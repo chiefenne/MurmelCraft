@@ -14,7 +14,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `mesh.info` | 1 | read | Counts, zones, patches, metadata and evidence of the open mesh. |
 | `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport. |
 | `view.set_camera` | 1 | read | Set any of target, distance, yaw, pitch, roll, projection, field of view and viewport size. |
-| `view.orbit` | 1 | read | Turn the camera about the up axis (yaw) and tilt it (pitch), in degrees. |
+| `view.orbit` | 2 | read | Turn the camera about the up axis (yaw) and tilt it (pitch), in degrees, about the target or about a world point pivot (the window passes the point under the cursor, or the centre of the shown faces over empty space). |
 | `view.pan` | 1 | read | Move the view by a drag in pixels (x right, y down); the scene follows the pointer. |
 | `view.zoom` | 1 | read | Scale the camera distance by factor (below 1 zooms in), keeping the point under cursor_ndc (-1..1, y up) in place. |
 | `view.fit` | 1 | read | Frame the faces shown, or the shown faces of one item (mesh, zone:<name>, kind:<cell type>, patch:<name>), from the current direction. |
@@ -189,6 +189,14 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "properties": {
     "pitch_deg": {
       "type": "number"
+    },
+    "pivot": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
     },
     "yaw_deg": {
       "type": "number"

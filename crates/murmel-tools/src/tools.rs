@@ -204,14 +204,26 @@ struct Orbit {
     yaw_deg: f64,
     #[serde(default)]
     pitch_deg: f64,
+    /// Turn about this world point instead of the target.
+    #[serde(default)]
+    pivot: Option<[f64; 3]>,
 }
 
 fn view_orbit(input: Value, s: &mut Session) -> Run {
     let i: Orbit = parse(input)?;
-    s.camera.orbit(
+    let (dyaw, dpitch) = (
         finite(i.yaw_deg, "yaw_deg")?,
         finite(i.pitch_deg, "pitch_deg")?,
     );
+    match i.pivot {
+        Some(p) => {
+            for v in p {
+                finite(v, "pivot")?;
+            }
+            s.camera.orbit_about(dyaw, dpitch, p);
+        }
+        None => s.camera.orbit(dyaw, dpitch),
+    }
     Ok(camera_json(s))
 }
 
@@ -1065,14 +1077,18 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "view.orbit",
-        version: 1,
+        version: 2,
         action: Action::Read,
         label_key: "tool-view-orbit",
-        summary: "Turn the camera about the up axis (yaw) and tilt it (pitch), in degrees.",
+        summary: "Turn the camera about the up axis (yaw) and tilt it (pitch), in degrees, about the target or about a world point pivot (the window passes the point under the cursor, or the centre of the shown faces over empty space).",
         outputs: &[],
         input_schema: || {
             object(
-                json!({"yaw_deg": {"type": "number"}, "pitch_deg": {"type": "number"}}),
+                json!({
+                    "yaw_deg": {"type": "number"},
+                    "pitch_deg": {"type": "number"},
+                    "pivot": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+                }),
                 &[],
             )
         },
