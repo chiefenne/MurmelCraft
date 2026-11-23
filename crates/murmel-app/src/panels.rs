@@ -414,35 +414,48 @@ impl MurmelApp {
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                egui::Grid::new("props")
-                    .num_columns(2)
-                    .spacing([12.0, 6.0])
-                    .striped(false)
-                    .show(ui, |ui| {
-                        for r in &c.rows {
-                            let key = r["key"].as_str().unwrap_or("");
-                            let mut label = self.i18n.tr(&format!("prop-{key}"));
-                            if let Some(u) = r["unit"].as_str() {
-                                label = format!("{label} ({u})");
-                            }
-                            ui.label(RichText::new(label).color(secondary));
-                            let value = self.format_value(key, &r["value"]);
-                            let resp = ui
-                                .add(
-                                    egui::Label::new(RichText::new(&value).monospace())
-                                        .truncate()
-                                        .sense(Sense::click()),
+                // Label and value columns of fixed shares of the panel,
+                // both cut with an ellipsis (full text on hover), so long
+                // values never widen the panel.
+                let width = ui.available_width();
+                let label_w = (width * 0.48).round();
+                for r in &c.rows {
+                    let key = r["key"].as_str().unwrap_or("");
+                    let mut label = self.i18n.tr(&format!("prop-{key}"));
+                    if let Some(u) = r["unit"].as_str() {
+                        label = format!("{label} ({u})");
+                    }
+                    let value = self.format_value(key, &r["value"]);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(label_w - 12.0, 20.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_width(label_w - 12.0);
+                                ui.add(
+                                    egui::Label::new(RichText::new(&label).color(secondary))
+                                        .truncate(),
                                 )
-                                .on_hover_text(
-                                    self.i18n
-                                        .tr_args("props-copy", &[("value", value.clone().into())]),
-                                );
-                            if resp.clicked() {
-                                ui.ctx().copy_text(value.clone());
-                            }
-                            ui.end_row();
+                                .on_hover_text(&label);
+                            },
+                        );
+                        let resp = ui
+                            .add(
+                                egui::Label::new(RichText::new(&value).monospace())
+                                    .truncate()
+                                    .sense(Sense::click()),
+                            )
+                            .on_hover_text(
+                                self.i18n
+                                    .tr_args("props-copy", &[("value", value.clone().into())]),
+                            );
+                        if resp.clicked() {
+                            ui.ctx().copy_text(value.clone());
                         }
                     });
+                    ui.add_space(2.0);
+                }
             });
     }
 
