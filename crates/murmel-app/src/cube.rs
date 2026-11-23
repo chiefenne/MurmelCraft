@@ -1,5 +1,8 @@
-//! The view cube, top right of the viewport (UI spec, "Viewport,
-//! navigation and view cube"): 124 px, drawn with egui's painter over the
+//! The view cube, top right of the viewport by default (UI spec,
+//! "Viewport, navigation and view cube"), or in another corner, in a
+//! floating panel the user drags anywhere over the viewport, or hidden,
+//! and optionally hidden while the pointer is far from it
+//! (`settings.set_view_cube`, decided 2026-11-23): 124 px, drawn with egui's painter over the
 //! mesh (decided 2026-11-23), from the patches of `murmel_engine::cube`,
 //! so the drawing and the hit test are the geometry the engine tests
 //! check. A click on a face, edge or corner flies to one of 26 views in
@@ -9,7 +12,7 @@
 
 use egui::{Color32, FontId, Pos2, Rect, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo};
 use murmel_engine::cube;
-use murmel_engine::{Camera, Projection, ScreenAxis};
+use murmel_engine::{Camera, Placement, Projection, ScreenAxis};
 use serde_json::json;
 
 use crate::app::{MurmelApp, icon_button};
@@ -30,6 +33,13 @@ const MIN_LABEL: i32 = 8;
 const LABEL_GAP: f32 = 3.0;
 /// Width of the block: the cube with its roll arrows, and the rotate row.
 const BLOCK: f32 = 196.0;
+/// Height of the block: the bar (28 + 4), the cube, the rotate row
+/// (10 + 26).
+const HEIGHT: f32 = 28.0 + 4.0 + SIDE + 10.0 + 26.0;
+/// Height of the floating panel's grip, above the block.
+const GRIP: f32 = 16.0;
+/// Room between the floating panel's sides and the block.
+const PAD: f32 = 6.0;
 
 impl MurmelApp {
     /// The camera the viewport shows: the session's, or a point of the
@@ -46,13 +56,185 @@ impl MurmelApp {
         self.session.camera.clone()
     }
 
+    /// The view cube's block where the settings place it: a corner of
+    /// the viewport, a floating panel with a grip, or nowhere; faded by
+    /// the pointer's distance when it hides itself.
     pub(crate) fn view_cube(&mut self, ui: &mut Ui, viewport: Rect, cam: &Camera, dark: bool) {
+        let mut placed = self.session.view_cube.clone();
+        if let Some(at) = self.cube_move {
+            placed.placement = Placement::Floating;
+            placed.position = Some(at);
+        }
+        let floating = placed.placement == Placement::Floating;
+        let size = if floating {
+            Vec2::new(BLOCK + 2.0 * PAD, HEIGHT + GRIP + PAD)
+        } else {
+            Vec2::new(BLOCK, HEIGHT)
+        };
+        let Some(o) = placed.origin(
+            [viewport.width() as f64, viewport.height() as f64],
+            [size.x as f64, size.y as f64],
+        ) else {
+            self.cube_busy = false;
+            return;
+        };
+        let block = Rect::from_min_size(viewport.min + Vec2::new(o[0] as f32, o[1] as f32), size);
+        let pointer = ui.input(|i| i.pointer.hover_pos());
+        let distance = pointer.map(|q| {
+            cube::distance_to_rect(
+                [q.x as f64, q.y as f64],
+                [block.min.x as f64, block.min.y as f64],
+                [block.max.x as f64, block.max.y as f64],
+            )
+        });
+        // A drag, a moved panel or an open menu of the cube keeps it shown.
+        let busy = self.cube_busy || self.cube_move.is_some() || egui::Popup::is_any_open(ui.ctx());
+        let opacity = placed.opacity(distance, busy) as f32;
+        if opacity <= 0.0 {
+            self.cube_busy = false;
+            return;
+        }
+        ui.scope(|ui| {
+            ui.multiply_opacity(opacity);
+            let top = if floating {
+                self.cube_panel(ui, viewport, block, dark);
+                block.min + Vec2::new(PAD, GRIP)
+            } else {
+                block.min
+            };
+            self.cube_block(ui, top, cam, dark);
+        });
+    }
+
+    /// How far the view note and legends (top left) move down and the
+    /// axis triad (bottom left) moves right, so a cube in a left corner
+    /// does not cover them.
+    pub(crate) fn cube_room(&self) -> (f32, f32) {
+        match self.session.view_cube.placement {
+            Placement::TopLeft => (HEIGHT + 8.0, 0.0),
+            Placement::BottomLeft => (0.0, BLOCK + 16.0),
+            _ => (0.0, 0.0),
+        }
+    }
+
+    /// The floating panel behind the block, and its grip: dragging the
+    /// grip moves the panel; the position is saved when the drag ends.
+    fn cube_panel(&mut self, ui: &mut Ui, viewport: Rect, block: Rect, dark: bool) {
         let p = self.session.tokens.palette(dark).clone();
-        let top = viewport.right_top() + egui::vec2(-16.0 - BLOCK, 12.0);
+        let painter = ui.painter();
+        painter.rect(
+            block,
+            8.0,
+            color(p.bg_panel).gamma_multiply(0.92),
+            Stroke::new(1.0, color(p.line)),
+            egui::StrokeKind::Inside,
+        );
+        let grip = Rect::from_min_size(block.min, Vec2::new(block.width(), GRIP));
+        let r = ui.interact(grip, ui.scope_id().with("view-cube-grip"), Sense::drag());
+        let ink = if r.hovered() || r.dragged() {
+            color(p.accent)
+        } else {
+            color(p.text_secondary)
+        };
+        // Six dots, a grip of our own (UI spec: custom icons drawn by us).
+        for i in 0..3 {
+            for j in 0..2 {
+                let at = grip.center() + Vec2::new((i as f32 - 1.0) * 5.0, (j as f32 - 0.5) * 4.0);
+                painter.circle_filled(at, 1.2, ink);
+            }
+        }
+        let name = self.i18n.tr("cube-grip");
+        let r = r
+            .on_hover_text(&name)
+            .on_hover_cursor(egui::CursorIcon::Grab);
+        r.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+        let from = block.min - viewport.min;
+        if r.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            let d = r.drag_delta();
+            let at = self.cube_move.unwrap_or([from.x as f64, from.y as f64]);
+            // Kept inside the viewport as it moves (CubeSettings::origin).
+            let max = viewport.size() - block.size();
+            self.cube_move = Some([
+                (at[0] + d.x as f64).clamp(0.0, max.x.max(0.0) as f64),
+                (at[1] + d.y as f64).clamp(0.0, max.y.max(0.0) as f64),
+            ]);
+        }
+        if r.drag_stopped()
+            && let Some(at) = self.cube_move.take()
+        {
+            self.call(
+                "settings.set_view_cube",
+                json!({"placement": "floating", "position": at}),
+            );
+        }
+    }
+
+    /// The pull-down of the cube's placement: the corners, the floating
+    /// panel, hidden, and auto-hide. In a menu (`in_menu`) a placement
+    /// closes it; the Settings window stays open.
+    pub(crate) fn cube_menu(&mut self, ui: &mut Ui, in_menu: bool) {
+        let current = self.session.view_cube.placement;
+        for pl in Placement::ALL {
+            let label = self.i18n.tr(&format!("cube-at-{}", pl.key()));
+            if ui.radio(pl == current, label).clicked() {
+                self.call("settings.set_view_cube", json!({ "placement": pl }));
+                if in_menu {
+                    ui.close();
+                }
+            }
+        }
+        ui.separator();
+        let mut auto = self.session.view_cube.auto_hide;
+        if ui
+            .checkbox(&mut auto, self.i18n.tr("settings-cube-auto-hide"))
+            .changed()
+        {
+            self.call("settings.set_view_cube", json!({ "auto_hide": auto }));
+        }
+        self.cube_distance(ui);
+    }
+
+    /// The auto-hide distance, saved when an edit ends (not on every
+    /// frame of a drag).
+    pub(crate) fn cube_distance(&mut self, ui: &mut Ui) {
+        let c = &self.session.view_cube;
+        if !c.auto_hide {
+            return;
+        }
+        let name = self.i18n.tr("settings-cube-distance");
+        let mut d = self.cube_distance_edit.unwrap_or(c.distance_px);
+        ui.horizontal(|ui| {
+            ui.label(&name);
+            let r = ui.add(
+                egui::DragValue::new(&mut d)
+                    .range(0.0..=cube::MAX_DISTANCE)
+                    .speed(2.0)
+                    .suffix(self.i18n.tr("settings-cube-distance-unit"))
+                    .max_decimals(0),
+            );
+            r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name.clone()));
+            if r.changed() {
+                self.cube_distance_edit = Some(d);
+            }
+            let done = r.drag_stopped()
+                || (r.changed() && !r.dragged() && !r.has_focus())
+                || r.lost_focus();
+            if done && let Some(v) = self.cube_distance_edit.take() {
+                self.call("settings.set_view_cube", json!({ "distance_px": v }));
+            }
+        });
+    }
+
+    /// The block itself, its top left at `top`: Home, projection and
+    /// placement above the cube, roll arrows beside it, the rotate row
+    /// below.
+    fn cube_block(&mut self, ui: &mut Ui, top: Pos2, cam: &Camera, dark: bool) {
+        let p = self.session.tokens.palette(dark).clone();
         let mid = top.x + BLOCK / 2.0;
 
-        // Home and projection, above the cube.
-        let bar = Rect::from_min_size(egui::pos2(mid - 30.0, top.y), egui::vec2(64.0, 28.0));
+        // Home, projection and placement, above the cube.
+        let bar = Rect::from_min_size(egui::pos2(mid - 46.0, top.y), egui::vec2(96.0, 28.0));
         ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -85,6 +267,13 @@ impl MurmelApp {
                 let tip = format!("{long}\n{name}");
                 r.response
                     .on_hover_text(tip)
+                    .widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+                let name = self.i18n.tr("cube-menu");
+                let r = ui.menu_button(egui::RichText::new(icon::SETTINGS).size(16.0), |ui| {
+                    self.cube_menu(ui, true);
+                });
+                r.response
+                    .on_hover_text(&name)
                     .widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
             });
         });
@@ -205,6 +394,7 @@ impl MurmelApp {
             let d = resp.drag_delta();
             self.orbit_by_drag(d.x as f64, d.y as f64);
         }
+        self.cube_busy = resp.dragged();
 
         // Roll arrows beside the cube.
         for (dir, deg, key) in [

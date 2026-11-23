@@ -10,6 +10,7 @@
 //! onto the screen axes of the camera (x right, y up).
 
 use glam::DVec3;
+use serde::{Deserialize, Serialize};
 
 use crate::camera::{Camera, StandardView};
 
@@ -200,6 +201,131 @@ pub fn front_face(c: &Camera) -> StandardView {
         .unwrap_or(StandardView::FRONT)
 }
 
+// ---- placement ----------------------------------------------------------
+
+/// Where the window shows the view cube (decided 2026-11-23: any corner of
+/// the viewport, a floating panel the user drags anywhere over it, or
+/// hidden).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    #[default]
+    TopRight,
+    TopLeft,
+    BottomLeft,
+    BottomRight,
+    Floating,
+    Hidden,
+}
+
+impl Placement {
+    pub const ALL: [Placement; 6] = [
+        Placement::TopRight,
+        Placement::TopLeft,
+        Placement::BottomLeft,
+        Placement::BottomRight,
+        Placement::Floating,
+        Placement::Hidden,
+    ];
+
+    /// The name in tool inputs, settings and translation keys.
+    pub fn key(self) -> &'static str {
+        match self {
+            Placement::TopRight => "top_right",
+            Placement::TopLeft => "top_left",
+            Placement::BottomLeft => "bottom_left",
+            Placement::BottomRight => "bottom_right",
+            Placement::Floating => "floating",
+            Placement::Hidden => "hidden",
+        }
+    }
+}
+
+/// Room between the viewport's sides and a cube in a corner, in pixels.
+pub const MARGIN: [f64; 2] = [16.0, 12.0];
+/// Pixels over which an auto-hidden cube fades out beyond its distance.
+pub const FADE: f64 = 40.0;
+/// The auto-hide distance unless the user sets one, in pixels.
+pub const DEFAULT_DISTANCE: f64 = 120.0;
+/// The largest auto-hide distance a setting may give, in pixels.
+pub const MAX_DISTANCE: f64 = 2000.0;
+
+/// The view cube's placement settings, kept in `settings.toml` and set by
+/// `settings.set_view_cube`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CubeSettings {
+    pub placement: Placement,
+    /// Hide the cube while the pointer is farther from it than
+    /// `distance_px`.
+    pub auto_hide: bool,
+    pub distance_px: f64,
+    /// Top left of the floating panel, from the viewport's top left, in
+    /// pixels; `None` starts it where the top-right cube is.
+    pub position: Option<[f64; 2]>,
+}
+
+impl Default for CubeSettings {
+    fn default() -> Self {
+        Self {
+            placement: Placement::default(),
+            auto_hide: false,
+            distance_px: DEFAULT_DISTANCE,
+            position: None,
+        }
+    }
+}
+
+impl CubeSettings {
+    /// Top left of the cube's block (`block` wide and high) in a viewport
+    /// of `viewport` pixels, from the viewport's top left; `None` when the
+    /// cube is hidden. A floating block is kept inside the viewport, so a
+    /// smaller window never loses it.
+    pub fn origin(&self, viewport: [f64; 2], block: [f64; 2]) -> Option<[f64; 2]> {
+        let right = viewport[0] - MARGIN[0] - block[0];
+        let bottom = viewport[1] - MARGIN[1] - block[1];
+        let at = match self.placement {
+            Placement::Hidden => return None,
+            Placement::TopRight => [right, MARGIN[1]],
+            Placement::TopLeft => [MARGIN[0], MARGIN[1]],
+            Placement::BottomLeft => [MARGIN[0], bottom],
+            Placement::BottomRight => [right, bottom],
+            Placement::Floating => {
+                let p = self.position.unwrap_or([right, MARGIN[1]]);
+                let clamp = |v: f64, hi: f64| v.min(hi).max(0.0);
+                [
+                    clamp(p[0], viewport[0] - block[0]),
+                    clamp(p[1], viewport[1] - block[1]),
+                ]
+            }
+        };
+        Some(at)
+    }
+
+    /// How opaque the cube is drawn, 0 to 1, for a pointer `distance`
+    /// pixels from its block (`None`: the pointer is not over the
+    /// window). Without auto-hide, or while the cube is dragged, it is
+    /// always 1; with it, 1 up to the distance, then fading to 0 over
+    /// `FADE` pixels.
+    pub fn opacity(&self, distance: Option<f64>, dragging: bool) -> f64 {
+        if !self.auto_hide || dragging {
+            return 1.0;
+        }
+        match distance {
+            None => 0.0,
+            Some(d) => (1.0 - (d - self.distance_px) / FADE).clamp(0.0, 1.0),
+        }
+    }
+}
+
+/// Distance in pixels from point `p` to the rectangle `min`..`max`
+/// (0 inside).
+pub fn distance_to_rect(p: [f64; 2], min: [f64; 2], max: [f64; 2]) -> f64 {
+    let dx = (min[0] - p[0]).max(p[0] - max[0]).max(0.0);
+    let dy = (min[1] - p[1]).max(p[1] - max[1]).max(0.0);
+    dx.hypot(dy)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +410,76 @@ mod tests {
             c.set_standard(v);
             assert_eq!(front_face(&c), v);
         }
+    }
+
+    /// Invariant: each corner places the block inside the viewport at the
+    /// margins, hidden places none, and a floating block saved outside a
+    /// now smaller viewport comes back inside. Breaks when a placement
+    /// puts the cube off screen (a restored floating position from a
+    /// larger window); the window tests do not check positions.
+    #[test]
+    fn placements_stay_in_the_viewport() {
+        let vp = [800.0, 600.0];
+        let block = [196.0, 192.0];
+        let mut s = CubeSettings::default();
+        assert_eq!(s.origin(vp, block), Some([588.0, 12.0]));
+        s.placement = Placement::BottomLeft;
+        assert_eq!(s.origin(vp, block), Some([16.0, 396.0]));
+        s.placement = Placement::Hidden;
+        assert_eq!(s.origin(vp, block), None);
+        s.placement = Placement::Floating;
+        assert_eq!(s.origin(vp, block), Some([588.0, 12.0]));
+        s.position = Some([1500.0, -40.0]);
+        assert_eq!(s.origin(vp, block), Some([604.0, 0.0]));
+        for p in Placement::ALL {
+            s.placement = p;
+            if let Some(o) = s.origin(vp, block) {
+                assert!(o[0] >= 0.0 && o[0] + block[0] <= vp[0], "{}", p.key());
+                assert!(o[1] >= 0.0 && o[1] + block[1] <= vp[1], "{}", p.key());
+            }
+        }
+    }
+
+    /// Invariant: auto-hide shows the cube fully within the distance,
+    /// fades it over FADE pixels beyond, hides it with the pointer outside
+    /// the window, and never hides it while it is dragged or with
+    /// auto-hide off. Breaks when the cube vanishes under a drag that
+    /// leaves the distance, or stays when the pointer leaves the window.
+    #[test]
+    fn auto_hide_fades_by_distance() {
+        let mut s = CubeSettings::default();
+        assert_eq!(s.opacity(None, false), 1.0);
+        s.auto_hide = true;
+        s.distance_px = 100.0;
+        assert_eq!(s.opacity(Some(0.0), false), 1.0);
+        assert_eq!(s.opacity(Some(100.0), false), 1.0);
+        assert!((s.opacity(Some(100.0 + FADE / 2.0), false) - 0.5).abs() < 1e-9);
+        assert_eq!(s.opacity(Some(100.0 + FADE), false), 0.0);
+        assert_eq!(s.opacity(None, false), 0.0);
+        assert_eq!(s.opacity(Some(900.0), true), 1.0);
+        assert_eq!(distance_to_rect([5.0, 5.0], [0.0, 0.0], [10.0, 10.0]), 0.0);
+        assert_eq!(
+            distance_to_rect([13.0, 14.0], [0.0, 0.0], [10.0, 10.0]),
+            5.0
+        );
+    }
+
+    /// Invariant: the settings file form round-trips and an empty table
+    /// gives the defaults (an old settings.toml without the cube loads).
+    #[test]
+    fn cube_settings_round_trip() {
+        let s = CubeSettings {
+            placement: Placement::Floating,
+            auto_hide: true,
+            distance_px: 80.0,
+            position: Some([10.0, 20.0]),
+        };
+        let t = toml::to_string(&s).unwrap();
+        assert_eq!(toml::from_str::<CubeSettings>(&t).unwrap(), s);
+        assert_eq!(
+            toml::from_str::<CubeSettings>("").unwrap(),
+            CubeSettings::default()
+        );
+        assert!(toml::from_str::<CubeSettings>("placement = \"middle\"").is_err());
     }
 }

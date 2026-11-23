@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use murmel_mesh::{Evidence, Mesh, MeshError};
 
 use crate::camera::Camera;
+use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Display, Item};
 use crate::navigation::Navigation;
 use crate::quality::Quality;
@@ -129,6 +130,8 @@ pub struct Session {
     pub theme: Theme,
     /// The user's mesh colours, already laid over `tokens`.
     pub colors: MeshColors,
+    /// Where the window shows the view cube.
+    pub view_cube: CubeSettings,
     /// Viewport size in pixels, for aspect, pan and zoom.
     pub viewport: [f64; 2],
     /// Bumped whenever the surface changes, so renderers re-upload.
@@ -147,6 +150,7 @@ impl Session {
             navigation: Navigation::default(),
             theme: Theme::default(),
             colors: MeshColors::default(),
+            view_cube: CubeSettings::default(),
             viewport: [1280.0, 720.0],
             surface_revision: 0,
             config_dir: crate::settings::config_dir(),

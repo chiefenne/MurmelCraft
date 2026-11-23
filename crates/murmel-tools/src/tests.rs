@@ -140,6 +140,52 @@ fn settings_write_files() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Invariant: settings.set_view_cube changes only the fields it is given,
+/// is saved in settings.toml beside the theme and loads back, and refuses
+/// an unknown placement or a distance out of range without a change.
+/// Breaks when the cube's settings drop the theme (or the other way) or a
+/// bad distance is stored; the engine tests check placement geometry only.
+#[test]
+fn view_cube_placement_is_saved() {
+    let dir = std::env::temp_dir().join(format!("murmel-cube-{}", std::process::id()));
+    let mut s = session();
+    s.config_dir = Some(dir.clone());
+    assert!(call("settings.set_theme", json!({"theme": "light"}), &mut s).ok());
+    let e = call(
+        "settings.set_view_cube",
+        json!({"placement": "floating", "position": [40.0, 50.0]}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["view_cube"]["placement"], "floating");
+    let e = call(
+        "settings.set_view_cube",
+        json!({"auto_hide": true, "distance_px": 80.0}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.view_cube.placement, murmel_engine::Placement::Floating);
+    assert_eq!(s.view_cube.position, Some([40.0, 50.0]));
+    let (st, _, problems) = murmel_engine::settings::load(&dir, false);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(st.theme, murmel_engine::Theme::Light);
+    assert_eq!(st.view_cube, s.view_cube);
+    for bad in [
+        json!({"placement": "middle"}),
+        json!({"distance_px": -1.0}),
+        json!({"distance_px": 5000.0}),
+        json!({"position": [1.0]}),
+        json!({"size": 3}),
+    ] {
+        let e = call("settings.set_view_cube", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, "TOOL002", "{bad}");
+        assert_eq!(s.view_cube, st.view_cube, "{bad}");
+    }
+    let e = call("settings.get", json!({}), &mut s);
+    assert_eq!(e.result["view_cube"]["distance_px"], 80.0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Invariant: user mesh colours reach the tokens, are saved in
 /// settings.toml beside the theme (neither setting drops the other) and
 /// load back; a reset returns to the built-in colours; bad input is

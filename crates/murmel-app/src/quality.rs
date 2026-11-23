@@ -56,7 +56,7 @@ impl MurmelApp {
         let secondary = color(p.text_secondary);
         let shown_cells = self.session.mesh.as_ref().map_or(0, |m| m.surface.cells);
 
-        let at = rect.min + egui::vec2(16.0, 52.0);
+        let at = rect.min + egui::vec2(16.0, 52.0 + self.cube_room().0);
         let area = Rect::from_min_size(at, egui::vec2(WIDTH + 20.0, 220.0));
         ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
             egui::Frame::NONE

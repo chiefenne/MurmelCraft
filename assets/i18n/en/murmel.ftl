@@ -168,6 +168,10 @@ settings-colors = Colours
 settings-mesh-color = Mesh colour (solid)
 settings-reset-colors = Reset to the built-in colours
 settings-file = Saved in { $path }
+settings-view-cube = View cube
+settings-cube-auto-hide = Hide when the pointer is far away
+settings-cube-distance = Show within
+settings-cube-distance-unit = { " " }px
 
 viewport-empty = Open a KoflCraft mesh (foehncraft.vtu) with Open or Ctrl + O, or drop it here.
 viewport-description = { $view }, { $cells } cells, { $faces } boundary faces, colour by { $colour }
@@ -238,6 +242,7 @@ tool-settings-get = Settings
 tool-settings-set-theme = Theme
 tool-settings-set-colors = Mesh colours
 tool-settings-set-bindings = Mouse bindings
+tool-settings-set-view-cube = View cube placement
 
 
 # Views of the cube (view.standard): faces, edges and corners.
@@ -351,6 +356,22 @@ cube-home = Home view (Home)
 cube-roll-left = Roll 90° counter-clockwise
 cube-roll-right = Roll 90° clockwise
 cube-projection = Projection (5)
+cube-menu = View cube placement
+cube-grip = Move the view cube
+cube-placement-top_right = View cube: top right
+cube-placement-top_left = View cube: top left
+cube-placement-bottom_left = View cube: bottom left
+cube-placement-bottom_right = View cube: bottom right
+cube-placement-floating = View cube: floating panel
+cube-placement-hidden = View cube: hidden
+cube-at-top_right = Top right
+cube-at-top_left = Top left
+cube-at-bottom_left = Bottom left
+cube-at-bottom_right = Bottom right
+cube-at-floating = Floating panel
+cube-at-hidden = Hidden
+cmd-cube-auto-hide = View cube: hide when the pointer is far away (on or off)
+menu-view-cube = View cube
 rotate-title = Rotate about a screen axis
 rotate-axis = Screen { $axis } axis
 rotate-plus = Rotate +{ $deg }° about screen { $axis }

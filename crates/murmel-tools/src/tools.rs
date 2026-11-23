@@ -7,8 +7,8 @@ use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::settings::{Settings, save_navigation, save_settings};
 use murmel_engine::{
-    Clip, ClipMode, ColorBy, Item, MeshColors, Metric, PickTarget, Projection, Quality, RenderMode,
-    Rgb, ScreenAxis, Session, StandardView, Theme, Visibility,
+    Clip, ClipMode, ColorBy, CubeSettings, Item, MeshColors, Metric, PickTarget, Placement,
+    Projection, Quality, RenderMode, Rgb, ScreenAxis, Session, StandardView, Theme, Visibility,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -863,7 +863,7 @@ fn settings_set_theme(input: Value, s: &mut Session) -> Run {
     Ok(json!({"theme": i.theme, "files": [path]}))
 }
 
-/// Write settings.toml from the session (theme and mesh colours), so one
+/// Write settings.toml from the session (theme, mesh colours, view cube), so one
 /// setting never drops another.
 fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> {
     let dir = config_dir(s)?;
@@ -872,6 +872,7 @@ fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> {
         &Settings {
             theme: s.theme,
             colors: s.colors.clone(),
+            view_cube: s.view_cube.clone(),
             ..Settings::default()
         },
     )
@@ -902,6 +903,46 @@ fn settings_set_colors(mut input: Value, s: &mut Session) -> Run {
         .map_err(|e| Diagnostic::new("TOOL002", e))?;
     let path = save_session_settings(s)?;
     Ok(json!({"colors": s.colors, "files": [path]}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetViewCube {
+    placement: Option<Placement>,
+    auto_hide: Option<bool>,
+    distance_px: Option<f64>,
+    position: Option<[f64; 2]>,
+}
+
+fn settings_set_view_cube(input: Value, s: &mut Session) -> Run {
+    let i: SetViewCube = parse(input)?;
+    let mut c: CubeSettings = s.view_cube.clone();
+    if let Some(p) = i.placement {
+        c.placement = p;
+    }
+    if let Some(a) = i.auto_hide {
+        c.auto_hide = a;
+    }
+    if let Some(d) = i.distance_px {
+        let d = finite(d, "distance_px")?;
+        if !(0.0..=murmel_engine::cube::MAX_DISTANCE).contains(&d) {
+            return Err(Diagnostic::new(
+                "TOOL002",
+                format!(
+                    "distance_px must be 0 to {} pixels",
+                    murmel_engine::cube::MAX_DISTANCE
+                ),
+            ));
+        }
+        c.distance_px = d;
+    }
+    if let Some([x, y]) = i.position {
+        c.position = Some([finite(x, "position")?, finite(y, "position")?]);
+    }
+    // Applied live first; see settings.set_bindings.
+    s.view_cube = c;
+    let path = save_session_settings(s)?;
+    Ok(json!({"view_cube": s.view_cube, "files": [path]}))
 }
 
 #[derive(Deserialize)]
@@ -973,6 +1014,7 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
         "theme": s.theme,
         "colors": s.colors,
         "navigation": s.navigation,
+        "view_cube": s.view_cube,
         "presets": PRESETS,
         "config_dir": s.config_dir,
     }))
@@ -1407,7 +1449,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-settings-get",
-        summary: "The theme, the mesh colours, the navigation bindings, the presets and the config folder.",
+        summary: "The theme, the mesh colours, the navigation bindings, the view cube placement, the presets and the config folder.",
         outputs: &[],
         input_schema: no_input,
         run: settings_get,
@@ -1449,6 +1491,26 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: settings_set_colors,
+    },
+    Tool {
+        id: "settings.set_view_cube",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-set-view-cube",
+        summary: "Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder.",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "placement": {"enum": ["top_right", "top_left", "bottom_left", "bottom_right", "floating", "hidden"]},
+                    "auto_hide": {"type": "boolean"},
+                    "distance_px": {"type": "number", "minimum": 0, "maximum": 2000},
+                    "position": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}
+                }),
+                &[],
+            )
+        },
+        run: settings_set_view_cube,
     },
     Tool {
         id: "settings.set_bindings",
