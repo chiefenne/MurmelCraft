@@ -4,6 +4,7 @@
 
 mod app;
 mod i18n;
+mod panels;
 mod style;
 mod viewport;
 

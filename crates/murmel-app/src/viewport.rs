@@ -55,6 +55,7 @@ impl MurmelApp {
         let dark = self.dark(ui.ctx());
         self.draw_mesh(ui, frame, rect, dark);
         self.overlays(ui, rect, dark);
+        self.legend(ui, rect, dark);
 
         let desc = self.describe();
         resp.widget_info(|| WidgetInfo::labeled(Role::Canvas, true, desc.clone()));
@@ -79,7 +80,7 @@ impl MurmelApp {
             .session
             .mesh
             .as_ref()
-            .map_or((0, 0), |m| (m.mesh.cell_count(), m.mesh.boundary.len()));
+            .map_or((0, 0), |m| (m.surface.cells, m.surface.faces));
         let (y, p) = murmel_engine::StandardView::Iso.angles();
         let c = &self.session.camera;
         let view = if (c.yaw_deg - y).abs() < 1e-6 && (c.pitch_deg - p).abs() < 1e-6 {
@@ -93,6 +94,12 @@ impl MurmelApp {
                 ("view", view.into()),
                 ("cells", count(cells).into()),
                 ("faces", count(faces).into()),
+                (
+                    "colour",
+                    self.i18n
+                        .tr(&format!("color-by-{}", self.session.display.color_by.key()))
+                        .into(),
+                ),
             ],
         )
     }

@@ -22,6 +22,12 @@ pub struct MurmelApp {
     pub(crate) settings_open: bool,
     pub(crate) installed_theme: Option<Theme>,
     logo: Option<egui::TextureHandle>,
+    /// Side panels shown (T and P toggle them).
+    pub(crate) show_tree: bool,
+    pub(crate) show_props: bool,
+    pub(crate) tree_filter: String,
+    pub(crate) focus_filter: bool,
+    pub(crate) props: Option<crate::panels::PropsCache>,
 }
 
 impl MurmelApp {
@@ -47,6 +53,11 @@ impl MurmelApp {
             drag: None,
             settings_open: false,
             installed_theme: None,
+            show_tree: true,
+            show_props: true,
+            tree_filter: String::new(),
+            focus_filter: false,
+            props: None,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -106,10 +117,54 @@ impl MurmelApp {
     }
 
     fn keys(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        use egui::Key;
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::F)) {
+            self.show_tree = true;
+            self.focus_filter = true;
+        }
+        // Only a text field keeps the keys: a clicked button also holds the
+        // focus, and must not swallow F, H or Esc (docs/pitfalls.md).
+        if ctx.text_edit_focused() {
             return;
         }
-        use egui::Key;
+        // Alt + H before H: consume_key matches modifiers logically, so a
+        // plain H would also take Alt + H.
+        let (show_all, tree, props, hide, isolate, clear) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::ALT, Key::H),
+                i.consume_key(egui::Modifiers::NONE, Key::T),
+                i.consume_key(egui::Modifiers::NONE, Key::P),
+                i.consume_key(egui::Modifiers::NONE, Key::H),
+                i.consume_key(egui::Modifiers::NONE, Key::I),
+                i.consume_key(egui::Modifiers::NONE, Key::Escape),
+            )
+        });
+        self.show_tree ^= tree;
+        self.show_props ^= props;
+        let selected = self.session.display.selection.and_then(|it| {
+            let m = self.session.mesh.as_ref()?;
+            (it != murmel_engine::Item::Mesh).then(|| it.id(&m.mesh))
+        });
+        if let Some(id) = &selected {
+            if hide {
+                self.call(
+                    "display.visibility",
+                    json!({"action": "hide", "items": [id]}),
+                );
+            }
+            if isolate {
+                self.call(
+                    "display.visibility",
+                    json!({"action": "isolate", "items": [id]}),
+                );
+            }
+        }
+        if show_all && self.session.mesh.is_some() {
+            self.call("display.visibility", json!({"action": "show_all"}));
+        }
+        if clear && self.session.display.selection.is_some() {
+            self.call("select.clear", json!({}));
+        }
         let (open, fit, home, cycle, zin, zout, arrows, shift) = ctx.input_mut(|i| {
             let open = i.consume_key(egui::Modifiers::COMMAND, Key::O);
             let fit = i.consume_key(egui::Modifiers::NONE, Key::F);
@@ -160,7 +215,7 @@ impl MurmelApp {
         }
     }
 
-    fn palette(&self, ctx: &egui::Context) -> &murmel_engine::theme::Palette {
+    pub(crate) fn palette(&self, ctx: &egui::Context) -> &murmel_engine::theme::Palette {
         self.session.tokens.palette(self.dark(ctx))
     }
 
@@ -298,6 +353,57 @@ impl MurmelApp {
             if b.clicked() {
                 self.call("view.set_camera", json!({ "projection": proj.next() }));
             }
+            ui.separator();
+            ui.label(
+                RichText::new(self.i18n.tr("toolbar-group-display").to_uppercase())
+                    .small()
+                    .color(secondary),
+            );
+            let by = self.session.display.color_by;
+            let mut pick = None;
+            let label = self.i18n.tr("toolbar-color-by");
+            let current = self.i18n.tr(&format!("color-by-{}", by.key()));
+            let r = egui::ComboBox::from_id_salt("color-by")
+                .selected_text(format!("{label}: {current}"))
+                .show_ui(ui, |ui| {
+                    for c in murmel_engine::ColorBy::ALL {
+                        let name = self.i18n.tr(&format!("color-by-{}", c.key()));
+                        if ui.selectable_label(c == by, name).clicked() {
+                            pick = Some(c);
+                        }
+                    }
+                });
+            r.response
+                .on_hover_text(self.i18n.tr("toolbar-color-by-tip"));
+            if let Some(c) = pick.filter(|&c| c != by) {
+                self.call("display.color_by", json!({ "by": c }));
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let props = self.i18n.tr("toolbar-properties");
+                if icon_button(
+                    ui,
+                    icon::INFO,
+                    &props,
+                    &self.i18n.tr("toolbar-properties-tip"),
+                    self.show_props,
+                )
+                .clicked()
+                {
+                    self.show_props = !self.show_props;
+                }
+                let tree = self.i18n.tr("toolbar-tree");
+                if icon_button(
+                    ui,
+                    icon::LAYERS,
+                    &tree,
+                    &self.i18n.tr("toolbar-tree-tip"),
+                    self.show_tree,
+                )
+                .clicked()
+                {
+                    self.show_tree = !self.show_tree;
+                }
+            });
         });
     }
 
@@ -377,7 +483,24 @@ impl MurmelApp {
                     )
                     .on_hover_text(e.fix.unwrap_or(""));
                 } else if let Some(m) = &self.session.mesh {
-                    let s = (m.mesh.cell_count(), m.mesh.boundary.len());
+                    let s = (m.surface.cells, m.surface.faces);
+                    if let Some(sel) = self.session.display.selection {
+                        let id = sel.id(&m.mesh);
+                        let (area, name) = id.split_once(':').unwrap_or(("mesh", ""));
+                        let name = if area == "kind" {
+                            self.i18n.tr(&format!("kind-{name}"))
+                        } else {
+                            name.to_string()
+                        };
+                        let area = self.i18n.tr(&format!("props-area-{area}"));
+                        ui.label(
+                            RichText::new(self.i18n.tr_args(
+                                "status-selected",
+                                &[("area", area.into()), ("item", name.into())],
+                            ))
+                            .small(),
+                        );
+                    }
                     ui.label(
                         RichText::new(self.i18n.tr_args(
                             "status-cells",
@@ -513,6 +636,30 @@ impl eframe::App for MurmelApp {
             .exact_size(24.0)
             .frame(bar(p.bg_app))
             .show(ui, |ui| self.status_bar(ui));
+        if self.show_tree {
+            egui::Panel::left("tree")
+                .default_size(264.0)
+                .size_range(200.0..=480.0)
+                .resizable(true)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(color(p.bg_panel))
+                        .inner_margin(egui::Margin::symmetric(10, 0)),
+                )
+                .show(ui, |ui| self.model_tree(ui));
+        }
+        if self.show_props {
+            egui::Panel::right("properties")
+                .default_size(304.0)
+                .size_range(220.0..=520.0)
+                .resizable(true)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(color(p.bg_panel))
+                        .inner_margin(egui::Margin::symmetric(12, 0)),
+                )
+                .show(ui, |ui| self.properties(ui));
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(color(p.viewport_bottom)))
             .show(ui, |ui| self.viewport(ui, frame));

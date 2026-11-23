@@ -32,10 +32,13 @@ status_error = "#C7402F"
 
 [mesh]
 # Twelve hues of our own, OKLCH at hue steps of 30 degrees from 20,
-# lightness 0.74 and 0.68 alternating, chroma 0.12.
+# lightness 0.74 and 0.68 alternating, chroma 0.12. Ordered so that the
+# first patches differ most, also under simulated protanopia,
+# deuteranopia and tritanopia (each next hue is the farthest from those
+# before it; see the theme tests).
 patch = [
-  "#ED8B8B", "#D38151", "#D2A249", "#9D9E3D", "#81BD74", "#32B08D",
-  "#24C1C9", "#32A5D4", "#7EABF6", "#988BDD", "#CC91DA", "#CF78A3",
+  "#D38151", "#7EABF6", "#D2A249", "#ED8B8B", "#988BDD", "#CC91DA",
+  "#32B08D", "#CF78A3", "#24C1C9", "#81BD74", "#9D9E3D", "#32A5D4",
 ]
 # Edges take the face colour darkened by this fraction.
 edge_darken = 0.45
@@ -47,3 +50,28 @@ logo = "#AD3285"
 axis_x = "#E5534B"
 axis_y = "#57AB5A"
 axis_z = "#539BF5"
+# Selected items: faces mix this much of the selection colour into
+# their own, and their edges take it whole.
+selection = "#FF4FB8"
+selection_mix = 0.2
+
+# Patch roles (UI spec, Colour by): wall grey, inlet blue, outlet orange,
+# symmetry green, interface violet, unspecified sand. Searched in OKLCH
+# within those hue families for the largest smallest OKLab distance
+# under the three colour-vision simulations (0.11).
+[mesh.role]
+wall = "#95999F"
+inlet = "#5081BE"
+outlet = "#F78340"
+symmetry = "#8EE297"
+interface = "#D4B4E8"
+unspecified = "#88775D"
+
+# Cell types: polyhedron teal, prism amber, hexahedron slate, tetrahedron
+# rose, pyramid lime; found the same way (0.12).
+[mesh.kind]
+polyhedron = "#6ACBC0"
+prism = "#E79504"
+hexahedron = "#7C90AF"
+tetrahedron = "#9E5D62"
+pyramid = "#C9DB72"

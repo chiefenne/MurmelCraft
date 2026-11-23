@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use murmel_engine::{Session, StandardView, Tokens};
+use murmel_engine::{ColorBy, Item, Session, StandardView, Tokens, Visibility};
 use murmel_render::{diff_share, read_png, render_session, write_png};
 
 fn root() -> PathBuf {
@@ -31,7 +31,11 @@ fn session(view: StandardView) -> Session {
 }
 
 fn check(name: &str, view: StandardView) {
-    let shot = render_session(&session(view), 480, 320).unwrap();
+    check_session(name, &session(view));
+}
+
+fn check_session(name: &str, s: &Session) {
+    let shot = render_session(s, 480, 320).unwrap();
     let reference =
         Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/reference/{name}.png"));
     let out = root().join(format!("target/render-test/{name}.png"));
@@ -61,6 +65,31 @@ fn channel_iso_shaded_with_edges() {
 #[test]
 fn channel_front_orthographic() {
     check("channel-front", StandardView::Front);
+}
+
+/// V0.2 display: colour by patch role with the walls hidden shows the
+/// inlet (blue) and outlet (orange) ends and nothing else.
+#[test]
+fn channel_roles_without_walls() {
+    let mut s = session(StandardView::Iso);
+    s.display.color_by = ColorBy::Role;
+    let walls = Item::parse("patch:walls", &s.mesh.as_ref().unwrap().mesh).unwrap();
+    let m = s.mesh.as_ref().unwrap().mesh.clone();
+    s.display.set_visibility(Visibility::Hide, &[walls], &m);
+    s.redraw();
+    check_session("channel-roles-no-walls", &s);
+}
+
+/// V0.2 display: colour by cell type (prism layers amber, the core
+/// polyhedra teal) with the outlet selected (tinted, edges in the
+/// selection colour).
+#[test]
+fn channel_cell_types_outlet_selected() {
+    let mut s = session(StandardView::Iso);
+    s.display.color_by = ColorBy::CellType;
+    s.display.selection = Item::parse("patch:outlet", &s.mesh.as_ref().unwrap().mesh);
+    s.redraw();
+    check_session("channel-cell-types-selected", &s);
 }
 
 /// The image is not a blank gradient: the mesh covers a good part of the

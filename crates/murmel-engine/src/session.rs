@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use murmel_mesh::{Evidence, Mesh, MeshError};
 
 use crate::camera::Camera;
+use crate::display::{Display, Item};
 use crate::navigation::Navigation;
 use crate::surface::Surface;
 use crate::theme::{Theme, Tokens};
@@ -19,6 +20,93 @@ pub struct OpenMesh {
     /// Why the evidence beside the mesh could not be read (MESH011).
     pub evidence_problem: Option<MeshError>,
     pub surface: Surface,
+    /// SHA-256 of the mesh file, hex.
+    pub digest: String,
+    /// The validity badge of the tree root.
+    pub validity: Validity,
+}
+
+/// The validity badge (UI spec, Model tree): green when the evidence
+/// beside the mesh matches it, amber when there is none, red when a check
+/// fails.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Validity {
+    Valid,
+    NoEvidence,
+    Failed(Vec<String>),
+}
+
+impl Validity {
+    pub fn key(&self) -> &'static str {
+        match self {
+            Validity::Valid => "valid",
+            Validity::NoEvidence => "no_evidence",
+            Validity::Failed(_) => "failed",
+        }
+    }
+
+    /// Check `mesh` (read from `path`, with SHA-256 `digest`) against its
+    /// evidence.
+    pub fn check(
+        path: &Path,
+        digest: &str,
+        mesh: &Mesh,
+        evidence: Option<&Evidence>,
+        problem: Option<&MeshError>,
+    ) -> Validity {
+        if let Some(p) = problem {
+            return Validity::Failed(vec![format!("{}: {}", p.code, p.message)]);
+        }
+        let Some(e) = evidence else {
+            return Validity::NoEvidence;
+        };
+        let mut why = Vec::new();
+        let name = path
+            .file_name()
+            .map_or(String::new(), |f| f.to_string_lossy().into_owned());
+        match e.digest(&name) {
+            Some(d) if d.eq_ignore_ascii_case(digest) => {}
+            Some(_) => why.push(format!(
+                "{name} differs from the file the evidence describes"
+            )),
+            None => why.push(format!("the evidence does not list {name}")),
+        }
+        if let Some(c) = e.cells
+            && c as usize != mesh.cell_count()
+        {
+            why.push(format!("{} cells, evidence says {c}", mesh.cell_count()));
+        }
+        if let Some(b) = e.boundary_faces
+            && b as usize != mesh.boundary.len()
+        {
+            why.push(format!(
+                "{} boundary faces, evidence says {b}",
+                mesh.boundary.len()
+            ));
+        }
+        if let Some(n) = e.inverted_faces
+            && n > 0
+        {
+            why.push(format!("{n} inverted faces"));
+        }
+        if why.is_empty() {
+            Validity::Valid
+        } else {
+            Validity::Failed(why)
+        }
+    }
+}
+
+/// SHA-256 of a file, hex; empty when it cannot be read.
+pub fn sha256(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    match std::fs::read(path) {
+        Ok(bytes) => Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+        Err(_) => String::new(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -26,6 +114,8 @@ pub struct Session {
     pub tokens: Tokens,
     pub mesh: Option<OpenMesh>,
     pub camera: Camera,
+    /// Colouring, hidden items and selection of the open mesh.
+    pub display: Display,
     pub navigation: Navigation,
     pub theme: Theme,
     /// Viewport size in pixels, for aspect, pan and zoom.
@@ -42,6 +132,7 @@ impl Session {
             tokens,
             mesh: None,
             camera: Camera::default(),
+            display: Display::default(),
             navigation: Navigation::default(),
             theme: Theme::default(),
             viewport: [1280.0, 720.0],
@@ -61,7 +152,19 @@ impl Session {
             Ok(e) => (e, None),
             Err(e) => (None, Some(e)),
         };
-        let surface = Surface::build(&mesh, &self.tokens);
+        // A new mesh starts with everything shown and nothing selected;
+        // the colouring stays.
+        self.display.hidden.clear();
+        self.display.selection = None;
+        let surface = Surface::build(&mesh, &self.tokens, &self.display);
+        let digest = sha256(path);
+        let validity = Validity::check(
+            path,
+            &digest,
+            &mesh,
+            evidence.as_ref(),
+            evidence_problem.as_ref(),
+        );
         if let Some(b) = &surface.bounds {
             self.camera.fit(b, self.aspect());
         }
@@ -72,23 +175,90 @@ impl Session {
             evidence,
             evidence_problem,
             surface,
+            digest,
+            validity,
         }))
     }
 
     pub fn close(&mut self) {
         self.mesh = None;
+        self.display.hidden.clear();
+        self.display.selection = None;
         self.surface_revision += 1;
     }
 
-    /// Frame the open mesh.
+    /// Build the surface again after a change of `display`.
+    pub fn redraw(&mut self) {
+        if let Some(m) = &mut self.mesh {
+            m.surface = Surface::build(&m.mesh, &self.tokens, &self.display);
+        }
+        self.surface_revision += 1;
+    }
+
+    /// Frame the faces shown (or the whole mesh when everything is
+    /// hidden).
     pub fn fit(&mut self) -> bool {
         let aspect = self.aspect();
-        match self.mesh.as_ref().and_then(|m| m.surface.bounds) {
+        match self
+            .mesh
+            .as_ref()
+            .and_then(|m| m.surface.visible_bounds.or(m.surface.bounds))
+        {
             Some(b) => {
                 self.camera.fit(&b, aspect);
                 true
             }
             None => false,
         }
+    }
+
+    /// Frame the shown faces of `item`; false when it has none.
+    pub fn fit_item(&mut self, item: Item) -> bool {
+        let aspect = self.aspect();
+        match self
+            .mesh
+            .as_ref()
+            .and_then(|m| self.display.bounds(&m.mesh, Some(item)))
+        {
+            Some(b) => {
+                self.camera.fit(&b, aspect);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(p: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures")
+            .join(p)
+    }
+
+    /// Invariant: the channel matches the evidence KoflCraft wrote beside
+    /// it (green badge), the box has none (amber), and a file whose bytes
+    /// differ from the recorded SHA-256 fails (red), so a stale evidence
+    /// file never shows green.
+    #[test]
+    fn validity_badge() {
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let m = s.open(&fixture("channel/foehncraft.vtu")).unwrap();
+        assert_eq!(m.validity, Validity::Valid);
+        let (mesh, ev) = (m.mesh.clone(), m.evidence.clone());
+        let stale = Validity::check(
+            &fixture("channel/foehncraft.vtu"),
+            "00",
+            &mesh,
+            ev.as_ref(),
+            None,
+        );
+        assert!(matches!(stale, Validity::Failed(w) if w.len() == 1));
+        let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
+        assert_eq!(m.validity, Validity::NoEvidence);
     }
 }

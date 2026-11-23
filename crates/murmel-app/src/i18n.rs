@@ -78,6 +78,7 @@ mod tests {
             include_str!("app.rs"),
             include_str!("viewport.rs"),
             include_str!("main.rs"),
+            include_str!("panels.rs"),
         ];
         for s in src {
             for part in s
@@ -98,6 +99,41 @@ mod tests {
         }
         for p in murmel_engine::navigation::PRESETS {
             assert!(t.has(&format!("preset-{p}")));
+        }
+        for c in murmel_engine::ColorBy::ALL {
+            assert!(t.has(&format!("color-by-{}", c.key())));
+        }
+        for k in murmel_mesh::CellKind::ALL {
+            assert!(t.has(&format!("kind-{}", k.name())));
+        }
+        for r in murmel_mesh::PatchRole::ALL {
+            assert!(t.has(&format!("role-{}", r.name())));
+        }
+        for v in ["valid", "no_evidence", "failed"] {
+            assert!(t.has(&format!("validity-{v}")));
+        }
+        for a in ["mesh", "zone", "kind", "patch"] {
+            assert!(t.has(&format!("props-area-{a}")));
+        }
+        // Every property row of every item of the channel has a label.
+        let mut s = murmel_engine::Session::new(murmel_engine::Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/channel/foehncraft.vtu");
+        s.open(&path).unwrap();
+        let (Some(m), d) = (&s.mesh, &s.display) else {
+            unreachable!()
+        };
+        let items = std::iter::once(murmel_engine::Item::Mesh)
+            .chain(murmel_engine::display::all_items(&m.mesh));
+        for item in items {
+            for r in murmel_engine::inspect::rows(m, d, item) {
+                assert!(
+                    t.has(&format!("prop-{}", r.key)),
+                    "missing key prop-{}",
+                    r.key
+                );
+            }
         }
     }
 

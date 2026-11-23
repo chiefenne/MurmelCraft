@@ -17,9 +17,14 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `view.orbit` | 1 | read | Turn the camera about the up axis (yaw) and tilt it (pitch), in degrees. |
 | `view.pan` | 1 | read | Move the view by a drag in pixels (x right, y down); the scene follows the pointer. |
 | `view.zoom` | 1 | read | Scale the camera distance by factor (below 1 zooms in), keeping the point under cursor_ndc (-1..1, y up) in place. |
-| `view.fit` | 1 | read | Frame the open mesh from the current direction. |
+| `view.fit` | 1 | read | Frame the faces shown, or the shown faces of one item (mesh, zone:<name>, kind:<cell type>, patch:<name>), from the current direction. |
 | `view.standard` | 1 | read | Go to a standard view (front, back, left, right, top, bottom, iso, home) and fit; face views snap to orthographic in perspective_ortho_faces. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
+| `display.color_by` | 1 | read | Colour the boundary faces by patch, patch role or the type of their cell. |
+| `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>), or show all; returns the hidden items and the visible counts. |
+| `select.item` | 1 | read | Select an item by id; its faces are highlighted and inspect.item shows it. |
+| `select.clear` | 1 | read | Clear the selection. |
+| `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
 | `settings.get` | 1 | read | The theme, the navigation bindings, the presets and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
@@ -229,7 +234,11 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
+  "properties": {
+    "item": {
+      "type": "string"
+    }
+  },
   "required": [],
   "type": "object"
 }
@@ -308,6 +317,98 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "required": [
     "path"
   ],
+  "type": "object"
+}
+```
+
+### `display.color_by`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "by": {
+      "enum": [
+        "patch",
+        "role",
+        "cell_type"
+      ]
+    }
+  },
+  "required": [
+    "by"
+  ],
+  "type": "object"
+}
+```
+
+### `display.visibility`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "show",
+        "hide",
+        "isolate",
+        "show_all"
+      ]
+    },
+    "items": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "type": "object"
+}
+```
+
+### `select.item`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "item"
+  ],
+  "type": "object"
+}
+```
+
+### `select.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `inspect.item`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item": {
+      "type": "string"
+    }
+  },
+  "required": [],
   "type": "object"
 }
 ```
@@ -439,6 +540,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `TOOL001` | error | No tool has this id. | Run `murmel commands` for the ids. |
 | `TOOL002` | error | The input does not match the tool's input schema. | Compare the input with the schema in `murmel commands`. |
 | `VIEW001` | error | The tool needs an open mesh and none is open. | Call mesh.open first, or pass `mesh` to view.screenshot. |
+| `VIEW002` | error | No item of the open mesh has this id. | Use `mesh`, `zone:<name>`, `kind:<cell type>` or `patch:<name>`; mesh.info lists the names. |
 | `SET001` | error | A settings file could not be written, or no config folder is known. | Set MURMEL_CONFIG_DIR to a writable folder. |
 | `SET002` | error | The navigation bindings bind one input to two actions. | Give each gesture, button and modifier combination one action. |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |

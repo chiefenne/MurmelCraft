@@ -15,6 +15,7 @@ egui.workspace = true
 egui-wgpu.workspace = true
 fluent-bundle.workspace = true
 murmel-engine.workspace = true
+murmel-mesh.workspace = true
 murmel-render.workspace = true
 murmel-tools.workspace = true
 png.workspace = true

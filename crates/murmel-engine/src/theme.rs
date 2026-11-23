@@ -1,6 +1,7 @@
 //! Design tokens (`assets/tokens.toml`) and the theme setting. egui's
 //! Visuals and the wgpu viewport both take their colours from here.
 
+use murmel_mesh::{CellKind, PatchRole};
 use serde::{Deserialize, Serialize};
 
 const TOKENS: &str = include_str!("../../../assets/tokens.toml");
@@ -68,6 +69,31 @@ pub struct MeshTokens {
     pub axis_x: Rgb,
     pub axis_y: Rgb,
     pub axis_z: Rgb,
+    pub selection: Rgb,
+    pub selection_mix: f32,
+    pub role: RoleTokens,
+    pub kind: KindTokens,
+}
+
+/// Colours of the patch roles.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct RoleTokens {
+    pub wall: Rgb,
+    pub inlet: Rgb,
+    pub outlet: Rgb,
+    pub symmetry: Rgb,
+    pub interface: Rgb,
+    pub unspecified: Rgb,
+}
+
+/// Colours of the cell types.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct KindTokens {
+    pub polyhedron: Rgb,
+    pub prism: Rgb,
+    pub hexahedron: Rgb,
+    pub tetrahedron: Rgb,
+    pub pyramid: Rgb,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -93,6 +119,29 @@ impl Tokens {
 
     pub fn patch_color(&self, patch: usize) -> Rgb {
         self.mesh.patch[patch % self.mesh.patch.len()]
+    }
+
+    pub fn role_color(&self, role: PatchRole) -> Rgb {
+        let r = &self.mesh.role;
+        match role {
+            PatchRole::Wall => r.wall,
+            PatchRole::Inlet => r.inlet,
+            PatchRole::Outlet => r.outlet,
+            PatchRole::Symmetry => r.symmetry,
+            PatchRole::Interface => r.interface,
+            PatchRole::Unspecified => r.unspecified,
+        }
+    }
+
+    pub fn kind_color(&self, kind: CellKind) -> Rgb {
+        let k = &self.mesh.kind;
+        match kind {
+            CellKind::Polyhedron => k.polyhedron,
+            CellKind::Prism => k.prism,
+            CellKind::Hexahedron => k.hexahedron,
+            CellKind::Tetrahedron => k.tetrahedron,
+            CellKind::Pyramid => k.pyramid,
+        }
     }
 }
 
@@ -150,5 +199,76 @@ mod tests {
             assert!(ratio(p.text_secondary, p.bg_panel) >= 4.5);
             assert!(ratio(p.accent, p.bg_app) >= 3.0);
         }
+    }
+
+    /// OKLab of a linear colour (Ottosson 2020).
+    fn oklab([r, g, b]: [f32; 3]) -> [f32; 3] {
+        let l = (0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_99 * b).cbrt();
+        let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+        let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+        [
+            0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+            1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+            0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+        ]
+    }
+
+    /// Full-severity colour-vision simulations (Machado, Oliveira and
+    /// Fernandes 2009) on linear RGB, with normal vision first.
+    const VISION: [[[f32; 3]; 3]; 4] = [
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        [
+            [0.152_286, 1.052_583, -0.204_868],
+            [0.114_503, 0.786_281, 0.099_216],
+            [-0.003_882, -0.048_116, 1.051_998],
+        ],
+        [
+            [0.367_322, 0.860_646, -0.227_968],
+            [0.280_085, 0.672_501, 0.047_413],
+            [-0.011_820, 0.042_940, 0.968_881],
+        ],
+        [
+            [1.255_528, -0.076_749, -0.178_779],
+            [-0.078_411, 0.930_809, 0.147_602],
+            [0.004_733, 0.691_367, 0.303_900],
+        ],
+    ];
+
+    /// The smallest OKLab distance between any two of `colors` under the
+    /// simulations `vision`.
+    fn min_distance(colors: &[Rgb], vision: &[[[f32; 3]; 3]]) -> f32 {
+        let mut best = f32::MAX;
+        for m in vision {
+            let lab: Vec<[f32; 3]> = colors
+                .iter()
+                .map(|c| {
+                    let v = c.linear();
+                    oklab(m.map(|row| (0..3).map(|k| row[k] * v[k]).sum::<f32>().clamp(0.0, 1.0)))
+                })
+                .collect();
+            for i in 0..lab.len() {
+                for j in i + 1..lab.len() {
+                    let d = (0..3).map(|k| (lab[i][k] - lab[j][k]).powi(2)).sum::<f32>();
+                    best = best.min(d.sqrt());
+                }
+            }
+        }
+        best
+    }
+
+    /// Invariant (UI spec: palettes tested for colour-blind safety): the
+    /// role and cell-type colours stay apart (OKLab distance at least 0.1)
+    /// in normal vision and under simulated protanopia, deuteranopia and
+    /// tritanopia; the first four patch colours stay at least 0.05 apart
+    /// under all four, and all twelve at least 0.07 in normal vision.
+    #[test]
+    fn palettes_are_colour_blind_safe() {
+        let t = Tokens::builtin().unwrap();
+        let roles: Vec<Rgb> = PatchRole::ALL.iter().map(|&r| t.role_color(r)).collect();
+        let kinds: Vec<Rgb> = CellKind::ALL.iter().map(|&k| t.kind_color(k)).collect();
+        assert!(min_distance(&roles, &VISION) >= 0.1);
+        assert!(min_distance(&kinds, &VISION) >= 0.1);
+        assert!(min_distance(&t.mesh.patch[..4], &VISION) >= 0.05);
+        assert!(min_distance(&t.mesh.patch, &VISION[..1]) >= 0.07);
     }
 }

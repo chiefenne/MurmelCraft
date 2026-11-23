@@ -1,0 +1,287 @@
+//! What the viewport shows (UI spec, "Display" and "Model tree"): the
+//! colouring, the hidden items and the selected item. Items are named by
+//! ids that tools and the tree share: `mesh`, `zone:<name>`,
+//! `kind:<cell type>` and `patch:<name>`.
+//!
+//! The viewport draws boundary faces, so an item hides the boundary faces
+//! it covers: a patch its own faces, a zone or a cell type the faces whose
+//! owner cell is in it.
+
+use std::collections::BTreeSet;
+
+use murmel_mesh::{Bounds, CellKind, Mesh, NO_CELL};
+use serde::{Deserialize, Serialize};
+
+/// What gives a boundary face its colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorBy {
+    #[default]
+    Patch,
+    Role,
+    CellType,
+}
+
+impl ColorBy {
+    pub const ALL: [ColorBy; 3] = [ColorBy::Patch, ColorBy::Role, ColorBy::CellType];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ColorBy::Patch => "patch",
+            ColorBy::Role => "role",
+            ColorBy::CellType => "cell_type",
+        }
+    }
+}
+
+/// One item of the model tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Item {
+    Mesh,
+    Zone(u32),
+    Kind(CellKind),
+    Patch(u32),
+}
+
+impl Item {
+    /// The item's id, for tools and the tree.
+    pub fn id(self, mesh: &Mesh) -> String {
+        match self {
+            Item::Mesh => "mesh".into(),
+            Item::Zone(z) => format!(
+                "zone:{}",
+                mesh.zones.get(z as usize).map_or("?", String::as_str)
+            ),
+            Item::Kind(k) => format!("kind:{}", k.name()),
+            Item::Patch(p) => format!(
+                "patch:{}",
+                mesh.patches
+                    .get(p as usize)
+                    .map_or("?", |p| p.name.as_str())
+            ),
+        }
+    }
+
+    /// The item an id names in `mesh`.
+    pub fn parse(id: &str, mesh: &Mesh) -> Option<Item> {
+        if id == "mesh" {
+            return Some(Item::Mesh);
+        }
+        let (area, name) = id.split_once(':')?;
+        match area {
+            "zone" => mesh
+                .zones
+                .iter()
+                .position(|z| z == name)
+                .map(|z| Item::Zone(z as u32)),
+            "kind" => CellKind::ALL
+                .into_iter()
+                .find(|k| k.name() == name)
+                .map(Item::Kind),
+            "patch" => mesh
+                .patches
+                .iter()
+                .position(|p| p.name == name)
+                .map(|p| Item::Patch(p as u32)),
+            _ => None,
+        }
+    }
+
+    fn same_area(self, other: Item) -> bool {
+        std::mem::discriminant(&self) == std::mem::discriminant(&other)
+    }
+}
+
+/// A change of visibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    Show,
+    Hide,
+    /// Hide every other item of the same kind (other patches, zones or
+    /// cell types).
+    Isolate,
+    ShowAll,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Display {
+    pub color_by: ColorBy,
+    pub hidden: BTreeSet<Item>,
+    pub selection: Option<Item>,
+}
+
+impl Display {
+    pub fn is_hidden(&self, item: Item) -> bool {
+        self.hidden.contains(&item)
+    }
+
+    /// Apply a visibility change to `items` of `mesh`.
+    pub fn set_visibility(&mut self, v: Visibility, items: &[Item], mesh: &Mesh) {
+        match v {
+            Visibility::ShowAll => self.hidden.clear(),
+            Visibility::Show => {
+                for i in items {
+                    self.hidden.remove(i);
+                }
+            }
+            Visibility::Hide => self.hidden.extend(items.iter().copied()),
+            Visibility::Isolate => {
+                if items.contains(&Item::Mesh) {
+                    self.hidden.clear();
+                    return;
+                }
+                let areas: Vec<Item> = items.to_vec();
+                for &i in items {
+                    self.hidden.remove(&i);
+                }
+                for other in all_items(mesh) {
+                    if areas.iter().any(|a| a.same_area(other)) && !items.contains(&other) {
+                        self.hidden.insert(other);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether the cells of zone and kind of cell `c` are shown.
+    pub fn cell_visible(&self, mesh: &Mesh, c: usize) -> bool {
+        if self.hidden.is_empty() {
+            return true;
+        }
+        if self.is_hidden(Item::Mesh) {
+            return false;
+        }
+        let z = mesh.cell_zone.get(c).copied().unwrap_or(0);
+        let k = mesh.cell_kind.get(c).copied();
+        !self.is_hidden(Item::Zone(z)) && !k.is_some_and(|k| self.is_hidden(Item::Kind(k)))
+    }
+
+    /// Whether boundary face `f` is drawn.
+    pub fn face_visible(&self, mesh: &Mesh, f: usize) -> bool {
+        if self.hidden.is_empty() {
+            return true;
+        }
+        if self.is_hidden(Item::Mesh) {
+            return false;
+        }
+        let p = mesh.boundary_patch.get(f).copied().unwrap_or(0);
+        if self.is_hidden(Item::Patch(p)) {
+            return false;
+        }
+        match mesh.boundary_owner.get(f).copied() {
+            Some(c) if c != NO_CELL => self.cell_visible(mesh, c as usize),
+            _ => true,
+        }
+    }
+
+    /// Whether boundary face `f` belongs to `item`.
+    pub fn face_in(mesh: &Mesh, f: usize, item: Item) -> bool {
+        let owner = mesh
+            .boundary_owner
+            .get(f)
+            .copied()
+            .filter(|&c| c != NO_CELL)
+            .map(|c| c as usize);
+        match item {
+            Item::Mesh => true,
+            Item::Patch(p) => mesh.boundary_patch.get(f) == Some(&p),
+            Item::Zone(z) => owner.is_some_and(|c| mesh.cell_zone.get(c) == Some(&z)),
+            Item::Kind(k) => owner.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
+        }
+    }
+
+    /// Whether boundary face `f` is drawn as selected.
+    pub fn face_selected(&self, mesh: &Mesh, f: usize) -> bool {
+        match self.selection {
+            None | Some(Item::Mesh) => false,
+            Some(item) => Self::face_in(mesh, f, item),
+        }
+    }
+
+    /// The bounds of the drawn faces that belong to `item` (all drawn
+    /// faces for `None`).
+    pub fn bounds(&self, mesh: &Mesh, item: Option<Item>) -> Option<Bounds> {
+        let mut b = Bounds::empty();
+        for (f, face) in mesh.boundary.iter().enumerate() {
+            if !self.face_visible(mesh, f) || item.is_some_and(|i| !Self::face_in(mesh, f, i)) {
+                continue;
+            }
+            for &n in face {
+                b.add(mesh.points[n as usize]);
+            }
+        }
+        (!b.is_empty()).then_some(b)
+    }
+
+    /// Cells and boundary faces shown.
+    pub fn visible_counts(&self, mesh: &Mesh) -> (usize, usize) {
+        if self.hidden.is_empty() {
+            return (mesh.cell_count(), mesh.boundary.len());
+        }
+        let cells = (0..mesh.cell_count())
+            .filter(|&c| self.cell_visible(mesh, c))
+            .count();
+        let faces = (0..mesh.boundary.len())
+            .filter(|&f| self.face_visible(mesh, f))
+            .count();
+        (cells, faces)
+    }
+}
+
+/// Every tree item of `mesh` below the root, in tree order: zones, the
+/// cell types it has, patches.
+pub fn all_items(mesh: &Mesh) -> Vec<Item> {
+    let mut v: Vec<Item> = (0..mesh.zones.len() as u32).map(Item::Zone).collect();
+    for k in CellKind::ALL {
+        if mesh.cell_kind.contains(&k) {
+            v.push(Item::Kind(k));
+        }
+    }
+    v.extend((0..mesh.patches.len() as u32).map(Item::Patch));
+    v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channel() -> Mesh {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/channel/foehncraft.vtu");
+        murmel_mesh::read(&p).unwrap()
+    }
+
+    /// Invariant: ids round-trip, and unknown names are refused.
+    #[test]
+    fn item_ids_round_trip() {
+        let m = channel();
+        for i in std::iter::once(Item::Mesh).chain(all_items(&m)) {
+            assert_eq!(Item::parse(&i.id(&m), &m), Some(i));
+        }
+        assert_eq!(Item::parse("patch:nope", &m), None);
+        assert_eq!(
+            Item::parse("kind:hexahedron", &m),
+            Some(Item::Kind(CellKind::Hexahedron))
+        );
+        assert_eq!(Item::parse("walls", &m), None);
+    }
+
+    /// Invariant: isolating a patch hides every other patch and nothing
+    /// else, so the visible faces are that patch's (walls: 256 of 426);
+    /// show all brings back all 426.
+    #[test]
+    fn isolate_and_show_all() {
+        let m = channel();
+        let mut d = Display::default();
+        let walls = Item::parse("patch:walls", &m).unwrap();
+        d.set_visibility(Visibility::Isolate, &[walls], &m);
+        assert_eq!(d.hidden.len(), 2);
+        assert_eq!(d.visible_counts(&m), (776, 256));
+        d.set_visibility(Visibility::Hide, &[Item::Kind(CellKind::Prism)], &m);
+        let (cells, _) = d.visible_counts(&m);
+        assert_eq!(cells, 8);
+        d.set_visibility(Visibility::ShowAll, &[], &m);
+        assert_eq!(d.visible_counts(&m), (776, 426));
+    }
+}

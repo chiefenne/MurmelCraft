@@ -143,6 +143,11 @@ pub mod icon {
     pub const MONITOR: &str = "\u{E121}";
     pub const SETTINGS: &str = "\u{E158}";
     pub const ALERT: &str = "\u{E07B}";
+    pub const EYE: &str = "\u{E0BE}";
+    pub const EYE_OFF: &str = "\u{E0BF}";
+    pub const INFO: &str = "\u{E0FE}";
+    pub const LAYERS: &str = "\u{E104}";
+    pub const SEARCH: &str = "\u{E155}";
 }
 
 /// The MurmelCraft logo (assets/logo, supplied by the maintainer) as RGBA.

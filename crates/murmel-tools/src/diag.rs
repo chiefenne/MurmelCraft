@@ -41,6 +41,14 @@ const OWN: &[Code] = &[
         fix: Some("Call mesh.open first, or pass `mesh` to view.screenshot."),
     },
     Code {
+        code: "VIEW002",
+        severity: Severity::Error,
+        meaning: "No item of the open mesh has this id.",
+        fix: Some(
+            "Use `mesh`, `zone:<name>`, `kind:<cell type>` or `patch:<name>`; mesh.info lists the names.",
+        ),
+    },
+    Code {
         code: "SET001",
         severity: Severity::Error,
         meaning: "A settings file could not be written, or no config folder is known.",

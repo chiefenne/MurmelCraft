@@ -1,5 +1,6 @@
 //! The boundary of a mesh as triangles and edge lines, ready for the GPU.
-//! Built once per mesh and colouring; orbiting never re-triangulates.
+//! Built once per mesh and display (colouring, hidden items, selection);
+//! orbiting never re-triangulates.
 //!
 //! Each boundary polygon is a fan about its node average (exact for the
 //! star-shaped faces KoflCraft writes, including merged faces), with one
@@ -8,15 +9,22 @@
 
 use std::collections::HashSet;
 
-use murmel_mesh::{Bounds, Mesh};
+use murmel_mesh::{Bounds, Mesh, NO_CELL};
 
-use crate::theme::Tokens;
+use crate::display::{ColorBy, Display};
+use crate::theme::{Rgb, Tokens};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Surface {
     pub origin: [f64; 3],
     pub radius: f64,
     pub bounds: Option<Bounds>,
+    /// Bounds of the faces drawn (hidden items left out).
+    pub visible_bounds: Option<Bounds>,
+    /// Boundary faces drawn, and the cells shown (counted once per build
+    /// so the status bar does not walk the mesh every frame).
+    pub faces: usize,
+    pub cells: usize,
     /// Triangle vertices: position, normal, linear colour.
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
@@ -36,8 +44,9 @@ impl Surface {
         self.edge_positions.len() / 2
     }
 
-    /// Triangulate the boundary of `mesh`, each face in its patch colour.
-    pub fn build(mesh: &Mesh, tokens: &Tokens) -> Surface {
+    /// Triangulate the boundary faces of `mesh` that `display` shows, in
+    /// the colours it asks for.
+    pub fn build(mesh: &Mesh, tokens: &Tokens, display: &Display) -> Surface {
         let bounds = mesh.bounds();
         let origin = bounds.center();
         let mut s = Surface {
@@ -51,12 +60,60 @@ impl Surface {
             [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]]
         };
         let darken = 1.0 - tokens.mesh.edge_darken;
-        let mut seen: HashSet<(u32, u32)> = HashSet::new();
-        for (f, face) in mesh.boundary.iter().enumerate() {
+        let sel = tokens.mesh.selection;
+        let mix = tokens.mesh.selection_mix.clamp(0.0, 1.0);
+        let face_rgb = |f: usize| -> Rgb {
             let patch = mesh.boundary_patch.get(f).copied().unwrap_or(0) as usize;
-            let rgb = tokens.patch_color(patch);
-            let color = rgb.linear();
-            let ec = crate::theme::Rgb(rgb.0.map(|v| (v as f32 * darken).round() as u8)).linear();
+            match display.color_by {
+                ColorBy::Patch => tokens.patch_color(patch),
+                ColorBy::Role => tokens.role_color(
+                    mesh.patches
+                        .get(patch)
+                        .map_or(murmel_mesh::PatchRole::Unspecified, |p| p.role),
+                ),
+                ColorBy::CellType => match mesh.boundary_owner.get(f).copied() {
+                    Some(c) if c != NO_CELL => mesh
+                        .cell_kind
+                        .get(c as usize)
+                        .map_or(tokens.mesh.role.unspecified, |&k| tokens.kind_color(k)),
+                    _ => tokens.mesh.role.unspecified,
+                },
+            }
+        };
+        // Selected faces first, so the edges they share with others take
+        // the selection colour.
+        let mut order: Vec<(bool, usize)> = (0..mesh.boundary.len())
+            .filter(|&f| display.face_visible(mesh, f))
+            .map(|f| (!display.face_selected(mesh, f), f))
+            .collect();
+        order.sort_unstable();
+        s.faces = order.len();
+        s.cells = if display.hidden.is_empty() {
+            mesh.cell_count()
+        } else {
+            (0..mesh.cell_count())
+                .filter(|&c| display.cell_visible(mesh, c))
+                .count()
+        };
+        let mut vb = Bounds::empty();
+        let mut seen: HashSet<(u32, u32)> = HashSet::new();
+        for (unselected, f) in order {
+            let face = mesh.boundary.get(f);
+            let rgb = face_rgb(f);
+            let (color, ec) = if unselected {
+                (
+                    rgb.linear(),
+                    Rgb(rgb.0.map(|v| (v as f32 * darken).round() as u8)).linear(),
+                )
+            } else {
+                let m = Rgb(std::array::from_fn(|k| {
+                    (rgb.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
+                }));
+                (m.linear(), sel.linear())
+            };
+            for &i in face {
+                vb.add(mesh.points[i as usize]);
+            }
             let pts: Vec<[f64; 3]> = face.iter().map(|&i| rel(i)).collect();
             let n = newell(&pts);
             let base = s.positions.len() as u32;
@@ -93,6 +150,7 @@ impl Surface {
                 }
             }
         }
+        s.visible_bounds = (!vb.is_empty()).then_some(vb);
         s
     }
 }
@@ -132,10 +190,11 @@ mod tests {
         )
         .unwrap();
         let t = Tokens::builtin().unwrap();
-        let s = Surface::build(&mesh, &t);
+        let s = Surface::build(&mesh, &t, &Display::default());
         assert_eq!(s.triangles(), 4);
         assert_eq!(s.edges(), 6);
         assert_eq!(s.origin, [0.5; 3]);
+        assert_eq!(s.faces, 4);
         for n in &s.normals {
             let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
             assert!((l - 1.0).abs() < 1e-5);

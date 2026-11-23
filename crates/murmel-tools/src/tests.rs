@@ -190,3 +190,73 @@ fn engine_has_no_window_or_gpu() {
         }
     }
 }
+
+/// Invariant: the display tools drive what the viewport draws. Isolating
+/// the walls draws only their 256 faces, the selection is reported by id,
+/// colour by cell type is accepted, an unknown item says VIEW002, and the
+/// properties of the mesh and of a patch come back as rows.
+#[test]
+fn display_selection_and_properties() {
+    let mut s = session();
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    let e = call("mesh.open", json!({"path": channel}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["validity"], "valid");
+    assert!(
+        e.result["items"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("kind:prism"))
+    );
+
+    let e = call(
+        "display.visibility",
+        json!({"action": "isolate", "items": ["patch:walls"]}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["visible_faces"], 256);
+    assert_eq!(s.mesh.as_ref().unwrap().surface.faces, 256);
+    let e = call(
+        "display.visibility",
+        json!({"action": "hide", "items": ["patch:nope"]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "VIEW002");
+    let e = call("display.visibility", json!({"action": "hide"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let e = call("display.visibility", json!({"action": "show_all"}), &mut s);
+    assert_eq!(e.result["visible_faces"], 426);
+
+    let e = call("display.color_by", json!({"by": "cell_type"}), &mut s);
+    assert_eq!(e.result["color_by"], "cell_type");
+    let e = call("display.color_by", json!({"by": "quality"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+
+    let e = call("select.item", json!({"item": "patch:inlet"}), &mut s);
+    assert_eq!(e.result["selection"], "patch:inlet");
+    let e = call("inspect.item", json!({}), &mut s);
+    assert_eq!(e.result["item"], "patch:inlet");
+    let rows = e.result["rows"].as_array().unwrap();
+    let get = |k: &str| {
+        rows.iter()
+            .find(|r| r["key"] == k)
+            .map(|r| r["value"].clone())
+    };
+    assert_eq!(get("faces"), Some(json!(85)));
+    assert_eq!(get("foehncraft_type"), Some(json!("velocity-inlet")));
+    let e = call("view.fit", json!({"item": "patch:inlet"}), &mut s);
+    assert!(e.ok());
+
+    call("select.clear", json!({}), &mut s);
+    let e = call("inspect.item", json!({}), &mut s);
+    assert_eq!(e.result["item"], "mesh");
+    let rows = e.result["rows"].as_array().unwrap();
+    let get = |k: &str| {
+        rows.iter()
+            .find(|r| r["key"] == k)
+            .map(|r| r["value"].clone())
+    };
+    assert_eq!(get("faces_interior"), Some(json!(1747)));
+    assert_eq!(get("validity"), Some(json!("valid")));
+}
