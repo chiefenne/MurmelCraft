@@ -61,6 +61,20 @@ impl MurmelApp {
             ui.scope_id().with("viewport"),
             Sense::click_and_drag(),
         );
+        // The canvas takes the focus (F6), and keeps the arrow keys for
+        // orbiting instead of letting egui move the focus with them.
+        self.focus.viewport = Some(resp.id);
+        self.focus.offer(crate::focus::Region::Viewport, &resp);
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                resp.id,
+                egui::EventFilter {
+                    horizontal_arrows: true,
+                    vertical_arrows: true,
+                    ..Default::default()
+                },
+            )
+        });
         let size = [rect.width() as f64, rect.height() as f64];
         if size[0] >= 1.0 && size[1] >= 1.0 && self.session.viewport != size {
             self.session.viewport = size;

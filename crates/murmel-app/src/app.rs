@@ -9,6 +9,7 @@ use murmel_engine::{Session, Theme, Tokens, settings};
 use murmel_tools::Diagnostic;
 use serde_json::{Value, json};
 
+use crate::focus::Region;
 use crate::i18n::{I18n, count};
 use crate::style::{self, color, icon};
 use crate::viewport::GpuView;
@@ -62,6 +63,13 @@ pub struct MurmelApp {
     pub(crate) cube_distance_edit: Option<f64>,
     /// Until when a run of wheel steps keeps its undo group open.
     wheel_until: f64,
+    /// Keyboard focus: F6 regions, the focus ring, the arrow keys.
+    pub(crate) focus: crate::focus::Focus,
+    /// The width of the panel toggles at the right of the toolbar, as
+    /// last drawn (the groups take the rest).
+    toggles_w: f32,
+    /// The same for the buttons at the right of the title bar.
+    title_buttons_w: f32,
 }
 
 /// A pause of the wheel this long (seconds) ends its undo step.
@@ -117,6 +125,9 @@ impl MurmelApp {
             cube_busy: false,
             cube_distance_edit: None,
             wheel_until: 0.0,
+            focus: crate::focus::Focus::default(),
+            toggles_w: 90.0,
+            title_buttons_w: 110.0,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -279,37 +290,43 @@ impl MurmelApp {
                     }
                 })
                 .unwrap_or_else(|| self.i18n.tr("app-no-file"));
-            ui.label(RichText::new(file).color(color(p.text_secondary)));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let settings = self.i18n.tr("settings-title");
-                let palette = self.i18n.tr("cmd-palette");
-                if icon_button(
-                    ui,
-                    icon::SETTINGS,
-                    &settings,
-                    &self.i18n.tr("settings-tip"),
-                    self.settings_open,
-                )
-                .clicked()
-                {
-                    self.settings_open = !self.settings_open;
-                }
-                let tip = format!("{palette} ({})", crate::commands::key_text("Ctrl+K"));
-                if icon_button(ui, icon::SEARCH, &palette, &tip, self.palette.is_some()).clicked() {
-                    self.open_palette(String::new());
-                }
-                let (glyph, next) = match self.session.theme {
-                    Theme::Dark => (icon::MOON, Theme::Light),
-                    Theme::Light => (icon::SUN, Theme::System),
-                    Theme::System => (icon::MONITOR, Theme::Dark),
-                };
-                let name = self
-                    .i18n
-                    .tr(&format!("theme-{}", theme_key(self.session.theme)));
-                if icon_button(ui, glyph, &name, &self.i18n.tr("settings-theme"), false).clicked() {
-                    self.call("settings.set_theme", json!({ "theme": next }));
-                }
-            });
+            ui.add(egui::Label::new(RichText::new(file).color(color(p.text_secondary))).truncate());
+            // The buttons at the right, drawn left to right so that Tab
+            // visits them in the order they show.
+            let w = self.title_buttons_w;
+            ui.add_space((ui.available_width() - w).max(0.0));
+            let start = ui.cursor().min.x;
+            let (glyph, next) = match self.session.theme {
+                Theme::Dark => (icon::MOON, Theme::Light),
+                Theme::Light => (icon::SUN, Theme::System),
+                Theme::System => (icon::MONITOR, Theme::Dark),
+            };
+            let theme = self
+                .i18n
+                .tr(&format!("theme-{}", theme_key(self.session.theme)));
+            let name = self.i18n.tr_args("theme-name", &[("theme", theme.into())]);
+            let b = icon_button(ui, glyph, &name, &self.i18n.tr("settings-theme"), false);
+            self.focus.offer(Region::Title, &b);
+            if b.clicked() {
+                self.call("settings.set_theme", json!({ "theme": next }));
+            }
+            let palette = self.i18n.tr("cmd-palette");
+            let tip = format!("{palette} ({})", crate::commands::key_text("Ctrl+K"));
+            if icon_button(ui, icon::SEARCH, &palette, &tip, self.palette.is_some()).clicked() {
+                self.open_palette(String::new());
+            }
+            let settings = self.i18n.tr("settings-title");
+            let b = icon_button(
+                ui,
+                icon::SETTINGS,
+                &settings,
+                &self.i18n.tr("settings-tip"),
+                self.settings_open,
+            );
+            if b.clicked() {
+                self.settings_open = !self.settings_open;
+            }
+            self.title_buttons_w = b.rect.max.x - start;
         });
     }
 
@@ -317,33 +334,14 @@ impl MurmelApp {
     /// left. When the window is too narrow for all groups they scroll
     /// sideways under the toggles instead of drawing over them.
     fn toolbar(&mut self, ui: &mut Ui) {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let props = self.i18n.tr("toolbar-properties");
-            if icon_button(
-                ui,
-                icon::INFO,
-                &props,
-                &self.i18n.tr("toolbar-properties-tip"),
-                self.show_props,
-            )
-            .clicked()
-            {
-                self.show_props = !self.show_props;
-            }
-            let tree = self.i18n.tr("toolbar-tree");
-            if icon_button(
-                ui,
-                icon::LAYERS,
-                &tree,
-                &self.i18n.tr("toolbar-tree-tip"),
-                self.show_tree,
-            )
-            .clicked()
-            {
-                self.show_tree = !self.show_tree;
-            }
-            ui.separator();
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+        // Groups first and the toggles after them, so that Tab visits the
+        // toolbar from left to right; the groups take what the toggles
+        // (as wide as last frame) leave.
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            let room = (ui.available_width() - self.toggles_w).max(0.0);
+            let size = egui::vec2(room, ui.available_height());
+            ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                ui.set_width(room);
                 let out = egui::ScrollArea::horizontal()
                     .id_salt("toolbar-groups")
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -369,6 +367,36 @@ impl MurmelApp {
                     ui.ctx().request_repaint();
                 }
             });
+            let start = ui.cursor().min.x;
+            ui.separator();
+            let tree = self.i18n.tr("toolbar-tree");
+            if icon_button(
+                ui,
+                icon::LAYERS,
+                &tree,
+                &self.i18n.tr("toolbar-tree-tip"),
+                self.show_tree,
+            )
+            .clicked()
+            {
+                self.show_tree = !self.show_tree;
+            }
+            let props = self.i18n.tr("toolbar-properties");
+            let b = icon_button(
+                ui,
+                icon::INFO,
+                &props,
+                &self.i18n.tr("toolbar-properties-tip"),
+                self.show_props,
+            );
+            if b.clicked() {
+                self.show_props = !self.show_props;
+            }
+            let w = b.rect.max.x - start;
+            if (w - self.toggles_w).abs() > 0.5 {
+                self.toggles_w = w;
+                ui.ctx().request_repaint();
+            }
         });
     }
 
@@ -396,6 +424,8 @@ impl MurmelApp {
                 RichText::new(format!("{}  {open}", icon::FOLDER_OPEN)).size(13.0),
             ))
             .on_hover_text(self.i18n.tr("toolbar-open-tip"));
+        b.widget_info(|| WidgetInfo::labeled(Role::Button, true, open.clone()));
+        self.focus.offer(Region::Toolbar, &b);
         if b.clicked() {
             self.open_dialog();
         }
@@ -441,7 +471,10 @@ impl MurmelApp {
                 "{long}\n{}",
                 self.i18n.tr("toolbar-projection-tip")
             ));
-        b.widget_info(|| WidgetInfo::labeled(Role::Button, true, long.clone()));
+        let name = self
+            .i18n
+            .tr_args("projection-name", &[("mode", long.clone().into())]);
+        b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
         if b.clicked() {
             self.call("view.set_camera", json!({ "projection": proj.next() }));
         }
@@ -450,6 +483,9 @@ impl MurmelApp {
         let mode = self.session.display.render_mode;
         let mut pick_mode = None;
         let current = self.i18n.tr(&format!("render-mode-{}", mode.key()));
+        let name = self
+            .i18n
+            .tr_args("render-mode-name", &[("mode", current.clone().into())]);
         let r = egui::ComboBox::from_id_salt("render-mode")
             .selected_text(current)
             .show_ui(ui, |ui| {
@@ -464,7 +500,8 @@ impl MurmelApp {
                 }
             });
         r.response
-            .on_hover_text(self.i18n.tr("toolbar-render-mode-tip"));
+            .on_hover_text(self.i18n.tr("toolbar-render-mode-tip"))
+            .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, name.clone()));
         if let Some(m) = pick_mode.filter(|&m| m != mode) {
             self.call("display.render_mode", json!({ "mode": m }));
         }
@@ -565,8 +602,12 @@ impl MurmelApp {
             };
             let mode = c.mode;
             let mut pick = None;
+            let current = self.i18n.tr(&format!("clip-mode-{}", mode.key()));
+            let name = self
+                .i18n
+                .tr_args("clip-mode-name", &[("mode", current.clone().into())]);
             let r = egui::ComboBox::from_id_salt("clip-mode")
-                .selected_text(self.i18n.tr(&format!("clip-mode-{}", mode.key())))
+                .selected_text(current)
                 .show_ui(ui, |ui| {
                     for m in murmel_engine::ClipMode::ALL {
                         let name = self.i18n.tr(&format!("clip-mode-{}", m.key()));
@@ -576,7 +617,8 @@ impl MurmelApp {
                     }
                 });
             r.response
-                .on_hover_text(self.i18n.tr("toolbar-clip-mode-tip"));
+                .on_hover_text(self.i18n.tr("toolbar-clip-mode-tip"))
+                .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, name.clone()));
             if let Some(m) = pick.filter(|&m| m != mode) {
                 self.call("clip.set", json!({ "mode": m }));
             }
@@ -664,8 +706,12 @@ impl MurmelApp {
     fn status_bar(&mut self, ui: &mut Ui) {
         let p = self.palette(ui.ctx()).clone();
         let secondary = color(p.text_secondary);
+        // What the bar says, for its node in the accessibility tree: the
+        // message first, then the hint.
+        let mut said: Vec<String> = Vec::new();
+        let hint = self.hint();
         ui.horizontal_centered(|ui| {
-            ui.label(RichText::new(self.hint()).small().color(secondary));
+            ui.label(RichText::new(&hint).small().color(secondary));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
                     RichText::new(self.i18n.tr("status-units"))
@@ -710,25 +756,33 @@ impl MurmelApp {
                             ("message", e.message.clone().into()),
                         ],
                     );
-                    ui.label(
-                        RichText::new(format!("{}  {text}", icon::ALERT))
-                            .small()
-                            .color(color(p.status_error)),
-                    )
-                    .on_hover_text(e.fix.unwrap_or(""));
+                    let red = color(p.status_error);
+                    ui.label(RichText::new(&text).small().color(red))
+                        .on_hover_text(e.fix.unwrap_or(""));
+                    // The alert glyph is painted left of the text, not
+                    // put in it: a screen reader would read it.
+                    let (g, _) = ui.allocate_exact_size(egui::vec2(14.0, 16.0), Sense::hover());
+                    ui.painter().text(
+                        g.center(),
+                        egui::Align2::CENTER_CENTER,
+                        icon::ALERT,
+                        egui::FontId::proportional(12.0),
+                        red,
+                    );
+                    said.push(text);
                 } else if let Some(m) = &self.session.mesh {
                     let s = (m.surface.cells, m.surface.faces);
                     let sel = &self.session.display.selection;
+                    let cells = self.i18n.tr_args(
+                        "status-cells",
+                        &[("cells", count(s.0).into()), ("faces", count(s.1).into())],
+                    );
                     if sel.len() > 1 {
-                        ui.label(
-                            RichText::new(
-                                self.i18n.tr_args(
-                                    "status-selected-many",
-                                    &[("count", sel.len().into())],
-                                ),
-                            )
-                            .small(),
-                        );
+                        let text = self
+                            .i18n
+                            .tr_args("status-selected-many", &[("count", sel.len().into())]);
+                        ui.label(RichText::new(&text).small());
+                        said.push(text);
                     } else if let Some(&sel) = sel.first() {
                         let id = sel.id(&m.mesh);
                         let (area, name) = id.split_once(':').unwrap_or(("mesh", ""));
@@ -738,24 +792,29 @@ impl MurmelApp {
                             name.to_string()
                         };
                         let area = self.i18n.tr(&format!("props-area-{area}"));
-                        ui.label(
-                            RichText::new(self.i18n.tr_args(
-                                "status-selected",
-                                &[("area", area.into()), ("item", name.into())],
-                            ))
-                            .small(),
+                        let text = self.i18n.tr_args(
+                            "status-selected",
+                            &[("area", area.into()), ("item", name.into())],
                         );
+                        ui.label(RichText::new(&text).small());
+                        said.push(text);
                     }
-                    ui.label(
-                        RichText::new(self.i18n.tr_args(
-                            "status-cells",
-                            &[("cells", count(s.0).into()), ("faces", count(s.1).into())],
-                        ))
-                        .small(),
-                    );
+                    ui.label(RichText::new(&cells).small());
+                    said.push(cells);
                 }
             });
         });
+        // The bar as one status node F6 can reach, so a screen reader
+        // reads its message.
+        said.push(hint);
+        let name = said.join(". ");
+        let resp = ui.interact(
+            ui.max_rect(),
+            ui.scope_id().with("status-node"),
+            Sense::focusable_noninteractive(),
+        );
+        resp.widget_info(|| WidgetInfo::labeled(Role::Status, true, name.clone()));
+        self.focus.offer(Region::Status, &resp);
     }
 
     fn settings_window(&mut self, ctx: &egui::Context) {
@@ -842,6 +901,22 @@ impl MurmelApp {
     }
 }
 
+impl MurmelApp {
+    /// Name the pane `ui` is drawn in and remember where it is (F6).
+    fn region(&mut self, ui: &Ui, region: Region) {
+        crate::focus::name_pane(ui, &self.i18n.tr(region.key()));
+        self.focus.region(region, ui.max_rect());
+    }
+
+    /// F6 and Shift + F6: focus the first widget of the next region.
+    pub(crate) fn cycle_region(&mut self, ctx: &egui::Context, forward: bool) {
+        if let Some((_, id)) = self.focus.next(ctx, forward) {
+            ctx.memory_mut(|m| m.request_focus(id));
+            self.focus.visible = true;
+        }
+    }
+}
+
 pub(crate) fn theme_key(t: Theme) -> &'static str {
     match t {
         Theme::Dark => "dark",
@@ -874,6 +949,7 @@ impl eframe::App for MurmelApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.now = ctx.input(|i| i.time);
+        self.focus.begin(&ctx);
         self.apply_theme(&ctx);
         self.group_steps(&ctx);
         self.keys(&ctx);
@@ -896,15 +972,24 @@ impl eframe::App for MurmelApp {
         egui::Panel::top("title")
             .exact_size(36.0)
             .frame(bar(p.bg_app))
-            .show(ui, |ui| self.title_bar(ui));
+            .show(ui, |ui| {
+                self.region(ui, Region::Title);
+                self.title_bar(ui)
+            });
         egui::Panel::top("toolbar")
             .exact_size(40.0)
             .frame(bar(p.bg_panel))
-            .show(ui, |ui| self.toolbar(ui));
+            .show(ui, |ui| {
+                self.region(ui, Region::Toolbar);
+                self.toolbar(ui)
+            });
         egui::Panel::bottom("status")
             .exact_size(24.0)
             .frame(bar(p.bg_app))
-            .show(ui, |ui| self.status_bar(ui));
+            .show(ui, |ui| {
+                self.region(ui, Region::Status);
+                self.status_bar(ui)
+            });
         if self.show_tree {
             egui::Panel::left("tree")
                 .default_size(264.0)
@@ -915,7 +1000,10 @@ impl eframe::App for MurmelApp {
                         .fill(color(p.bg_panel))
                         .inner_margin(egui::Margin::symmetric(10, 0)),
                 )
-                .show(ui, |ui| self.model_tree(ui));
+                .show(ui, |ui| {
+                    self.region(ui, Region::Tree);
+                    self.model_tree(ui)
+                });
         }
         if self.show_props {
             egui::Panel::right("properties")
@@ -927,14 +1015,22 @@ impl eframe::App for MurmelApp {
                         .fill(color(p.bg_panel))
                         .inner_margin(egui::Margin::symmetric(12, 0)),
                 )
-                .show(ui, |ui| self.properties(ui));
+                .show(ui, |ui| {
+                    self.region(ui, Region::Properties);
+                    self.properties(ui)
+                });
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(color(p.viewport_bottom)))
-            .show(ui, |ui| self.viewport(ui, frame));
+            .show(ui, |ui| {
+                self.region(ui, Region::Viewport);
+                self.viewport(ui, frame)
+            });
         self.settings_window(&ctx);
         self.shortcuts_window(&ctx);
         self.palette_window(&ctx);
+        crate::focus::ring(&ctx, &self.focus, color(p.accent));
+        self.focus.end(&ctx);
     }
 }
 

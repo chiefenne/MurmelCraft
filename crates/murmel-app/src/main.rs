@@ -3,9 +3,12 @@
 //! `murmelcraft [MESH]` opens the window, optionally with a mesh: a
 //! `.vtu` file or an OpenFOAM case, `constant` or `polyMesh` folder.
 
+#[cfg(test)]
+mod a11y_tests;
 mod app;
 mod commands;
 mod cube;
+mod focus;
 mod i18n;
 mod panels;
 mod quality;

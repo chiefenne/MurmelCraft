@@ -210,6 +210,20 @@ pub fn commands() -> Vec<Command> {
             Window(None),
         ),
         cmd(
+            "window.next_region",
+            "cmd-next-region",
+            "window",
+            &["F6"],
+            Window(None),
+        ),
+        cmd(
+            "window.previous_region",
+            "cmd-previous-region",
+            "window",
+            &["Shift+F6"],
+            Window(None),
+        ),
+        cmd(
             "window.settings",
             "cmd-settings",
             "window",

@@ -55,7 +55,11 @@ The method is the ArtCraft Craft Anything method of KoflCraft and FoehnCraft:
 - **MUST** take every visible string from a translation key in
   `assets/i18n/en/murmel.ftl` (a test checks the keys the window uses).
 - **MUST** give every command a key or a palette entry, and every widget an
-  accessible name (AccessKit): icon-only buttons set `widget_info`.
+  accessible name (AccessKit): icon-only buttons set `widget_info`, and no
+  name or label text holds an icon glyph (paint glyphs beside text). A new
+  region offers its first control to F6 (`Focus::offer`); the window test
+  (`crates/murmel-app/src/a11y_tests.rs`) checks names and F6
+  ([docs/accessibility.md](docs/accessibility.md)).
 - **MUST** take every colour from `assets/tokens.toml`; no colour literal in
   code.
 
@@ -137,7 +141,7 @@ the same code path in the fast run.
 | `crates/murmel-tools` | tool registry, result envelope, diagnostic codes, `docs/tools.md`; command table (keys and palette), `docs/keys.md` |
 | `crates/murmel-cli` | `murmel`, the command line of the registry; `murmel mcp` starts the MCP server |
 | `crates/murmel-mcp` | the MCP server (stdio, MCP 2025-11-25): the registry for agents on one headless session, paths confined to read and write roots, screenshots returned as images ([docs/mcp.md](docs/mcp.md)) |
-| `crates/murmel-app` | `murmelcraft`, the egui + eframe window: panels, viewport, view cube, command palette, shortcut sheet |
+| `crates/murmel-app` | `murmelcraft`, the egui + eframe window: panels, viewport, view cube, command palette, shortcut sheet, keyboard focus (F6 regions, focus ring), window tests with egui_kittest |
 | `assets/` | tokens, fonts, icons, translations, with provenance |
 | `test-fixtures/` | KoflCraft meshes and OpenFOAM polyMesh cases, with provenance |
 

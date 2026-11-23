@@ -40,6 +40,24 @@ problem took more than a few minutes to understand.
 - **`Color32::gamma_multiply` scales alpha too.** `gamma_multiply(0.8)
   .to_opaque()` turns a colour dark and dull, not dimmer; mix two token
   colours instead (the view cube's `lerp`).
+- **egui moves the focus with the arrow keys and drops it on Esc.** Both
+  happen when the frame begins, before the window reads its keys, so
+  `memory().focused()` is already `None` after Esc; the window keeps the
+  focused widget of the last frame (`Focus::last`). The viewport keeps the
+  arrows for orbiting with `set_focus_lock_filter`, or the first Left
+  moves the focus out of it.
+- **Tab follows the order widgets are created.** A `right_to_left` layout
+  creates its rightmost widget first, so Tab ran backwards through the
+  title bar's buttons and visited the toolbar's panel toggles before Open.
+  Both bars now draw from left to right after a spacer as wide as the
+  buttons were last frame.
+- **A label's text runs carry its glyphs.** Setting a widget's name does
+  not change the `TextRun` children AccessKit gets from the text, so an
+  icon glyph inside a label's text still reaches the screen reader. Paint
+  the glyph with `Painter::text` beside the label instead.
+- **`get_by_label` skips labels.** kittest's queries leave out `Label`
+  nodes unless asked (`include_labels`); the window test looks names up
+  over all nodes.
 - **Keys under Xvfb.** Without a window manager the window has no keyboard
   focus; send keys with `xdotool key --window <id>` after `windowfocus`.
 
