@@ -1,0 +1,184 @@
+//! The tool registry of MurmelCraft (UI spec, "Viewer tools in the
+//! registry"). Every control in the window calls one of these tools; the
+//! CLI (`murmel call ID --input in.json`) and, later, the MCP server call
+//! the same ids. Every call ends in the same result envelope
+//! (`murmelcraft.tool-result`), as in KoflCraft (AG-12) and FoehnCraft
+//! (D196).
+//!
+//! Tools change the session only; the kind `write-files` marks the tools
+//! that also write files and names them (`outputs`), so an approval table
+//! can judge a call before it runs.
+
+mod diag;
+mod markdown;
+mod tools;
+
+use std::time::Instant;
+
+use murmel_engine::Session;
+use serde::Serialize;
+use serde_json::{Value, json};
+
+pub use diag::{Code, Severity, code, codes};
+pub use markdown::markdown;
+
+pub const RESULT_FORMAT: &str = "murmelcraft.tool-result";
+pub const CATALOGUE_FORMAT: &str = "murmelcraft.tool-catalogue";
+pub const FORMAT_VERSION: &str = "1.0";
+
+/// What a tool does beyond the session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Action {
+    /// Reads files and changes the session only.
+    Read,
+    /// Also writes files (named by `outputs` or the tool's summary).
+    WriteFiles,
+}
+
+/// A failed call: a registered code and a message.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Diagnostic {
+    pub code: &'static str,
+    pub severity: Severity,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<&'static str>,
+}
+
+impl Diagnostic {
+    pub fn new(code_id: &'static str, message: impl Into<String>) -> Self {
+        let c = code(code_id);
+        Self {
+            code: code_id,
+            severity: c.map_or(Severity::Error, |c| c.severity),
+            message: message.into(),
+            fix: c.and_then(|c| c.fix),
+        }
+    }
+}
+
+pub type Run = Result<Value, Diagnostic>;
+type RunFn = fn(Value, &mut Session) -> Run;
+
+/// One registered tool.
+pub struct Tool {
+    pub id: &'static str,
+    pub version: u32,
+    pub action: Action,
+    /// Translation key of the tool's name in the window.
+    pub label_key: &'static str,
+    pub summary: &'static str,
+    /// Input fields that name files the call writes.
+    pub outputs: &'static [&'static str],
+    input_schema: fn() -> Value,
+    run: RunFn,
+}
+
+impl Tool {
+    pub fn input_schema(&self) -> Value {
+        (self.input_schema)()
+    }
+
+    /// The files a call with `input` would write, before it runs.
+    pub fn effects(&self, input: &Value) -> Vec<String> {
+        self.outputs
+            .iter()
+            .filter_map(|f| input[*f].as_str().map(str::to_string))
+            .collect()
+    }
+}
+
+/// The result of every call.
+#[derive(Clone, Debug, Serialize)]
+pub struct Envelope {
+    pub format: String,
+    pub format_version: String,
+    pub tool: String,
+    pub tool_version: u32,
+    /// `finished` or `failed`.
+    pub status: String,
+    /// 0 finished, 1 failed, 2 unknown tool or bad input.
+    pub exit_code: i32,
+    pub result: Value,
+    pub diagnostics: Vec<Diagnostic>,
+    pub seconds: f64,
+}
+
+impl Envelope {
+    fn failed(tool: &str, version: u32, d: Diagnostic) -> Self {
+        let exit_code = if d.code.starts_with("TOOL") { 2 } else { 1 };
+        Self {
+            format: RESULT_FORMAT.into(),
+            format_version: FORMAT_VERSION.into(),
+            tool: tool.into(),
+            tool_version: version,
+            status: "failed".into(),
+            exit_code,
+            result: Value::Null,
+            diagnostics: vec![d],
+            seconds: 0.0,
+        }
+    }
+
+    pub fn ok(&self) -> bool {
+        self.exit_code == 0
+    }
+
+    pub fn to_json(&self) -> Value {
+        serde_json::to_value(self).unwrap_or(Value::Null)
+    }
+}
+
+pub fn tools() -> &'static [Tool] {
+    tools::TOOLS
+}
+
+pub fn find(id: &str) -> Option<&'static Tool> {
+    tools::TOOLS.iter().find(|t| t.id == id)
+}
+
+/// Run tool `id` with `input` on `session`.
+pub fn call(id: &str, input: Value, session: &mut Session) -> Envelope {
+    let Some(tool) = find(id) else {
+        return Envelope::failed(id, 0, Diagnostic::new("TOOL001", format!("no tool {id}")));
+    };
+    let start = Instant::now();
+    let input = if input.is_null() { json!({}) } else { input };
+    let mut e = match (tool.run)(input, session) {
+        Ok(result) => Envelope {
+            format: RESULT_FORMAT.into(),
+            format_version: FORMAT_VERSION.into(),
+            tool: tool.id.into(),
+            tool_version: tool.version,
+            status: "finished".into(),
+            exit_code: 0,
+            result,
+            diagnostics: Vec::new(),
+            seconds: 0.0,
+        },
+        Err(d) => Envelope::failed(tool.id, tool.version, d),
+    };
+    e.seconds = start.elapsed().as_secs_f64();
+    e
+}
+
+/// `system.commands`: every tool with its schema.
+pub fn catalogue() -> Value {
+    json!({
+        "format": CATALOGUE_FORMAT,
+        "format_version": FORMAT_VERSION,
+        "tools": tools::TOOLS.iter().map(|t| json!({
+            "id": t.id,
+            "version": t.version,
+            "action": t.action,
+            "label_key": t.label_key,
+            "summary": t.summary,
+            "outputs": t.outputs,
+            "input_schema": t.input_schema(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(test)]
+mod tests;

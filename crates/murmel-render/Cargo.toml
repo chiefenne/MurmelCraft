@@ -1,0 +1,20 @@
+[package]
+name = "murmel-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The wgpu renderer of MurmelCraft: one code path for the window and for offscreen screenshots"
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+murmel-engine.workspace = true
+png.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+murmel-mesh.workspace = true
+
+[lints]
+workspace = true

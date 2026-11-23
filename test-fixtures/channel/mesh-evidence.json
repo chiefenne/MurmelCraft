@@ -1,0 +1,95 @@
+{
+  "format": "koflcraft.mesh-evidence",
+  "format_version": "1.0",
+  "koflcraft_version": "0.1.0",
+  "generator": "straight_channel",
+  "summary": {
+    "cells": 776,
+    "faces": 2173,
+    "interior_faces": 1747,
+    "boundary_faces": 426,
+    "points": 576,
+    "total_volume": 8.000000000000023,
+    "min_volume": 0.0004,
+    "max_relative_closure": 3.137800545299877e-16,
+    "merged_faces": 0,
+    "inverted_faces": 0,
+    "patches": [
+      {
+        "name": "inlet",
+        "role": "inlet",
+        "foehncraft_type": "velocity-inlet",
+        "faces": 85,
+        "area": 1.9999999999999996
+      },
+      {
+        "name": "outlet",
+        "role": "outlet",
+        "foehncraft_type": "static-pressure-outlet",
+        "faces": 85,
+        "area": 1.9999999999999991
+      },
+      {
+        "name": "walls",
+        "role": "wall",
+        "foehncraft_type": "wall",
+        "faces": 256,
+        "area": 24.000000000000043
+      }
+    ],
+    "zones": [
+      {
+        "name": "fluid",
+        "cells": 776,
+        "volume": 8.000000000000023
+      }
+    ]
+  },
+  "patches": [
+    {
+      "name": "inlet",
+      "role": "inlet"
+    },
+    {
+      "name": "outlet",
+      "role": "outlet"
+    },
+    {
+      "name": "walls",
+      "role": "wall"
+    }
+  ],
+  "files": [
+    [
+      "volume.vtu",
+      "f09a3fbee47f72e381bce66b5f8cf714f91b010a6d6f446267d1033d706d6d14"
+    ],
+    [
+      "inlet.vtu",
+      "743920bd4d832c6677d685ec1332956ec49309d0360d77cad64f5bd58aa7b342"
+    ],
+    [
+      "outlet.vtu",
+      "f65125ae4ccb6a0984ebfb22fc73bb2f42c4cd875fb677c9a3d2d219ec51c036"
+    ],
+    [
+      "walls.vtu",
+      "072382c2ea1d0a846495ad2ffa7ecfb191ceed5ba969ae41b624eef7df764834"
+    ],
+    [
+      "channel.vtm",
+      "9eab677f3cab49d1ef800a37afc1b9580606049cab67bfaafa81b0fcdcd6cc5d"
+    ],
+    [
+      "channel.msh",
+      "5eb7bb032d998238272155b47501c9630fe7df24febb5763cfe82f8cfd81cc0e"
+    ],
+    [
+      "foehncraft.vtu",
+      "c1a1bfa046f85a0a0fa391fb8be9bdefb80eaaaaf9844938ac521de8d09d050e"
+    ]
+  ],
+  "limitations": [
+    "flow accuracy on this mesh is untested"
+  ]
+}

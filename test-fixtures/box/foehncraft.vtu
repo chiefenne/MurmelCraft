@@ -1,0 +1,162 @@
+<?xml version="1.0"?>
+<VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian">
+  <UnstructuredGrid>
+    <FieldData>
+      <DataArray type="String" Name="zone_names" NumberOfTuples="1" format="ascii">48 61 102 108 117 105 100 0 </DataArray>
+      <DataArray type="String" Name="boundary_names" NumberOfTuples="6" format="ascii">48 61 120 109 105 110 0 49 61 120 109 97 120 0 50 61 121 109 105 110 0 51 61 121 109 97 120 0 52 61 122 109 105 110 0 53 61 122 109 97 120 0 </DataArray>
+      <DataArray type="String" Name="boundary_roles" NumberOfTuples="6" format="ascii">48 61 117 110 115 112 101 99 105 102 105 101 100 0 49 61 117 110 115 112 101 99 105 102 105 101 100 0 50 61 117 110 115 112 101 99 105 102 105 101 100 0 51 61 117 110 115 112 101 99 105 102 105 101 100 0 52 61 117 110 115 112 101 99 105 102 105 101 100 0 53 61 117 110 115 112 101 99 105 102 105 101 100 0 </DataArray>
+      <DataArray type="String" Name="koflcraft_version" NumberOfTuples="1" format="ascii">48 46 49 46 48 0 </DataArray>
+      <DataArray type="String" Name="koflcraft_mesh_digest" NumberOfTuples="1" format="ascii">100 55 54 51 52 50 97 54 51 97 49 53 55 98 51 50 52 49 98 102 52 53 54 51 52 100 56 100 102 49 54 57 56 99 57 48 56 102 57 56 56 55 50 51 48 97 97 54 48 99 49 56 101 100 55 97 99 55 49 97 50 99 99 51 0 </DataArray>
+      <DataArray type="String" Name="koflcraft_topology_digest" NumberOfTuples="1" format="ascii">100 56 100 49 99 101 98 51 98 99 49 100 100 100 100 50 101 97 50 55 50 102 97 53 56 99 101 100 99 52 55 55 98 100 98 55 52 49 102 54 53 54 50 52 101 51 98 99 54 53 98 56 53 49 99 49 49 97 51 54 99 97 54 48 0 </DataArray>
+      <DataArray type="String" Name="koflcraft_input_digest" NumberOfTuples="1" format="ascii">48 50 48 53 101 48 100 51 57 102 99 102 57 53 55 50 102 52 98 99 100 101 99 98 51 56 49 50 51 52 50 57 51 54 101 56 52 54 52 56 55 57 99 101 50 56 101 49 57 100 98 97 100 57 102 98 97 53 52 55 52 48 53 99 0 </DataArray>
+      <DataArray type="String" Name="koflcraft_algorithm" NumberOfTuples="1" format="ascii">99 112 117 95 98 111 120 95 99 108 105 112 112 101 100 95 118 111 114 111 110 111 105 95 118 50 0 </DataArray>
+    </FieldData>
+    <Piece NumberOfPoints="21" NumberOfCells="20">
+      <Points>
+        <DataArray type="Float64" NumberOfComponents="3" format="ascii">
+0e0 0e0 0e0
+0e0 0e0 8.495918367346939e-1
+0e0 8.333834586466166e-1 3.733727175080558e-1
+0e0 9.902e-1 0e0
+3.764035087719298e-1 0e0 0e0
+6.298927313480628e-1 0e0 6.567675312199808e-1
+3.0065503875968985e-1 7.196104651162791e-1 0e0
+5.496145930552564e-1 2.755039844927848e-1 5.239116232321057e-1
+1e0 0e0 0e0
+1e0 9.103409090909091e-1 0e0
+1e0 7.822773186409525e-2 8.514646464646465e-1
+1e0 0e0 8.757042253521126e-1
+0e0 1e0 5.042857142857141e-1
+0e0 1e0 0e0
+1e0 1e0 0e0
+1e0 1e0 1e0
+1e0 2.672727272727273e-1 1e0
+4.626666666666667e-1 1e0 1e0
+0e0 0e0 1e0
+0e0 1e0 1e0
+1e0 0e0 1e0
+        </DataArray>
+      </Points>
+      <Cells>
+        <DataArray type="Int64" Name="connectivity" format="ascii">
+0 1 2 3 4 5 6 7 
+4 5 6 7 8 9 10 11 
+2 3 6 7 9 10 12 13 14 15 16 17 
+1 2 5 7 10 11 12 16 17 18 19 20 
+0 1 2 3 
+12 13 3 2 
+1 18 19 12 2 
+8 9 10 11 
+9 14 15 16 10 
+16 20 11 10 
+0 4 5 1 
+4 8 11 5 
+11 20 18 1 5 
+13 12 17 15 14 
+12 19 17 
+0 3 6 4 
+9 8 4 6 
+3 13 14 9 6 
+16 15 17 
+18 20 16 17 19 
+        </DataArray>
+        <DataArray type="Int64" Name="offsets" format="ascii">
+8
+16
+28
+40
+44
+48
+53
+57
+62
+66
+70
+74
+79
+84
+87
+91
+95
+100
+103
+108
+        </DataArray>
+        <DataArray type="UInt8" Name="types" format="ascii">
+42
+42
+42
+42
+7
+7
+7
+7
+7
+7
+7
+7
+7
+7
+7
+7
+7
+7
+7
+7
+        </DataArray>
+        <DataArray type="Int64" Name="faces" format="ascii">
+6 4 4 6 7 5 4 2 7 6 3 4 1 5 7 2 4 0 1 2 3 4 0 4 5 1 4 0 3 6 4
+6 4 9 6 7 10 4 10 7 5 11 4 8 9 10 11 4 4 8 11 5 4 9 8 4 6 4 5 7 6 4
+8 6 12 2 7 10 16 17 4 12 13 3 2 5 9 14 15 16 10 5 13 12 17 15 14 5 3 13 14 9 6 3 16 15 17 4 3 6 7 2 4 10 7 6 9
+8 5 1 18 19 12 2 4 16 20 11 10 5 11 20 18 1 5 3 12 19 17 5 18 20 16 17 19 4 2 7 5 1 4 11 5 7 10 6 17 16 10 7 2 12
+        </DataArray>
+        <DataArray type="Int64" Name="faceoffsets" format="ascii">
+31
+62
+107
+152
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+-1
+        </DataArray>
+      </Cells>
+      <CellData Scalars="region">
+        <DataArray type="Int32" Name="region" format="ascii">
+0
+0
+0
+0
+0
+0
+0
+1
+1
+1
+2
+2
+2
+3
+3
+4
+4
+4
+5
+5
+        </DataArray>
+      </CellData>
+    </Piece>
+  </UnstructuredGrid>
+</VTKFile>
