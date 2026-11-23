@@ -96,6 +96,19 @@ impl Gpu {
             adapter: format!("{} · {:?}", info.name, info.backend),
         })
     }
+
+    /// The process's one offscreen device, made on first use and kept to
+    /// the end. Offscreen renders (screenshots, render tests) share it
+    /// instead of each creating and dropping its own instance: Mesa 26
+    /// lavapipe crashed (SIGSEGV) when render tests created and destroyed
+    /// devices on several threads at once (docs/pitfalls.md).
+    pub fn shared() -> Result<&'static std::sync::Mutex<Gpu>, RenderError> {
+        static GPU: std::sync::OnceLock<Result<std::sync::Mutex<Gpu>, RenderError>> =
+            std::sync::OnceLock::new();
+        GPU.get_or_init(|| Gpu::headless().map(std::sync::Mutex::new))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
 }
 
 #[repr(C)]
@@ -582,7 +595,11 @@ pub fn render_session(
             format!("{width} x {height} is outside 1..{MAX_SIDE}"),
         ));
     }
-    let gpu = Gpu::headless()?;
+    let gpu = Gpu::shared()?;
+    // One offscreen render at a time on the shared device.
+    let gpu = gpu
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut r = MeshRenderer::new(&gpu.device);
     let dark = session.theme.is_dark(None);
     let p = session.tokens.palette(dark);
@@ -605,7 +622,7 @@ pub fn render_session(
         width,
         height,
         rgba,
-        adapter: gpu.adapter,
+        adapter: gpu.adapter.clone(),
     })
 }
 

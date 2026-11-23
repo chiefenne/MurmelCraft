@@ -51,17 +51,6 @@ jobs:
           else
             cargo test --locked --workspace --all-targets
           fi
-      - name: Diagnose a render-test crash (temporary)
-        if: failure()
-        run: |
-          sudo apt-get install -y -qq --no-install-recommends gdb
-          bin=$(ls target/debug/build/murmel-render/*/out/render-* 2>/dev/null | grep -v '\.d$' | head -1)
-          [ -n "$bin" ] || bin=$(ls target/debug/deps/render-* | grep -v '\.d$' | head -1)
-          echo "binary: $bin"
-          for t in $("$bin" --list 2>/dev/null | sed -n 's/: test$//p'); do
-            echo "== $t"; "$bin" --exact "$t" --test-threads=1 2>&1 | tail -3 || true
-          done
-          gdb -batch -ex run -ex 'thread apply all bt 25' --args "$bin" --test-threads=1 2>&1 | grep -v '^\[New Thread\|^\[Thread' | tail -150
       - name: Keep the rendered images when a render test fails
         if: failure()
         uses: actions/upload-artifact@v4

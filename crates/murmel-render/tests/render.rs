@@ -175,3 +175,25 @@ fn the_mesh_fills_the_view() {
     let covered = diff_share(&shot.rgba, &bg.rgba, 8);
     assert!(covered > 0.15, "mesh covers only {:.1} %", 100.0 * covered);
 }
+
+/// Invariant: offscreen renders from several threads at once share the
+/// one device (`Gpu::shared` hands out the same one) and all give the same
+/// picture. Each render used to create and drop its own Vulkan instance;
+/// Mesa 26 lavapipe crashed the test process (SIGSEGV) when that happened
+/// on several threads at once, which no single-threaded test shows.
+#[test]
+fn renders_on_many_threads_share_one_device() {
+    let a = murmel_render::Gpu::shared().unwrap() as *const _;
+    let b = murmel_render::Gpu::shared().unwrap() as *const _;
+    assert_eq!(a, b);
+    let s = session(StandardView::ISO);
+    let first = render_session(&s, 160, 120).unwrap().rgba;
+    std::thread::scope(|scope| {
+        let runs: Vec<_> = (0..6)
+            .map(|_| scope.spawn(|| render_session(&s, 160, 120).unwrap().rgba))
+            .collect();
+        for r in runs {
+            assert!(r.join().unwrap() == first);
+        }
+    });
+}

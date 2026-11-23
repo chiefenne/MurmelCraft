@@ -91,6 +91,10 @@ problem took more than a few minutes to understand.
   a dropped file's path is `DroppedFile::path()`.
 - **quick-xml 0.42**: `local_name().as_ref()` is a `&str`;
   `Attribute::unescape_value` is deprecated for `normalized_value(version)`.
+- **Mesa 26 lavapipe (CI image ubuntu-26.04)** crashed the render-test
+  process (SIGSEGV, about two runs in three) when each test created and
+  dropped its own Vulkan instance on its own thread; Mesa 25 never did.
+  Offscreen renders share one device (`Gpu::shared`) and take turns.
 
 ## Serde
 
