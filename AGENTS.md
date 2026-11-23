@@ -42,6 +42,10 @@ The method is the ArtCraft Craft Anything method of KoflCraft and FoehnCraft:
   and regenerate `docs/keys.md` with
   `cargo run -p murmel-cli -- keys --markdown > docs/keys.md` (tests check
   both, and that no key is bound twice).
+- **MUST** decide for every new tool whether its calls are undo steps:
+  list it in `JOURNALED` (it changes the camera or the display) or in
+  `NOT_JOURNALED` with the reason (`crates/murmel-tools/src/tools.rs`; a
+  test checks). The selection, settings and files are never undone.
 - **MUST** take every visible string from a translation key in
   `assets/i18n/en/murmel.ftl` (a test checks the keys the window uses).
 - **MUST** give every command a key or a palette entry, and every widget an
@@ -122,7 +126,7 @@ the same code path in the fast run.
 | Path | What |
 |---|---|
 | `crates/murmel-mesh` | `.vtu` reader (VTK polyhedra 42, `region`, zone and boundary names and roles), `mesh-evidence.json`, mesh model and summary |
-| `crates/murmel-engine` | session, camera (turntable with roll, three projection modes, 26 cube views, rotation about screen axes), view cube geometry, navigation bindings and presets, tokens and user colours, settings files, triangulated surface and feature edges |
+| `crates/murmel-engine` | session, tool journal (undo and redo), camera (turntable with roll, three projection modes, 26 cube views, rotation about screen axes), view cube geometry, navigation bindings and presets, tokens and user colours, settings files, triangulated surface and feature edges |
 | `crates/murmel-render` | wgpu renderer for the window and offscreen PNGs, render tests |
 | `crates/murmel-tools` | tool registry, result envelope, diagnostic codes, `docs/tools.md`; command table (keys and palette), `docs/keys.md` |
 | `crates/murmel-cli` | `murmel`, the command line of the registry |

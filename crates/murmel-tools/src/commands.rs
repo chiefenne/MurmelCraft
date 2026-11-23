@@ -66,6 +66,7 @@ impl Command {
 /// group is one of them (a test checks).
 pub const GROUPS: &[&str] = &[
     "view",
+    "edit",
     "file",
     "window",
     "display",
@@ -503,6 +504,24 @@ pub fn commands() -> Vec<Command> {
             Tool("select.filter", json!({ "target": t })),
         ));
     }
+    v.push(cmd(
+        "journal.undo",
+        "cmd-undo",
+        "edit",
+        &["Ctrl+Z"],
+        Dynamic("journal.undo", |s| {
+            (!s.journal.undo.is_empty()).then(|| json!({}))
+        }),
+    ));
+    v.push(cmd(
+        "journal.redo",
+        "cmd-redo",
+        "edit",
+        &["Ctrl+Shift+Z"],
+        Dynamic("journal.redo", |s| {
+            (!s.journal.redo.is_empty()).then(|| json!({}))
+        }),
+    ));
     for t in ["dark", "light", "system"] {
         v.push(cmd(
             format!("settings.set_theme:{t}"),
@@ -568,6 +587,11 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     ("view.get_camera", "the view note and the cube show it"),
     ("inspect.item", "the Properties panel shows it"),
     ("settings.get", "the Settings window shows it"),
+    (
+        "journal.group",
+        "the window groups each mouse gesture and run of wheel steps itself",
+    ),
+    ("journal.list", "for scripts; undo and redo walk it"),
     ("select.item", "needs an item: the model tree selects"),
     (
         "select.pick",
@@ -735,8 +759,12 @@ mod tests {
                     let e = crate::call(tool, input, &mut s);
                     assert!(e.ok(), "{}: {:?}", c.id, e.diagnostics);
                 }
+                // Undo and redo apply only with a step to walk; the
+                // journal tests run them.
                 None => assert!(
-                    matches!(c.run, Run::Window(_)) || c.id == "select.clear",
+                    matches!(c.run, Run::Window(_))
+                        || c.id == "select.clear"
+                        || c.id.starts_with("journal."),
                     "{} has no input with a selection",
                     c.id
                 ),

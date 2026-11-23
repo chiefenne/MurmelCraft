@@ -1,4 +1,4 @@
-//! The tools of V0.1. Inputs are typed structs (unknown fields refused);
+//! The tools. Inputs are typed structs (unknown fields refused);
 //! each tool has a JSON Schema of its input for the catalogue.
 
 use std::path::PathBuf;
@@ -1020,6 +1020,120 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
     }))
 }
 
+// ---- journal ------------------------------------------------------------
+
+/// The tools whose calls are steps of the journal: they change the camera
+/// or the display (UI spec: "Ctrl + Z, Ctrl + Shift + Z: undo, redo
+/// (camera and display)"). Every other tool is in `NOT_JOURNALED` with
+/// the reason (a test checks).
+pub const JOURNALED: &[&str] = &[
+    "view.set_camera",
+    "view.orbit",
+    "view.pan",
+    "view.zoom",
+    "view.fit",
+    "view.standard",
+    "view.rotate",
+    "display.render_mode",
+    "display.color_by",
+    "display.threshold",
+    "display.set_color",
+    "display.visibility",
+    "clip.set",
+    "clip.clear",
+];
+
+/// Tools that make no step, and why.
+pub const NOT_JOURNALED: &[(&str, &str)] = &[
+    ("system.info", "reads only"),
+    ("system.commands", "reads only"),
+    ("diag.codes", "reads only"),
+    ("mesh.open", "a new mesh starts a new journal"),
+    ("mesh.close", "closing the mesh ends its journal"),
+    ("mesh.info", "reads only"),
+    ("view.get_camera", "reads only"),
+    (
+        "view.screenshot",
+        "writes a file; a mesh or view it is given is for the picture",
+    ),
+    (
+        "select.item",
+        "the selection is not undone, as in CAD tools",
+    ),
+    (
+        "select.pick",
+        "the selection is not undone, as in CAD tools",
+    ),
+    (
+        "select.clear",
+        "the selection is not undone, as in CAD tools",
+    ),
+    (
+        "select.filter",
+        "a mode of picking, not a change of the view",
+    ),
+    ("inspect.at", "reads only"),
+    ("inspect.quality", "reads only"),
+    ("inspect.item", "reads only"),
+    ("settings.get", "reads only"),
+    ("settings.set_theme", "settings are files, not undone"),
+    ("settings.set_colors", "settings are files, not undone"),
+    ("settings.set_view_cube", "settings are files, not undone"),
+    ("settings.set_bindings", "settings are files, not undone"),
+    ("journal.undo", "walks the journal"),
+    ("journal.redo", "walks the journal"),
+    ("journal.group", "groups the steps"),
+    ("journal.list", "reads only"),
+];
+
+pub(crate) fn journaled(id: &str) -> bool {
+    JOURNALED.contains(&id)
+}
+
+fn journal_json(s: &Session) -> Value {
+    json!({"undo": s.journal.undo.len(), "redo": s.journal.redo.len()})
+}
+
+fn journal_undo(_: Value, s: &mut Session) -> Run {
+    let undone = s.undo();
+    let mut out = journal_json(s);
+    out["undone"] = json!(undone);
+    out["camera"] = camera_json(s);
+    Ok(out)
+}
+
+fn journal_redo(_: Value, s: &mut Session) -> Run {
+    let redone = s.redo();
+    let mut out = journal_json(s);
+    out["redone"] = json!(redone);
+    out["camera"] = camera_json(s);
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Group {
+    open: bool,
+}
+
+fn journal_group(input: Value, s: &mut Session) -> Run {
+    let i: Group = parse(input)?;
+    s.journal.group(i.open);
+    Ok(json!({"open": s.journal.group_open()}))
+}
+
+fn journal_list(_: Value, s: &mut Session) -> Run {
+    let tools = |v: &[murmel_engine::journal::Step]| -> Vec<String> {
+        v.iter().map(|st| st.tool.clone()).collect()
+    };
+    Ok(json!({
+        "undo": tools(&s.journal.undo),
+        "redo": tools(&s.journal.redo),
+        "group_open": s.journal.group_open(),
+        "max_steps": murmel_engine::journal::MAX_STEPS,
+    }))
+}
+
 // ---- the catalogue ------------------------------------------------------
 
 pub static TOOLS: &[Tool] = &[
@@ -1443,6 +1557,46 @@ pub static TOOLS: &[Tool] = &[
         outputs: &[],
         input_schema: || object(json!({"item": {"type": "string"}}), &[]),
         run: inspect_item,
+    },
+    Tool {
+        id: "journal.undo",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-journal-undo",
+        summary: "Undo the last step of the camera or the display (a call of a journalled tool, or one group of calls such as a mouse drag); the selection stays. undone is the tool of the step, null when there was none.",
+        outputs: &[],
+        input_schema: no_input,
+        run: journal_undo,
+    },
+    Tool {
+        id: "journal.redo",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-journal-redo",
+        summary: "Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none.",
+        outputs: &[],
+        input_schema: no_input,
+        run: journal_redo,
+    },
+    Tool {
+        id: "journal.group",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-journal-group",
+        summary: "Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps).",
+        outputs: &[],
+        input_schema: || object(json!({"open": {"type": "boolean"}}), &["open"]),
+        run: journal_group,
+    },
+    Tool {
+        id: "journal.list",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-journal-list",
+        summary: "The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept.",
+        outputs: &[],
+        input_schema: no_input,
+        run: journal_list,
     },
     Tool {
         id: "settings.get",

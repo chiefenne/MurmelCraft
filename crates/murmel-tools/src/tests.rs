@@ -515,3 +515,72 @@ fn orbit_about_a_pivot() {
     );
     assert_eq!(e.diagnostics[0].code, "TOOL002");
 }
+
+/// Invariant: every tool is either a journal step (JOURNALED) or listed
+/// in NOT_JOURNALED with a reason, never both. Breaks when a new tool
+/// that changes the view is added without deciding whether undo covers
+/// it.
+#[test]
+fn every_tool_decides_on_the_journal() {
+    for t in crate::tools() {
+        let j = crate::JOURNALED.contains(&t.id);
+        let n = crate::NOT_JOURNALED.iter().any(|(id, _)| *id == t.id);
+        assert!(j != n, "{}: journalled {j}, not journalled {n}", t.id);
+    }
+    for id in crate::JOURNALED
+        .iter()
+        .chain(crate::NOT_JOURNALED.iter().map(|(id, _)| id))
+    {
+        assert!(crate::find(id).is_some(), "{id} is no tool");
+    }
+}
+
+/// Invariant: through the registry, undo and redo walk the camera and
+/// display steps, keep the selection, make one step of a group (a mouse
+/// drag), and a new mesh starts an empty journal. Breaks when a tool call
+/// stops recording its step, when a drag needs one undo per frame, or
+/// when undo drops the selection; the engine journal tests call the
+/// journal directly, not through the tools.
+#[test]
+fn undo_and_redo_through_the_tools() {
+    let mut s = session();
+    let path = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    let cam0 = s.camera.clone();
+    assert!(call("journal.group", json!({"open": true}), &mut s).ok());
+    for _ in 0..20 {
+        assert!(
+            call(
+                "view.orbit",
+                json!({"yaw_deg": 2.0, "pitch_deg": 1.0}),
+                &mut s
+            )
+            .ok()
+        );
+    }
+    assert!(call("journal.group", json!({"open": false}), &mut s).ok());
+    let cam1 = s.camera.clone();
+    assert!(call("display.color_by", json!({"by": "patch"}), &mut s).ok());
+    assert!(call("select.item", json!({"item": "patch:inlet"}), &mut s).ok());
+    let selection = s.display.selection.clone();
+    let e = call("journal.list", json!({}), &mut s);
+    assert_eq!(e.result["undo"], json!(["view.orbit", "display.color_by"]));
+    let e = call("journal.undo", json!({}), &mut s);
+    assert_eq!(e.result["undone"], "display.color_by");
+    assert_eq!(s.display.color_by, murmel_engine::ColorBy::Solid);
+    assert_eq!(s.display.selection, selection);
+    let e = call("journal.undo", json!({}), &mut s);
+    assert_eq!(e.result["undone"], "view.orbit");
+    assert_eq!(s.camera, cam0);
+    let e = call("journal.undo", json!({}), &mut s);
+    assert!(e.ok());
+    assert_eq!(e.result["undone"], serde_json::Value::Null);
+    let e = call("journal.redo", json!({}), &mut s);
+    assert_eq!(e.result["redone"], "view.orbit");
+    assert_eq!(s.camera, cam1);
+    assert_eq!(e.result["redo"], 1);
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    let e = call("journal.list", json!({}), &mut s);
+    assert_eq!(e.result["undo"], json!([]));
+    assert_eq!(e.result["redo"], json!([]));
+}

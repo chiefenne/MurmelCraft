@@ -8,6 +8,7 @@ use murmel_mesh::{Evidence, Mesh, MeshError};
 use crate::camera::Camera;
 use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Display, Item};
+use crate::journal::Journal;
 use crate::navigation::Navigation;
 use crate::quality::Quality;
 use crate::surface::Surface;
@@ -138,6 +139,8 @@ pub struct Session {
     pub surface_revision: u64,
     /// Where settings tools write; `None` disables them.
     pub config_dir: Option<PathBuf>,
+    /// The undo and redo steps of the open mesh.
+    pub journal: Journal,
 }
 
 impl Session {
@@ -154,6 +157,7 @@ impl Session {
             viewport: [1280.0, 720.0],
             surface_revision: 0,
             config_dir: crate::settings::config_dir(),
+            journal: Journal::default(),
         }
     }
 
@@ -169,7 +173,8 @@ impl Session {
             Err(e) => (None, Some(e)),
         };
         // A new mesh starts with everything shown and nothing selected;
-        // the colouring stays.
+        // the colouring stays. Its journal starts empty.
+        self.journal.clear();
         self.display.hidden.clear();
         self.display.selection.clear();
         self.display.isolated.clear();
@@ -204,6 +209,7 @@ impl Session {
 
     pub fn close(&mut self) {
         self.mesh = None;
+        self.journal.clear();
         self.display.hidden.clear();
         self.display.selection.clear();
         self.display.isolated.clear();

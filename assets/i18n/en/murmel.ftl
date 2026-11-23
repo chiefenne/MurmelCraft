@@ -238,6 +238,10 @@ tool-select-pick = Pick
 tool-select-filter = What a click picks
 tool-inspect-at = What is under the cursor
 tool-inspect-item = Properties
+tool-journal-undo = Undo
+tool-journal-redo = Redo
+tool-journal-group = Group steps
+tool-journal-list = Undo history
 tool-settings-get = Settings
 tool-settings-set-theme = Theme
 tool-settings-set-colors = Mesh colours
@@ -274,6 +278,7 @@ view-back_right = Back right
 view-back_right_top = Back right top
 
 # Commands of the keyboard map and the palette (crates/murmel-tools/src/commands.rs).
+group-edit = Edit
 group-file = File
 group-window = Window
 group-view = View
@@ -338,6 +343,8 @@ cmd-fit-selection = Fit the selection
 cmd-clear-selection = Clear the selection
 cmd-pick-cell = Click picks cells
 cmd-pick-face = Click picks faces
+cmd-undo = Undo (camera and display)
+cmd-redo = Redo
 cmd-theme-dark = Theme: dark
 cmd-theme-light = Theme: light
 cmd-theme-system = Theme: follow the system

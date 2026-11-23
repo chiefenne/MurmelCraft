@@ -35,6 +35,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `inspect.quality` | 1 | read | Statistics of a cell quality metric over all cells (the current one when left out): min, max, mean and a histogram of bins equal-width bins (default 20); with above, the number of cells at or above that value. |
 | `select.clear` | 1 | read | Clear the selection. |
 | `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
+| `journal.undo` | 1 | read | Undo the last step of the camera or the display (a call of a journalled tool, or one group of calls such as a mouse drag); the selection stays. undone is the tool of the step, null when there was none. |
+| `journal.redo` | 1 | read | Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none. |
+| `journal.group` | 1 | read | Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps). |
+| `journal.list` | 1 | read | The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, the presets and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
 | `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
@@ -754,6 +758,56 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       "type": "string"
     }
   },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `journal.undo`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `journal.redo`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `journal.group`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "open": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "open"
+  ],
+  "type": "object"
+}
+```
+
+### `journal.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
   "required": [],
   "type": "object"
 }
