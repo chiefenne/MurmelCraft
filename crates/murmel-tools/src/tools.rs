@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::settings::{Settings, save_navigation, save_settings};
-use murmel_engine::{ColorBy, Item, Projection, Session, StandardView, Theme, Visibility};
+use murmel_engine::{
+    ColorBy, Item, MeshColors, Projection, Rgb, Session, StandardView, Theme, Visibility,
+};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -344,6 +346,11 @@ fn display_json(s: &Session) -> Value {
     let Some(m) = &s.mesh else {
         return json!({"color_by": d.color_by});
     };
+    let colors: serde_json::Map<String, Value> = d
+        .colors
+        .iter()
+        .map(|(i, c)| (i.id(&m.mesh), json!(c.hex())))
+        .collect();
     let (cells, faces) = d.visible_counts(&m.mesh);
     json!({
         "color_by": d.color_by,
@@ -351,6 +358,7 @@ fn display_json(s: &Session) -> Value {
         "selection": d.selection.map(|i| i.id(&m.mesh)),
         "visible_cells": cells,
         "visible_faces": faces,
+        "colors": colors,
     })
 }
 
@@ -363,6 +371,26 @@ struct ColorByInput {
 fn display_color_by(input: Value, s: &mut Session) -> Run {
     let i: ColorByInput = parse(input)?;
     s.display.color_by = i.by;
+    s.redraw();
+    Ok(display_json(s))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetColorInput {
+    item: String,
+    /// `#RRGGBB`; null (or left out) goes back to the colour mode's own.
+    #[serde(default)]
+    color: Option<Rgb>,
+}
+
+fn display_set_color(input: Value, s: &mut Session) -> Run {
+    let i: SetColorInput = parse(input)?;
+    let it = item(s, &i.item)?;
+    match i.color {
+        Some(c) => s.display.colors.insert(it, c),
+        None => s.display.colors.remove(&it),
+    };
     s.redraw();
     Ok(display_json(s))
 }
@@ -459,11 +487,19 @@ fn settings_set_theme(input: Value, s: &mut Session) -> Run {
     let i: SetTheme = parse(input)?;
     // Applied live first; see settings.set_bindings.
     s.theme = i.theme;
+    let path = save_session_settings(s)?;
+    Ok(json!({"theme": i.theme, "files": [path]}))
+}
+
+/// Write settings.toml from the session (theme and mesh colours), so one
+/// setting never drops another.
+fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> {
     let dir = config_dir(s)?;
-    let path = save_settings(
+    save_settings(
         &dir,
         &Settings {
-            theme: i.theme,
+            theme: s.theme,
+            colors: s.colors.clone(),
             ..Settings::default()
         },
     )
@@ -472,8 +508,28 @@ fn settings_set_theme(input: Value, s: &mut Session) -> Run {
             "SET001",
             format!("applied for this session, not saved: {e}"),
         )
-    })?;
-    Ok(json!({"theme": i.theme, "files": [path]}))
+    })
+}
+
+fn settings_set_colors(mut input: Value, s: &mut Session) -> Run {
+    // `reset` (back to the built-in colours first) is taken out; the rest
+    // are the colours, unknown fields refused.
+    let reset = match input.as_object_mut().and_then(|o| o.remove("reset")) {
+        None => false,
+        Some(Value::Bool(b)) => b,
+        Some(_) => return Err(Diagnostic::new("TOOL002", "reset must be true or false")),
+    };
+    let new: MeshColors = parse(input)?;
+    let mut colors = if reset {
+        MeshColors::default()
+    } else {
+        s.colors.clone()
+    };
+    colors.merge(new);
+    s.set_colors(colors)
+        .map_err(|e| Diagnostic::new("TOOL002", e))?;
+    let path = save_session_settings(s)?;
+    Ok(json!({"colors": s.colors, "files": [path]}))
 }
 
 #[derive(Deserialize)]
@@ -543,6 +599,7 @@ fn settings_set_bindings(input: Value, s: &mut Session) -> Run {
 fn settings_get(_: Value, s: &mut Session) -> Run {
     Ok(json!({
         "theme": s.theme,
+        "colors": s.colors,
         "navigation": s.navigation,
         "presets": PRESETS,
         "config_dir": s.config_dir,
@@ -745,15 +802,33 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-display-color-by",
-        summary: "Colour the boundary faces by patch, patch role or the type of their cell.",
+        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role or by the type of their cell.",
         outputs: &[],
         input_schema: || {
             object(
-                json!({"by": {"enum": ["patch", "role", "cell_type"]}}),
+                json!({"by": {"enum": ["solid", "patch", "role", "cell_type"]}}),
                 &["by"],
             )
         },
         run: display_color_by,
+    },
+    Tool {
+        id: "display.set_color",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-display-set-color",
+        summary: "Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type.",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "item": {"type": "string"},
+                    "color": {"oneOf": [{"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}, {"type": "null"}]}
+                }),
+                &["item"],
+            )
+        },
+        run: display_set_color,
     },
     Tool {
         id: "display.visibility",
@@ -808,7 +883,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-settings-get",
-        summary: "The theme, the navigation bindings, the presets and the config folder.",
+        summary: "The theme, the mesh colours, the navigation bindings, the presets and the config folder.",
         outputs: &[],
         input_schema: no_input,
         run: settings_get,
@@ -827,6 +902,28 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: settings_set_theme,
+    },
+    Tool {
+        id: "settings.set_colors",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-set-colors",
+        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening; reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "solid": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+                    "patch": {"type": "array", "items": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}, "minItems": 1},
+                    "role": {"type": "object", "propertyNames": {"enum": ["wall", "inlet", "outlet", "symmetry", "interface", "unspecified"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
+                    "kind": {"type": "object", "propertyNames": {"enum": ["polyhedron", "prism", "hexahedron", "tetrahedron", "pyramid"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
+                    "edge_darken": {"type": "number", "minimum": 0, "maximum": 1},
+                    "reset": {"type": "boolean"}
+                }),
+                &[],
+            )
+        },
+        run: settings_set_colors,
     },
     Tool {
         id: "settings.set_bindings",

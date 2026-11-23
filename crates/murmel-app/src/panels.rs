@@ -37,7 +37,7 @@ impl MurmelApp {
         let mesh = &m.mesh;
         let summary = mesh.summary();
         let t = &self.session.tokens;
-        let by = self.session.display.color_by;
+        let d = &self.session.display;
         let mut zones = Vec::new();
         let mut kinds = Vec::new();
         let mut patches = Vec::new();
@@ -47,14 +47,14 @@ impl MurmelApp {
                     item,
                     label: mesh.zones[z as usize].clone(),
                     count: summary.zones.get(z as usize).map_or(0, |n| n.cells),
-                    swatch: None,
+                    swatch: d.item_color(mesh, t, item),
                     tip: None,
                 }),
                 Item::Kind(k) => kinds.push(Row {
                     item,
                     label: self.i18n.tr(&format!("kind-{}", k.name())),
                     count: summary.cell_kinds.get(k.name()).copied().unwrap_or(0),
-                    swatch: (by == ColorBy::CellType).then(|| t.kind_color(k)),
+                    swatch: d.item_color(mesh, t, item),
                     tip: None,
                 }),
                 Item::Patch(p) => {
@@ -63,11 +63,7 @@ impl MurmelApp {
                         item,
                         label: patch.name.clone(),
                         count: summary.patches.get(p as usize).map_or(0, |n| n.faces),
-                        swatch: match by {
-                            ColorBy::Patch => Some(t.patch_color(p as usize)),
-                            ColorBy::Role => Some(t.role_color(patch.role)),
-                            ColorBy::CellType => None,
-                        },
+                        swatch: d.item_color(mesh, t, item),
                         tip: Some(self.i18n.tr_args(
                             "tree-patch-tip",
                             &[(
@@ -256,6 +252,10 @@ impl MurmelApp {
                     ui.ctx().copy_text(r.label.clone());
                     ui.close();
                 }
+                ui.separator();
+                if let Some(c) = self.color_action(ui, &id) {
+                    action = Some(c);
+                }
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
@@ -384,6 +384,35 @@ impl MurmelApp {
         }
     }
 
+    /// The colour entry of an item's context menu: a picker that calls
+    /// display.set_color, and a reset when the item has its own colour.
+    pub(crate) fn color_action(&self, ui: &mut Ui, id: &str) -> Option<(&'static str, Value)> {
+        let m = self.session.mesh.as_ref()?;
+        let item = Item::parse(id, &m.mesh)?;
+        let d = &self.session.display;
+        let current = d
+            .item_color(&m.mesh, &self.session.tokens, item)
+            .or_else(|| d.colors.get(&item).copied())
+            .unwrap_or(self.session.tokens.mesh.solid);
+        let mut rgb = current.0;
+        let mut action = None;
+        ui.horizontal(|ui| {
+            let r = egui::color_picker::color_edit_button_srgb(ui, &mut rgb);
+            let name = self.i18n.tr("tree-color");
+            r.widget_info(|| WidgetInfo::labeled(Role::ColorWell, true, name.clone()));
+            ui.label(self.i18n.tr("tree-color"));
+            if rgb != current.0 {
+                let hex = murmel_engine::Rgb(rgb).hex();
+                action = Some(("display.set_color", json!({"item": id, "color": hex})));
+            }
+        });
+        if d.colors.contains_key(&item) && ui.button(self.i18n.tr("tree-reset-color")).clicked() {
+            action = Some(("display.set_color", json!({"item": id, "color": null})));
+            ui.close();
+        }
+        action
+    }
+
     /// Legend of the colouring, top left under the view note.
     pub(crate) fn legend(&self, ui: &Ui, rect: egui::Rect, dark: bool) {
         let Some(m) = &self.session.mesh else {
@@ -392,26 +421,31 @@ impl MurmelApp {
         let p = self.session.tokens.palette(dark);
         let t = &self.session.tokens;
         let mesh = &m.mesh;
-        let entries: Vec<(murmel_engine::Rgb, String)> = match self.session.display.color_by {
-            ColorBy::Patch => mesh
-                .patches
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !self.session.display.is_hidden(Item::Patch(*i as u32)))
-                .map(|(i, pa)| (t.patch_color(i), pa.name.clone()))
+        let d = &self.session.display;
+        let name = |i: Item| -> String {
+            match i {
+                Item::Mesh => self.i18n.tr("props-area-mesh"),
+                Item::Kind(k) => self.i18n.tr(&format!("kind-{}", k.name())),
+                other => other
+                    .id(mesh)
+                    .split_once(':')
+                    .map_or(String::new(), |(_, n)| n.to_string()),
+            }
+        };
+        let entries: Vec<(murmel_engine::Rgb, String)> = match d.color_by {
+            ColorBy::Solid => std::iter::once(Item::Mesh)
+                .chain(murmel_engine::display::all_items(mesh))
+                .filter(|&i| !d.is_hidden(i))
+                .filter_map(|i| d.item_color(mesh, t, i).map(|c| (c, name(i))))
                 .collect(),
             ColorBy::Role => murmel_mesh_roles(mesh)
                 .into_iter()
                 .map(|r| (t.role_color(r), self.i18n.tr(&format!("role-{}", r.name()))))
                 .collect(),
-            ColorBy::CellType => murmel_engine::display::all_items(mesh)
+            ColorBy::Patch | ColorBy::CellType => murmel_engine::display::all_items(mesh)
                 .into_iter()
-                .filter_map(|i| match i {
-                    Item::Kind(k) => {
-                        Some((t.kind_color(k), self.i18n.tr(&format!("kind-{}", k.name()))))
-                    }
-                    _ => None,
-                })
+                .filter(|&i| !d.is_hidden(i))
+                .filter_map(|i| d.item_color(mesh, t, i).map(|c| (c, name(i))))
                 .collect(),
         };
         if entries.is_empty() {

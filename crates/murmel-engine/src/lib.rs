@@ -18,4 +18,4 @@ pub use display::{ColorBy, Display, Item, Visibility};
 pub use navigation::Navigation;
 pub use session::{OpenMesh, Session, Validity};
 pub use surface::Surface;
-pub use theme::{Rgb, Theme, Tokens};
+pub use theme::{MeshColors, Rgb, Theme, Tokens};

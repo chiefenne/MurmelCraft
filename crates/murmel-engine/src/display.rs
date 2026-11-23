@@ -7,26 +7,37 @@
 //! it covers: a patch its own faces, a zone or a cell type the faces whose
 //! owner cell is in it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use murmel_mesh::{Bounds, CellKind, Mesh, NO_CELL};
 use serde::{Deserialize, Serialize};
+
+use crate::theme::{Rgb, Tokens};
 
 /// What gives a boundary face its colour.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorBy {
+    /// One colour for the mesh (decided 2026-11-23 as the default), with
+    /// the colours set on zones and patches laid over it.
     #[default]
+    Solid,
     Patch,
     Role,
     CellType,
 }
 
 impl ColorBy {
-    pub const ALL: [ColorBy; 3] = [ColorBy::Patch, ColorBy::Role, ColorBy::CellType];
+    pub const ALL: [ColorBy; 4] = [
+        ColorBy::Solid,
+        ColorBy::Patch,
+        ColorBy::Role,
+        ColorBy::CellType,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
+            ColorBy::Solid => "solid",
             ColorBy::Patch => "patch",
             ColorBy::Role => "role",
             ColorBy::CellType => "cell_type",
@@ -109,6 +120,10 @@ pub struct Display {
     pub color_by: ColorBy,
     pub hidden: BTreeSet<Item>,
     pub selection: Option<Item>,
+    /// Colours set on items of the open mesh (`display.set_color`). The
+    /// mesh's and the zones' colours show in colour mode solid, a patch's
+    /// in solid and patch, a cell type's in cell type.
+    pub colors: BTreeMap<Item, Rgb>,
 }
 
 impl Display {
@@ -141,6 +156,59 @@ impl Display {
                     }
                 }
             }
+        }
+    }
+
+    /// The colour of boundary face `f` of `mesh` before shading.
+    pub fn face_color(&self, mesh: &Mesh, tokens: &Tokens, f: usize) -> Rgb {
+        let patch = mesh.boundary_patch.get(f).copied().unwrap_or(0);
+        let owner = mesh
+            .boundary_owner
+            .get(f)
+            .copied()
+            .filter(|&c| c != NO_CELL)
+            .map(|c| c as usize);
+        let set = |i: Item| self.colors.get(&i).copied();
+        match self.color_by {
+            ColorBy::Solid => set(Item::Patch(patch))
+                .or_else(|| {
+                    owner
+                        .and_then(|c| mesh.cell_zone.get(c))
+                        .and_then(|&z| set(Item::Zone(z)))
+                })
+                .or_else(|| set(Item::Mesh))
+                .unwrap_or(tokens.mesh.solid),
+            ColorBy::Patch => {
+                set(Item::Patch(patch)).unwrap_or_else(|| tokens.patch_color(patch as usize))
+            }
+            ColorBy::Role => tokens.role_color(
+                mesh.patches
+                    .get(patch as usize)
+                    .map_or(murmel_mesh::PatchRole::Unspecified, |p| p.role),
+            ),
+            ColorBy::CellType => match owner.and_then(|c| mesh.cell_kind.get(c).copied()) {
+                Some(k) => set(Item::Kind(k)).unwrap_or_else(|| tokens.kind_color(k)),
+                None => tokens.mesh.role.unspecified,
+            },
+        }
+    }
+
+    /// The colour `item` shows in the current colour mode, for the legend
+    /// and the tree; `None` when the mode does not colour that item.
+    pub fn item_color(&self, mesh: &Mesh, tokens: &Tokens, item: Item) -> Option<Rgb> {
+        let set = self.colors.get(&item).copied();
+        match (self.color_by, item) {
+            (ColorBy::Solid, Item::Mesh) => Some(set.unwrap_or(tokens.mesh.solid)),
+            (ColorBy::Solid, Item::Zone(_) | Item::Patch(_)) => set,
+            (ColorBy::Patch, Item::Patch(p)) => {
+                Some(set.unwrap_or_else(|| tokens.patch_color(p as usize)))
+            }
+            (ColorBy::Role, Item::Patch(p)) => mesh
+                .patches
+                .get(p as usize)
+                .map(|pa| tokens.role_color(pa.role)),
+            (ColorBy::CellType, Item::Kind(k)) => Some(set.unwrap_or_else(|| tokens.kind_color(k))),
+            _ => None,
         }
     }
 
@@ -283,5 +351,39 @@ mod tests {
         assert_eq!(cells, 8);
         d.set_visibility(Visibility::ShowAll, &[], &m);
         assert_eq!(d.visible_counts(&m), (776, 426));
+    }
+
+    /// Invariant: solid is the default mode and gives every face the solid
+    /// token; a patch colour wins over the mesh colour, which wins over the
+    /// token; a cell-type colour shows only in cell-type mode.
+    #[test]
+    fn item_colours_layer_in_order() {
+        let m = channel();
+        let t = Tokens::builtin().unwrap();
+        let mut d = Display::default();
+        assert_eq!(d.color_by, ColorBy::Solid);
+        assert!((0..m.boundary.len()).all(|f| d.face_color(&m, &t, f) == t.mesh.solid));
+        let (red, blue) = (Rgb([200, 0, 0]), Rgb([0, 0, 200]));
+        let inlet = Item::parse("patch:inlet", &m).unwrap();
+        d.colors.insert(Item::Mesh, blue);
+        d.colors.insert(inlet, red);
+        d.colors.insert(Item::Kind(CellKind::Prism), red);
+        let mut n = [0usize; 2];
+        for f in 0..m.boundary.len() {
+            let c = d.face_color(&m, &t, f);
+            if Display::face_in(&m, f, inlet) {
+                assert_eq!(c, red);
+                n[0] += 1;
+            } else {
+                assert_eq!(c, blue);
+                n[1] += 1;
+            }
+        }
+        assert_eq!(n, [85, 341]);
+        d.color_by = ColorBy::Patch;
+        assert_eq!(d.item_color(&m, &t, inlet), Some(red));
+        assert_eq!(d.item_color(&m, &t, Item::Mesh), None);
+        d.color_by = ColorBy::CellType;
+        assert_eq!(d.item_color(&m, &t, Item::Kind(CellKind::Prism)), Some(red));
     }
 }

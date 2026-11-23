@@ -1,4 +1,4 @@
-//! The user's settings files: `settings.toml` (theme) and
+//! The user's settings files: `settings.toml` (theme, mesh colours) and
 //! `navigation.toml` (mouse bindings), in the MurmelCraft config folder.
 //! `MURMEL_CONFIG_DIR` overrides the folder (tests, portable installs).
 
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::navigation::Navigation;
-use crate::theme::Theme;
+use crate::theme::{MeshColors, Theme};
 
 pub const SETTINGS_FORMAT: &str = "murmelcraft.settings";
 
@@ -34,6 +34,9 @@ pub struct Settings {
     pub format: String,
     #[serde(default)]
     pub theme: Theme,
+    /// Mesh colours that replace the built-in tokens.
+    #[serde(default)]
+    pub colors: MeshColors,
 }
 
 impl Default for Settings {
@@ -41,6 +44,7 @@ impl Default for Settings {
         Self {
             format: SETTINGS_FORMAT.into(),
             theme: Theme::default(),
+            colors: MeshColors::default(),
         }
     }
 }

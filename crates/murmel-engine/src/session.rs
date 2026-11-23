@@ -9,7 +9,7 @@ use crate::camera::Camera;
 use crate::display::{Display, Item};
 use crate::navigation::Navigation;
 use crate::surface::Surface;
-use crate::theme::{Theme, Tokens};
+use crate::theme::{MeshColors, Theme, Tokens};
 
 /// A mesh loaded into the session.
 #[derive(Clone, Debug)]
@@ -118,6 +118,8 @@ pub struct Session {
     pub display: Display,
     pub navigation: Navigation,
     pub theme: Theme,
+    /// The user's mesh colours, already laid over `tokens`.
+    pub colors: MeshColors,
     /// Viewport size in pixels, for aspect, pan and zoom.
     pub viewport: [f64; 2],
     /// Bumped whenever the surface changes, so renderers re-upload.
@@ -135,6 +137,7 @@ impl Session {
             display: Display::default(),
             navigation: Navigation::default(),
             theme: Theme::default(),
+            colors: MeshColors::default(),
             viewport: [1280.0, 720.0],
             surface_revision: 0,
             config_dir: crate::settings::config_dir(),
@@ -156,6 +159,7 @@ impl Session {
         // the colouring stays.
         self.display.hidden.clear();
         self.display.selection = None;
+        self.display.colors.clear();
         let surface = Surface::build(&mesh, &self.tokens, &self.display);
         let digest = sha256(path);
         let validity = Validity::check(
@@ -184,7 +188,18 @@ impl Session {
         self.mesh = None;
         self.display.hidden.clear();
         self.display.selection = None;
+        self.display.colors.clear();
         self.surface_revision += 1;
+    }
+
+    /// Replace the user's mesh colours: the built-in tokens with `colors`
+    /// laid over them, and the surface rebuilt. Refused colours change
+    /// nothing.
+    pub fn set_colors(&mut self, colors: MeshColors) -> Result<(), String> {
+        self.tokens = Tokens::builtin()?.with_colors(&colors)?;
+        self.colors = colors;
+        self.redraw();
+        Ok(())
     }
 
     /// Build the surface again after a change of `display`.
