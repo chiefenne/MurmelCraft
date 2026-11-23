@@ -573,7 +573,7 @@ impl MurmelApp {
         }
         let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max) + 18.0;
         let line = 18.0;
-        let at = rect.min + egui::vec2(16.0, 52.0);
+        let at = rect.min + egui::vec2(16.0, 52.0 + self.cube_room().0);
         let bg =
             egui::Rect::from_min_size(at, egui::vec2(w + 20.0, line * galleys.len() as f32 + 10.0));
         painter.rect_filled(bg, 6.0, color(p.bg_panel).gamma_multiply(0.92));

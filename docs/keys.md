@@ -104,4 +104,11 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | palette | Apple mouse or trackpad | `settings.set_bindings` `{"preset":"apple"}` |
 | palette | Fusion style | `settings.set_bindings` `{"preset":"fusion"}` |
 | palette | ParaView style | `settings.set_bindings` `{"preset":"paraview"}` |
+| palette | View cube: top right | `settings.set_view_cube` `{"placement":"top_right"}` |
+| palette | View cube: top left | `settings.set_view_cube` `{"placement":"top_left"}` |
+| palette | View cube: bottom left | `settings.set_view_cube` `{"placement":"bottom_left"}` |
+| palette | View cube: bottom right | `settings.set_view_cube` `{"placement":"bottom_right"}` |
+| palette | View cube: floating panel | `settings.set_view_cube` `{"placement":"floating"}` |
+| palette | View cube: hidden | `settings.set_view_cube` `{"placement":"hidden"}` |
+| palette | View cube: hide when the pointer is far away (on or off) | `settings.set_view_cube` (input from the session) |
 | palette | Reset to the built-in colours | `settings.set_colors` `{"reset":true}` |

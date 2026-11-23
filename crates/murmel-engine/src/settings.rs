@@ -1,4 +1,5 @@
-//! The user's settings files: `settings.toml` (theme, mesh colours) and
+//! The user's settings files: `settings.toml` (theme, mesh colours, view
+//! cube placement) and
 //! `navigation.toml` (mouse bindings), in the MurmelCraft config folder.
 //! `MURMEL_CONFIG_DIR` overrides the folder (tests, portable installs).
 
@@ -6,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cube::CubeSettings;
 use crate::navigation::Navigation;
 use crate::theme::{MeshColors, Theme};
 
@@ -37,6 +39,9 @@ pub struct Settings {
     /// Mesh colours that replace the built-in tokens.
     #[serde(default)]
     pub colors: MeshColors,
+    /// Where the view cube is and whether it hides itself.
+    #[serde(default)]
+    pub view_cube: CubeSettings,
 }
 
 impl Default for Settings {
@@ -45,6 +50,7 @@ impl Default for Settings {
             format: SETTINGS_FORMAT.into(),
             theme: Theme::default(),
             colors: MeshColors::default(),
+            view_cube: CubeSettings::default(),
         }
     }
 }

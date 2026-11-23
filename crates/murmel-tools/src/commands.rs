@@ -521,6 +521,24 @@ pub fn commands() -> Vec<Command> {
             Tool("settings.set_bindings", json!({ "preset": p })),
         ));
     }
+    for p in murmel_engine::Placement::ALL {
+        v.push(cmd(
+            format!("settings.set_view_cube:{}", p.key()),
+            format!("cube-placement-{}", p.key()),
+            "settings",
+            &[],
+            Tool("settings.set_view_cube", json!({ "placement": p })),
+        ));
+    }
+    v.push(cmd(
+        "settings.set_view_cube:auto_hide",
+        "cmd-cube-auto-hide",
+        "settings",
+        &[],
+        Dynamic("settings.set_view_cube", |s| {
+            Some(json!({"auto_hide": !s.view_cube.auto_hide}))
+        }),
+    ));
     v.push(cmd(
         "settings.set_colors:reset",
         "settings-reset-colors",

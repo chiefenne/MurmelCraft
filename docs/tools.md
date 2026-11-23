@@ -35,9 +35,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `inspect.quality` | 1 | read | Statistics of a cell quality metric over all cells (the current one when left out): min, max, mean and a histogram of bins equal-width bins (default 20); with above, the number of cells at or above that value. |
 | `select.clear` | 1 | read | Clear the selection. |
 | `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
-| `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the presets and the config folder. |
+| `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, the presets and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
 | `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
+| `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
 
 ## Inputs
@@ -856,6 +857,44 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     "solid": {
       "pattern": "^#[0-9A-Fa-f]{6}$",
       "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `settings.set_view_cube`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "auto_hide": {
+      "type": "boolean"
+    },
+    "distance_px": {
+      "maximum": 2000,
+      "minimum": 0,
+      "type": "number"
+    },
+    "placement": {
+      "enum": [
+        "top_right",
+        "top_left",
+        "bottom_left",
+        "bottom_right",
+        "floating",
+        "hidden"
+      ]
+    },
+    "position": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
     }
   },
   "required": [],

@@ -102,6 +102,9 @@ impl MurmelApp {
                 self.call("display.visibility", json!({"action": "show_all"}));
                 ui.close();
             }
+            ui.menu_button(self.i18n.tr("menu-view-cube"), |ui| {
+                self.cube_menu(ui, true)
+            });
             ui.separator();
             for (key, call) in [
                 ("menu-fit", ("view.fit", json!({}))),
@@ -442,14 +445,17 @@ impl MurmelApp {
             }
         );
         let galley = painter.layout_no_wrap(note, body, color(p.text_primary));
-        let at = rect.min + egui::vec2(16.0, 16.0);
+        let at = rect.min + egui::vec2(16.0, 16.0 + self.cube_room().0);
         let bg = Rect::from_min_size(at, galley.size() + egui::vec2(20.0, 10.0));
         painter.rect_filled(bg, 6.0, color(p.bg_panel).gamma_multiply(0.92));
         painter.galley(at + egui::vec2(10.0, 5.0), galley, Color32::WHITE);
 
         // Axis triad, bottom left: X red, Y green, Z blue.
         let t = &self.session.tokens.mesh;
-        let origin = Pos2::new(rect.left() + 48.0, rect.bottom() - 48.0);
+        let origin = Pos2::new(
+            rect.left() + 48.0 + self.cube_room().1,
+            rect.bottom() - 48.0,
+        );
         let (right, up) = cam.basis();
         let len = 28.0;
         let mut axes = [

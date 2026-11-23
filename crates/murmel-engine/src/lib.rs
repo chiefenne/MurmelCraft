@@ -19,6 +19,7 @@ pub mod theme;
 
 pub use camera::{Camera, Projection, ScreenAxis, StandardView};
 pub use clip::{Clip, ClipMode};
+pub use cube::{CubeSettings, Placement};
 pub use display::{ColorBy, Display, Item, PickTarget, RenderMode, Visibility};
 pub use navigation::Navigation;
 pub use quality::{Metric, Quality};

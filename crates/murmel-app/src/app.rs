@@ -53,6 +53,13 @@ pub struct MurmelApp {
     /// the width the full one needs, as last measured.
     pub(crate) toolbar_compact: bool,
     pub(crate) toolbar_full: f32,
+    /// The floating view cube's position while its grip is dragged
+    /// (saved by `settings.set_view_cube` when the drag ends).
+    pub(crate) cube_move: Option<[f64; 2]>,
+    /// The cube was dragged last frame, so auto-hide keeps it shown.
+    pub(crate) cube_busy: bool,
+    /// The auto-hide distance while it is edited.
+    pub(crate) cube_distance_edit: Option<f64>,
 }
 
 impl MurmelApp {
@@ -65,6 +72,7 @@ impl MurmelApp {
             let (st, nav, problems) = settings::load(&dir, cfg!(target_os = "macos"));
             session.theme = st.theme;
             session.navigation = nav;
+            session.view_cube = st.view_cube;
             let mut problems = problems;
             if let Err(e) = session.set_colors(st.colors) {
                 problems.push(format!("settings.toml colors: {e}"));
@@ -100,6 +108,9 @@ impl MurmelApp {
             orbit_pivot: None,
             toolbar_compact: false,
             toolbar_full: 0.0,
+            cube_move: None,
+            cube_busy: false,
+            cube_distance_edit: None,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -746,6 +757,9 @@ impl MurmelApp {
                 {
                     self.call("settings.set_bindings", json!({ "invert_zoom": inv }));
                 }
+                ui.add_space(8.0);
+                ui.heading(self.i18n.tr("settings-view-cube"));
+                self.cube_menu(ui, false);
                 ui.add_space(8.0);
                 ui.heading(self.i18n.tr("settings-colors"));
                 ui.horizontal(|ui| {
