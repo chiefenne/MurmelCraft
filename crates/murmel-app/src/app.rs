@@ -49,6 +49,10 @@ pub struct MurmelApp {
     pub(crate) histogram: Option<crate::quality::HistogramCache>,
     /// The world point the current viewport orbit turns about.
     pub(crate) orbit_pivot: Option<[f64; 3]>,
+    /// The toolbar leaves out group names when the full one does not fit;
+    /// the width the full one needs, as last measured.
+    pub(crate) toolbar_compact: bool,
+    pub(crate) toolbar_full: f32,
 }
 
 impl MurmelApp {
@@ -94,6 +98,8 @@ impl MurmelApp {
             threshold_edit: None,
             histogram: None,
             orbit_pivot: None,
+            toolbar_compact: false,
+            toolbar_full: 0.0,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -281,7 +287,7 @@ impl MurmelApp {
             }
             ui.separator();
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                egui::ScrollArea::horizontal()
+                let out = egui::ScrollArea::horizontal()
                     .id_salt("toolbar-groups")
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .show(ui, |ui| {
@@ -292,8 +298,36 @@ impl MurmelApp {
                             |ui| self.toolbar_groups(ui),
                         );
                     });
+                // Compact (no group names, short Colour by) when the full
+                // toolbar would not fit, so the last group (Select, Faces)
+                // never scrolls out of sight; the full width is measured
+                // whenever the full toolbar is shown.
+                let room = out.inner_rect.width();
+                if !self.toolbar_compact {
+                    self.toolbar_full = out.content_size.x;
+                }
+                let compact = needs_compact(self.toolbar_full, room);
+                if compact != self.toolbar_compact {
+                    self.toolbar_compact = compact;
+                    ui.ctx().request_repaint();
+                }
             });
         });
+    }
+
+    /// The name of a toolbar group, left out when the toolbar is compact.
+    fn group_label(&self, ui: &mut Ui, group: &str, secondary: Color32) {
+        if !self.toolbar_compact {
+            ui.label(
+                RichText::new(
+                    self.i18n
+                        .tr(&format!("toolbar-group-{group}"))
+                        .to_uppercase(),
+                )
+                .small()
+                .color(secondary),
+            );
+        }
     }
 
     /// The groups of the toolbar: Open, View, Display, Clip and Select.
@@ -309,11 +343,7 @@ impl MurmelApp {
             self.open_dialog();
         }
         ui.separator();
-        ui.label(
-            RichText::new(self.i18n.tr("toolbar-group-view").to_uppercase())
-                .small()
-                .color(secondary),
-        );
+        self.group_label(ui, "view", secondary);
         let fit = self.i18n.tr("toolbar-fit");
         if icon_button(
             ui,
@@ -359,11 +389,7 @@ impl MurmelApp {
             self.call("view.set_camera", json!({ "projection": proj.next() }));
         }
         ui.separator();
-        ui.label(
-            RichText::new(self.i18n.tr("toolbar-group-display").to_uppercase())
-                .small()
-                .color(secondary),
-        );
+        self.group_label(ui, "display", secondary);
         let mode = self.session.display.render_mode;
         let mut pick_mode = None;
         let current = self.i18n.tr(&format!("render-mode-{}", mode.key()));
@@ -390,8 +416,13 @@ impl MurmelApp {
         let mut pick = None;
         let label = self.i18n.tr("toolbar-color-by");
         let current = self.color_by_name();
+        let text = if self.toolbar_compact {
+            current.clone()
+        } else {
+            format!("{label}: {current}")
+        };
         let r = egui::ComboBox::from_id_salt("color-by")
-            .selected_text(format!("{label}: {current}"))
+            .selected_text(text)
             .show_ui(ui, |ui| {
                 for c in murmel_engine::ColorBy::ALL {
                     if c == murmel_engine::ColorBy::Quality {
@@ -415,8 +446,13 @@ impl MurmelApp {
                     }
                 }
             });
-        r.response
-            .on_hover_text(self.i18n.tr("toolbar-color-by-tip"));
+        let tip = format!(
+            "{label}: {current}\n{}",
+            self.i18n.tr("toolbar-color-by-tip")
+        );
+        r.response.on_hover_text(tip).widget_info(|| {
+            WidgetInfo::labeled(Role::ComboBox, true, format!("{label}: {current}"))
+        });
         if let Some(input) = pick.filter(|i| i["by"] != json!(by) || i.get("metric").is_some()) {
             self.call("display.color_by", input);
         }
@@ -443,11 +479,7 @@ impl MurmelApp {
     /// The Clip group of the toolbar: the axis buttons (X, Y, Z), the
     /// cut mode, flip and the plane's position.
     fn clip_group(&mut self, ui: &mut Ui, secondary: Color32) {
-        ui.label(
-            RichText::new(self.i18n.tr("toolbar-group-clip").to_uppercase())
-                .small()
-                .color(secondary),
-        );
+        self.group_label(ui, "clip", secondary);
         let clip = self.session.display.clip;
         let has_mesh = self.session.mesh.is_some();
         ui.add_enabled_ui(has_mesh, |ui| {
@@ -519,11 +551,7 @@ impl MurmelApp {
 
     /// The Select group: what a click picks (cells or faces).
     fn select_group(&mut self, ui: &mut Ui, secondary: Color32) {
-        ui.label(
-            RichText::new(self.i18n.tr("toolbar-group-select").to_uppercase())
-                .small()
-                .color(secondary),
-        );
+        self.group_label(ui, "select", secondary);
         let now = self.session.display.pick;
         for t in murmel_engine::PickTarget::ALL {
             let label = self.i18n.tr(&format!("toolbar-pick-{}", t.key()));
@@ -846,5 +874,29 @@ impl eframe::App for MurmelApp {
         self.settings_window(&ctx);
         self.shortcuts_window(&ctx);
         self.palette_window(&ctx);
+    }
+}
+
+/// Whether the toolbar must leave out its group names: when the full
+/// toolbar, `full` points wide, is wider than the `room` it has (with half
+/// a point for rounding). The full width is measured only while the full
+/// toolbar shows, so the decision does not flicker.
+pub(crate) fn needs_compact(full: f32, room: f32) -> bool {
+    full > room + 0.5
+}
+
+#[cfg(test)]
+mod toolbar_tests {
+    /// Invariant: the toolbar turns compact exactly when the full one
+    /// would scroll its last group (Select, Faces) out of sight, and back
+    /// when there is room again. Breaks when the comparison is turned
+    /// around or the full width is compared with itself; the window is
+    /// otherwise checked by hand (a 1280 px window with colour by
+    /// quality, which hid Faces before).
+    #[test]
+    fn compact_only_when_the_full_toolbar_does_not_fit() {
+        assert!(super::needs_compact(1260.0, 1100.0));
+        assert!(!super::needs_compact(1100.0, 1100.0));
+        assert!(!super::needs_compact(1000.0, 1300.0));
     }
 }
