@@ -259,7 +259,15 @@ impl MurmelApp {
             .resizable(false)
             .default_width(640.0)
             .show(ctx, |ui| {
-                let groups = ["view", "file", "window", "display", "selection"];
+                let groups: Vec<&str> = murmel_tools::commands::GROUPS
+                    .iter()
+                    .copied()
+                    .filter(|g| {
+                        self.commands
+                            .iter()
+                            .any(|c| c.group == *g && !c.keys.is_empty())
+                    })
+                    .collect();
                 ui.columns(2, |cols| {
                     for (n, g) in groups.iter().enumerate() {
                         let ui = &mut cols[if n < 1 { 0 } else { 1 }];

@@ -60,6 +60,18 @@ impl Command {
     }
 }
 
+/// The palette groups in the order of the shortcut sheet; every command's
+/// group is one of them (a test checks).
+pub const GROUPS: &[&str] = &[
+    "view",
+    "file",
+    "window",
+    "display",
+    "clip",
+    "selection",
+    "settings",
+];
+
 /// The views with keys (the numeric keypad's layout: 1 front, 3 right,
 /// 7 top; Ctrl for the opposite view). egui cannot tell the keypad's
 /// digits from the top row's, so the views take Alt (decided 2026-11-23)
@@ -565,6 +577,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), n, "duplicate command id");
         for c in &all {
+            assert!(GROUPS.contains(&c.group), "{}: group {}", c.id, c.group);
             assert_ne!(
                 english(&c.label_key),
                 c.label_key,
