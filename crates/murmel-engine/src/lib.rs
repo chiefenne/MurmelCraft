@@ -5,6 +5,7 @@
 //! change this state only through the tools of `murmel-tools`.
 
 pub mod camera;
+pub mod clip;
 pub mod cube;
 pub mod display;
 pub mod inspect;
@@ -15,6 +16,7 @@ pub mod surface;
 pub mod theme;
 
 pub use camera::{Camera, Projection, ScreenAxis, StandardView};
+pub use clip::{Clip, ClipMode};
 pub use display::{ColorBy, Display, Item, RenderMode, Visibility};
 pub use navigation::Navigation;
 pub use session::{OpenMesh, Session, Validity};

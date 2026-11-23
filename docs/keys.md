@@ -37,6 +37,10 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | `3` | Wireframe | `display.render_mode` `{"mode":"wireframe"}` |
 | `4` | Feature edges | `display.render_mode` `{"mode":"feature_edges"}` |
 | `C` | Colour by… | window |
+| `X` | Clip normal to X | `clip.set` `{"axis":"x"}` |
+| `Y` | Clip normal to Y | `clip.set` `{"axis":"y"}` |
+| `Z` | Clip normal to Z | `clip.set` `{"axis":"z"}` |
+| `Shift + C` | Flip the clip side | `clip.set` (input from the session) |
 | `H` | Hide the selection | `display.visibility` (input from the session) |
 | `I` | Isolate the selection | `display.visibility` (input from the session) |
 | `Alt + H` | Show all | `display.visibility` (input from the session) |
@@ -77,6 +81,13 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | palette | Colour by: patch | `display.color_by` `{"by":"patch"}` |
 | palette | Colour by: patch role | `display.color_by` `{"by":"role"}` |
 | palette | Colour by: cell type | `display.color_by` `{"by":"cell_type"}` |
+| palette | Clip along the view direction | `clip.set` `{"axis":"view"}` |
+| palette | Clip: crinkle cut (whole cells) | `clip.set` `{"mode":"crinkle"}` |
+| palette | Clip: flat cut | `clip.set` `{"mode":"flat"}` |
+| palette | Clip plane: cut more away | `clip.set` (input from the session) |
+| palette | Clip plane: cut less away | `clip.set` (input from the session) |
+| palette | Turn the clip plane on or off | `clip.set` (input from the session) |
+| palette | Remove the clip plane | `clip.clear` (input from the session) |
 | palette | Fit the selection | `view.fit` (input from the session) |
 | palette | Theme: dark | `settings.set_theme` `{"theme":"dark"}` |
 | palette | Theme: light | `settings.set_theme` `{"theme":"light"}` |

@@ -335,3 +335,62 @@ fn display_selection_and_properties() {
     assert_eq!(get("faces_interior"), Some(json!(1747)));
     assert_eq!(get("validity"), Some(json!("valid")));
 }
+
+/// Invariant (V0.4 clip plane): `clip.set` by axis cuts the channel
+/// through its centre and keeps whole cells (more than half, fewer than
+/// all); flip keeps the other side, so the two sides cover every cell
+/// with the crossed cells in both; an offset at the end of the range keeps
+/// everything or almost nothing; a zero normal or axis plus normal is
+/// refused; `clip.clear` and opening a mesh bring back every cell.
+#[test]
+fn clip_plane_tools() {
+    let mut s = session();
+    let ch = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(!call("clip.set", json!({"axis": "x"}), &mut s).ok());
+    assert!(call("mesh.open", json!({"path": ch}), &mut s).ok());
+    let e = call("clip.set", json!({"axis": "x"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let clip = &e.result["clip"];
+    // The home view looks from +x (right, front, top), so the +x half
+    // (towards the eye) goes; from the left the -x half goes.
+    assert_eq!(clip["normal"], json!([1.0, 0.0, 0.0]));
+    assert!(call("view.standard", json!({"view": "left"}), &mut s).ok());
+    let e = call("clip.set", json!({"axis": "x"}), &mut s);
+    assert_eq!(e.result["clip"]["normal"], json!([-1.0, 0.0, 0.0]));
+    let e = call("clip.set", json!({"axis": "x", "flip": true}), &mut s);
+    assert_eq!(clip["mode"], "crinkle");
+    let a = e.result["visible_cells"].as_u64().unwrap();
+    assert!(a > 388 && a < 776, "{a}");
+    let e = call("clip.set", json!({"flip": true}), &mut s);
+    let b = e.result["visible_cells"].as_u64().unwrap();
+    assert!(a + b > 776, "{a} + {b}");
+    let range = e.result["clip"]["range"].clone();
+    let (lo, hi) = (range[0].as_f64().unwrap(), range[1].as_f64().unwrap());
+    // The plane moves along its normal (-x now) by the offset: at the high
+    // end it sits at the low x end and cuts nothing away; at the low end
+    // only the cells it crosses stay.
+    let e = call("clip.set", json!({"offset": hi, "mode": "flat"}), &mut s);
+    assert_eq!(e.result["clip"]["mode"], "flat");
+    assert_eq!(e.result["visible_cells"], 776);
+    let e = call("clip.set", json!({"offset": lo}), &mut s);
+    let few = e.result["visible_cells"].as_u64().unwrap();
+    assert!(few > 0 && few < 200, "{few}");
+    for bad in [
+        json!({"normal": [0, 0, 0]}),
+        json!({"axis": "y", "normal": [0, 1, 0]}),
+        json!({"origin": [0, 0, 0], "offset": 1}),
+    ] {
+        let e = call("clip.set", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, "TOOL002", "{bad}");
+    }
+    let e = call("clip.set", json!({"enabled": false}), &mut s);
+    assert_eq!(e.result["visible_cells"], 776);
+    assert_eq!(e.result["clip"]["enabled"], false);
+    let e = call("clip.clear", json!({}), &mut s);
+    assert_eq!(e.result["clip"], serde_json::Value::Null);
+    assert!(call("clip.set", json!({"axis": "view"}), &mut s).ok());
+    assert!(call("mesh.open", json!({"path": ch}), &mut s).ok());
+    let e = call("inspect.item", json!({}), &mut s);
+    assert!(e.ok());
+    assert!(s.display.clip.is_none());
+}

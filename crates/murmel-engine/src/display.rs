@@ -3,15 +3,17 @@
 //! ids that tools and the tree share: `mesh`, `zone:<name>`,
 //! `kind:<cell type>` and `patch:<name>`.
 //!
-//! The viewport draws boundary faces, so an item hides the boundary faces
-//! it covers: a patch its own faces, a zone or a cell type the faces whose
-//! owner cell is in it.
+//! The viewport draws the outside of the cells shown: a hidden patch
+//! takes its boundary faces away, a hidden zone or cell type its cells, so
+//! the faces of the cells behind them show (hiding the prism layers shows
+//! the polyhedral core). The clip plane takes cells away the same way.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use murmel_mesh::{Bounds, CellKind, Mesh, NO_CELL};
 use serde::{Deserialize, Serialize};
 
+use crate::clip::Clip;
 use crate::theme::{Rgb, Tokens};
 
 /// What gives a boundary face its colour.
@@ -165,6 +167,8 @@ pub struct Display {
     /// mesh's and the zones' colours show in colour mode solid, a patch's
     /// in solid and patch, a cell type's in cell type.
     pub colors: BTreeMap<Item, Rgb>,
+    /// The clip plane, if one is set (`clip.set`).
+    pub clip: Option<Clip>,
 }
 
 impl Display {
@@ -232,6 +236,44 @@ impl Display {
                 None => tokens.mesh.role.unspecified,
             },
         }
+    }
+
+    /// The colour of a face of cell `c` that is not on the boundary (a
+    /// face the clip or a hidden item lays open, or a section): the cell
+    /// type's colour in cell-type mode, else the zone's, the mesh's or the
+    /// solid colour.
+    pub fn cell_color(&self, mesh: &Mesh, tokens: &Tokens, c: usize) -> Rgb {
+        let set = |i: Item| self.colors.get(&i).copied();
+        if self.color_by == ColorBy::CellType
+            && let Some(&k) = mesh.cell_kind.get(c)
+        {
+            return set(Item::Kind(k)).unwrap_or_else(|| tokens.kind_color(k));
+        }
+        mesh.cell_zone
+            .get(c)
+            .and_then(|&z| set(Item::Zone(z)))
+            .or_else(|| set(Item::Mesh))
+            .unwrap_or(tokens.mesh.solid)
+    }
+
+    /// The clip plane if it cuts now.
+    pub fn active_clip(&self) -> Option<&Clip> {
+        self.clip.as_ref().filter(|c| c.enabled)
+    }
+
+    /// The cells shown: not hidden (by zone, cell type or the mesh) and
+    /// kept by the clip plane.
+    pub fn shown_cells(&self, mesh: &Mesh) -> Vec<bool> {
+        let mut shown: Vec<bool> = (0..mesh.cell_count())
+            .map(|c| self.cell_visible(mesh, c))
+            .collect();
+        if let Some(clip) = self.active_clip() {
+            let keeps: Vec<bool> = mesh.points.iter().map(|&p| clip.keeps(p)).collect();
+            for (s, k) in shown.iter_mut().zip(crate::clip::kept_cells(mesh, &keeps)) {
+                *s &= k;
+            }
+        }
+        shown
     }
 
     /// The colour `item` shows in the current colour mode, for the legend
@@ -323,16 +365,27 @@ impl Display {
         (!b.is_empty()).then_some(b)
     }
 
-    /// Cells and boundary faces shown.
+    /// Cells and boundary faces shown (the clip plane included).
     pub fn visible_counts(&self, mesh: &Mesh) -> (usize, usize) {
-        if self.hidden.is_empty() {
+        if self.hidden.is_empty() && self.active_clip().is_none() {
             return (mesh.cell_count(), mesh.boundary.len());
         }
-        let cells = (0..mesh.cell_count())
-            .filter(|&c| self.cell_visible(mesh, c))
-            .count();
+        let shown = self.shown_cells(mesh);
+        let cells = shown.iter().filter(|&&s| s).count();
+        let clip = self.active_clip();
         let faces = (0..mesh.boundary.len())
-            .filter(|&f| self.face_visible(mesh, f))
+            .filter(|&f| {
+                self.face_visible(mesh, f)
+                    && match mesh.boundary_owner.get(f).copied() {
+                        Some(c) if c != NO_CELL => shown[c as usize],
+                        _ => clip.is_none_or(|cl| {
+                            mesh.boundary
+                                .get(f)
+                                .iter()
+                                .any(|&i| cl.keeps(mesh.points[i as usize]))
+                        }),
+                    }
+            })
             .count();
         (cells, faces)
     }

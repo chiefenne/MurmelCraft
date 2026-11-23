@@ -443,6 +443,40 @@ impl Camera {
         self.distance = (self.distance * factor).max(1e-9);
     }
 
+    /// World point `p` in normalised device coordinates (-1..1, y up) of
+    /// the frame for a scene about `origin` of `radius`; `None` behind
+    /// the eye.
+    pub fn project(
+        &self,
+        origin: [f64; 3],
+        radius: f64,
+        aspect: f64,
+        p: [f64; 3],
+    ) -> Option<[f64; 2]> {
+        let f = self.frame(origin, radius, aspect);
+        let q = DVec4::new(p[0] - origin[0], p[1] - origin[1], p[2] - origin[2], 1.0);
+        let c = f.view_proj.as_dmat4() * q;
+        (c.w > 1e-12).then(|| [c.x / c.w, c.y / c.w])
+    }
+
+    /// The ray under the point `ndc` (-1..1, y up) of a viewport of
+    /// `aspect`: its start and unit direction, in world coordinates. In
+    /// orthographic projection the rays are parallel and start behind the
+    /// scene; in perspective they start at the eye.
+    pub fn ray(&self, ndc: [f64; 2], aspect: f64) -> (DVec3, DVec3) {
+        let (right, up) = self.basis();
+        let hh = self.half_height();
+        let t = DVec3::from(self.target);
+        let on_target = t + right * ndc[0] * hh * aspect + up * ndc[1] * hh;
+        let to_eye = self.to_eye();
+        if self.is_orthographic() {
+            (on_target + to_eye * self.distance, -to_eye)
+        } else {
+            let eye = self.eye();
+            (eye, (on_target - eye).normalize_or(-to_eye))
+        }
+    }
+
     /// View-projection relative to `origin`, for a scene of `radius` about
     /// it, in a viewport of `aspect`. Depth runs 0..1 (wgpu).
     pub fn frame(&self, origin: [f64; 3], radius: f64, aspect: f64) -> Frame {
@@ -526,6 +560,30 @@ mod tests {
         Bounds {
             min: [0.0; 3],
             max: [1.0; 3],
+        }
+    }
+
+    /// Invariant: `ray` and `project` agree in both projections: a point
+    /// projected to the screen lies on the ray cast back through that
+    /// screen point. Picking casts these rays and the clip gizmo projects
+    /// points, so a mismatch would pick beside the cursor.
+    #[test]
+    fn rays_go_through_projected_points() {
+        for proj in [Projection::Perspective, Projection::Orthographic] {
+            let mut c = Camera {
+                projection: proj,
+                ..Camera::default()
+            };
+            c.fit(&unit_box(), 1.6);
+            c.orbit(23.0, -11.0);
+            let origin = [0.5; 3];
+            for p in [[0.1, 0.9, 0.3], [1.0, 0.0, 1.0], [0.5, 0.5, 0.5]] {
+                let ndc = c.project(origin, 0.87, 1.6, p).unwrap();
+                let (o, d) = c.ray(ndc, 1.6);
+                let v = DVec3::from(p) - o;
+                let off = (v - d * v.dot(d)).length();
+                assert!(off < 1e-5, "{proj:?} {p:?}: {off}");
+            }
         }
     }
 

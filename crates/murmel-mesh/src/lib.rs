@@ -272,8 +272,21 @@ pub struct Mesh {
     /// The volume cell each boundary face belongs to ([`NO_CELL`] when
     /// none matches).
     pub boundary_owner: Vec<u32>,
-    /// Distinct faces of the volume cells (interior plus boundary).
+    /// Distinct faces of the volume cells (interior plus boundary); the
+    /// length of `face_owner`.
     pub unique_faces: usize,
+    /// The distinct face (`face:<n>`) each cell face is, by cell-face index.
+    pub cell_face_id: Vec<u32>,
+    /// Owner and neighbour cell of each distinct face ([`NO_CELL`] for no
+    /// neighbour: a boundary face). The owner is the first cell that uses it.
+    pub face_owner: Vec<u32>,
+    pub face_neighbour: Vec<u32>,
+    /// The cell-face index of each distinct face as its owner sees it.
+    pub face_first: Vec<u32>,
+    /// The distinct face of each boundary polygon, and the boundary polygon
+    /// of each distinct face ([`NO_CELL`] when there is none).
+    pub boundary_face_id: Vec<u32>,
+    pub face_boundary: Vec<u32>,
     pub zones: Vec<String>,
     pub patches: Vec<Patch>,
     /// Further field-data strings (`koflcraft_version`, digests).
@@ -360,6 +373,31 @@ impl Mesh {
     /// The faces of cell `c`.
     pub fn cell(&self, c: usize) -> impl Iterator<Item = &[u32]> {
         (self.cell_faces[c] as usize..self.cell_faces[c + 1] as usize).map(|f| self.faces.get(f))
+    }
+
+    /// The cell-face indices of cell `c`.
+    pub fn cell_face_range(&self, c: usize) -> std::ops::Range<usize> {
+        self.cell_faces[c] as usize..self.cell_faces[c + 1] as usize
+    }
+
+    /// The point ids of distinct face `u` (`face:<u>`), as its owner sees
+    /// it (outward from the owner), or the boundary polygon when the mesh
+    /// has no cells.
+    pub fn face_nodes(&self, u: usize) -> &[u32] {
+        match self.face_first.get(u) {
+            Some(&f) if f != NO_CELL => self.faces.get(f as usize),
+            _ => match self.face_boundary.get(u) {
+                Some(&b) if b != NO_CELL => self.boundary.get(b as usize),
+                _ => &[],
+            },
+        }
+    }
+
+    /// The cell across distinct face `u` from cell `c` ([`NO_CELL`] on
+    /// the boundary).
+    pub fn across(&self, u: usize, c: u32) -> u32 {
+        let (o, n) = (self.face_owner[u], self.face_neighbour[u]);
+        if o == c { n } else { o }
     }
 
     /// The bounds of the points the boundary uses (all points when there

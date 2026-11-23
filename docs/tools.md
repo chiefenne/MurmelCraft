@@ -25,6 +25,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `display.color_by` | 1 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role or by the type of their cell. |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>), or show all; returns the hidden items and the visible counts. |
+| `clip.set` | 1 | read | Set the clip plane: its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). |
+| `clip.clear` | 1 | read | Remove the clip plane; the whole mesh shows again. |
 | `select.item` | 1 | read | Select an item by id; its faces are highlighted and inspect.item shows it. |
 | `select.clear` | 1 | read | Clear the selection. |
 | `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
@@ -489,6 +491,68 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "required": [
     "action"
   ],
+  "type": "object"
+}
+```
+
+### `clip.set`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axis": {
+      "enum": [
+        "x",
+        "y",
+        "z",
+        "view"
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "flip": {
+      "type": "boolean"
+    },
+    "mode": {
+      "enum": [
+        "crinkle",
+        "flat"
+      ]
+    },
+    "normal": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "offset": {
+      "type": "number"
+    },
+    "origin": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `clip.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
   "type": "object"
 }
 ```

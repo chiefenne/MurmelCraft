@@ -169,6 +169,9 @@ impl MurmelApp {
                         }
                     });
                 }
+                if let Some(a) = self.clip_row(ui, &p) {
+                    action = Some(a);
+                }
             });
         if let Some((id, input)) = action {
             self.call(id, input);
@@ -263,6 +266,86 @@ impl MurmelApp {
                         .monospace()
                         .color(color(p.text_secondary)),
                 );
+            });
+        });
+        action
+    }
+
+    /// The clip plane's row under "Clip planes": the eye turns it on and
+    /// off, the context menu flips it, changes the cut or removes it.
+    fn clip_row(
+        &self,
+        ui: &mut Ui,
+        p: &murmel_engine::theme::Palette,
+    ) -> Option<(&'static str, Value)> {
+        let c = self.session.display.clip?;
+        let secondary = color(p.text_secondary);
+        let mut action = None;
+        egui::CollapsingHeader::new(
+            RichText::new(self.i18n.tr("tree-clip-planes").to_uppercase())
+                .small()
+                .color(secondary),
+        )
+        .id_salt("tree-clip-planes")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let axis = ["x", "y", "z"]
+                    .into_iter()
+                    .zip(c.normal)
+                    .find(|(_, n)| n.abs() > 0.999)
+                    .map(|(a, n)| {
+                        format!("{}{}", if n < 0.0 { "−" } else { "" }, a.to_uppercase())
+                    });
+                let label = self.i18n.tr_args(
+                    "tree-clip-label",
+                    &[
+                        (
+                            "normal",
+                            axis.unwrap_or_else(|| self.i18n.tr("tree-clip-oblique"))
+                                .into(),
+                        ),
+                        (
+                            "mode",
+                            self.i18n.tr(&format!("clip-mode-{}", c.mode.key())).into(),
+                        ),
+                    ],
+                );
+                let eye = if c.enabled { icon::EYE } else { icon::EYE_OFF };
+                let name = self.i18n.tr_args(
+                    if c.enabled { "tree-hide" } else { "tree-show" },
+                    &[("item", label.clone().into())],
+                );
+                let b = ui
+                    .add(
+                        egui::Button::new(RichText::new(eye).size(14.0).color(if c.enabled {
+                            color(p.text_primary)
+                        } else {
+                            secondary
+                        }))
+                        .frame(false)
+                        .min_size(egui::vec2(20.0, 20.0)),
+                    )
+                    .on_hover_text(&name);
+                b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+                if b.clicked() {
+                    action = Some(("clip.set", json!({"enabled": !c.enabled})));
+                }
+                let r = ui.selectable_label(false, &label);
+                r.context_menu(|ui| {
+                    for (key, call) in [
+                        ("cmd-clip-flip", ("clip.set", json!({"flip": true}))),
+                        ("cmd-clip-crinkle", ("clip.set", json!({"mode": "crinkle"}))),
+                        ("cmd-clip-flat", ("clip.set", json!({"mode": "flat"}))),
+                        ("cmd-clip-view", ("clip.set", json!({"axis": "view"}))),
+                        ("cmd-clip-clear", ("clip.clear", json!({}))),
+                    ] {
+                        if ui.button(self.i18n.tr(key)).clicked() {
+                            action = Some(call);
+                            ui.close();
+                        }
+                    }
+                });
             });
         });
         action

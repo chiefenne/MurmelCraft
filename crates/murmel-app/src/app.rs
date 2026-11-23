@@ -345,6 +345,8 @@ impl MurmelApp {
             if let Some(c) = pick.filter(|&c| c != by) {
                 self.call("display.color_by", json!({ "by": c }));
             }
+            ui.separator();
+            self.clip_group(ui, secondary);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let props = self.i18n.tr("toolbar-properties");
                 if icon_button(
@@ -371,6 +373,83 @@ impl MurmelApp {
                     self.show_tree = !self.show_tree;
                 }
             });
+        });
+    }
+
+    /// The Clip group of the toolbar: the axis buttons (X, Y, Z), the
+    /// cut mode, flip and the plane's position.
+    fn clip_group(&mut self, ui: &mut Ui, secondary: Color32) {
+        ui.label(
+            RichText::new(self.i18n.tr("toolbar-group-clip").to_uppercase())
+                .small()
+                .color(secondary),
+        );
+        let clip = self.session.display.clip;
+        let has_mesh = self.session.mesh.is_some();
+        ui.add_enabled_ui(has_mesh, |ui| {
+            let on = clip.is_some_and(|c| c.enabled);
+            for (axis, n) in [("x", 0), ("y", 1), ("z", 2)] {
+                let active = on && clip.is_some_and(|c| c.normal[n].abs() > 0.999);
+                let name = self.i18n.tr(&format!("cmd-clip-{axis}"));
+                let b = ui
+                    .add(
+                        egui::Button::new(RichText::new(axis.to_uppercase()).size(13.0))
+                            .selected(active)
+                            .min_size(egui::vec2(28.0, 28.0)),
+                    )
+                    .on_hover_text(format!("{name} ({})", axis.to_uppercase()));
+                b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+                if b.clicked() {
+                    if active {
+                        self.call("clip.set", json!({"enabled": false}));
+                    } else {
+                        self.call("clip.set", json!({ "axis": axis }));
+                    }
+                }
+            }
+            let Some(c) = clip else {
+                return;
+            };
+            let mode = c.mode;
+            let mut pick = None;
+            let r = egui::ComboBox::from_id_salt("clip-mode")
+                .selected_text(self.i18n.tr(&format!("clip-mode-{}", mode.key())))
+                .show_ui(ui, |ui| {
+                    for m in murmel_engine::ClipMode::ALL {
+                        let name = self.i18n.tr(&format!("clip-mode-{}", m.key()));
+                        if ui.selectable_label(m == mode, name).clicked() {
+                            pick = Some(m);
+                        }
+                    }
+                });
+            r.response
+                .on_hover_text(self.i18n.tr("toolbar-clip-mode-tip"));
+            if let Some(m) = pick.filter(|&m| m != mode) {
+                self.call("clip.set", json!({ "mode": m }));
+            }
+            let flip = self.i18n.tr("toolbar-clip-flip");
+            if ui
+                .button(flip)
+                .on_hover_text(self.i18n.tr("toolbar-clip-flip-tip"))
+                .clicked()
+            {
+                self.call("clip.set", json!({"flip": true}));
+            }
+            if let Some(m) = &self.session.mesh {
+                let (off, [lo, hi]) = c.offset(&m.mesh.bounds());
+                let mut v = off;
+                let name = self.i18n.tr("toolbar-clip-position");
+                let r = ui
+                    .add_sized(
+                        [120.0, 20.0],
+                        egui::Slider::new(&mut v, lo..=hi).show_value(false),
+                    )
+                    .on_hover_text(self.i18n.tr("toolbar-clip-position-tip"));
+                r.widget_info(|| WidgetInfo::slider(true, v, name.clone()));
+                if r.changed() && v != off {
+                    self.call("clip.set", json!({ "offset": v }));
+                }
+            }
         });
     }
 

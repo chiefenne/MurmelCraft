@@ -14,7 +14,8 @@
 use std::path::{Path, PathBuf};
 
 use murmel_engine::{
-    ColorBy, Item, RenderMode, ScreenAxis, Session, StandardView, Tokens, Visibility,
+    Clip, ClipMode, ColorBy, Item, RenderMode, ScreenAxis, Session, StandardView, Tokens,
+    Visibility,
 };
 use murmel_render::{diff_share, read_png, render_session, write_png};
 
@@ -126,6 +127,43 @@ fn channel_cube_views_and_roll() {
     s.camera.rotate(ScreenAxis::Z, 90.0);
     s.fit();
     check_session("channel-front-rolled", &s);
+}
+
+/// V0.4 clip plane: the channel cut at x = centre and coloured by cell
+/// type, seen from the iso view (the cut faces the camera). The crinkle cut shows whole cells (the
+/// amber prism layers along the walls, the teal core between them); the
+/// flat cut shows the cells' sections in the plane.
+#[test]
+fn channel_clip_by_cell_type() {
+    for mode in ClipMode::ALL {
+        let mut s = session(StandardView::ISO);
+        s.display.color_by = ColorBy::CellType;
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        s.display.clip = Some(Clip {
+            origin: b.center(),
+            normal: [1.0, 0.0, 0.0],
+            mode,
+            enabled: true,
+        });
+        s.redraw();
+        check_session(&format!("channel-clip-{}", mode.key()), &s);
+    }
+}
+
+/// V0.4 cell types: with the prism layers hidden the core's polyhedra
+/// show as a closed block (V0.2 left holes where the layers were).
+#[test]
+fn channel_prisms_hidden_show_the_core() {
+    let mut s = session(StandardView::ISO);
+    s.display.color_by = ColorBy::CellType;
+    let m = s.mesh.as_ref().unwrap().mesh.clone();
+    s.display.set_visibility(
+        Visibility::Hide,
+        &[Item::Kind(murmel_mesh::CellKind::Prism)],
+        &m,
+    );
+    s.redraw();
+    check_session("channel-prisms-hidden", &s);
 }
 
 /// The image is not a blank gradient: the mesh covers a good part of the
