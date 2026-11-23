@@ -21,7 +21,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
-pub use evidence::Evidence;
+pub use boundary::NO_CELL;
+pub use evidence::{Evidence, EvidencePatch};
 pub use vtu::{read_vtu, read_vtu_str};
 
 /// A failure to read a mesh, with its diagnostic code.
@@ -167,7 +168,7 @@ impl CellKind {
 }
 
 /// The role of a boundary patch as KoflCraft writes it (`boundary_roles`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PatchRole {
     Wall,
@@ -179,6 +180,26 @@ pub enum PatchRole {
 }
 
 impl PatchRole {
+    pub const ALL: [PatchRole; 6] = [
+        PatchRole::Wall,
+        PatchRole::Inlet,
+        PatchRole::Outlet,
+        PatchRole::Symmetry,
+        PatchRole::Interface,
+        PatchRole::Unspecified,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            PatchRole::Wall => "wall",
+            PatchRole::Inlet => "inlet",
+            PatchRole::Outlet => "outlet",
+            PatchRole::Symmetry => "symmetry",
+            PatchRole::Interface => "interface",
+            PatchRole::Unspecified => "unspecified",
+        }
+    }
+
     pub fn parse(s: &str) -> PatchRole {
         match s.trim() {
             "wall" => PatchRole::Wall,
@@ -248,6 +269,11 @@ pub struct Mesh {
     /// Boundary faces and the patch of each.
     pub boundary: Polygons,
     pub boundary_patch: Vec<u32>,
+    /// The volume cell each boundary face belongs to ([`NO_CELL`] when
+    /// none matches).
+    pub boundary_owner: Vec<u32>,
+    /// Distinct faces of the volume cells (interior plus boundary).
+    pub unique_faces: usize,
     pub zones: Vec<String>,
     pub patches: Vec<Patch>,
     /// Further field-data strings (`koflcraft_version`, digests).

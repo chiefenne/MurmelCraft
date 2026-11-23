@@ -3,9 +3,10 @@
 
 use std::path::PathBuf;
 
+use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::settings::{Settings, save_navigation, save_settings};
-use murmel_engine::{Projection, Session, StandardView, Theme};
+use murmel_engine::{ColorBy, Item, Projection, Session, StandardView, Theme, Visibility};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -92,6 +93,9 @@ fn mesh_summary(s: &Session) -> Value {
         "summary": m.mesh.summary(),
         "metadata": m.mesh.metadata,
         "evidence": m.evidence,
+        "validity": m.validity.key(),
+        "digest": m.digest,
+        "items": std::iter::once(Item::Mesh).chain(all_items(&m.mesh)).map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
         "surface": {"triangles": m.surface.triangles(), "edges": m.surface.edges()},
         "warnings": warnings,
     })
@@ -233,9 +237,26 @@ fn view_zoom(input: Value, s: &mut Session) -> Run {
     Ok(camera_json(s))
 }
 
-fn view_fit(_: Value, s: &mut Session) -> Run {
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct Fit {
+    item: Option<String>,
+}
+
+fn view_fit(input: Value, s: &mut Session) -> Run {
+    let i: Fit = parse(input)?;
     need_mesh(s)?;
-    s.fit();
+    match i.item {
+        Some(id) => {
+            let item = item(s, &id)?;
+            if !s.fit_item(item) {
+                s.fit();
+            }
+        }
+        None => {
+            s.fit();
+        }
+    }
     Ok(camera_json(s))
 }
 
@@ -304,6 +325,116 @@ fn view_screenshot(input: Value, s: &mut Session) -> Run {
         "height": shot.height,
         "adapter": shot.adapter,
         "camera": camera_json(s),
+    }))
+}
+
+// ---- display, selection and properties ----------------------------------
+
+fn item(s: &Session, id: &str) -> Result<Item, Diagnostic> {
+    let m = s
+        .mesh
+        .as_ref()
+        .ok_or_else(|| Diagnostic::new("VIEW001", "no mesh is open"))?;
+    Item::parse(id, &m.mesh)
+        .ok_or_else(|| Diagnostic::new("VIEW002", format!("no item {id} in the open mesh")))
+}
+
+fn display_json(s: &Session) -> Value {
+    let d = &s.display;
+    let Some(m) = &s.mesh else {
+        return json!({"color_by": d.color_by});
+    };
+    let (cells, faces) = d.visible_counts(&m.mesh);
+    json!({
+        "color_by": d.color_by,
+        "hidden": d.hidden.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
+        "selection": d.selection.map(|i| i.id(&m.mesh)),
+        "visible_cells": cells,
+        "visible_faces": faces,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ColorByInput {
+    by: ColorBy,
+}
+
+fn display_color_by(input: Value, s: &mut Session) -> Run {
+    let i: ColorByInput = parse(input)?;
+    s.display.color_by = i.by;
+    s.redraw();
+    Ok(display_json(s))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VisibilityInput {
+    action: Visibility,
+    #[serde(default)]
+    items: Vec<String>,
+}
+
+fn display_visibility(input: Value, s: &mut Session) -> Run {
+    let i: VisibilityInput = parse(input)?;
+    need_mesh(s)?;
+    let items = i
+        .items
+        .iter()
+        .map(|id| item(s, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    if items.is_empty() && i.action != Visibility::ShowAll {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "items is empty; name at least one item, or use show_all",
+        ));
+    }
+    if let Some(m) = &s.mesh {
+        s.display.set_visibility(i.action, &items, &m.mesh);
+    }
+    s.redraw();
+    Ok(display_json(s))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectInput {
+    item: String,
+}
+
+fn select_item(input: Value, s: &mut Session) -> Run {
+    let i: SelectInput = parse(input)?;
+    let it = item(s, &i.item)?;
+    s.display.selection = Some(it);
+    s.redraw();
+    Ok(display_json(s))
+}
+
+fn select_clear(_: Value, s: &mut Session) -> Run {
+    s.display.selection = None;
+    s.redraw();
+    Ok(display_json(s))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct InspectInput {
+    item: Option<String>,
+}
+
+fn inspect_item(input: Value, s: &mut Session) -> Run {
+    let i: InspectInput = parse(input)?;
+    need_mesh(s)?;
+    let it = match &i.item {
+        Some(id) => item(s, id)?,
+        None => s.display.selection.unwrap_or(Item::Mesh),
+    };
+    let Some(m) = &s.mesh else {
+        return Err(Diagnostic::new("VIEW001", "no mesh is open"));
+    };
+    Ok(json!({
+        "item": it.id(&m.mesh),
+        "rows": murmel_engine::inspect::rows(m, &s.display, it),
     }))
 }
 
@@ -567,9 +698,9 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-view-fit",
-        summary: "Frame the open mesh from the current direction.",
+        summary: "Frame the faces shown, or the shown faces of one item (mesh, zone:<name>, kind:<cell type>, patch:<name>), from the current direction.",
         outputs: &[],
-        input_schema: no_input,
+        input_schema: || object(json!({"item": {"type": "string"}}), &[]),
         run: view_fit,
     },
     Tool {
@@ -608,6 +739,69 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: view_screenshot,
+    },
+    Tool {
+        id: "display.color_by",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-display-color-by",
+        summary: "Colour the boundary faces by patch, patch role or the type of their cell.",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({"by": {"enum": ["patch", "role", "cell_type"]}}),
+                &["by"],
+            )
+        },
+        run: display_color_by,
+    },
+    Tool {
+        id: "display.visibility",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-display-visibility",
+        summary: "Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>), or show all; returns the hidden items and the visible counts.",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "action": {"enum": ["show", "hide", "isolate", "show_all"]},
+                    "items": {"type": "array", "items": {"type": "string"}}
+                }),
+                &["action"],
+            )
+        },
+        run: display_visibility,
+    },
+    Tool {
+        id: "select.item",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-select-item",
+        summary: "Select an item by id; its faces are highlighted and inspect.item shows it.",
+        outputs: &[],
+        input_schema: || object(json!({"item": {"type": "string"}}), &["item"]),
+        run: select_item,
+    },
+    Tool {
+        id: "select.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-select-clear",
+        summary: "Clear the selection.",
+        outputs: &[],
+        input_schema: no_input,
+        run: select_clear,
+    },
+    Tool {
+        id: "inspect.item",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-inspect-item",
+        summary: "The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel.",
+        outputs: &[],
+        input_schema: || object(json!({"item": {"type": "string"}}), &[]),
+        run: inspect_item,
     },
     Tool {
         id: "settings.get",

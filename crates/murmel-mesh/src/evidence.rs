@@ -20,11 +20,40 @@ pub struct Evidence {
     pub boundary_faces: Option<u64>,
     pub total_volume: Option<f64>,
     pub inverted_faces: Option<u64>,
+    pub interior_faces: Option<u64>,
+    pub max_relative_closure: Option<f64>,
+    pub patches: Vec<EvidencePatch>,
+    /// File name and SHA-256 (hex) of each file KoflCraft wrote.
+    pub files: Vec<(String, String)>,
+    pub limitations: Vec<String>,
     #[serde(skip)]
     pub raw: Value,
 }
 
+/// A patch as the evidence summarises it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EvidencePatch {
+    pub name: String,
+    pub role: Option<String>,
+    pub foehncraft_type: Option<String>,
+    pub faces: Option<u64>,
+    pub area: Option<f64>,
+}
+
 impl Evidence {
+    /// The evidence of the patch called `name`.
+    pub fn patch(&self, name: &str) -> Option<&EvidencePatch> {
+        self.patches.iter().find(|p| p.name == name)
+    }
+
+    /// The SHA-256 the evidence records for the file called `name`.
+    pub fn digest(&self, name: &str) -> Option<&str> {
+        self.files
+            .iter()
+            .find(|f| f.0 == name)
+            .map(|f| f.1.as_str())
+    }
+
     pub fn parse(text: &str) -> Result<Self, MeshError> {
         let raw: Value = serde_json::from_str(text)
             .map_err(|e| MeshError::new("MESH011", format!("mesh-evidence.json: {e}")))?;
@@ -45,6 +74,34 @@ impl Evidence {
             boundary_faces: s["boundary_faces"].as_u64(),
             total_volume: s["total_volume"].as_f64(),
             inverted_faces: s["inverted_faces"].as_u64(),
+            interior_faces: s["interior_faces"].as_u64(),
+            max_relative_closure: s["max_relative_closure"].as_f64(),
+            patches: s["patches"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| {
+                    Some(EvidencePatch {
+                        name: p["name"].as_str()?.to_string(),
+                        role: p["role"].as_str().map(str::to_string),
+                        foehncraft_type: p["foehncraft_type"].as_str().map(str::to_string),
+                        faces: p["faces"].as_u64(),
+                        area: p["area"].as_f64(),
+                    })
+                })
+                .collect(),
+            files: raw["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|f| Some((f[0].as_str()?.to_string(), f[1].as_str()?.to_string())))
+                .collect(),
+            limitations: raw["limitations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|l| l.as_str().map(str::to_string))
+                .collect(),
             raw,
         })
     }
@@ -76,6 +133,10 @@ mod tests {
         assert_eq!(e.cells, Some(776));
         assert_eq!(e.inverted_faces, Some(0));
         assert_eq!(e.generator.as_deref(), Some("straight_channel"));
+        let walls = e.patch("walls").unwrap();
+        assert_eq!(walls.faces, Some(256));
+        assert_eq!(walls.foehncraft_type.as_deref(), Some("wall"));
+        assert_eq!(e.digest("foehncraft.vtu").map(str::len), Some(64));
     }
 
     #[test]

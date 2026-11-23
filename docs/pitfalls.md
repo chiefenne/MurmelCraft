@@ -25,6 +25,28 @@ problem took more than a few minutes to understand.
   so the comparison allows 1 % of pixels to differ by more than 24 levels.
   Bless an intended change with `MURMEL_BLESS=1`; do not raise the tolerance.
 
+## Window input
+
+- **A clicked button keeps the keyboard focus in egui.** After any click,
+  `Context::egui_wants_keyboard_input()` is true and the viewport keys
+  (F, H, I, Esc) stop working. Check `Context::text_edit_focused()` instead:
+  only a text field should keep the keys.
+- **`consume_key` matches modifiers logically.** `consume_key(NONE, H)` also
+  takes Alt + H. Consume the combination with more modifiers first.
+- **Keys under Xvfb.** Without a window manager the window has no keyboard
+  focus; send keys with `xdotool key --window <id>` after `windowfocus`.
+
+## Display
+
+- **Boundary polygons carry no owner cell.** KoflCraft writes the boundary as
+  separate polygons (type 7). Their owner cells, which colour by cell type and
+  hiding a zone or a cell type need, come from matching each polygon to a cell
+  face by its sorted point ids (`murmel-mesh` `boundary::link`).
+- **A closed patch has no mean normal.** The normals of a tube or a box
+  cancel, and normalising the round-off gives a random direction. The patch
+  properties show no mean normal when the summed vector area is below 1e-6
+  of the area.
+
 ## Library versions (2026-11)
 
 - **wgpu 30**: vertex buffer layouts and bind group layouts are `Option`s,

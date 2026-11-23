@@ -643,9 +643,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<Mesh, MeshError> {
         }
     }
 
-    if mesh.boundary.is_empty() && mesh.cell_count() > 0 {
-        boundary::extract(&mut mesh);
-    }
+    boundary::link(&mut mesh);
     if mesh.cell_count() == 0 && mesh.boundary.is_empty() {
         return Err(err("MESH010", "no volume cells and no boundary faces"));
     }
@@ -716,6 +714,22 @@ mod tests {
         assert_eq!(s.cell_kinds.values().sum::<usize>(), 776);
     }
 
+    /// Invariant: every boundary polygon of the channel matches a face of
+    /// exactly one cell, and the distinct cell faces are the evidence's
+    /// 2173 (1747 interior plus 426 boundary). A face matched by node
+    /// order instead of node set would leave owners unknown.
+    #[test]
+    fn links_boundary_faces_to_their_cells() {
+        let m = read_vtu(&fixture("channel/foehncraft.vtu")).unwrap();
+        assert_eq!(m.boundary_owner.len(), 426);
+        assert!(
+            m.boundary_owner
+                .iter()
+                .all(|&c| (c as usize) < m.cell_count())
+        );
+        assert_eq!(m.unique_faces, 2173);
+    }
+
     const TET: &str = r#"<?xml version="1.0"?>
 <VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian">
 <UnstructuredGrid><Piece NumberOfPoints="4" NumberOfCells="1">
@@ -736,6 +750,8 @@ mod tests {
         assert_eq!(m.cell_kind, vec![CellKind::Tetrahedron]);
         assert_eq!(m.boundary.len(), 4);
         assert!(m.boundary_extracted);
+        assert_eq!(m.boundary_owner, [0; 4]);
+        assert_eq!(m.unique_faces, 4);
         assert_eq!(m.patches.len(), 1);
     }
 

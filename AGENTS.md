@@ -28,6 +28,10 @@ The method is the ArtCraft Craft Anything method of KoflCraft and FoehnCraft:
   GPU) → `murmel-engine` (session, camera, bindings, tokens, no window, no
   GPU) → `murmel-render` (wgpu, no egui) → `murmel-tools` (registry) →
   front ends `murmel-cli` and `murmel-app` (egui + eframe).
+- **MUST** name model items by the ids the tree and the tools share:
+  `mesh`, `zone:<name>`, `kind:<cell type>`, `patch:<name>`
+  (`murmel_engine::Item`). A change of display state (colour, visibility,
+  selection) goes through `Session::redraw`, which rebuilds the surface.
 - **MUST** mark a tool that writes files `write-files` and name what it
   writes (`outputs`), so an approval table can judge a call before it runs.
 - **MUST** regenerate `docs/tools.md` with
