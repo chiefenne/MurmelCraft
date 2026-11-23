@@ -635,6 +635,53 @@ mod tests {
         }
     }
 
+    /// Invariant: the buffers the renderer uploads are well formed for
+    /// every display the render tests draw: one normal and colour per
+    /// position, whole triangles and segments, every index in range, all
+    /// numbers finite, unit normals. A software rasteriser may read out of
+    /// bounds (or crash) on a bad index or a NaN instead of failing
+    /// validation.
+    #[test]
+    fn buffers_are_well_formed() {
+        let m = channel();
+        let t = Tokens::builtin().unwrap();
+        let mut no_prisms = Display::default();
+        no_prisms
+            .hidden
+            .insert(Item::Kind(murmel_mesh::CellKind::Prism));
+        for (name, d) in [
+            ("all", Display::default()),
+            ("no prisms", no_prisms),
+            ("crinkle", clip_y(&m, ClipMode::Crinkle)),
+            ("flat", clip_y(&m, ClipMode::Flat)),
+        ] {
+            let s = Surface::build(&m, &t, &d);
+            let n = s.positions.len();
+            assert_eq!(s.normals.len(), n, "{name}");
+            assert_eq!(s.colors.len(), n, "{name}");
+            assert_eq!(s.indices.len() % 3, 0, "{name}");
+            assert!(s.indices.iter().all(|&i| (i as usize) < n), "{name}");
+            assert_eq!(s.edge_positions.len() % 2, 0, "{name}");
+            assert_eq!(s.edge_colors.len(), s.edge_positions.len(), "{name}");
+            let finite = |v: &[[f32; 3]]| v.iter().flatten().all(|x| x.is_finite());
+            assert!(finite(&s.positions) && finite(&s.colors), "{name}");
+            assert!(
+                finite(&s.edge_positions) && finite(&s.edge_colors),
+                "{name}"
+            );
+            let bad: Vec<_> = s
+                .normals
+                .iter()
+                .filter(|v| {
+                    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                    (l - 1.0).abs() >= 1e-3
+                })
+                .take(3)
+                .collect();
+            assert!(bad.is_empty(), "{name}: {bad:?}");
+        }
+    }
+
     /// Invariant: hiding the prism layers keeps the 8 polyhedra of the
     /// core and draws their faces, and the crinkle clip keeps whole cells:
     /// fewer than all, more than half (the cells the plane crosses stay).
