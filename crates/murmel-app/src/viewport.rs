@@ -53,9 +53,11 @@ impl MurmelApp {
         }
         self.navigate(ui, &resp, rect);
         let dark = self.dark(ui.ctx());
-        self.draw_mesh(ui, frame, rect, dark);
-        self.overlays(ui, rect, dark);
+        let cam = self.shown_camera(ui.ctx());
+        self.draw_mesh(ui, frame, rect, dark, &cam);
+        self.overlays(ui, rect, dark, &cam);
         self.legend(ui, rect, dark);
+        self.view_cube(ui, rect, &cam, dark);
 
         let desc = self.describe();
         resp.widget_info(|| WidgetInfo::labeled(Role::Canvas, true, desc.clone()));
@@ -63,9 +65,9 @@ impl MurmelApp {
             for (key, call) in [
                 ("menu-fit", ("view.fit", json!({}))),
                 ("menu-home", ("view.standard", json!({"view": "home"}))),
-                ("menu-front", ("view.standard", json!({"view": "front"}))),
-                ("menu-top", ("view.standard", json!({"view": "top"}))),
-                ("menu-right", ("view.standard", json!({"view": "right"}))),
+                ("view-front", ("view.standard", json!({"view": "front"}))),
+                ("view-top", ("view.standard", json!({"view": "top"}))),
+                ("view-right", ("view.standard", json!({"view": "right"}))),
             ] {
                 if ui.button(self.i18n.tr(key)).clicked() {
                     self.call(call.0, call.1);
@@ -81,12 +83,9 @@ impl MurmelApp {
             .mesh
             .as_ref()
             .map_or((0, 0), |m| (m.surface.cells, m.surface.faces));
-        let (y, p) = murmel_engine::StandardView::Iso.angles();
-        let c = &self.session.camera;
-        let view = if (c.yaw_deg - y).abs() < 1e-6 && (c.pitch_deg - p).abs() < 1e-6 {
-            self.i18n.tr("viewport-view-iso")
-        } else {
-            self.i18n.tr("viewport-view-custom")
+        let view = match self.session.camera.standard() {
+            Some(v) => self.i18n.tr(&format!("view-{}", v.name())),
+            None => self.i18n.tr("viewport-view-custom"),
         };
         self.i18n.tr_args(
             "viewport-description",
@@ -131,12 +130,18 @@ impl MurmelApp {
             let d = resp.drag_delta();
             let (dx, dy) = (d.x as f64, d.y as f64);
             match self.drag {
-                Some(Action::Orbit) => {
-                    let s = nav.orbit_speed;
-                    self.call(
-                        "view.orbit",
-                        json!({"yaw_deg": -dx * s, "pitch_deg": dy * s}),
-                    );
+                Some(Action::Orbit) => self.orbit_by_drag(dx, dy),
+                Some(Action::Roll) => {
+                    // Turn about the view direction as the pointer turns
+                    // about the viewport centre.
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        let c = rect.center();
+                        let (a, b) = (p - d - c, p - c);
+                        if a.length() > 8.0 && b.length() > 8.0 {
+                            let deg = (a.x * b.y - a.y * b.x).atan2(a.dot(b)).to_degrees();
+                            self.call("view.rotate", json!({"axis": "z", "deg": -deg as f64}));
+                        }
+                    }
                 }
                 Some(Action::Pan) => {
                     self.call("view.pan", json!({"dx_px": dx, "dy_px": dy}));
@@ -172,7 +177,14 @@ impl MurmelApp {
         }
     }
 
-    fn draw_mesh(&mut self, ui: &Ui, frame: &mut eframe::Frame, rect: Rect, dark: bool) {
+    fn draw_mesh(
+        &mut self,
+        ui: &Ui,
+        frame: &mut eframe::Frame,
+        rect: Rect,
+        dark: bool,
+        cam: &murmel_engine::Camera,
+    ) {
         let p = self.session.tokens.palette(dark).clone();
         let painter = ui.painter_at(rect);
         let (Some(rs), Some(g)) = (frame.wgpu_render_state(), self.gpu.as_mut()) else {
@@ -185,8 +197,8 @@ impl MurmelApp {
             ((rect.height() * ppp).round() as u32).clamp(1, murmel_render::MAX_SIDE),
         ];
         let key = format!(
-            "{:?}|{}|{px:?}|{dark}",
-            self.session.camera, self.session.surface_revision
+            "{cam:?}|{}|{px:?}|{dark}|{:?}",
+            self.session.surface_revision, self.session.display.render_mode
         );
         if g.last.as_deref() != Some(key.as_str()) {
             g.renderer.render(
@@ -195,11 +207,12 @@ impl MurmelApp {
                 &View {
                     surface: self.session.mesh.as_ref().map(|m| &m.surface),
                     revision: self.session.surface_revision,
-                    camera: &self.session.camera,
+                    camera: cam,
                     size: px,
                     bg_top: p.viewport_top.linear(),
                     bg_bottom: p.viewport_bottom.linear(),
-                    edges: true,
+                    faces: self.session.display.render_mode.faces(),
+                    edges: self.session.display.render_mode.edges(),
                 },
             );
             if let Some(view) = g.renderer.egui_view() {
@@ -241,7 +254,7 @@ impl MurmelApp {
         }
     }
 
-    fn overlays(&self, ui: &Ui, rect: Rect, dark: bool) {
+    fn overlays(&self, ui: &Ui, rect: Rect, dark: bool, cam: &murmel_engine::Camera) {
         let p = self.session.tokens.palette(dark);
         let painter = ui.painter_at(rect);
         let body = egui::FontId::proportional(13.0);
@@ -255,11 +268,14 @@ impl MurmelApp {
             );
         }
         // View note, top left.
-        let proj = self.session.camera.projection;
+        let proj = cam.projection;
         let note = format!(
             "{} · {}",
-            self.i18n.tr("display-shaded-edges"),
-            if self.session.camera.is_orthographic() {
+            self.i18n.tr(&format!(
+                "render-mode-{}",
+                self.session.display.render_mode.key()
+            )),
+            if cam.is_orthographic() {
                 self.i18n.tr("projection-orthographic")
             } else {
                 self.i18n.tr(&format!("projection-{}", proj.key()))
@@ -274,7 +290,7 @@ impl MurmelApp {
         // Axis triad, bottom left: X red, Y green, Z blue.
         let t = &self.session.tokens.mesh;
         let origin = Pos2::new(rect.left() + 48.0, rect.bottom() - 48.0);
-        let (right, up) = self.session.camera.basis();
+        let (right, up) = cam.basis();
         let len = 28.0;
         let mut axes = [
             (glam_dir(0), t.axis_x, "X"),
@@ -282,7 +298,7 @@ impl MurmelApp {
             (glam_dir(2), t.axis_z, "Z"),
         ];
         // Draw the axis pointing away first.
-        let to_eye = self.session.camera.to_eye();
+        let to_eye = cam.to_eye();
         axes.sort_by(|a, b| {
             let da: f64 = (0..3).map(|k| a.0[k] * to_eye[k]).sum();
             let db: f64 = (0..3).map(|k| b.0[k] * to_eye[k]).sum();

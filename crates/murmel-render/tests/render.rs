@@ -13,7 +13,9 @@
 
 use std::path::{Path, PathBuf};
 
-use murmel_engine::{ColorBy, Item, Session, StandardView, Tokens, Visibility};
+use murmel_engine::{
+    ColorBy, Item, RenderMode, ScreenAxis, Session, StandardView, Tokens, Visibility,
+};
 use murmel_render::{diff_share, read_png, render_session, write_png};
 
 fn root() -> PathBuf {
@@ -59,19 +61,19 @@ fn check_session(name: &str, s: &Session) {
 
 #[test]
 fn channel_iso_shaded_with_edges() {
-    check("channel-iso", StandardView::Iso);
+    check("channel-iso", StandardView::ISO);
 }
 
 #[test]
 fn channel_front_orthographic() {
-    check("channel-front", StandardView::Front);
+    check("channel-front", StandardView::FRONT);
 }
 
 /// V0.2 display: colour by patch role with the walls hidden shows the
 /// inlet (blue) and outlet (orange) ends and nothing else.
 #[test]
 fn channel_roles_without_walls() {
-    let mut s = session(StandardView::Iso);
+    let mut s = session(StandardView::ISO);
     s.display.color_by = ColorBy::Role;
     let walls = Item::parse("patch:walls", &s.mesh.as_ref().unwrap().mesh).unwrap();
     let m = s.mesh.as_ref().unwrap().mesh.clone();
@@ -85,18 +87,52 @@ fn channel_roles_without_walls() {
 /// selection colour).
 #[test]
 fn channel_cell_types_outlet_selected() {
-    let mut s = session(StandardView::Iso);
+    let mut s = session(StandardView::ISO);
     s.display.color_by = ColorBy::CellType;
     s.display.selection = Item::parse("patch:outlet", &s.mesh.as_ref().unwrap().mesh);
     s.redraw();
     check_session("channel-cell-types-selected", &s);
 }
 
+/// V0.3 render modes 2 to 4 (shaded, wireframe, feature edges) in the
+/// cell-type colours, so prism layers and core read in each.
+#[test]
+fn channel_render_modes() {
+    for mode in [
+        RenderMode::Shaded,
+        RenderMode::Wireframe,
+        RenderMode::FeatureEdges,
+    ] {
+        let mut s = session(StandardView::ISO);
+        s.display.color_by = ColorBy::CellType;
+        s.display.render_mode = mode;
+        s.redraw();
+        check_session(&format!("channel-mode-{}", mode.key()), &s);
+    }
+}
+
+/// V0.3 views: an edge view and a corner view of the cube, and the front
+/// view rolled by 90 degrees (the inlet end on top) through
+/// `Camera::rotate`.
+#[test]
+fn channel_cube_views_and_roll() {
+    let edge = StandardView::parse("front_top").unwrap();
+    check("channel-front-top", edge);
+    check(
+        "channel-back-left-bottom",
+        StandardView::parse("back_left_bottom").unwrap(),
+    );
+    let mut s = session(StandardView::FRONT);
+    s.camera.rotate(ScreenAxis::Z, 90.0);
+    s.fit();
+    check_session("channel-front-rolled", &s);
+}
+
 /// The image is not a blank gradient: the mesh covers a good part of the
 /// view and its edges are darker than its faces.
 #[test]
 fn the_mesh_fills_the_view() {
-    let shot = render_session(&session(StandardView::Iso), 240, 160).unwrap();
+    let shot = render_session(&session(StandardView::ISO), 240, 160).unwrap();
     let bg = render_session(&Session::new(Tokens::builtin().unwrap()), 240, 160).unwrap();
     let covered = diff_share(&shot.rgba, &bg.rgba, 8);
     assert!(covered > 0.15, "mesh covers only {:.1} %", 100.0 * covered);

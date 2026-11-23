@@ -9,6 +9,7 @@
 //! that also write files and names them (`outputs`), so an approval table
 //! can judge a call before it runs.
 
+pub mod commands;
 mod diag;
 mod markdown;
 mod tools;

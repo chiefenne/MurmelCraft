@@ -3,6 +3,8 @@
 //! `murmelcraft [MESH.vtu]` opens the window, optionally with a mesh.
 
 mod app;
+mod commands;
+mod cube;
 mod i18n;
 mod panels;
 mod style;

@@ -7,7 +7,8 @@ use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::settings::{Settings, save_navigation, save_settings};
 use murmel_engine::{
-    ColorBy, Item, MeshColors, Projection, Rgb, Session, StandardView, Theme, Visibility,
+    ColorBy, Item, MeshColors, Projection, RenderMode, Rgb, ScreenAxis, Session, StandardView,
+    Theme, Visibility,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -38,6 +39,8 @@ fn camera_json(s: &Session) -> Value {
         "distance": c.distance,
         "yaw_deg": c.yaw_deg,
         "pitch_deg": c.pitch_deg,
+        "roll_deg": c.roll_deg,
+        "view": c.standard().map(|v| v.name()),
         "projection": c.projection,
         "orthographic": c.is_orthographic(),
         "fov_deg": c.fov_deg,
@@ -133,6 +136,7 @@ struct SetCamera {
     distance: Option<f64>,
     yaw_deg: Option<f64>,
     pitch_deg: Option<f64>,
+    roll_deg: Option<f64>,
     projection: Option<Projection>,
     fov_deg: Option<f64>,
     viewport: Option<[f64; 2]>,
@@ -168,6 +172,12 @@ fn view_set(input: Value, s: &mut Session) -> Run {
     if let Some(p) = i.pitch_deg {
         c.pitch_deg = finite(p, "pitch_deg")?.clamp(-90.0, 90.0);
         c.snapped = false;
+    }
+    if let Some(r) = i.roll_deg {
+        c.roll_deg = finite(r, "roll_deg")?.rem_euclid(360.0);
+        if c.roll_deg > 180.0 {
+            c.roll_deg -= 360.0;
+        }
     }
     if let Some(p) = i.projection {
         c.projection = p;
@@ -279,6 +289,19 @@ fn view_standard(input: Value, s: &mut Session) -> Run {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct Rotate {
+    axis: ScreenAxis,
+    deg: f64,
+}
+
+fn view_rotate(input: Value, s: &mut Session) -> Run {
+    let i: Rotate = parse(input)?;
+    s.camera.rotate(i.axis, finite(i.deg, "deg")?);
+    Ok(camera_json(s))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Screenshot {
     path: PathBuf,
     #[serde(default = "default_w")]
@@ -344,7 +367,7 @@ fn item(s: &Session, id: &str) -> Result<Item, Diagnostic> {
 fn display_json(s: &Session) -> Value {
     let d = &s.display;
     let Some(m) = &s.mesh else {
-        return json!({"color_by": d.color_by});
+        return json!({"color_by": d.color_by, "render_mode": d.render_mode});
     };
     let colors: serde_json::Map<String, Value> = d
         .colors
@@ -354,6 +377,7 @@ fn display_json(s: &Session) -> Value {
     let (cells, faces) = d.visible_counts(&m.mesh);
     json!({
         "color_by": d.color_by,
+        "render_mode": d.render_mode,
         "hidden": d.hidden.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
         "selection": d.selection.map(|i| i.id(&m.mesh)),
         "visible_cells": cells,
@@ -366,6 +390,19 @@ fn display_json(s: &Session) -> Value {
 #[serde(deny_unknown_fields)]
 struct ColorByInput {
     by: ColorBy,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderModeInput {
+    mode: RenderMode,
+}
+
+fn display_render_mode(input: Value, s: &mut Session) -> Run {
+    let i: RenderModeInput = parse(input)?;
+    s.display.render_mode = i.mode;
+    s.redraw();
+    Ok(display_json(s))
 }
 
 fn display_color_by(input: Value, s: &mut Session) -> Run {
@@ -674,7 +711,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-view-get-camera",
-        summary: "The camera: target, distance, yaw, pitch, projection, eye and viewport.",
+        summary: "The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport.",
         outputs: &[],
         input_schema: no_input,
         run: view_get,
@@ -684,7 +721,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-view-set-camera",
-        summary: "Set any of target, distance, yaw, pitch, projection, field of view and viewport size.",
+        summary: "Set any of target, distance, yaw, pitch, roll, projection, field of view and viewport size.",
         outputs: &[],
         input_schema: || {
             object(
@@ -693,6 +730,7 @@ pub static TOOLS: &[Tool] = &[
                     "distance": {"type": "number", "exclusiveMinimum": 0},
                     "yaw_deg": {"type": "number"},
                     "pitch_deg": {"type": "number", "minimum": -90, "maximum": 90},
+                    "roll_deg": {"type": "number"},
                     "projection": {"enum": ["orthographic", "perspective", "perspective_ortho_faces"]},
                     "fov_deg": {"type": "number", "minimum": 1, "maximum": 120},
                     "viewport": {"type": "array", "items": {"type": "number", "minimum": 1}, "minItems": 2, "maxItems": 2}
@@ -765,15 +803,25 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-view-standard",
-        summary: "Go to a standard view (front, back, left, right, top, bottom, iso, home) and fit; face views snap to orthographic in perspective_ortho_faces.",
+        summary: "Go to one of the 26 view-cube views (faces like front, edges like front_top, corners like front_right_top; parts in any order), iso or home, and fit; the roll is reset, and face views snap to orthographic in perspective_ortho_faces.",
+        outputs: &[],
+        input_schema: || object(json!({"view": {"enum": StandardView::names()}}), &["view"]),
+        run: view_standard,
+    },
+    Tool {
+        id: "view.rotate",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-view-rotate",
+        summary: "Rotate the scene by deg degrees about a screen axis (x right, y up, z towards the viewer; right-hand rule, so +90 about z turns it counter-clockwise on screen). The view cube's roll arrows send z ±90.",
         outputs: &[],
         input_schema: || {
             object(
-                json!({"view": {"enum": ["front", "back", "left", "right", "top", "bottom", "iso", "home"]}}),
-                &["view"],
+                json!({"axis": {"enum": ["x", "y", "z"]}, "deg": {"type": "number"}}),
+                &["axis", "deg"],
             )
         },
-        run: view_standard,
+        run: view_rotate,
     },
     Tool {
         id: "view.screenshot",
@@ -789,13 +837,28 @@ pub static TOOLS: &[Tool] = &[
                     "width": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 1280},
                     "height": {"type": "integer", "minimum": 1, "maximum": 8192, "default": 800},
                     "mesh": {"type": "string"},
-                    "view": {"enum": ["front", "back", "left", "right", "top", "bottom", "iso", "home"]},
+                    "view": {"enum": StandardView::names()},
                     "theme": {"enum": ["dark", "light", "system"]}
                 }),
                 &["path"],
             )
         },
         run: view_screenshot,
+    },
+    Tool {
+        id: "display.render_mode",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-display-render-mode",
+        summary: "Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders).",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({"mode": {"enum": ["shaded_edges", "shaded", "wireframe", "feature_edges"]}}),
+                &["mode"],
+            )
+        },
+        run: display_render_mode,
     },
     Tool {
         id: "display.color_by",

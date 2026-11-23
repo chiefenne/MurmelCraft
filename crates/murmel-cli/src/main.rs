@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! murmel commands [--markdown]
+//! murmel keys [--markdown]
 //! murmel call TOOL_ID [--input FILE|-|JSON]
 //! murmel run --script FILE
 //! murmel diag codes
@@ -17,6 +18,7 @@ use serde_json::{Value, json};
 
 const USAGE: &str = "Usage: murmel COMMAND
   murmel commands [--markdown]          list every tool (JSON, or docs/tools.md)
+  murmel keys [--markdown]              the window's commands and keys (JSON, or docs/keys.md)
   murmel call TOOL_ID [--input FILE|-|JSON]
                                         run one tool and print its result envelope
   murmel run --script FILE              run a JSON list of {\"tool\", \"input\"} calls
@@ -87,6 +89,27 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         ["commands"] => murmel_tools::call("system.commands", json!({}), &mut s),
         ["commands", "--markdown"] => {
             print!("{}", murmel_tools::markdown());
+            return Ok(ExitCode::SUCCESS);
+        }
+        ["keys", "--markdown"] => {
+            print!("{}", murmel_tools::commands::keys_markdown());
+            return Ok(ExitCode::SUCCESS);
+        }
+        ["keys"] => {
+            let list: Vec<Value> = murmel_tools::commands::commands()
+                .iter()
+                .map(|c| {
+                    json!({
+                        "id": c.id,
+                        "label": murmel_tools::commands::english(&c.label_key),
+                        "keys": c.keys,
+                        "tool": c.tool(),
+                    })
+                })
+                .collect();
+            print(
+                &json!({"format": "murmelcraft.keys", "format_version": "1.0", "commands": list}),
+            );
             return Ok(ExitCode::SUCCESS);
         }
         ["info"] => murmel_tools::call("system.info", json!({}), &mut s),

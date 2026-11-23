@@ -12,14 +12,16 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `mesh.open` | 1 | read | Load a .vtu (KoflCraft's foehncraft.vtu) and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones and patches. |
 | `mesh.close` | 1 | read | Drop the open mesh from the session. |
 | `mesh.info` | 1 | read | Counts, zones, patches, metadata and evidence of the open mesh. |
-| `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, projection, eye and viewport. |
-| `view.set_camera` | 1 | read | Set any of target, distance, yaw, pitch, projection, field of view and viewport size. |
+| `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport. |
+| `view.set_camera` | 1 | read | Set any of target, distance, yaw, pitch, roll, projection, field of view and viewport size. |
 | `view.orbit` | 1 | read | Turn the camera about the up axis (yaw) and tilt it (pitch), in degrees. |
 | `view.pan` | 1 | read | Move the view by a drag in pixels (x right, y down); the scene follows the pointer. |
 | `view.zoom` | 1 | read | Scale the camera distance by factor (below 1 zooms in), keeping the point under cursor_ndc (-1..1, y up) in place. |
 | `view.fit` | 1 | read | Frame the faces shown, or the shown faces of one item (mesh, zone:<name>, kind:<cell type>, patch:<name>), from the current direction. |
-| `view.standard` | 1 | read | Go to a standard view (front, back, left, right, top, bottom, iso, home) and fit; face views snap to orthographic in perspective_ortho_faces. |
+| `view.standard` | 1 | read | Go to one of the 26 view-cube views (faces like front, edges like front_top, corners like front_right_top; parts in any order), iso or home, and fit; the roll is reset, and face views snap to orthographic in perspective_ortho_faces. |
+| `view.rotate` | 1 | read | Rotate the scene by deg degrees about a screen axis (x right, y up, z towards the viewer; right-hand rule, so +90 about z turns it counter-clockwise on screen). The view cube's roll arrows send z ±90. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
+| `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
 | `display.color_by` | 1 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role or by the type of their cell. |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>), or show all; returns the hidden items and the visible counts. |
@@ -143,6 +145,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "perspective_ortho_faces"
       ]
     },
+    "roll_deg": {
+      "type": "number"
+    },
     "target": {
       "items": {
         "type": "number"
@@ -256,10 +261,30 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       "enum": [
         "front",
         "back",
-        "left",
         "right",
+        "left",
         "top",
         "bottom",
+        "front_right",
+        "front_left",
+        "back_right",
+        "back_left",
+        "front_top",
+        "back_top",
+        "right_top",
+        "left_top",
+        "front_bottom",
+        "back_bottom",
+        "right_bottom",
+        "left_bottom",
+        "front_right_top",
+        "front_left_top",
+        "back_right_top",
+        "back_left_top",
+        "front_right_bottom",
+        "front_left_bottom",
+        "back_right_bottom",
+        "back_left_bottom",
         "iso",
         "home"
       ]
@@ -267,6 +292,31 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   },
   "required": [
     "view"
+  ],
+  "type": "object"
+}
+```
+
+### `view.rotate`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axis": {
+      "enum": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "deg": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "axis",
+    "deg"
   ],
   "type": "object"
 }
@@ -301,10 +351,30 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       "enum": [
         "front",
         "back",
-        "left",
         "right",
+        "left",
         "top",
         "bottom",
+        "front_right",
+        "front_left",
+        "back_right",
+        "back_left",
+        "front_top",
+        "back_top",
+        "right_top",
+        "left_top",
+        "front_bottom",
+        "back_bottom",
+        "right_bottom",
+        "left_bottom",
+        "front_right_top",
+        "front_left_top",
+        "back_right_top",
+        "back_left_top",
+        "front_right_bottom",
+        "front_left_bottom",
+        "back_right_bottom",
+        "back_left_bottom",
         "iso",
         "home"
       ]
@@ -318,6 +388,28 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   },
   "required": [
     "path"
+  ],
+  "type": "object"
+}
+```
+
+### `display.render_mode`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "enum": [
+        "shaded_edges",
+        "shaded",
+        "wireframe",
+        "feature_edges"
+      ]
+    }
+  },
+  "required": [
+    "mode"
   ],
   "type": "object"
 }
