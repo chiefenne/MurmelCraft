@@ -236,3 +236,28 @@ fn renders_on_many_threads_share_one_device() {
         }
     });
 }
+
+/// V1.0 OpenFOAM reader: the 81 dual polyhedra of FoehnCraft's
+/// `polyDualMesh` case, colour by cell type with a flat clip through the
+/// middle, so the cut polyhedra show that the reversed neighbour faces
+/// close every cell. A reader that left a face the wrong way round or
+/// lost a patch would open holes or change the section.
+#[test]
+fn openfoam_dual_polyhedra_clipped() {
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.viewport = [480.0, 320.0];
+    s.open(&root().join("test-fixtures/openfoam/dual_polyhedra"))
+        .unwrap();
+    s.camera.set_standard(StandardView::ISO);
+    s.fit();
+    s.display.color_by = ColorBy::CellType;
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    s.display.clip = Some(Clip {
+        normal: [1.0, 0.0, 0.0],
+        origin: b.center(),
+        mode: ClipMode::Flat,
+        enabled: true,
+    });
+    s.redraw();
+    check_session("openfoam-dual-clip-flat", &s);
+}

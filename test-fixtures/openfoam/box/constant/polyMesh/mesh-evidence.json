@@ -1,0 +1,119 @@
+{
+  "format": "koflcraft.mesh-evidence",
+  "format_version": "1.0",
+  "koflcraft_version": "0.1.0",
+  "generator": "cpu_box_clipped_voronoi_v2",
+  "summary": {
+    "cells": 4,
+    "faces": 22,
+    "interior_faces": 6,
+    "boundary_faces": 16,
+    "points": 21,
+    "total_volume": 1.0,
+    "min_volume": 0.1842953734360905,
+    "max_relative_closure": 5.994940414253646e-17,
+    "merged_faces": 0,
+    "inverted_faces": 0,
+    "patches": [
+      {
+        "name": "xmin",
+        "role": "unspecified",
+        "faces": 3,
+        "area": 1.0
+      },
+      {
+        "name": "xmax",
+        "role": "unspecified",
+        "faces": 3,
+        "area": 1.0
+      },
+      {
+        "name": "ymin",
+        "role": "unspecified",
+        "faces": 3,
+        "area": 1.0
+      },
+      {
+        "name": "ymax",
+        "role": "unspecified",
+        "faces": 2,
+        "area": 1.0
+      },
+      {
+        "name": "zmin",
+        "role": "unspecified",
+        "faces": 3,
+        "area": 1.0
+      },
+      {
+        "name": "zmax",
+        "role": "unspecified",
+        "faces": 2,
+        "area": 1.0
+      }
+    ],
+    "zones": [
+      {
+        "name": "fluid",
+        "cells": 4,
+        "volume": 1.0
+      }
+    ]
+  },
+  "patches": [
+    {
+      "name": "xmin",
+      "role": "unspecified"
+    },
+    {
+      "name": "xmax",
+      "role": "unspecified"
+    },
+    {
+      "name": "ymin",
+      "role": "unspecified"
+    },
+    {
+      "name": "ymax",
+      "role": "unspecified"
+    },
+    {
+      "name": "zmin",
+      "role": "unspecified"
+    },
+    {
+      "name": "zmax",
+      "role": "unspecified"
+    }
+  ],
+  "files": [
+    [
+      "points",
+      "3e436e0bb5e3cb3a1a4e19bc4dd8826edbc6161a7c8017799b16367bde979275"
+    ],
+    [
+      "faces",
+      "cfc405aed266519b40984dcef049d099b7b26d4101b7c08295d1e83020c8aec5"
+    ],
+    [
+      "owner",
+      "77fe47cc84d2fcb1dcc8eb36de1ddcce708dc2f714ccd6f9a1045953774710d2"
+    ],
+    [
+      "neighbour",
+      "dabec239d69b172e8161bddd8acfdcb8c6f1a89075e7161683563fee0bdbf632"
+    ],
+    [
+      "boundary",
+      "084001e1dcc76c6d0ee34c5b8644e7c1f17cc41b28347379918cfb86814f3fa1"
+    ],
+    [
+      "cellZones",
+      "3fce04bd902245b29463fbb270801f1f93eda7c94ab2602fa602c3d468fc40ad"
+    ]
+  ],
+  "limitations": [
+    "no boundary-condition role could be derived for: xmin, xmax, ymin, ymax, zmin, zmax",
+    "flow accuracy on this mesh is untested"
+  ]
+}

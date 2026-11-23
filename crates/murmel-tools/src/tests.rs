@@ -584,3 +584,56 @@ fn undo_and_redo_through_the_tools() {
     assert_eq!(e.result["undo"], json!([]));
     assert_eq!(e.result["redo"], json!([]));
 }
+
+/// Invariant: `mesh.open` opens an OpenFOAM case folder through the same
+/// tool as a .vtu, and the viewer's tools work on it: patch and zone ids,
+/// quality colouring, the clip plane and the properties (format and
+/// OpenFOAM patch type). Breaks when a front end needs another tool for
+/// polyMesh, or when the polyMesh topology is not what the clip and the
+/// quality walk; the reader tests check the mesh, not the tools.
+#[test]
+fn opens_an_openfoam_case() {
+    let mut s = session();
+    let case = root().join("test-fixtures/openfoam/channel_binary");
+    let e = call("mesh.open", json!({"path": case}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["format"], "openfoam");
+    assert_eq!(e.result["summary"]["cells"], 16);
+    assert_eq!(e.result["files"].as_array().map(Vec::len), Some(6));
+    let items = e.result["items"].as_array().unwrap();
+    for id in ["patch:walls", "patch:sides", "zone:left", "zone:right"] {
+        assert!(items.contains(&json!(id)), "{id}");
+    }
+    let e = call("display.color_by", json!({"by": "quality"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let q = call("inspect.quality", json!({}), &mut s);
+    assert_eq!(q.result["cells"], 16);
+    let e = call("clip.set", json!({"axis": "x"}), &mut s);
+    let shown = e.result["visible_cells"].as_u64().unwrap();
+    assert!(shown > 0 && shown < 16, "{shown}");
+    call("clip.clear", json!({}), &mut s);
+    let e = call("inspect.item", json!({"item": "patch:sides"}), &mut s);
+    let rows = e.result["rows"].as_array().unwrap();
+    let get = |k: &str| {
+        rows.iter()
+            .find(|r| r["key"] == k)
+            .map(|r| r["value"].clone())
+    };
+    assert_eq!(get("openfoam_type"), Some(json!("empty")));
+    assert_eq!(get("faces"), Some(json!(16)));
+    let e = call("inspect.item", json!({"item": "mesh"}), &mut s);
+    let rows = e.result["rows"].as_array().unwrap();
+    let get = |k: &str| {
+        rows.iter()
+            .find(|r| r["key"] == k)
+            .map(|r| r["value"].clone())
+    };
+    assert_eq!(get("format"), Some(json!("OpenFOAM polyMesh (binary)")));
+    assert_eq!(get("validity"), Some(json!("no_evidence")));
+    let e = call(
+        "mesh.open",
+        json!({"path": root().join("test-fixtures")}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "MESH013");
+}

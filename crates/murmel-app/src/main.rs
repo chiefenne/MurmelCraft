@@ -1,6 +1,7 @@
 //! MurmelCraft, the desktop mesh viewer of KoflCraft and FoehnCraft.
 //!
-//! `murmelcraft [MESH.vtu]` opens the window, optionally with a mesh.
+//! `murmelcraft [MESH]` opens the window, optionally with a mesh: a
+//! `.vtu` file or an OpenFOAM case, `constant` or `polyMesh` folder.
 
 mod app;
 mod commands;

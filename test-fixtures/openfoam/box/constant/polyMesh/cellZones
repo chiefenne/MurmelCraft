@@ -1,0 +1,25 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       regIOobject;
+    note        "nPoints:21 nCells:4 nFaces:22 nInternalFaces:6";
+    location    "constant/polyMesh";
+    object      cellZones;
+}
+
+1
+(
+fluid
+{
+    type cellZone;
+cellLabels      List<label> 4
+(
+0
+1
+2
+3
+)
+;
+}
+)

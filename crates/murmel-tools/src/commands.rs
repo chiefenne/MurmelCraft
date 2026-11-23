@@ -160,6 +160,13 @@ pub fn commands() -> Vec<Command> {
             Window(Some("mesh.open")),
         ),
         cmd(
+            "window.open_folder",
+            "cmd-open-folder",
+            "file",
+            &["Ctrl+Shift+O"],
+            Window(Some("mesh.open")),
+        ),
+        cmd(
             "mesh.close",
             "cmd-close",
             "file",

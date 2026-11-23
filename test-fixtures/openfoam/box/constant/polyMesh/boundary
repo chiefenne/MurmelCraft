@@ -1,0 +1,49 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       polyBoundaryMesh;
+    note        "nPoints:21 nCells:4 nFaces:22 nInternalFaces:6";
+    location    "constant/polyMesh";
+    object      boundary;
+}
+
+6
+(
+    xmin
+    {
+        type        patch;
+        nFaces      3;
+        startFace   6;
+    }
+    xmax
+    {
+        type        patch;
+        nFaces      3;
+        startFace   9;
+    }
+    ymin
+    {
+        type        patch;
+        nFaces      3;
+        startFace   12;
+    }
+    ymax
+    {
+        type        patch;
+        nFaces      2;
+        startFace   15;
+    }
+    zmin
+    {
+        type        patch;
+        nFaces      3;
+        startFace   17;
+    }
+    zmax
+    {
+        type        patch;
+        nFaces      2;
+        startFace   20;
+    }
+)
