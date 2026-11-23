@@ -45,6 +45,8 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | `I` | Isolate the selection | `display.visibility` (input from the session) |
 | `Alt + H` | Show all | `display.visibility` (input from the session) |
 | `Escape` | Clear the selection | `select.clear` (input from the session) |
+| `Ctrl + Z` | Undo (camera and display) | `journal.undo` (input from the session) |
+| `Ctrl + Shift + Z` | Redo | `journal.redo` (input from the session) |
 | palette | Close mesh | `mesh.close` `{}` |
 | palette | Save a screenshot… | window, then `view.screenshot` |
 | palette | Settings | window |

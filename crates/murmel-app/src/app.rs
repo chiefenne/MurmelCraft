@@ -60,7 +60,12 @@ pub struct MurmelApp {
     pub(crate) cube_busy: bool,
     /// The auto-hide distance while it is edited.
     pub(crate) cube_distance_edit: Option<f64>,
+    /// Until when a run of wheel steps keeps its undo group open.
+    wheel_until: f64,
 }
+
+/// A pause of the wheel this long (seconds) ends its undo step.
+const WHEEL_PAUSE: f64 = 0.3;
 
 impl MurmelApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Result<Self, String> {
@@ -111,6 +116,7 @@ impl MurmelApp {
             cube_move: None,
             cube_busy: false,
             cube_distance_edit: None,
+            wheel_until: 0.0,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -132,7 +138,10 @@ impl MurmelApp {
         // Jumps of the view fly there in 250 ms; drags and wheel steps
         // follow the pointer directly.
         if e.ok()
-            && matches!(id, "view.standard" | "view.rotate" | "view.fit")
+            && matches!(
+                id,
+                "view.standard" | "view.rotate" | "view.fit" | "journal.undo" | "journal.redo"
+            )
             && before != self.session.camera
         {
             let from = match &self.flight {
@@ -153,6 +162,27 @@ impl MurmelApp {
         } else {
             self.error = e.diagnostics.into_iter().next();
             None
+        }
+    }
+
+    /// Group the calls of one mouse gesture (while a button is held) and
+    /// of one run of wheel or pinch steps (until a pause of
+    /// `WHEEL_PAUSE`) into one undo step (UI spec: undo steps are
+    /// gestures, not frames).
+    fn group_steps(&mut self, ctx: &egui::Context) {
+        let (held, wheel) = ctx.input(|i| {
+            (
+                i.pointer.any_down(),
+                i.smooth_scroll_delta != egui::Vec2::ZERO || i.zoom_delta() != 1.0,
+            )
+        });
+        if wheel {
+            self.wheel_until = self.now + WHEEL_PAUSE;
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(WHEEL_PAUSE));
+        }
+        let want = held || self.now < self.wheel_until;
+        if want != self.session.journal.group_open() {
+            self.call("journal.group", json!({ "open": want }));
         }
     }
 
@@ -829,6 +859,7 @@ impl eframe::App for MurmelApp {
         let ctx = ui.ctx().clone();
         self.now = ctx.input(|i| i.time);
         self.apply_theme(&ctx);
+        self.group_steps(&ctx);
         self.keys(&ctx);
         let dropped: Option<PathBuf> = ctx.input(|i| {
             i.raw

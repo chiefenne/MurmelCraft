@@ -5,6 +5,9 @@
 //! (`murmelcraft.tool-result`), as in KoflCraft (AG-12) and FoehnCraft
 //! (D196).
 //!
+//! Calls of the tools in `JOURNALED` are the steps of the session's
+//! journal, which `journal.undo` and `journal.redo` walk.
+//!
 //! Tools change the session only; the kind `write-files` marks the tools
 //! that also write files and names them (`outputs`), so an approval table
 //! can judge a call before it runs.
@@ -16,12 +19,13 @@ mod tools;
 
 use std::time::Instant;
 
-use murmel_engine::Session;
+use murmel_engine::{Session, Snapshot};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 pub use diag::{Code, Severity, code, codes};
 pub use markdown::markdown;
+pub use tools::{JOURNALED, NOT_JOURNALED};
 
 pub const RESULT_FORMAT: &str = "murmelcraft.tool-result";
 pub const CATALOGUE_FORMAT: &str = "murmelcraft.tool-catalogue";
@@ -146,18 +150,27 @@ pub fn call(id: &str, input: Value, session: &mut Session) -> Envelope {
     };
     let start = Instant::now();
     let input = if input.is_null() { json!({}) } else { input };
+    // A call that changes the camera or the display is a step of the
+    // journal (undo and redo).
+    let before = tools::journaled(tool.id).then(|| Snapshot::of(session));
     let mut e = match (tool.run)(input, session) {
-        Ok(result) => Envelope {
-            format: RESULT_FORMAT.into(),
-            format_version: FORMAT_VERSION.into(),
-            tool: tool.id.into(),
-            tool_version: tool.version,
-            status: "finished".into(),
-            exit_code: 0,
-            result,
-            diagnostics: Vec::new(),
-            seconds: 0.0,
-        },
+        Ok(result) => {
+            if let Some(b) = before {
+                let after = Snapshot::of(session);
+                session.journal.record(tool.id, b, &after);
+            }
+            Envelope {
+                format: RESULT_FORMAT.into(),
+                format_version: FORMAT_VERSION.into(),
+                tool: tool.id.into(),
+                tool_version: tool.version,
+                status: "finished".into(),
+                exit_code: 0,
+                result,
+                diagnostics: Vec::new(),
+                seconds: 0.0,
+            }
+        }
         Err(d) => Envelope::failed(tool.id, tool.version, d),
     };
     e.seconds = start.elapsed().as_secs_f64();
