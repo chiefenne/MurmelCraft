@@ -144,3 +144,35 @@ pub mod icon {
     pub const SETTINGS: &str = "\u{E158}";
     pub const ALERT: &str = "\u{E07B}";
 }
+
+/// The MurmelCraft logo (assets/logo, supplied by the maintainer) as RGBA.
+pub fn logo_rgba(size: u32) -> Option<(u32, u32, Vec<u8>)> {
+    let bytes: &[u8] = if size <= 128 {
+        include_bytes!("../../../assets/logo/murmelcraft-128.png")
+    } else {
+        include_bytes!("../../../assets/logo/murmelcraft-256.png")
+    };
+    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
+    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
+    let mut reader = dec.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    buf.truncate(info.buffer_size());
+    (info.color_type == png::ColorType::Rgba).then_some((info.width, info.height, buf))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Invariant: both logo sizes decode to square RGBA with transparent
+    /// corners (the rounded square is cut out of the white page).
+    #[test]
+    fn logo_decodes_with_transparent_corners() {
+        for size in [128, 256] {
+            let (w, h, rgba) = super::logo_rgba(size).unwrap();
+            assert_eq!((w, h), (size, size));
+            assert_eq!(rgba[3], 0, "top-left corner must be transparent");
+            let mid = ((h / 2 * w + w / 2) * 4 + 3) as usize;
+            assert_eq!(rgba[mid], 255);
+        }
+    }
+}

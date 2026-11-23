@@ -11,7 +11,7 @@ text_primary = "#E7E9EC"
 text_secondary = "#A2A9B2"
 viewport_top = "#30353C"
 viewport_bottom = "#191C20"
-accent = "#D671B4"
+accent = "#DE74B6"
 status_ok = "#4CBB7A"
 status_warn = "#E5B54A"
 status_error = "#EF6B5B"
@@ -25,7 +25,7 @@ text_primary = "#1C2026"
 text_secondary = "#5A626C"
 viewport_top = "#F8F9FB"
 viewport_bottom = "#D9DEE4"
-accent = "#A3337E"
+accent = "#AD3285"
 status_ok = "#2E8A53"
 status_warn = "#A9760F"
 status_error = "#C7402F"
@@ -39,8 +39,10 @@ patch = [
 ]
 # Edges take the face colour darkened by this fraction.
 edge_darken = 0.45
-# The logo colour (rose-1) for the placeholder mark.
-logo = "#B13E8B"
+# The magenta of the logo (assets/logo), measured from the supplied image.
+# The accents share its hue (OKLCH 0.53 0.18 -16): light uses it as is,
+# dark lifts it to lightness 0.70 so text on both passes WCAG AA.
+logo = "#AD3285"
 # Axis triad: X red, Y green, Z blue (UI spec, Axis triad).
 axis_x = "#E5534B"
 axis_y = "#57AB5A"

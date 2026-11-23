@@ -17,6 +17,7 @@ fluent-bundle.workspace = true
 murmel-engine.workspace = true
 murmel-render.workspace = true
 murmel-tools.workspace = true
+png.workspace = true
 rfd = "0.18"
 serde_json.workspace = true
 unic-langid.workspace = true

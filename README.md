@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo/murmelcraft-256.png" width="128" alt="MurmelCraft logo: an engraved marmot on a magenta rounded square"></p>
+
 # MurmelCraft
 
 The shared desktop viewer of [KoflCraft](https://github.com/chiefenne/KoflCraft)
