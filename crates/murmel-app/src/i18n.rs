@@ -125,7 +125,7 @@ mod tests {
         for v in ["valid", "no_evidence", "failed"] {
             assert!(t.has(&format!("validity-{v}")));
         }
-        for a in ["mesh", "zone", "kind", "patch"] {
+        for a in ["mesh", "zone", "kind", "patch", "cell", "face"] {
             assert!(t.has(&format!("props-area-{a}")));
         }
         // Every property row of every item of the channel has a label.
@@ -138,7 +138,12 @@ mod tests {
             unreachable!()
         };
         let items = std::iter::once(murmel_engine::Item::Mesh)
-            .chain(murmel_engine::display::all_items(&m.mesh));
+            .chain(murmel_engine::display::all_items(&m.mesh))
+            .chain([
+                murmel_engine::Item::Cell(0),
+                murmel_engine::Item::Face(0),
+                murmel_engine::Item::Face(m.mesh.boundary_face_id[0]),
+            ]);
         for item in items {
             for r in murmel_engine::inspect::rows(m, d, item) {
                 assert!(

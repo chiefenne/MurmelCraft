@@ -90,7 +90,9 @@ fn channel_roles_without_walls() {
 fn channel_cell_types_outlet_selected() {
     let mut s = session(StandardView::ISO);
     s.display.color_by = ColorBy::CellType;
-    s.display.selection = Item::parse("patch:outlet", &s.mesh.as_ref().unwrap().mesh);
+    s.display.selection = Item::parse("patch:outlet", &s.mesh.as_ref().unwrap().mesh)
+        .into_iter()
+        .collect();
     s.redraw();
     check_session("channel-cell-types-selected", &s);
 }
@@ -148,6 +150,28 @@ fn channel_clip_by_cell_type() {
         s.redraw();
         check_session(&format!("channel-clip-{}", mode.key()), &s);
     }
+}
+
+/// V0.4 picking: a crinkle cut by cell type with one core polyhedron
+/// picked in the middle of the view: tinted, and outlined in the
+/// selection colour over everything (its hidden edges too).
+#[test]
+fn channel_picked_cell() {
+    let mut s = session(StandardView::ISO);
+    s.display.color_by = ColorBy::CellType;
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    s.display.clip = Some(Clip {
+        origin: b.center(),
+        normal: [1.0, 0.0, 0.0],
+        mode: ClipMode::Crinkle,
+        enabled: true,
+    });
+    s.redraw();
+    let m = s.mesh.as_ref().unwrap();
+    let hit = murmel_engine::pick::pick(&m.surface, &s.camera, [0.0, 0.0], s.aspect()).unwrap();
+    s.display.selection = vec![Item::Cell(hit.cell)];
+    s.redraw();
+    check_session("channel-picked-cell", &s);
 }
 
 /// V0.4 cell types: with the prism layers hidden the core's polyhedra

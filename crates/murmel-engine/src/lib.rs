@@ -10,6 +10,7 @@ pub mod cube;
 pub mod display;
 pub mod inspect;
 pub mod navigation;
+pub mod pick;
 pub mod session;
 pub mod settings;
 pub mod surface;
@@ -17,7 +18,7 @@ pub mod theme;
 
 pub use camera::{Camera, Projection, ScreenAxis, StandardView};
 pub use clip::{Clip, ClipMode};
-pub use display::{ColorBy, Display, Item, RenderMode, Visibility};
+pub use display::{ColorBy, Display, Item, PickTarget, RenderMode, Visibility};
 pub use navigation::Navigation;
 pub use session::{OpenMesh, Session, Validity};
 pub use surface::Surface;

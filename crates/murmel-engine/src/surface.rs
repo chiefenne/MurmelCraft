@@ -59,6 +59,10 @@ pub struct Surface {
     /// Edge line vertices, two per edge, with their linear colour.
     pub edge_positions: Vec<[f32; 3]>,
     pub edge_colors: Vec<[f32; 3]>,
+    /// The outline of the picked cells and faces (line pairs), drawn over
+    /// everything in `outline_color` (linear).
+    pub outline: Vec<[f32; 3]>,
+    pub outline_color: [f32; 3],
 }
 
 /// A corner of a drawn polygon: a mesh node, or the point where the clip
@@ -319,6 +323,13 @@ impl Surface {
             }
         }
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
+        s.outline_color = sel.linear();
+        for (a, b) in outline(mesh, display) {
+            for i in [a, b] {
+                let p = mesh.points[i as usize];
+                s.outline.push([0, 1, 2].map(|k| (p[k] - origin[k]) as f32));
+            }
+        }
         s
     }
 }
@@ -422,6 +433,42 @@ fn polygons(
             GROUP_OPEN,
         );
     }
+    // Faces isolated on their own (I on picked faces), unless a cell
+    // shown beside them already draws them.
+    for &item in &display.isolated {
+        let Item::Face(u) = item else { continue };
+        let u = u as usize;
+        let side = |c: Option<&u32>| c.is_some_and(|&c| c != NO_CELL && shown[c as usize]);
+        if u >= mesh.unique_faces
+            || side(mesh.face_owner.get(u))
+            || side(mesh.face_neighbour.get(u))
+        {
+            continue;
+        }
+        let owner = mesh.face_owner.get(u).copied().unwrap_or(NO_CELL);
+        match mesh.face_boundary.get(u).copied() {
+            Some(b) if b != NO_CELL => add(
+                nodes(mesh.boundary.get(b as usize)),
+                owner,
+                u as u32,
+                b,
+                display.face_color(mesh, tokens, b as usize),
+                patch(b as usize),
+            ),
+            _ => add(
+                nodes(mesh.face_nodes(u)),
+                owner,
+                u as u32,
+                NO_CELL,
+                if owner == NO_CELL {
+                    tokens.mesh.solid
+                } else {
+                    display.cell_color(mesh, tokens, owner as usize)
+                },
+                GROUP_OPEN,
+            ),
+        }
+    }
     if let Some(cutter) = flat {
         for (c, &on) in shown.iter().enumerate() {
             if !on
@@ -447,17 +494,48 @@ fn polygons(
     polys
 }
 
-/// Whether `poly` belongs to the selected item.
+/// Whether `poly` belongs to a selected item.
 fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
     let cell = (poly.cell != NO_CELL).then_some(poly.cell as usize);
-    match display.selection {
-        None | Some(Item::Mesh) => false,
-        Some(Item::Patch(p)) => {
+    display.selection.iter().any(|&item| match item {
+        Item::Mesh => false,
+        Item::Patch(p) => {
             poly.boundary != NO_CELL && mesh.boundary_patch.get(poly.boundary as usize) == Some(&p)
         }
-        Some(Item::Zone(z)) => cell.is_some_and(|c| mesh.cell_zone.get(c) == Some(&z)),
-        Some(Item::Kind(k)) => cell.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
+        Item::Zone(z) => cell.is_some_and(|c| mesh.cell_zone.get(c) == Some(&z)),
+        Item::Kind(k) => cell.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
+        Item::Cell(c) => poly.cell == c,
+        Item::Face(u) => poly.face == u,
+    })
+}
+
+/// The outline of the picked cells and faces: every edge of a selected
+/// cell, every edge of a selected face, each once, as line pairs of point
+/// ids. Drawn over everything (UI spec: "an accent outline"), so a picked
+/// cell stays visible behind others.
+fn outline(mesh: &Mesh, display: &Display) -> Vec<(u32, u32)> {
+    let mut seen: HashSet<(u32, u32)> = HashSet::new();
+    let mut out = Vec::new();
+    let mut add_face = |f: &[u32], out: &mut Vec<(u32, u32)>| {
+        for i in 0..f.len() {
+            let (a, b) = (f[i], f[(i + 1) % f.len()]);
+            if seen.insert((a.min(b), a.max(b))) {
+                out.push((a, b));
+            }
+        }
+    };
+    for &item in &display.selection {
+        match item {
+            Item::Cell(c) if (c as usize) < mesh.cell_count() => {
+                for f in mesh.cell(c as usize) {
+                    add_face(f, &mut out);
+                }
+            }
+            Item::Face(u) => add_face(mesh.face_nodes(u as usize), &mut out),
+            _ => {}
+        }
     }
+    out
 }
 
 /// The feature edges among `polys` (corners, feature group, normal): an

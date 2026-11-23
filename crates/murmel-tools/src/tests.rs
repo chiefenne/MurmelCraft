@@ -309,7 +309,7 @@ fn display_selection_and_properties() {
     assert_eq!(e.diagnostics[0].code, "TOOL002");
 
     let e = call("select.item", json!({"item": "patch:inlet"}), &mut s);
-    assert_eq!(e.result["selection"], "patch:inlet");
+    assert_eq!(e.result["selection"], json!(["patch:inlet"]));
     let e = call("inspect.item", json!({}), &mut s);
     assert_eq!(e.result["item"], "patch:inlet");
     let rows = e.result["rows"].as_array().unwrap();

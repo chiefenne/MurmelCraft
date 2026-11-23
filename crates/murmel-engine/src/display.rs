@@ -1,7 +1,8 @@
 //! What the viewport shows (UI spec, "Display" and "Model tree"): the
-//! colouring, the hidden items and the selected item. Items are named by
-//! ids that tools and the tree share: `mesh`, `zone:<name>`,
-//! `kind:<cell type>` and `patch:<name>`.
+//! colouring, the hidden items and the selection. Items are named by ids
+//! that tools and the tree share: `mesh`, `zone:<name>`,
+//! `kind:<cell type>` and `patch:<name>`, and the picked `cell:<n>` and
+//! `face:<n>` (a distinct face of the mesh, interior or boundary).
 //!
 //! The viewport draws the outside of the cells shown: a hidden patch
 //! takes its boundary faces away, a hidden zone or cell type its cells, so
@@ -94,6 +95,10 @@ pub enum Item {
     Zone(u32),
     Kind(CellKind),
     Patch(u32),
+    /// A volume cell, by index.
+    Cell(u32),
+    /// A distinct face (`Mesh::face_owner` index).
+    Face(u32),
 }
 
 impl Item {
@@ -112,7 +117,14 @@ impl Item {
                     .get(p as usize)
                     .map_or("?", |p| p.name.as_str())
             ),
+            Item::Cell(c) => format!("cell:{c}"),
+            Item::Face(f) => format!("face:{f}"),
         }
+    }
+
+    /// A picked cell or face, as opposed to an item of the tree.
+    pub fn is_element(self) -> bool {
+        matches!(self, Item::Cell(_) | Item::Face(_))
     }
 
     /// The item an id names in `mesh`.
@@ -136,12 +148,45 @@ impl Item {
                 .iter()
                 .position(|p| p.name == name)
                 .map(|p| Item::Patch(p as u32)),
+            "cell" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&c| (c as usize) < mesh.cell_count())
+                .map(Item::Cell),
+            "face" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&f| (f as usize) < mesh.unique_faces)
+                .map(Item::Face),
             _ => None,
         }
     }
 
     fn same_area(self, other: Item) -> bool {
         std::mem::discriminant(&self) == std::mem::discriminant(&other)
+    }
+}
+
+/// What a click in the viewport picks (the Select group of the toolbar).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PickTarget {
+    /// The cell under the cursor (decided 2026-11-23).
+    #[default]
+    Cell,
+    /// The face under the cursor (a boundary face, or an interior face a
+    /// cut lays open).
+    Face,
+}
+
+impl PickTarget {
+    pub const ALL: [PickTarget; 2] = [PickTarget::Cell, PickTarget::Face];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            PickTarget::Cell => "cell",
+            PickTarget::Face => "face",
+        }
     }
 }
 
@@ -152,7 +197,7 @@ pub enum Visibility {
     Show,
     Hide,
     /// Hide every other item of the same kind (other patches, zones or
-    /// cell types).
+    /// cell types); for picked cells and faces, show only them.
     Isolate,
     ShowAll,
 }
@@ -162,7 +207,14 @@ pub struct Display {
     pub color_by: ColorBy,
     pub render_mode: RenderMode,
     pub hidden: BTreeSet<Item>,
-    pub selection: Option<Item>,
+    /// Cells and faces isolated (I on a picked cell or face): when not
+    /// empty, only these are drawn.
+    pub isolated: BTreeSet<Item>,
+    /// The selected items, in the order they were picked (Shift adds);
+    /// the last one fills the Properties panel.
+    pub selection: Vec<Item>,
+    /// What a click in the viewport picks.
+    pub pick: PickTarget,
     /// Colours set on items of the open mesh (`display.set_color`). The
     /// mesh's and the zones' colours show in colour mode solid, a patch's
     /// in solid and patch, a cell type's in cell type.
@@ -179,28 +231,67 @@ impl Display {
     /// Apply a visibility change to `items` of `mesh`.
     pub fn set_visibility(&mut self, v: Visibility, items: &[Item], mesh: &Mesh) {
         match v {
-            Visibility::ShowAll => self.hidden.clear(),
+            Visibility::ShowAll => {
+                self.hidden.clear();
+                self.isolated.clear();
+            }
             Visibility::Show => {
                 for i in items {
                     self.hidden.remove(i);
                 }
             }
-            Visibility::Hide => self.hidden.extend(items.iter().copied()),
+            Visibility::Hide => {
+                self.hidden.extend(items.iter().copied());
+                for i in items {
+                    self.isolated.remove(i);
+                }
+            }
             Visibility::Isolate => {
                 if items.contains(&Item::Mesh) {
                     self.hidden.clear();
+                    self.isolated.clear();
                     return;
                 }
-                let areas: Vec<Item> = items.to_vec();
-                for &i in items {
+                let (elements, items): (Vec<Item>, Vec<Item>) =
+                    items.iter().partition(|i| i.is_element());
+                if !elements.is_empty() {
+                    for i in &elements {
+                        self.hidden.remove(i);
+                    }
+                    self.isolated = elements.into_iter().collect();
+                }
+                for &i in &items {
                     self.hidden.remove(&i);
                 }
                 for other in all_items(mesh) {
-                    if areas.iter().any(|a| a.same_area(other)) && !items.contains(&other) {
+                    if items.iter().any(|a| a.same_area(other)) && !items.contains(&other) {
                         self.hidden.insert(other);
                     }
                 }
             }
+        }
+    }
+
+    /// Whether `item` is selected.
+    pub fn is_selected(&self, item: Item) -> bool {
+        self.selection.contains(&item)
+    }
+
+    /// The item the Properties panel shows: the last one selected.
+    pub fn current(&self) -> Option<Item> {
+        self.selection.last().copied()
+    }
+
+    /// Select `item`, or add it to the selection (`add`; picking it again
+    /// then takes it out).
+    pub fn select(&mut self, item: Item, add: bool) {
+        if !add {
+            self.selection = vec![item];
+        } else if let Some(i) = self.selection.iter().position(|&s| s == item) {
+            self.selection.remove(i);
+        } else {
+            self.selection.retain(|&s| s != Item::Mesh);
+            self.selection.push(item);
         }
     }
 
@@ -297,10 +388,13 @@ impl Display {
 
     /// Whether the cells of zone and kind of cell `c` are shown.
     pub fn cell_visible(&self, mesh: &Mesh, c: usize) -> bool {
+        if !self.isolated.is_empty() && !self.isolated.contains(&Item::Cell(c as u32)) {
+            return false;
+        }
         if self.hidden.is_empty() {
             return true;
         }
-        if self.is_hidden(Item::Mesh) {
+        if self.is_hidden(Item::Mesh) || self.is_hidden(Item::Cell(c as u32)) {
             return false;
         }
         let z = mesh.cell_zone.get(c).copied().unwrap_or(0);
@@ -318,6 +412,11 @@ impl Display {
         }
         let p = mesh.boundary_patch.get(f).copied().unwrap_or(0);
         if self.is_hidden(Item::Patch(p)) {
+            return false;
+        }
+        if let Some(&u) = mesh.boundary_face_id.get(f)
+            && self.is_hidden(Item::Face(u))
+        {
             return false;
         }
         match mesh.boundary_owner.get(f).copied() {
@@ -339,21 +438,39 @@ impl Display {
             Item::Patch(p) => mesh.boundary_patch.get(f) == Some(&p),
             Item::Zone(z) => owner.is_some_and(|c| mesh.cell_zone.get(c) == Some(&z)),
             Item::Kind(k) => owner.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
+            Item::Cell(c) => owner == Some(c as usize),
+            Item::Face(u) => mesh.boundary_face_id.get(f) == Some(&u),
         }
     }
 
     /// Whether boundary face `f` is drawn as selected.
     pub fn face_selected(&self, mesh: &Mesh, f: usize) -> bool {
-        match self.selection {
-            None | Some(Item::Mesh) => false,
-            Some(item) => Self::face_in(mesh, f, item),
-        }
+        self.selection
+            .iter()
+            .any(|&item| item != Item::Mesh && Self::face_in(mesh, f, item))
     }
 
     /// The bounds of the drawn faces that belong to `item` (all drawn
     /// faces for `None`).
     pub fn bounds(&self, mesh: &Mesh, item: Option<Item>) -> Option<Bounds> {
         let mut b = Bounds::empty();
+        match item {
+            Some(Item::Cell(c)) if (c as usize) < mesh.cell_count() => {
+                for f in mesh.cell(c as usize) {
+                    for &n in f {
+                        b.add(mesh.points[n as usize]);
+                    }
+                }
+                return (!b.is_empty()).then_some(b);
+            }
+            Some(Item::Face(u)) => {
+                for &n in mesh.face_nodes(u as usize) {
+                    b.add(mesh.points[n as usize]);
+                }
+                return (!b.is_empty()).then_some(b);
+            }
+            _ => {}
+        }
         for (f, face) in mesh.boundary.iter().enumerate() {
             if !self.face_visible(mesh, f) || item.is_some_and(|i| !Self::face_in(mesh, f, i)) {
                 continue;
@@ -367,7 +484,7 @@ impl Display {
 
     /// Cells and boundary faces shown (the clip plane included).
     pub fn visible_counts(&self, mesh: &Mesh) -> (usize, usize) {
-        if self.hidden.is_empty() && self.active_clip().is_none() {
+        if self.hidden.is_empty() && self.isolated.is_empty() && self.active_clip().is_none() {
             return (mesh.cell_count(), mesh.boundary.len());
         }
         let shown = self.shown_cells(mesh);

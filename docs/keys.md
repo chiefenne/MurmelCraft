@@ -89,6 +89,8 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | palette | Turn the clip plane on or off | `clip.set` (input from the session) |
 | palette | Remove the clip plane | `clip.clear` (input from the session) |
 | palette | Fit the selection | `view.fit` (input from the session) |
+| palette | Click picks cells | `select.filter` `{"target":"cell"}` |
+| palette | Click picks faces | `select.filter` `{"target":"face"}` |
 | palette | Theme: dark | `settings.set_theme` `{"theme":"dark"}` |
 | palette | Theme: light | `settings.set_theme` `{"theme":"light"}` |
 | palette | Theme: follow the system | `settings.set_theme` `{"theme":"system"}` |

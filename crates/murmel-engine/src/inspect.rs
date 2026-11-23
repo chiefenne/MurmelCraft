@@ -161,6 +161,90 @@ pub fn patch_stats(mesh: &Mesh, p: u32) -> PatchStats {
     }
 }
 
+/// Centre (area-weighted, from the fan about the node average) and area
+/// vector of a polygon; the area vector follows the node order.
+pub fn face_centre_area(mesh: &Mesh, face: &[u32]) -> ([f64; 3], [f64; 3]) {
+    let p: Vec<[f64; 3]> = face.iter().map(|&i| mesh.points[i as usize]).collect();
+    if p.is_empty() {
+        return ([0.0; 3], [0.0; 3]);
+    }
+    let k = p.len() as f64;
+    let m = [0, 1, 2].map(|d| p.iter().map(|q| q[d]).sum::<f64>() / k);
+    let mut s = [0.0; 3];
+    let mut c = [0.0; 3];
+    let mut total = 0.0;
+    for i in 0..p.len() {
+        let (a, b) = (p[i], p[(i + 1) % p.len()]);
+        let n = cross(sub(a, m), sub(b, m));
+        let w = norm(n);
+        for d in 0..3 {
+            s[d] += 0.5 * n[d];
+            c[d] += w * (m[d] + a[d] + b[d]) / 3.0;
+        }
+        total += w;
+    }
+    let centre = if total > 0.0 { c.map(|v| v / total) } else { m };
+    (centre, s)
+}
+
+/// The centroid of cell `c`: the volume-weighted centroids of the
+/// pyramids its faces span with the average of the face centres.
+pub fn cell_centroid(mesh: &Mesh, c: usize) -> [f64; 3] {
+    let faces: Vec<([f64; 3], [f64; 3])> =
+        mesh.cell(c).map(|f| face_centre_area(mesh, f)).collect();
+    if faces.is_empty() {
+        return [0.0; 3];
+    }
+    let k = faces.len() as f64;
+    let apex = [0, 1, 2].map(|d| faces.iter().map(|f| f.0[d]).sum::<f64>() / k);
+    let (mut vol, mut acc) = (0.0, [0.0; 3]);
+    for (fc, s) in &faces {
+        let v = dot(*s, sub(*fc, apex)).abs() / 3.0;
+        vol += v;
+        for d in 0..3 {
+            acc[d] += v * (0.75 * fc[d] + 0.25 * apex[d]);
+        }
+    }
+    if vol > 0.0 {
+        acc.map(|v| v / vol)
+    } else {
+        apex
+    }
+}
+
+/// Non-orthogonality (degrees) and skewness of distinct face `u`, given
+/// the centroids of its owner and neighbour. Non-orthogonality is the
+/// angle between the face's area vector and the vector joining the cell
+/// centres (to the face centre on the boundary); skewness is the distance
+/// from the face centre to where that line crosses the face plane, over
+/// the length of the line (Jasak, "Error analysis and estimation for the
+/// finite volume method", PhD thesis, Imperial College 1996, ch. 3;
+/// Ferziger and Perić, "Computational methods for fluid dynamics",
+/// sec. 8.6). Skewness is `None` on the boundary.
+pub fn face_quality(
+    centre: [f64; 3],
+    area: [f64; 3],
+    owner: [f64; 3],
+    neighbour: Option<[f64; 3]>,
+) -> (f64, Option<f64>) {
+    let d = sub(neighbour.unwrap_or(centre), owner);
+    let (ld, la) = (norm(d), norm(area));
+    if ld <= 0.0 || la <= 0.0 {
+        return (0.0, None);
+    }
+    let cos = (dot(d, area) / (ld * la)).abs().clamp(0.0, 1.0);
+    let non_ortho = cos.acos().to_degrees();
+    let skew = neighbour.and_then(|_| {
+        let dn = dot(d, area);
+        (dn.abs() > 0.0).then(|| {
+            let t = dot(sub(centre, owner), area) / dn;
+            let hit = [0, 1, 2].map(|k| owner[k] + t * d[k]);
+            norm(sub(centre, hit)) / ld
+        })
+    });
+    (non_ortho, skew)
+}
+
 fn round(v: f64, digits: i32) -> f64 {
     let s = 10f64.powi(digits);
     (v * s).round() / s
@@ -263,6 +347,8 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 row("hidden", display.is_hidden(item)),
             ]
         }
+        Item::Cell(c) => cell_rows(m, display, c as usize),
+        Item::Face(u) => face_rows(m, display, u as usize),
         Item::Kind(k) => {
             let cells = m.cell_kind.iter().filter(|&&x| x == k).count();
             let faces = m
@@ -278,6 +364,111 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ]
         }
     }
+}
+
+/// The rows of cell `c` (UI spec, Properties: a cell).
+fn cell_rows(m: &Mesh, display: &Display, c: usize) -> Vec<Row> {
+    if c >= m.cell_count() {
+        return Vec::new();
+    }
+    let centroid = cell_centroid(m, c);
+    let mut nodes: Vec<u32> = m.cell(c).flatten().copied().collect();
+    nodes.sort_unstable();
+    nodes.dedup();
+    let mut neighbours = Vec::new();
+    let (mut worst_no, mut worst_skew) = (0.0f64, 0.0f64);
+    for f in m.cell_face_range(c) {
+        let Some(&u) = m.cell_face_id.get(f) else {
+            continue;
+        };
+        let u = u as usize;
+        let other = m.across(u, c as u32);
+        let (fc, s) = face_centre_area(m, m.faces.get(f));
+        let nb = (other != NO_CELL).then(|| cell_centroid(m, other as usize));
+        let (no, skew) = face_quality(fc, s, centroid, nb);
+        worst_no = worst_no.max(no);
+        if let Some(sk) = skew {
+            worst_skew = worst_skew.max(sk);
+        }
+        if other != NO_CELL {
+            neighbours.push(other);
+        }
+    }
+    neighbours.sort_unstable();
+    neighbours.dedup();
+    let kind = m.cell_kind.get(c).map_or("polyhedron", |k| k.name());
+    let zone = m
+        .cell_zone
+        .get(c)
+        .and_then(|&z| m.zones.get(z as usize))
+        .cloned()
+        .unwrap_or_default();
+    vec![
+        row("id", format!("cell:{c}")),
+        row("type", kind),
+        row("zone", zone),
+        row("faces", m.cell_face_range(c).len()),
+        row("vertices", nodes.len()),
+        unit("volume", cell_volume(m, c), "m³"),
+        unit("centroid", vec3(centroid, 6), "m"),
+        row("neighbours", neighbours.len()),
+        row(
+            "neighbour_ids",
+            neighbours
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        unit("non_orthogonality_max", round(worst_no, 2), "°"),
+        row("skewness_max", round(worst_skew, 4)),
+        row("hidden", !display.cell_visible(m, c)),
+    ]
+}
+
+/// The rows of distinct face `u` (UI spec, Properties: a face).
+fn face_rows(m: &Mesh, display: &Display, u: usize) -> Vec<Row> {
+    if u >= m.unique_faces {
+        return Vec::new();
+    }
+    let nodes = m.face_nodes(u);
+    let (fc, s) = face_centre_area(m, nodes);
+    let area = norm(s);
+    let owner = m.face_owner.get(u).copied().unwrap_or(NO_CELL);
+    let neighbour = m.face_neighbour.get(u).copied().unwrap_or(NO_CELL);
+    let mut v = vec![row("id", format!("face:{u}"))];
+    v.push(row(
+        "owner",
+        (owner != NO_CELL).then(|| format!("cell:{owner}")),
+    ));
+    if neighbour != NO_CELL {
+        v.push(row("neighbour", format!("cell:{neighbour}")));
+    }
+    if let Some(&b) = m.face_boundary.get(u).filter(|&&b| b != NO_CELL)
+        && let Some(p) = m
+            .boundary_patch
+            .get(b as usize)
+            .and_then(|&p| m.patches.get(p as usize))
+    {
+        v.push(row("patch", p.name.clone()));
+        v.push(row("role", p.role.name()));
+    }
+    v.push(unit("area", area, "m²"));
+    v.push(row(
+        "normal",
+        (area > 0.0).then(|| vec3(s.map(|x| x / area), 4)),
+    ));
+    v.push(unit("centre", vec3(fc, 6), "m"));
+    v.push(row("vertices", nodes.len()));
+    if owner != NO_CELL {
+        let oc = cell_centroid(m, owner as usize);
+        let nc = (neighbour != NO_CELL).then(|| cell_centroid(m, neighbour as usize));
+        let (no, skew) = face_quality(fc, s, oc, nc);
+        v.push(unit("non_orthogonality", round(no, 2), "°"));
+        v.push(row("skewness", skew.map(|x| round(x, 4))));
+    }
+    v.push(row("hidden", display.is_hidden(Item::Face(u as u32))));
+    v
 }
 
 #[cfg(test)]
@@ -310,5 +501,69 @@ mod tests {
         let walls = patch_stats(&m, 2);
         assert!((walls.area - 24.0).abs() < 1e-9);
         assert_eq!(walls.mean_normal, None);
+    }
+
+    /// Invariant: cell centroids weighted by volume give the centroid of
+    /// the channel's box (the centre of its bounds), and each cell's
+    /// centroid lies inside its node bounds; a face's two cells see it the
+    /// same way (same non-orthogonality). Picking shows these numbers in
+    /// the Properties panel; a wrong pyramid weight would move them.
+    #[test]
+    fn centroids_and_face_quality() {
+        let m = channel();
+        let (mut vol, mut acc) = (0.0, [0.0; 3]);
+        for c in 0..m.cell_count() {
+            let v = cell_volume(&m, c);
+            let x = cell_centroid(&m, c);
+            let mut b = Bounds::empty();
+            for f in m.cell(c) {
+                for &n in f {
+                    b.add(m.points[n as usize]);
+                }
+            }
+            assert!((0..3).all(|k| x[k] >= b.min[k] - 1e-9 && x[k] <= b.max[k] + 1e-9));
+            vol += v;
+            for k in 0..3 {
+                acc[k] += v * x[k];
+            }
+        }
+        let want = m.bounds().center();
+        for k in 0..3 {
+            assert!((acc[k] / vol - want[k]).abs() < 1e-9, "{acc:?} {vol}");
+        }
+        // An orthogonal pair: a unit cube's face against a centre one
+        // unit away is orthogonal and unskewed; offset sideways it is not.
+        let (no, sk) = face_quality(
+            [0.5, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0; 3],
+            Some([1.0, 0.0, 0.0]),
+        );
+        assert!(no.abs() < 1e-9 && sk.unwrap().abs() < 1e-9);
+        let (no, sk) = face_quality(
+            [0.5, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0; 3],
+            Some([1.0, 1.0, 0.0]),
+        );
+        assert!((no - 45.0).abs() < 1e-9);
+        assert!((sk.unwrap() - 0.5 / 2f64.sqrt()).abs() < 1e-9);
+        // The rows of a cell and of its faces are there and labelled.
+        let open = crate::session::OpenMesh {
+            path: "channel.vtu".into(),
+            surface: Default::default(),
+            mesh: m.clone(),
+            evidence: None,
+            evidence_problem: None,
+            digest: String::new(),
+            validity: Validity::NoEvidence,
+        };
+        let d = Display::default();
+        let rows = rows(&open, &d, Item::Cell(0));
+        assert_eq!(rows[0].value, json!("cell:0"));
+        assert!(rows.iter().any(|r| r.key == "skewness_max"));
+        let f = m.cell_face_id[m.cell_face_range(0).start];
+        let rows = super::rows(&open, &d, Item::Face(f));
+        assert!(rows.iter().any(|r| r.key == "owner"));
     }
 }

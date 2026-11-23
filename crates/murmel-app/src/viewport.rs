@@ -2,7 +2,7 @@
 //! egui shows, the mouse mapped through the navigation bindings to view
 //! tools, the view note and the axis triad.
 
-use egui::{Color32, PointerButton, Pos2, Rect, Role, Sense, Ui, WidgetInfo};
+use egui::{Color32, PointerButton, Pos2, Rect, RichText, Role, Sense, Ui, WidgetInfo};
 use murmel_engine::navigation::{Action, Button, Mods};
 use murmel_render::{MeshRenderer, View};
 use serde_json::json;
@@ -10,6 +10,20 @@ use serde_json::json;
 use crate::app::MurmelApp;
 use crate::i18n::count;
 use crate::style::color;
+
+/// The pointer resting over the viewport: where, since when, and what
+/// `inspect.at` found there once it rested 400 ms (UI spec, Picking).
+pub struct Hover {
+    pub pos: Pos2,
+    pub since: f64,
+    /// The camera and surface the answer belongs to.
+    pub key: String,
+    pub asked: bool,
+    pub hit: Option<serde_json::Value>,
+}
+
+/// How long the pointer rests before the tooltip asks (UI spec).
+const HOVER_SECONDS: f64 = 0.4;
 
 pub struct GpuView {
     renderer: MeshRenderer,
@@ -62,7 +76,29 @@ impl MurmelApp {
 
         let desc = self.describe();
         resp.widget_info(|| WidgetInfo::labeled(Role::Canvas, true, desc.clone()));
+        let sel = !self.session.display.selection.is_empty();
+        let has_mesh = self.session.mesh.is_some();
         resp.context_menu(|ui| {
+            if sel {
+                for (key, cmd) in [
+                    ("menu-hide", "display.visibility:hide"),
+                    ("menu-isolate", "display.visibility:isolate"),
+                    ("menu-fit-selection", "view.fit:selection"),
+                ] {
+                    if ui.button(self.i18n.tr(key)).clicked() {
+                        if let Some(c) = self.commands.iter().find(|c| c.id == cmd).cloned() {
+                            let ctx = ui.ctx().clone();
+                            self.run_command(&ctx, &c);
+                        }
+                        ui.close();
+                    }
+                }
+            }
+            if has_mesh && ui.button(self.i18n.tr("menu-show-all")).clicked() {
+                self.call("display.visibility", json!({"action": "show_all"}));
+                ui.close();
+            }
+            ui.separator();
             for (key, call) in [
                 ("menu-fit", ("view.fit", json!({}))),
                 ("menu-home", ("view.standard", json!({"view": "home"}))),
@@ -158,6 +194,14 @@ impl MurmelApp {
         if resp.drag_stopped() {
             self.drag = None;
         }
+        let plain = Mods { shift: false, ..m };
+        if resp.clicked_by(PointerButton::Primary)
+            && nav.click(Button::Primary, plain) == Some(Action::Pick)
+            && let Some(p) = resp.interact_pointer_pos()
+        {
+            self.call("select.pick", json!({"ndc": ndc(p, rect), "add": m.shift}));
+        }
+        self.hover(ui, resp, rect, hover);
         if resp.double_clicked_by(PointerButton::Middle)
             && nav.double_click(Button::Middle, m) == Some(Action::Fit)
         {
@@ -176,6 +220,95 @@ impl MurmelApp {
             let f = 1.0 / pinch as f64;
             self.call("view.zoom", json!({"factor": f, "cursor_ndc": cursor}));
         }
+    }
+
+    /// Ask `inspect.at` once the pointer rests, and show the answer as a
+    /// tooltip; the status bar shows the point.
+    fn hover(&mut self, ui: &Ui, resp: &egui::Response, rect: Rect, pos: Option<Pos2>) {
+        let key = format!(
+            "{:?}|{}",
+            self.session.camera, self.session.surface_revision
+        );
+        let Some(pos) = pos.filter(|_| resp.hovered() && self.drag.is_none()) else {
+            self.hover = None;
+            return;
+        };
+        let now = self.now;
+        let fresh = match &self.hover {
+            Some(h) => (h.pos - pos).length() > 1.0 || h.key != key,
+            None => true,
+        };
+        if fresh {
+            self.hover = Some(Hover {
+                pos,
+                since: now,
+                key: key.clone(),
+                asked: false,
+                hit: None,
+            });
+        }
+        let Some(h) = &mut self.hover else { return };
+        if !h.asked {
+            if now - h.since >= HOVER_SECONDS {
+                h.asked = true;
+                let e = murmel_tools::call(
+                    "inspect.at",
+                    json!({"ndc": ndc(pos, rect)}),
+                    &mut self.session,
+                );
+                h.hit = e
+                    .ok()
+                    .then(|| e.result["hit"].clone())
+                    .filter(|v| !v.is_null());
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(HOVER_SECONDS));
+            }
+        }
+        let Some(hit) = self.hover.as_ref().and_then(|h| h.hit.clone()) else {
+            return;
+        };
+        let text = self.hover_text(&hit);
+        resp.clone().on_hover_ui_at_pointer(|ui| {
+            ui.label(RichText::new(text).monospace());
+        });
+    }
+
+    fn hover_text(&self, hit: &serde_json::Value) -> String {
+        let s = |k: &str| hit[k].as_str().unwrap_or("").to_string();
+        let num = |k: &str| {
+            s(k).split_once(':')
+                .map_or(String::new(), |(_, n)| n.to_string())
+        };
+        let mut lines = Vec::new();
+        if hit["cell"].is_string() {
+            lines.push(self.i18n.tr_args(
+                "hover-cell",
+                &[
+                    ("id", num("cell").into()),
+                    ("kind", self.i18n.tr(&format!("kind-{}", s("kind"))).into()),
+                    ("zone", s("zone").into()),
+                ],
+            ));
+        }
+        if hit["patch"].is_string() {
+            lines.push(self.i18n.tr_args(
+                "hover-face",
+                &[
+                    ("id", num("face").into()),
+                    ("patch", s("patch").into()),
+                    ("role", self.i18n.tr(&format!("role-{}", s("role"))).into()),
+                ],
+            ));
+        } else if hit["face"].is_string() {
+            lines.push(
+                self.i18n
+                    .tr_args("hover-open-face", &[("id", num("face").into())]),
+            );
+        } else {
+            lines.push(self.i18n.tr("hover-section"));
+        }
+        lines.join("\n")
     }
 
     fn draw_mesh(
