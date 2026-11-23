@@ -125,8 +125,9 @@ mod tests {
     #[test]
     fn builtin_tokens() {
         let t = Tokens::builtin().unwrap();
-        assert_eq!(t.dark.accent.hex(), "#D671B4");
-        assert_eq!(t.light.accent.hex(), "#A3337E");
+        assert_eq!(t.dark.accent.hex(), "#DE74B6");
+        assert_eq!(t.light.accent.hex(), "#AD3285");
+        assert_eq!(t.light.accent, t.mesh.logo);
         assert_eq!(t.mesh.patch.len(), 12);
         assert_eq!(t.patch_color(12), t.patch_color(0));
     }

@@ -11,8 +11,16 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     let open = std::env::args_os().nth(1).map(PathBuf::from);
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Some((width, height, rgba)) = style::logo_rgba(256) {
+        viewport = viewport.with_icon(egui::IconData {
+            rgba,
+            width,
+            height,
+        });
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             .with_title("MurmelCraft")
             .with_inner_size([1440.0, 900.0])
             .with_min_inner_size([960.0, 600.0])

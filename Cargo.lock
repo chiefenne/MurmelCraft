@@ -1717,6 +1717,7 @@ dependencies = [
  "murmel-engine",
  "murmel-render",
  "murmel-tools",
+ "png",
  "rfd",
  "serde_json",
  "unic-langid",

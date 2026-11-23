@@ -21,6 +21,7 @@ pub struct MurmelApp {
     pub(crate) drag: Option<murmel_engine::navigation::Action>,
     pub(crate) settings_open: bool,
     pub(crate) installed_theme: Option<Theme>,
+    logo: Option<egui::TextureHandle>,
 }
 
 impl MurmelApp {
@@ -46,6 +47,13 @@ impl MurmelApp {
             drag: None,
             settings_open: false,
             installed_theme: None,
+            logo: style::logo_rgba(128).map(|(w, h, rgba)| {
+                cc.egui_ctx.load_texture(
+                    "murmelcraft-logo",
+                    egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba),
+                    egui::TextureOptions::LINEAR,
+                )
+            }),
         };
         if let Some(p) = open {
             app.open_path(p);
@@ -160,16 +168,22 @@ impl MurmelApp {
         let p = self.palette(ui.ctx()).clone();
         let logo = color(self.session.tokens.mesh.logo);
         ui.horizontal_centered(|ui| {
-            // Placeholder mark until the marmot logo arrives.
-            let (r, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::hover());
-            ui.painter().rect_filled(r, 6.0, logo);
-            ui.painter().text(
-                r.center(),
-                egui::Align2::CENTER_CENTER,
-                "M",
-                egui::FontId::new(13.0, egui::FontFamily::Name(style::SEMIBOLD.into())),
-                Color32::WHITE,
-            );
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::hover());
+            match &self.logo {
+                Some(t) => {
+                    ui.painter().image(
+                        t.id(),
+                        r,
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+                None => {
+                    ui.painter().rect_filled(r, 6.0, logo);
+                }
+            }
+            let name = self.i18n.tr("app-name");
+            resp.widget_info(|| WidgetInfo::labeled(Role::Image, true, name.clone()));
             ui.label(
                 RichText::new(self.i18n.tr("app-name"))
                     .family(egui::FontFamily::Name(style::SEMIBOLD.into()))
