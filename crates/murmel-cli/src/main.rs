@@ -39,6 +39,9 @@ fn session() -> Result<Session, String> {
         }
         s.theme = st.theme;
         s.navigation = nav;
+        if let Err(e) = s.set_colors(st.colors) {
+            eprintln!("warning: settings.toml colors: {e}");
+        }
     }
     Ok(s)
 }

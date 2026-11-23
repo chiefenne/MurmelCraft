@@ -20,6 +20,7 @@ toolbar-tree-tip = Show or hide the model tree (T)
 toolbar-properties = Properties
 toolbar-properties-tip = Show or hide the properties (P)
 
+color-by-solid = Solid colour
 color-by-patch = Patch
 color-by-role = Patch role
 color-by-cell_type = Cell type
@@ -49,6 +50,8 @@ tree-isolate = Isolate (I)
 tree-show-all = Show all (Alt + H)
 tree-fit = Fit
 tree-copy-name = Copy name
+tree-color = Colour
+tree-reset-color = Reset colour
 
 validity-valid = Valid
 validity-no_evidence = No evidence
@@ -115,6 +118,9 @@ preset-paraview = ParaView style
 preset-custom = Custom
 settings-zoom-to-cursor = Zoom to the cursor
 settings-invert-zoom = Invert the zoom direction
+settings-colors = Colours
+settings-mesh-color = Mesh colour (solid)
+settings-reset-colors = Reset to the built-in colours
 settings-file = Saved in { $path }
 
 viewport-empty = Open a KoflCraft mesh (foehncraft.vtu) with Open or Ctrl + O, or drop it here.
@@ -162,12 +168,14 @@ tool-view-fit = Fit view
 tool-view-standard = Standard view
 tool-view-screenshot = Screenshot
 tool-display-color-by = Colour by
+tool-display-set-color = Item colour
 tool-display-visibility = Show and hide
 tool-select-item = Select
 tool-select-clear = Clear selection
 tool-inspect-item = Properties
 tool-settings-get = Settings
 tool-settings-set-theme = Theme
+tool-settings-set-colors = Mesh colours
 tool-settings-set-bindings = Mouse bindings
 
 display-shaded-edges = Shaded with edges

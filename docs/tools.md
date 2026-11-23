@@ -20,13 +20,15 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `view.fit` | 1 | read | Frame the faces shown, or the shown faces of one item (mesh, zone:<name>, kind:<cell type>, patch:<name>), from the current direction. |
 | `view.standard` | 1 | read | Go to a standard view (front, back, left, right, top, bottom, iso, home) and fit; face views snap to orthographic in perspective_ortho_faces. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
-| `display.color_by` | 1 | read | Colour the boundary faces by patch, patch role or the type of their cell. |
+| `display.color_by` | 1 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role or by the type of their cell. |
+| `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>), or show all; returns the hidden items and the visible counts. |
 | `select.item` | 1 | read | Select an item by id; its faces are highlighted and inspect.item shows it. |
 | `select.clear` | 1 | read | Clear the selection. |
 | `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
-| `settings.get` | 1 | read | The theme, the navigation bindings, the presets and the config folder. |
+| `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the presets and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
+| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening; reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
 
 ## Inputs
@@ -329,6 +331,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "properties": {
     "by": {
       "enum": [
+        "solid",
         "patch",
         "role",
         "cell_type"
@@ -337,6 +340,34 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   },
   "required": [
     "by"
+  ],
+  "type": "object"
+}
+```
+
+### `display.set_color`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "color": {
+      "oneOf": [
+        {
+          "pattern": "^#[0-9A-Fa-f]{6}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "item": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "item"
   ],
   "type": "object"
 }
@@ -441,6 +472,71 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "required": [
     "theme"
   ],
+  "type": "object"
+}
+```
+
+### `settings.set_colors`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "edge_darken": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+    },
+    "kind": {
+      "additionalProperties": {
+        "pattern": "^#[0-9A-Fa-f]{6}$",
+        "type": "string"
+      },
+      "propertyNames": {
+        "enum": [
+          "polyhedron",
+          "prism",
+          "hexahedron",
+          "tetrahedron",
+          "pyramid"
+        ]
+      },
+      "type": "object"
+    },
+    "patch": {
+      "items": {
+        "pattern": "^#[0-9A-Fa-f]{6}$",
+        "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "reset": {
+      "type": "boolean"
+    },
+    "role": {
+      "additionalProperties": {
+        "pattern": "^#[0-9A-Fa-f]{6}$",
+        "type": "string"
+      },
+      "propertyNames": {
+        "enum": [
+          "wall",
+          "inlet",
+          "outlet",
+          "symmetry",
+          "interface",
+          "unspecified"
+        ]
+      },
+      "type": "object"
+    },
+    "solid": {
+      "pattern": "^#[0-9A-Fa-f]{6}$",
+      "type": "string"
+    }
+  },
+  "required": [],
   "type": "object"
 }
 ```

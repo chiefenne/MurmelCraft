@@ -1,6 +1,8 @@
 //! Design tokens (`assets/tokens.toml`) and the theme setting. egui's
 //! Visuals and the wgpu viewport both take their colours from here.
 
+use std::collections::BTreeMap;
+
 use murmel_mesh::{CellKind, PatchRole};
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +39,12 @@ impl Rgb {
     }
 }
 
+impl Serialize for Rgb {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.hex())
+    }
+}
+
 impl<'de> Deserialize<'de> for Rgb {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
@@ -63,6 +71,8 @@ pub struct Palette {
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct MeshTokens {
+    /// The one colour of every face in colour mode `solid` (the default).
+    pub solid: Rgb,
     pub patch: Vec<Rgb>,
     pub edge_darken: f32,
     pub logo: Rgb,
@@ -145,6 +155,90 @@ impl Tokens {
     }
 }
 
+/// The user's mesh colours (`[colors]` in settings.toml): each one set
+/// replaces its built-in token, so every mesh colour is configurable.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeshColors {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid: Option<Rgb>,
+    /// The patch palette, in patch order (cycled).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patch: Vec<Rgb>,
+    /// Role name (wall, inlet, …) to colour.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role: BTreeMap<String, Rgb>,
+    /// Cell type name (polyhedron, prism, …) to colour.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub kind: BTreeMap<String, Rgb>,
+    /// Edges take the face colour darkened by this fraction (0 to 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_darken: Option<f32>,
+}
+
+impl MeshColors {
+    /// Lay `other` over these colours: what it sets wins.
+    pub fn merge(&mut self, other: MeshColors) {
+        if other.solid.is_some() {
+            self.solid = other.solid;
+        }
+        if !other.patch.is_empty() {
+            self.patch = other.patch;
+        }
+        self.role.extend(other.role);
+        self.kind.extend(other.kind);
+        if other.edge_darken.is_some() {
+            self.edge_darken = other.edge_darken;
+        }
+    }
+}
+
+impl Tokens {
+    /// These tokens with the user's mesh colours laid over them; an
+    /// unknown role or cell type, or an edge darkening outside 0 to 1, is
+    /// refused.
+    pub fn with_colors(&self, c: &MeshColors) -> Result<Tokens, String> {
+        let mut t = self.clone();
+        let m = &mut t.mesh;
+        if let Some(s) = c.solid {
+            m.solid = s;
+        }
+        if !c.patch.is_empty() {
+            m.patch = c.patch.clone();
+        }
+        for (name, &rgb) in &c.role {
+            let r = &mut m.role;
+            *match name.as_str() {
+                "wall" => &mut r.wall,
+                "inlet" => &mut r.inlet,
+                "outlet" => &mut r.outlet,
+                "symmetry" => &mut r.symmetry,
+                "interface" => &mut r.interface,
+                "unspecified" => &mut r.unspecified,
+                _ => return Err(format!("unknown role {name}")),
+            } = rgb;
+        }
+        for (name, &rgb) in &c.kind {
+            let k = &mut m.kind;
+            *match name.as_str() {
+                "polyhedron" => &mut k.polyhedron,
+                "prism" => &mut k.prism,
+                "hexahedron" => &mut k.hexahedron,
+                "tetrahedron" => &mut k.tetrahedron,
+                "pyramid" => &mut k.pyramid,
+                _ => return Err(format!("unknown cell type {name}")),
+            } = rgb;
+        }
+        if let Some(d) = c.edge_darken {
+            if !(0.0..=1.0).contains(&d) {
+                return Err(format!("edge_darken {d} is not between 0 and 1"));
+            }
+            m.edge_darken = d;
+        }
+        Ok(t)
+    }
+}
+
 /// The theme setting (decided 2026-11-23: dark by default).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -179,6 +273,36 @@ mod tests {
         assert_eq!(t.light.accent, t.mesh.logo);
         assert_eq!(t.mesh.patch.len(), 12);
         assert_eq!(t.patch_color(12), t.patch_color(0));
+        assert_eq!(t.mesh.solid.hex(), "#6EC64A");
+    }
+
+    /// Invariant: user colours replace exactly the tokens they name, and a
+    /// name that is no role or cell type is refused rather than ignored.
+    #[test]
+    fn user_colours_replace_tokens() {
+        let t = Tokens::builtin().unwrap();
+        let red = Rgb([255, 0, 0]);
+        let c = MeshColors {
+            solid: Some(red),
+            role: [("inlet".to_string(), red)].into(),
+            kind: [("prism".to_string(), red)].into(),
+            edge_darken: Some(0.3),
+            ..MeshColors::default()
+        };
+        let u = t.with_colors(&c).unwrap();
+        assert_eq!(u.mesh.solid, red);
+        assert_eq!(u.role_color(PatchRole::Inlet), red);
+        assert_eq!(u.role_color(PatchRole::Wall), t.role_color(PatchRole::Wall));
+        assert_eq!(u.kind_color(CellKind::Prism), red);
+        assert_eq!(u.mesh.edge_darken, 0.3);
+        assert_eq!(u.mesh.patch, t.mesh.patch);
+        let bad = MeshColors {
+            role: [("door".to_string(), red)].into(),
+            ..MeshColors::default()
+        };
+        assert!(t.with_colors(&bad).is_err());
+        let text = toml::to_string(&c).unwrap();
+        assert_eq!(toml::from_str::<MeshColors>(&text).unwrap(), c);
     }
 
     /// WCAG relative luminance contrast of primary text on the panel and of

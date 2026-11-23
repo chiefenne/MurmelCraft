@@ -31,6 +31,11 @@ status_warn = "#A9760F"
 status_error = "#C7402F"
 
 [mesh]
+# The default colour of the mesh (colour mode solid), decided by the
+# maintainer 2026-11-23: the green of a reference screenshot, sampled
+# from its lit faces (#6EC449) and set so that a face towards the
+# viewer shades to it. Users change it in Settings (settings.set_colors).
+solid = "#6EC64A"
 # Twelve hues of our own, OKLCH at hue steps of 30 degrees from 20,
 # lightness 0.74 and 0.68 alternating, chroma 0.12. Ordered so that the
 # first patches differ most, also under simulated protanopia,

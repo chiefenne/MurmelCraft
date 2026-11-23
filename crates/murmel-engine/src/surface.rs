@@ -9,9 +9,9 @@
 
 use std::collections::HashSet;
 
-use murmel_mesh::{Bounds, Mesh, NO_CELL};
+use murmel_mesh::{Bounds, Mesh};
 
-use crate::display::{ColorBy, Display};
+use crate::display::Display;
 use crate::theme::{Rgb, Tokens};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -62,24 +62,7 @@ impl Surface {
         let darken = 1.0 - tokens.mesh.edge_darken;
         let sel = tokens.mesh.selection;
         let mix = tokens.mesh.selection_mix.clamp(0.0, 1.0);
-        let face_rgb = |f: usize| -> Rgb {
-            let patch = mesh.boundary_patch.get(f).copied().unwrap_or(0) as usize;
-            match display.color_by {
-                ColorBy::Patch => tokens.patch_color(patch),
-                ColorBy::Role => tokens.role_color(
-                    mesh.patches
-                        .get(patch)
-                        .map_or(murmel_mesh::PatchRole::Unspecified, |p| p.role),
-                ),
-                ColorBy::CellType => match mesh.boundary_owner.get(f).copied() {
-                    Some(c) if c != NO_CELL => mesh
-                        .cell_kind
-                        .get(c as usize)
-                        .map_or(tokens.mesh.role.unspecified, |&k| tokens.kind_color(k)),
-                    _ => tokens.mesh.role.unspecified,
-                },
-            }
-        };
+        let face_rgb = |f: usize| -> Rgb { display.face_color(mesh, tokens, f) };
         // Selected faces first, so the edges they share with others take
         // the selection colour.
         let mut order: Vec<(bool, usize)> = (0..mesh.boundary.len())

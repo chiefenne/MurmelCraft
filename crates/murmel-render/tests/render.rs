@@ -4,7 +4,7 @@
 //! tolerance that absorbs rasteriser differences between GPU drivers.
 //!
 //! Keep rule: the invariant is the picture of the default view (shaded
-//! with edges, patch colours, gradient, fit). A change to the camera, the
+//! with edges, the solid default colour, gradient, fit). A change to the camera, the
 //! shader, the tokens or the reader that moves pixels fails here and
 //! nowhere else. To accept an intended change, run with MURMEL_BLESS=1 and
 //! commit the new reference with the reason in the pull request.

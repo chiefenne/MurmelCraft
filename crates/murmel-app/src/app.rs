@@ -40,6 +40,10 @@ impl MurmelApp {
             let (st, nav, problems) = settings::load(&dir, cfg!(target_os = "macos"));
             session.theme = st.theme;
             session.navigation = nav;
+            let mut problems = problems;
+            if let Err(e) = session.set_colors(st.colors) {
+                problems.push(format!("settings.toml colors: {e}"));
+            }
             if let Some(p) = problems.into_iter().next() {
                 error = Some(Diagnostic::new("SET001", p));
             }
@@ -557,6 +561,25 @@ impl MurmelApp {
                     .changed()
                 {
                     self.call("settings.set_bindings", json!({ "invert_zoom": inv }));
+                }
+                ui.add_space(8.0);
+                ui.heading(self.i18n.tr("settings-colors"));
+                ui.horizontal(|ui| {
+                    let current = self.session.tokens.mesh.solid;
+                    let mut rgb = current.0;
+                    let name = self.i18n.tr("settings-mesh-color");
+                    let r = egui::color_picker::color_edit_button_srgb(ui, &mut rgb);
+                    r.widget_info(|| WidgetInfo::labeled(Role::ColorWell, true, name.clone()));
+                    ui.label(&name);
+                    if rgb != current.0 {
+                        let hex = murmel_engine::Rgb(rgb).hex();
+                        self.call("settings.set_colors", json!({ "solid": hex }));
+                    }
+                });
+                if self.session.colors != murmel_engine::MeshColors::default()
+                    && ui.button(self.i18n.tr("settings-reset-colors")).clicked()
+                {
+                    self.call("settings.set_colors", json!({"reset": true}));
                 }
                 if let Some(d) = &self.session.config_dir {
                     ui.add_space(8.0);

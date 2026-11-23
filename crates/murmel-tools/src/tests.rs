@@ -140,6 +140,81 @@ fn settings_write_files() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Invariant: user mesh colours reach the tokens, are saved in
+/// settings.toml beside the theme (neither setting drops the other) and
+/// load back; a reset returns to the built-in colours; bad input is
+/// refused without a change.
+#[test]
+fn colours_are_configurable_and_saved() {
+    let dir = std::env::temp_dir().join(format!("murmel-colours-{}", std::process::id()));
+    let mut s = session();
+    s.config_dir = Some(dir.clone());
+    let builtin = Tokens::builtin().unwrap();
+    assert!(call("settings.set_theme", json!({"theme": "light"}), &mut s).ok());
+    let e = call(
+        "settings.set_colors",
+        json!({"solid": "#112233", "role": {"inlet": "#445566"}}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.tokens.mesh.solid.hex(), "#112233");
+    assert!(call("settings.set_theme", json!({"theme": "dark"}), &mut s).ok());
+    let (st, _, problems) = murmel_engine::settings::load(&dir, false);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(st.theme, murmel_engine::Theme::Dark);
+    assert_eq!(st.colors.solid.map(|c| c.hex()).as_deref(), Some("#112233"));
+    assert_eq!(st.colors.role["inlet"].hex(), "#445566");
+    for bad in [
+        json!({"solid": "green"}),
+        json!({"role": {"door": "#000000"}}),
+        json!({"edge_darken": 2.0}),
+        json!({"solids": "#000000"}),
+        json!({"reset": "yes"}),
+    ] {
+        let e = call("settings.set_colors", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, "TOOL002", "{bad}");
+        assert_eq!(s.tokens.mesh.solid.hex(), "#112233", "{bad}");
+    }
+    assert!(call("settings.set_colors", json!({"reset": true}), &mut s).ok());
+    assert_eq!(s.tokens, builtin);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Invariant: display.set_color colours one item of the open mesh, shows
+/// in the surface and in the display state, and null takes it back.
+#[test]
+fn item_colours_reach_the_surface() {
+    let mut s = session();
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    let solid = murmel_engine::Rgb::linear(s.tokens.mesh.solid);
+    let red = murmel_engine::Rgb([255, 0, 0]).linear();
+    let colours = |s: &murmel_engine::Session| s.mesh.as_ref().unwrap().surface.colors.clone();
+    assert!(colours(&s).iter().all(|c| *c == solid));
+    let e = call(
+        "display.set_color",
+        json!({"item": "patch:outlet", "color": "#FF0000"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["colors"]["patch:outlet"], "#FF0000");
+    let n = colours(&s).iter().filter(|c| **c == red).count();
+    assert!(n > 0 && n < colours(&s).len());
+    let e = call(
+        "display.set_color",
+        json!({"item": "patch:outlet", "color": null}),
+        &mut s,
+    );
+    assert!(e.ok());
+    assert!(colours(&s).iter().all(|c| *c == solid));
+    let e = call(
+        "display.set_color",
+        json!({"item": "patch:nope", "color": "#FF0000"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "VIEW002");
+}
+
 /// Headless screenshot through the registry, as `murmel call` runs it.
 #[test]
 fn screenshot_writes_a_png() {
