@@ -1,5 +1,5 @@
 //! The view cube, top right of the viewport (UI spec, "Viewport,
-//! navigation and view cube"): 96 px, drawn with egui's painter over the
+//! navigation and view cube"): 124 px, drawn with egui's painter over the
 //! mesh (decided 2026-11-23), from the patches of `murmel_engine::cube`,
 //! so the drawing and the hit test are the geometry the engine tests
 //! check. A click on a face, edge or corner flies to one of 26 views in
@@ -8,7 +8,7 @@
 //! any angle about a screen axis.
 
 use egui::{Color32, FontId, Pos2, Rect, Role, Sense, Shape, Stroke, Ui, Vec2, WidgetInfo};
-use murmel_engine::cube::{self, BORDER};
+use murmel_engine::cube;
 use murmel_engine::{Camera, Projection, ScreenAxis};
 use serde_json::json;
 
@@ -17,8 +17,17 @@ use crate::style::{SEMIBOLD, color, icon};
 
 /// Length of a flight to a view.
 pub const FLIGHT_SECONDS: f64 = 0.25;
-/// Side of the cube's square in the corner.
-const SIDE: f32 = 96.0;
+/// Side of the cube's square in the corner (enlarged from the spec's
+/// 96 px so the labels keep a gap to the grid lines, 2026-11-23).
+const SIDE: f32 = 124.0;
+/// Width of the grid lines between a face's patches.
+const INNER: f32 = 0.6;
+/// Width of the cube's edges.
+const OUTER: f32 = 2.0;
+/// Smallest label size; a face whose label does not fit at it shows none.
+const MIN_LABEL: i32 = 8;
+/// Room left between a label and the grid lines, in pixels.
+const LABEL_GAP: f32 = 3.0;
 /// Width of the block: the cube with its roll arrows, and the rotate row.
 const BLOCK: f32 = 196.0;
 
@@ -114,6 +123,15 @@ impl MurmelApp {
         );
         let dim = color(p.bg_raised);
         let accent = color(p.accent);
+        // Grid lines in the line token (a little stronger in the light
+        // theme, where it is faint on the pale faces); the cube's edges
+        // darker still.
+        let (inner, outer) = if dark {
+            (color(p.line), color(p.bg_app))
+        } else {
+            let edge = color(p.text_secondary);
+            (lerp(color(p.line), edge, 0.35), edge)
+        };
         for patch in cube::patches(cam) {
             let pts: Vec<Pos2> = patch.corners.iter().map(|&q| to_screen(q)).collect();
             let mut fill = lerp(dim, light, 0.35 + 0.65 * patch.facing as f32);
@@ -122,14 +140,13 @@ impl MurmelApp {
             } else if Some(patch.view) == hover {
                 fill = lerp(fill, accent, 0.3);
             }
-            painter.add(Shape::convex_polygon(
-                pts,
-                fill,
-                Stroke::new(0.75, color(p.line)),
-            ));
+            // Inner grid lines thin, so the cube's own edges stand out.
+            painter.add(Shape::convex_polygon(pts, fill, Stroke::new(INNER, inner)));
         }
-        // Face outlines over the grid lines.
-        for f in cube::labels(cam) {
+        // The cube's edges (each face's outline) thick, over the grid
+        // lines, so edges and corners read as targets.
+        let labels = cube::labels(cam);
+        for f in &labels {
             let c = |a: f64, b: f64| {
                 to_screen([
                     f.center[0] + f.right[0] * a + f.up[0] * b,
@@ -137,25 +154,29 @@ impl MurmelApp {
                 ])
             };
             let outline = vec![c(-1.0, -1.0), c(1.0, -1.0), c(1.0, 1.0), c(-1.0, 1.0)];
-            painter.add(Shape::closed_line(outline, Stroke::new(1.0, color(p.line))));
-            if f.facing < 0.3 {
-                continue;
-            }
+            painter.add(Shape::closed_line(outline, Stroke::new(OUTER, outer)));
+        }
+        let ink = if dark {
+            color(p.bg_app)
+        } else {
+            color(p.text_primary)
+        };
+        for f in labels.iter().filter(|f| f.facing >= 0.3) {
             let text = self.i18n.tr(&format!("view-{}", f.face.name()));
-            let size = (10.0 + 3.0 * f.facing as f32).round();
-            let font = FontId::new(size, egui::FontFamily::Name(SEMIBOLD.into()));
-            let ink = if dark {
-                color(p.bg_app)
-            } else {
-                color(p.text_primary)
-            };
-            let galley = painter.layout_no_wrap(text, font, ink);
-            // Fit the label inside the face centre patch.
-            let room = (1.0 - BORDER) as f32 * 2.0 * scale * f.facing.sqrt() as f32;
-            if galley.size().x > room * 1.15 {
-                continue;
-            }
             let angle = (-f.right[1] as f32).atan2(f.right[0] as f32);
+            // The largest size up to the face's own that leaves a gap to
+            // the grid lines; none if even the smallest touches them.
+            let max = (10.0 + 3.0 * f.facing as f32).round() as i32;
+            let fitted = (MIN_LABEL..=max).rev().find_map(|size| {
+                let font = FontId::new(size as f32, egui::FontFamily::Name(SEMIBOLD.into()));
+                let galley = painter.layout_no_wrap(text.clone(), font, ink);
+                let half = galley.size() / 2.0;
+                let half_cube = [(half.x / scale) as f64, (half.y / scale) as f64];
+                cube::label_fits(f, half_cube, (LABEL_GAP / scale) as f64).then_some(galley)
+            });
+            let Some(galley) = fitted else {
+                continue;
+            };
             let half = galley.size() / 2.0;
             let rot = egui::emath::Rot2::from_angle(angle);
             let pos = to_screen(f.center) - rot * Vec2::new(half.x, half.y);

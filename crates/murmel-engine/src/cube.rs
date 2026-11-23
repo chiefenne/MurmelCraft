@@ -127,6 +127,36 @@ pub fn labels(c: &Camera) -> Vec<Face> {
         .collect()
 }
 
+/// Whether a label fits in the centre patch of face `f` with `gap` to
+/// spare on every side, so it never touches the grid lines around it.
+/// The label is a box of half size `half` (along and across its
+/// baseline, cube units), drawn upright on the screen (not
+/// foreshortened) with its baseline along `f.right` about `f.center`.
+pub fn label_fits(f: &Face, half: [f64; 2], gap: f64) -> bool {
+    let (rx, ry) = (f.right[0], f.right[1]);
+    let (ux, uy) = (f.up[0], f.up[1]);
+    let len = rx.hypot(ry);
+    let det = rx * uy - ry * ux;
+    if len < 1e-9 || det.abs() < 1e-9 {
+        return false;
+    }
+    // Baseline and its normal on the screen, unit length.
+    let (bx, by) = (rx / len, ry / len);
+    let (nx, ny) = (-by, bx);
+    let limit = 1.0 - BORDER;
+    let (w, h) = (half[0] + gap, half[1] + gap);
+    [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+        .into_iter()
+        .all(|(sa, sb)| {
+            let dx = bx * w * sa + nx * h * sb;
+            let dy = by * w * sa + ny * h * sb;
+            // The corner in face coordinates: d = right·a + up·b.
+            let a = (dx * uy - dy * ux) / det;
+            let b = (rx * dy - ry * dx) / det;
+            a.abs() <= limit && b.abs() <= limit
+        })
+}
+
 /// Whether `p` lies in the convex quad `q` (either winding), edges
 /// included.
 fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
@@ -217,6 +247,33 @@ mod tests {
         assert!(top.right[0] > 0.0);
         let seen = [StandardView::FRONT, StandardView::RIGHT, StandardView::TOP];
         assert!(seen.contains(&front_face(&c)));
+    }
+
+    /// Invariant: a label that fits keeps `gap` from every grid line of
+    /// the centre patch, head-on and foreshortened. Breaks when the fit
+    /// lets labels overflow the patch (the window allowed 15 % before,
+    /// and "Front" touched the lines); the cube geometry tests above do
+    /// not look at labels.
+    #[test]
+    fn labels_keep_a_gap_to_the_lines() {
+        let mut c = Camera::default();
+        c.set_standard(StandardView::FRONT);
+        let front = labels(&c)
+            .into_iter()
+            .find(|f| f.face == StandardView::FRONT)
+            .unwrap();
+        let inner = 1.0 - BORDER;
+        assert!(label_fits(&front, [0.5, 0.2], 0.1));
+        // As wide as the patch: touches the lines, so it does not fit.
+        assert!(!label_fits(&front, [inner, 0.2], 0.0001));
+        assert!(!label_fits(&front, [inner - 0.05, 0.2], 0.1));
+        assert!(!label_fits(&front, [0.3, inner - 0.05], 0.1));
+        // Foreshortened faces leave less room than head-on.
+        c.set_standard(StandardView::ISO);
+        for f in labels(&c) {
+            assert!(!label_fits(&f, [0.6, 0.2], 0.1), "{}", f.face.name());
+            assert!(label_fits(&f, [0.3, 0.12], 0.05), "{}", f.face.name());
+        }
     }
 
     /// Invariant: the tinted face is the one head-on in a face view.
