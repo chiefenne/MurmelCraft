@@ -294,18 +294,20 @@ impl MurmelApp {
         });
     }
 
-    /// Orbit by a drag of `dx`, `dy` pixels (y down). The drag is turned
-    /// back by the roll, so the scene follows the pointer on a rolled
-    /// screen too.
+    /// Orbit by a drag of `dx`, `dy` pixels (y down), about the pivot the
+    /// viewport drag chose (the cube's drag has none: about the target).
+    /// The drag is turned back by the roll, so the scene follows the
+    /// pointer on a rolled screen too.
     pub(crate) fn orbit_by_drag(&mut self, dx: f64, dy: f64) {
         let (s, c) = self.session.camera.roll_deg.to_radians().sin_cos();
         let up = -dy;
         let (lx, lup) = (dx * c + up * s, -dx * s + up * c);
         let speed = self.session.navigation.orbit_speed;
-        self.call(
-            "view.orbit",
-            json!({"yaw_deg": -lx * speed, "pitch_deg": -lup * speed}),
-        );
+        let mut input = json!({"yaw_deg": -lx * speed, "pitch_deg": -lup * speed});
+        if let Some(p) = self.orbit_pivot {
+            input["pivot"] = json!(p);
+        }
+        self.call("view.orbit", input);
     }
 }
 

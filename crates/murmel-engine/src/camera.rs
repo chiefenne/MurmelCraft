@@ -420,6 +420,23 @@ impl Camera {
         self.snapped = false;
     }
 
+    /// Orbit as [`Camera::orbit`], about the world point `pivot` instead
+    /// of the target (UI spec: the camera orbits about the point under
+    /// the cursor). Eye and target turn rigidly about the pivot, so the
+    /// pivot stays where it is on the screen.
+    pub fn orbit_about(&mut self, dyaw: f64, dpitch: f64, pivot: [f64; 3]) {
+        let frame = |c: &Camera| {
+            let (r, u) = c.basis();
+            glam::DMat3::from_cols(r, u, c.to_eye())
+        };
+        let before = frame(self);
+        self.orbit(dyaw, dpitch);
+        // The turn that took the old frame to the new one.
+        let q = frame(self) * before.transpose();
+        let p = DVec3::from(pivot);
+        self.target = (p + q * (DVec3::from(self.target) - p)).into();
+    }
+
     /// Move the view by a drag of `dx`, `dy` pixels in a viewport `height`
     /// pixels high: the scene follows the pointer.
     pub fn pan(&mut self, dx: f64, dy: f64, height: f64) {
@@ -555,6 +572,39 @@ fn orthographic_rh(l: f64, r: f64, b: f64, t: f64, near: f64, far: f64) -> DMat4
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Invariant: orbiting about a pivot keeps the pivot where it is on
+    /// the screen and its distance to the eye, and turns the view like a
+    /// plain orbit; with the pivot at the target it is a plain orbit.
+    /// Breaks when the target is not turned with the eye (the pivot would
+    /// slide across the screen); the plain orbit tests do not move the
+    /// target.
+    #[test]
+    fn orbit_about_keeps_the_pivot_in_place() {
+        let mut c = Camera::default();
+        c.set_standard(StandardView::ISO);
+        c.roll(30.0);
+        let pivot = [0.7, -0.4, 0.3];
+        let screen = |c: &Camera| {
+            let (r, u) = c.basis();
+            let d = DVec3::from(pivot) - c.eye();
+            (d.dot(r), d.dot(u), d.dot(-c.to_eye()))
+        };
+        let before = screen(&c);
+        let mut plain = c.clone();
+        plain.orbit(25.0, -10.0);
+        c.orbit_about(25.0, -10.0, pivot);
+        let after = screen(&c);
+        assert!((before.0 - after.0).abs() < 1e-9, "{before:?} {after:?}");
+        assert!((before.1 - after.1).abs() < 1e-9);
+        assert!((before.2 - after.2).abs() < 1e-9);
+        assert_eq!((c.yaw_deg, c.pitch_deg), (plain.yaw_deg, plain.pitch_deg));
+        let mut t = plain.clone();
+        let mut u = plain.clone();
+        t.orbit(-5.0, 5.0);
+        u.orbit_about(-5.0, 5.0, u.target);
+        assert!((DVec3::from(t.target) - DVec3::from(u.target)).length() < 1e-12);
+    }
 
     fn unit_box() -> Bounds {
         Bounds {

@@ -47,6 +47,8 @@ pub struct MurmelApp {
     /// rebuilt when the drag ends).
     pub(crate) threshold_edit: Option<f64>,
     pub(crate) histogram: Option<crate::quality::HistogramCache>,
+    /// The world point the current viewport orbit turns about.
+    pub(crate) orbit_pivot: Option<[f64; 3]>,
 }
 
 impl MurmelApp {
@@ -91,6 +93,7 @@ impl MurmelApp {
             rotate_deg: 90.0,
             threshold_edit: None,
             histogram: None,
+            orbit_pivot: None,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",

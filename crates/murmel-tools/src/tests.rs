@@ -440,3 +440,32 @@ fn quality_colouring_and_threshold() {
     let e = call("inspect.quality", json!({"bins": 0}), &mut s);
     assert_eq!(e.diagnostics[0].code, "TOOL002");
 }
+
+/// Invariant: view.orbit about a pivot moves the target (the eye turns
+/// about the pivot), about the target it does not, and a pivot that is
+/// not finite is refused. Breaks when the pivot is ignored by the tool;
+/// the camera test checks only the engine.
+#[test]
+fn orbit_about_a_pivot() {
+    let mut s = session();
+    let e = call("view.orbit", json!({"yaw_deg": 30.0}), &mut s);
+    let target = e.result["target"].clone();
+    let e = call(
+        "view.orbit",
+        json!({"yaw_deg": 30.0, "pivot": target}),
+        &mut s,
+    );
+    assert_eq!(e.result["target"], target);
+    let e = call(
+        "view.orbit",
+        json!({"yaw_deg": 30.0, "pivot": [5.0, 0.0, 0.0]}),
+        &mut s,
+    );
+    assert_ne!(e.result["target"], target);
+    let e = call(
+        "view.orbit",
+        json!({"yaw_deg": 1.0, "pivot": [1.0, 2.0]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+}

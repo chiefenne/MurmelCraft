@@ -161,6 +161,11 @@ impl MurmelApp {
             .find(|(b, _)| resp.dragged_by(*b))
             .map(|(_, b)| b);
             self.drag = button.and_then(|b| nav.drag(b, m));
+            self.orbit_pivot = None;
+            if self.drag == Some(Action::Orbit) {
+                let start = ui.input(|i| i.pointer.press_origin());
+                self.orbit_pivot = self.pivot_at(start.map(|p| ndc(p, rect)));
+            }
         }
         if resp.dragged() {
             let d = resp.drag_delta();
@@ -192,6 +197,7 @@ impl MurmelApp {
         }
         if resp.drag_stopped() {
             self.drag = None;
+            self.orbit_pivot = None;
         }
         let plain = Mods { shift: false, ..m };
         if resp.clicked_by(PointerButton::Primary)
@@ -219,6 +225,27 @@ impl MurmelApp {
             let f = 1.0 / pinch as f64;
             self.call("view.zoom", json!({"factor": f, "cursor_ndc": cursor}));
         }
+    }
+
+    /// The point an orbit turns about (UI spec, Viewport): the point of
+    /// the mesh under `at`, or the centre of the faces shown when the
+    /// pointer is over empty space.
+    fn pivot_at(&mut self, at: Option<[f64; 2]>) -> Option<[f64; 3]> {
+        if let Some(at) = at {
+            let e = murmel_tools::call("inspect.at", json!({ "ndc": at }), &mut self.session);
+            let p = &e.result["hit"]["point"];
+            if let Some(v) = p.as_array().filter(|v| v.len() == 3) {
+                let c = |i: usize| v[i].as_f64();
+                if let (Some(x), Some(y), Some(z)) = (c(0), c(1), c(2)) {
+                    return Some([x, y, z]);
+                }
+            }
+        }
+        let m = self.session.mesh.as_ref()?;
+        m.surface
+            .visible_bounds
+            .or(m.surface.bounds)
+            .map(|b| b.center())
     }
 
     /// Ask `inspect.at` once the pointer rests, and show the answer as a
