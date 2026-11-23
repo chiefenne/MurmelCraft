@@ -7,11 +7,15 @@
 //! flat normal from Newell's method. Positions are relative to `origin`
 //! (the centre of the bounds) so they keep their precision in `f32`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use murmel_mesh::{Bounds, Mesh};
 
-use crate::display::Display;
+use crate::display::{Display, RenderMode};
+
+/// Feature edges (render mode 4) bend by more than this angle between
+/// their two faces (UI spec, Display).
+pub const FEATURE_ANGLE_DEG: f64 = 30.0;
 use crate::theme::{Rgb, Tokens};
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -80,13 +84,26 @@ impl Surface {
         };
         let mut vb = Bounds::empty();
         let mut seen: HashSet<(u32, u32)> = HashSet::new();
+        let features = (display.render_mode == RenderMode::FeatureEdges).then(|| {
+            feature_edges(
+                mesh,
+                order.iter().map(|&(_, f)| f),
+                FEATURE_ANGLE_DEG.to_radians().cos(),
+            )
+        });
+        // Lines alone are drawn in the face colour; over faces, darker.
+        let lines_only = !display.render_mode.faces();
         for (unselected, f) in order {
             let face = mesh.boundary.get(f);
             let rgb = face_rgb(f);
             let (color, ec) = if unselected {
                 (
                     rgb.linear(),
-                    Rgb(rgb.0.map(|v| (v as f32 * darken).round() as u8)).linear(),
+                    if lines_only {
+                        rgb.linear()
+                    } else {
+                        Rgb(rgb.0.map(|v| (v as f32 * darken).round() as u8)).linear()
+                    },
                 )
             } else {
                 let m = Rgb(std::array::from_fn(|k| {
@@ -125,7 +142,11 @@ impl Surface {
             }
             for i in 0..face.len() {
                 let (a, b) = (face[i], face[(i + 1) % face.len()]);
-                if seen.insert((a.min(b), a.max(b))) {
+                let key = (a.min(b), a.max(b));
+                if features.as_ref().is_some_and(|fe| !fe.contains(&key)) {
+                    continue;
+                }
+                if seen.insert(key) {
                     s.edge_positions.push(rel(a).map(|v| v as f32));
                     s.edge_positions.push(rel(b).map(|v| v as f32));
                     s.edge_colors.push(ec);
@@ -136,6 +157,51 @@ impl Surface {
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
         s
     }
+}
+
+/// The feature edges among the boundary faces `faces` of `mesh`: an edge
+/// whose two faces meet at a crease (the cosine of the angle between their
+/// normals below `cos_max`), whose faces lie on different patches, or
+/// that has only one face drawn (an open border, also where hidden items
+/// were cut away). The normals' orientation is not trusted, so a crease is
+/// judged on the absolute cosine.
+pub fn feature_edges(
+    mesh: &Mesh,
+    faces: impl Iterator<Item = usize>,
+    cos_max: f64,
+) -> HashSet<(u32, u32)> {
+    struct Seen {
+        normal: [f32; 3],
+        patch: u32,
+        count: u32,
+        feature: bool,
+    }
+    let mut edges: HashMap<(u32, u32), Seen> = HashMap::new();
+    for f in faces {
+        let face = mesh.boundary.get(f);
+        let pts: Vec<[f64; 3]> = face.iter().map(|&i| mesh.points[i as usize]).collect();
+        let n = newell(&pts);
+        let patch = mesh.boundary_patch.get(f).copied().unwrap_or(0);
+        for i in 0..face.len() {
+            let (a, b) = (face[i], face[(i + 1) % face.len()]);
+            let e = edges.entry((a.min(b), a.max(b))).or_insert(Seen {
+                normal: n,
+                patch,
+                count: 0,
+                feature: false,
+            });
+            if e.count > 0 {
+                let dot: f32 = (0..3).map(|k| e.normal[k] * n[k]).sum();
+                e.feature |= e.patch != patch || (dot.abs() as f64) < cos_max;
+            }
+            e.count += 1;
+        }
+    }
+    edges
+        .into_iter()
+        .filter(|(_, e)| e.feature || e.count == 1)
+        .map(|(k, _)| k)
+        .collect()
 }
 
 /// The unit normal of a polygon by Newell's method.
@@ -159,6 +225,48 @@ fn newell(p: &[[f64; 3]]) -> [f32; 3] {
 mod tests {
     use super::*;
 
+    /// Invariant: on the channel (a box of walls, inlet and outlet) the
+    /// feature edges are the box's 12 creases and nothing inside a flat
+    /// side: all lie on the bounding box's edges, the flat interior edges
+    /// are dropped, and every box edge is covered.
+    #[test]
+    fn channel_feature_edges_are_the_box_edges() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/channel/foehncraft.vtu");
+        let mesh = murmel_mesh::read(&p).unwrap();
+        let t = Tokens::builtin().unwrap();
+        let all = Surface::build(&mesh, &t, &Display::default());
+        let d = Display {
+            render_mode: RenderMode::FeatureEdges,
+            ..Display::default()
+        };
+        let s = Surface::build(&mesh, &t, &d);
+        assert!(
+            s.edges() > 0 && s.edges() < all.edges() / 4,
+            "{} of {}",
+            s.edges(),
+            all.edges()
+        );
+        let b = s.bounds.unwrap();
+        let half: Vec<f64> = (0..3).map(|k| 0.5 * (b.max[k] - b.min[k])).collect();
+        let mut length = 0.0;
+        for e in s.edge_positions.chunks(2) {
+            let on_box_edge = |p: [f32; 3]| {
+                (0..3)
+                    .filter(|&k| ((p[k].abs() as f64) - half[k]).abs() < 1e-6 * (1.0 + half[k]))
+                    .count()
+                    >= 2
+            };
+            assert!(on_box_edge(e[0]) && on_box_edge(e[1]), "{e:?}");
+            length += (0..3)
+                .map(|k| ((e[0][k] - e[1][k]) as f64).powi(2))
+                .sum::<f64>()
+                .sqrt();
+        }
+        let want = 4.0 * 2.0 * (half[0] + half[1] + half[2]);
+        assert!((length - want).abs() < 1e-6 * want, "{length} vs {want}");
+    }
+
     /// Invariant: every boundary polygon becomes a closed fan (n triangles
     /// for n > 3 nodes, one for a triangle) and every polygon edge is drawn
     /// once, so a closed surface has as many edge lines as unique edges.
@@ -178,6 +286,12 @@ mod tests {
         assert_eq!(s.edges(), 6);
         assert_eq!(s.origin, [0.5; 3]);
         assert_eq!(s.faces, 4);
+        // Every edge of a tetrahedron is a crease (70.5 degrees).
+        let feat = Display {
+            render_mode: RenderMode::FeatureEdges,
+            ..Display::default()
+        };
+        assert_eq!(Surface::build(&mesh, &t, &feat).edges(), 6);
         for n in &s.normals {
             let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
             assert!((l - 1.0).abs() < 1e-5);

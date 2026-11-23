@@ -119,6 +119,9 @@ pub struct View<'a> {
     /// Linear colours of the viewport gradient.
     pub bg_top: [f32; 3],
     pub bg_bottom: [f32; 3],
+    /// Draw the shaded faces (render modes 1 and 2).
+    pub faces: bool,
+    /// Draw the edge lines (render modes 1, 3 and 4).
     pub edges: bool,
 }
 
@@ -458,10 +461,12 @@ impl MeshRenderer {
             pass.set_pipeline(&self.bg_pipeline);
             pass.draw(0..3, 0..1);
             if let Some(geo) = &self.geometry {
-                pass.set_pipeline(&self.face_pipeline);
-                pass.set_vertex_buffer(0, geo.faces.slice(..));
-                pass.set_index_buffer(geo.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..geo.index_count, 0, 0..1);
+                if view.faces {
+                    pass.set_pipeline(&self.face_pipeline);
+                    pass.set_vertex_buffer(0, geo.faces.slice(..));
+                    pass.set_index_buffer(geo.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..geo.index_count, 0, 0..1);
+                }
                 if view.edges
                     && let Some(edges) = &geo.edges
                 {
@@ -591,7 +596,8 @@ pub fn render_session(
             size: [width, height],
             bg_top: p.viewport_top.linear(),
             bg_bottom: p.viewport_bottom.linear(),
-            edges: true,
+            faces: session.display.render_mode.faces(),
+            edges: session.display.render_mode.edges(),
         },
     );
     let rgba = r.read_rgba(&gpu.device, &gpu.queue)?;

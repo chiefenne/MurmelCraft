@@ -28,6 +28,18 @@ pub struct MurmelApp {
     pub(crate) tree_filter: String,
     pub(crate) focus_filter: bool,
     pub(crate) props: Option<crate::panels::PropsCache>,
+    /// The command table (keys, palette, shortcut sheet).
+    pub(crate) commands: Vec<murmel_tools::commands::Command>,
+    pub(crate) palette: Option<crate::commands::Palette>,
+    pub(crate) shortcuts_open: bool,
+    /// The 250 ms flight to a new view: the camera it started from and
+    /// when (UI spec, View cube).
+    pub(crate) flight: Option<(murmel_engine::Camera, f64)>,
+    /// The time of the frame, for flights started by a tool call.
+    pub(crate) now: f64,
+    /// The rotate row under the view cube: axis and degrees.
+    pub(crate) rotate_axis: murmel_engine::ScreenAxis,
+    pub(crate) rotate_deg: f64,
 }
 
 impl MurmelApp {
@@ -62,6 +74,13 @@ impl MurmelApp {
             tree_filter: String::new(),
             focus_filter: false,
             props: None,
+            commands: murmel_tools::commands::commands(),
+            palette: None,
+            shortcuts_open: false,
+            flight: None,
+            now: 0.0,
+            rotate_axis: murmel_engine::ScreenAxis::Z,
+            rotate_deg: 90.0,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -78,7 +97,24 @@ impl MurmelApp {
 
     /// Call a tool on the session; a failure goes to the status bar.
     pub(crate) fn call(&mut self, id: &str, input: Value) -> Option<Value> {
+        let before = self.session.camera.clone();
         let e = murmel_tools::call(id, input, &mut self.session);
+        // Jumps of the view fly there in 250 ms; drags and wheel steps
+        // follow the pointer directly.
+        if e.ok()
+            && matches!(id, "view.standard" | "view.rotate" | "view.fit")
+            && before != self.session.camera
+        {
+            let from = match &self.flight {
+                Some((a, t0)) => murmel_engine::Camera::lerp(
+                    a,
+                    &before,
+                    (self.now - t0) / crate::cube::FLIGHT_SECONDS,
+                ),
+                None => before,
+            };
+            self.flight = Some((from, self.now));
+        }
         if e.ok() {
             if id == "mesh.open" {
                 self.error = None;
@@ -94,7 +130,7 @@ impl MurmelApp {
         self.call("mesh.open", json!({ "path": path }));
     }
 
-    fn open_dialog(&mut self) {
+    pub(crate) fn open_dialog(&mut self) {
         let picked = rfd::FileDialog::new()
             .set_title(self.i18n.tr("toolbar-open-tip"))
             .add_filter("VTK unstructured grid", &["vtu"])
@@ -118,105 +154,6 @@ impl MurmelApp {
             Theme::System => egui::ThemePreference::System,
         });
         self.installed_theme = Some(self.session.theme);
-    }
-
-    fn keys(&mut self, ctx: &egui::Context) {
-        use egui::Key;
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::F)) {
-            self.show_tree = true;
-            self.focus_filter = true;
-        }
-        // Only a text field keeps the keys: a clicked button also holds the
-        // focus, and must not swallow F, H or Esc (docs/pitfalls.md).
-        if ctx.text_edit_focused() {
-            return;
-        }
-        // Alt + H before H: consume_key matches modifiers logically, so a
-        // plain H would also take Alt + H.
-        let (show_all, tree, props, hide, isolate, clear) = ctx.input_mut(|i| {
-            (
-                i.consume_key(egui::Modifiers::ALT, Key::H),
-                i.consume_key(egui::Modifiers::NONE, Key::T),
-                i.consume_key(egui::Modifiers::NONE, Key::P),
-                i.consume_key(egui::Modifiers::NONE, Key::H),
-                i.consume_key(egui::Modifiers::NONE, Key::I),
-                i.consume_key(egui::Modifiers::NONE, Key::Escape),
-            )
-        });
-        self.show_tree ^= tree;
-        self.show_props ^= props;
-        let selected = self.session.display.selection.and_then(|it| {
-            let m = self.session.mesh.as_ref()?;
-            (it != murmel_engine::Item::Mesh).then(|| it.id(&m.mesh))
-        });
-        if let Some(id) = &selected {
-            if hide {
-                self.call(
-                    "display.visibility",
-                    json!({"action": "hide", "items": [id]}),
-                );
-            }
-            if isolate {
-                self.call(
-                    "display.visibility",
-                    json!({"action": "isolate", "items": [id]}),
-                );
-            }
-        }
-        if show_all && self.session.mesh.is_some() {
-            self.call("display.visibility", json!({"action": "show_all"}));
-        }
-        if clear && self.session.display.selection.is_some() {
-            self.call("select.clear", json!({}));
-        }
-        let (open, fit, home, cycle, zin, zout, arrows, shift) = ctx.input_mut(|i| {
-            let open = i.consume_key(egui::Modifiers::COMMAND, Key::O);
-            let fit = i.consume_key(egui::Modifiers::NONE, Key::F);
-            let home = i.consume_key(egui::Modifiers::NONE, Key::Home);
-            let cycle = i.consume_key(egui::Modifiers::NONE, Key::Num5);
-            let zin = i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals);
-            let zout = i.key_pressed(Key::Minus);
-            let arrows = [
-                Key::ArrowLeft,
-                Key::ArrowRight,
-                Key::ArrowUp,
-                Key::ArrowDown,
-            ]
-            .map(|k| i.key_pressed(k));
-            (open, fit, home, cycle, zin, zout, arrows, i.modifiers.shift)
-        });
-        if open {
-            self.open_dialog();
-        }
-        if fit {
-            self.call("view.fit", json!({}));
-        }
-        if home {
-            self.call("view.standard", json!({"view": "home"}));
-        }
-        if cycle {
-            let next = self.session.camera.projection.next();
-            self.call("view.set_camera", json!({ "projection": next }));
-        }
-        if zin {
-            self.call("view.zoom", json!({"factor": 0.8}));
-        }
-        if zout {
-            self.call("view.zoom", json!({"factor": 1.25}));
-        }
-        let [l, r, u, d] = arrows;
-        let (dx, dy) = ((r as i32 - l as i32) as f64, (d as i32 - u as i32) as f64);
-        if dx != 0.0 || dy != 0.0 {
-            if shift {
-                let step = 0.05 * self.session.viewport[1];
-                self.call("view.pan", json!({"dx_px": dx * step, "dy_px": dy * step}));
-            } else {
-                self.call(
-                    "view.orbit",
-                    json!({"yaw_deg": -15.0 * dx, "pitch_deg": 15.0 * dy}),
-                );
-            }
-        }
     }
 
     pub(crate) fn palette(&self, ctx: &egui::Context) -> &murmel_engine::theme::Palette {
@@ -269,6 +206,7 @@ impl MurmelApp {
             ui.label(RichText::new(file).color(color(p.text_secondary)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let settings = self.i18n.tr("settings-title");
+                let palette = self.i18n.tr("cmd-palette");
                 if icon_button(
                     ui,
                     icon::SETTINGS,
@@ -279,6 +217,10 @@ impl MurmelApp {
                 .clicked()
                 {
                     self.settings_open = !self.settings_open;
+                }
+                let tip = format!("{palette} ({})", crate::commands::key_text("Ctrl+K"));
+                if icon_button(ui, icon::SEARCH, &palette, &tip, self.palette.is_some()).clicked() {
+                    self.open_palette(String::new());
                 }
                 let (glyph, next) = match self.session.theme {
                     Theme::Dark => (icon::MOON, Theme::Light),
@@ -363,6 +305,27 @@ impl MurmelApp {
                     .small()
                     .color(secondary),
             );
+            let mode = self.session.display.render_mode;
+            let mut pick_mode = None;
+            let current = self.i18n.tr(&format!("render-mode-{}", mode.key()));
+            let r = egui::ComboBox::from_id_salt("render-mode")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for (i, m) in murmel_engine::RenderMode::ALL.into_iter().enumerate() {
+                        let name = self.i18n.tr(&format!("render-mode-{}", m.key()));
+                        if ui
+                            .selectable_label(m == mode, format!("{}  {name}", i + 1))
+                            .clicked()
+                        {
+                            pick_mode = Some(m);
+                        }
+                    }
+                });
+            r.response
+                .on_hover_text(self.i18n.tr("toolbar-render-mode-tip"));
+            if let Some(m) = pick_mode.filter(|&m| m != mode) {
+                self.call("display.render_mode", json!({ "mode": m }));
+            }
             let by = self.session.display.color_by;
             let mut pick = None;
             let label = self.i18n.tr("toolbar-color-by");
@@ -629,6 +592,7 @@ pub(crate) fn icon_button(
 impl eframe::App for MurmelApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.now = ctx.input(|i| i.time);
         self.apply_theme(&ctx);
         self.keys(&ctx);
         let dropped: Option<PathBuf> = ctx.input(|i| {
@@ -687,5 +651,7 @@ impl eframe::App for MurmelApp {
             .frame(egui::Frame::NONE.fill(color(p.viewport_bottom)))
             .show(ui, |ui| self.viewport(ui, frame));
         self.settings_window(&ctx);
+        self.shortcuts_window(&ctx);
+        self.palette_window(&ctx);
     }
 }

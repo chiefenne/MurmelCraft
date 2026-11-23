@@ -79,6 +79,8 @@ mod tests {
             include_str!("viewport.rs"),
             include_str!("main.rs"),
             include_str!("panels.rs"),
+            include_str!("commands.rs"),
+            include_str!("cube.rs"),
         ];
         for s in src {
             for part in s
@@ -96,6 +98,17 @@ mod tests {
         for p in ["orthographic", "perspective", "perspective_ortho_faces"] {
             assert!(t.has(&format!("projection-{p}")));
             assert!(t.has(&format!("projection-short-{p}")));
+        }
+        // The command table, the views of the cube and the render modes.
+        for c in murmel_tools::commands::commands() {
+            assert!(t.has(&c.label_key), "missing key {}", c.label_key);
+            assert!(t.has(&format!("group-{}", c.group)));
+        }
+        for v in murmel_engine::StandardView::cube() {
+            assert!(t.has(&format!("view-{}", v.name())));
+        }
+        for m in murmel_engine::RenderMode::ALL {
+            assert!(t.has(&format!("render-mode-{}", m.key())));
         }
         for p in murmel_engine::navigation::PRESETS {
             assert!(t.has(&format!("preset-{p}")));

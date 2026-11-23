@@ -45,6 +45,46 @@ impl ColorBy {
     }
 }
 
+/// How faces and edges are drawn (UI spec, Display: keys 1 to 4).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderMode {
+    #[default]
+    ShadedEdges,
+    Shaded,
+    /// Every edge, no faces.
+    Wireframe,
+    /// Only the feature edges, no faces: creases, patch borders and open
+    /// borders.
+    FeatureEdges,
+}
+
+impl RenderMode {
+    pub const ALL: [RenderMode; 4] = [
+        RenderMode::ShadedEdges,
+        RenderMode::Shaded,
+        RenderMode::Wireframe,
+        RenderMode::FeatureEdges,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            RenderMode::ShadedEdges => "shaded_edges",
+            RenderMode::Shaded => "shaded",
+            RenderMode::Wireframe => "wireframe",
+            RenderMode::FeatureEdges => "feature_edges",
+        }
+    }
+
+    pub fn faces(self) -> bool {
+        matches!(self, RenderMode::ShadedEdges | RenderMode::Shaded)
+    }
+
+    pub fn edges(self) -> bool {
+        self != RenderMode::Shaded
+    }
+}
+
 /// One item of the model tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Item {
@@ -118,6 +158,7 @@ pub enum Visibility {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Display {
     pub color_by: ColorBy,
+    pub render_mode: RenderMode,
     pub hidden: BTreeSet<Item>,
     pub selection: Option<Item>,
     /// Colours set on items of the open mesh (`display.set_color`). The

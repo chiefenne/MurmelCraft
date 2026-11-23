@@ -33,10 +33,26 @@ problem took more than a few minutes to understand.
   only a text field should keep the keys.
 - **`consume_key` matches modifiers logically.** `consume_key(NONE, H)` also
   takes Alt + H. Consume the combination with more modifiers first.
+- **egui cannot tell the numeric keypad from the top row.** egui-winit
+  maps `Numpad1` and `Digit1` to the same `Key::Num1`, so the keypad views
+  of the spec (1, 3, 7) clash with the render modes 1 to 4. The views take
+  Alt (Ctrl + Alt for the opposite view), decided 2026-11-23.
+- **`Color32::gamma_multiply` scales alpha too.** `gamma_multiply(0.8)
+  .to_opaque()` turns a colour dark and dull, not dimmer; mix two token
+  colours instead (the view cube's `lerp`).
 - **Keys under Xvfb.** Without a window manager the window has no keyboard
   focus; send keys with `xdotool key --window <id>` after `windowfocus`.
 
 ## Display
+
+- **A rolled turntable.** `view.rotate` can give any orientation; the
+  camera keeps it as yaw, pitch and roll (recovered from the rotated
+  frame), so mouse orbiting stays a turntable. An orbit drag must be
+  turned back by the roll first (`orbit_by_drag`), or on a screen rolled
+  by 180 degrees the scene moves against the pointer.
+- **The flight is the window's, the camera is the session's.** A tool
+  sets the final camera at once (scripts and screenshots see the end
+  state); the window only draws `Camera::lerp` towards it for 250 ms.
 
 - **Boundary polygons carry no owner cell.** KoflCraft writes the boundary as
   separate polygons (type 7). Their owner cells, which colour by cell type and
@@ -62,6 +78,13 @@ problem took more than a few minutes to understand.
   a dropped file's path is `DroppedFile::path()`.
 - **quick-xml 0.42**: `local_name().as_ref()` is a `&str`;
   `Attribute::unescape_value` is deprecated for `normalized_value(version)`.
+
+## Serde
+
+- **`flatten` and `deny_unknown_fields` do not combine.** A flattened
+  struct with `deny_unknown_fields` refuses the outer struct's fields;
+  `settings.set_colors` takes `reset` out of the JSON before parsing the
+  colours instead.
 
 ## Formats
 

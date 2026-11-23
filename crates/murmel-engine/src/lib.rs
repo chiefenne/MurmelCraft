@@ -5,6 +5,7 @@
 //! change this state only through the tools of `murmel-tools`.
 
 pub mod camera;
+pub mod cube;
 pub mod display;
 pub mod inspect;
 pub mod navigation;
@@ -13,8 +14,8 @@ pub mod settings;
 pub mod surface;
 pub mod theme;
 
-pub use camera::{Camera, Projection, StandardView};
-pub use display::{ColorBy, Display, Item, Visibility};
+pub use camera::{Camera, Projection, ScreenAxis, StandardView};
+pub use display::{ColorBy, Display, Item, RenderMode, Visibility};
 pub use navigation::Navigation;
 pub use session::{OpenMesh, Session, Validity};
 pub use surface::Surface;
