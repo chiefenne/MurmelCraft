@@ -46,7 +46,7 @@ pub fn pick(surface: &Surface, camera: &Camera, ndc: [f64; 2], aspect: f64) -> O
         };
     let mut best: Option<(f64, usize)> = None;
     let p = |i: u32| DVec3::from(surface.positions[i as usize].map(f64::from));
-    for (t, tri) in surface.indices.chunks_exact(3).enumerate() {
+    for (t, tri) in surface.indices.as_chunks::<3>().0.iter().enumerate() {
         let (a, b, c) = (p(tri[0]), p(tri[1]), p(tri[2]));
         let (e1, e2) = (b - a, c - a);
         let h = dir.cross(e2);
@@ -145,7 +145,7 @@ mod tests {
         };
         let s = Surface::build(&mesh, &t, &d);
         let mut missed = Vec::new();
-        for (i, tri) in s.indices.chunks_exact(3).enumerate() {
+        for (i, tri) in s.indices.as_chunks::<3>().0.iter().enumerate() {
             let q: [DVec3; 3] =
                 std::array::from_fn(|j| DVec3::from(s.positions[tri[j] as usize].map(f64::from)));
             let n = (q[1] - q[0]).cross(q[2] - q[0]);
