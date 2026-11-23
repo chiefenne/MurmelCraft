@@ -19,6 +19,9 @@ pub struct MurmelApp {
     pub(crate) gpu: Option<GpuView>,
     pub(crate) error: Option<Diagnostic>,
     pub(crate) drag: Option<murmel_engine::navigation::Action>,
+    /// The pointer resting over the viewport, and what `inspect.at` found
+    /// under it (the hover tooltip and the cursor coordinates).
+    pub(crate) hover: Option<crate::viewport::Hover>,
     pub(crate) settings_open: bool,
     pub(crate) installed_theme: Option<Theme>,
     logo: Option<egui::TextureHandle>,
@@ -67,6 +70,7 @@ impl MurmelApp {
             gpu,
             error,
             drag: None,
+            hover: None,
             settings_open: false,
             installed_theme: None,
             show_tree: true,
@@ -237,143 +241,164 @@ impl MurmelApp {
         });
     }
 
+    /// The toolbar: the panel toggles at the right, the groups from the
+    /// left. When the window is too narrow for all groups they scroll
+    /// sideways under the toggles instead of drawing over them.
     fn toolbar(&mut self, ui: &mut Ui) {
-        let secondary = color(self.palette(ui.ctx()).text_secondary);
-        ui.horizontal_centered(|ui| {
-            let open = self.i18n.tr("toolbar-open");
-            let b = ui
-                .add(egui::Button::new(
-                    RichText::new(format!("{}  {open}", icon::FOLDER_OPEN)).size(13.0),
-                ))
-                .on_hover_text(self.i18n.tr("toolbar-open-tip"));
-            if b.clicked() {
-                self.open_dialog();
-            }
-            ui.separator();
-            ui.label(
-                RichText::new(self.i18n.tr("toolbar-group-view").to_uppercase())
-                    .small()
-                    .color(secondary),
-            );
-            let fit = self.i18n.tr("toolbar-fit");
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let props = self.i18n.tr("toolbar-properties");
             if icon_button(
                 ui,
-                icon::SCAN,
-                &fit,
-                &self.i18n.tr("toolbar-fit-tip"),
-                false,
+                icon::INFO,
+                &props,
+                &self.i18n.tr("toolbar-properties-tip"),
+                self.show_props,
             )
             .clicked()
             {
-                self.call("view.fit", json!({}));
+                self.show_props = !self.show_props;
             }
-            let home = self.i18n.tr("toolbar-home");
+            let tree = self.i18n.tr("toolbar-tree");
             if icon_button(
                 ui,
-                icon::HOUSE,
-                &home,
-                &self.i18n.tr("toolbar-home-tip"),
-                false,
+                icon::LAYERS,
+                &tree,
+                &self.i18n.tr("toolbar-tree-tip"),
+                self.show_tree,
             )
             .clicked()
             {
-                self.call("view.standard", json!({"view": "home"}));
-            }
-            let proj = self.session.camera.projection;
-            let glyph = if self.session.camera.is_orthographic() {
-                icon::SQUARE
-            } else {
-                icon::BOX
-            };
-            let short = self.i18n.tr(&format!("projection-short-{}", proj.key()));
-            let long = self.i18n.tr(&format!("projection-{}", proj.key()));
-            let b = ui
-                .add(egui::Button::new(RichText::new(format!(
-                    "{glyph}  {short}"
-                ))))
-                .on_hover_text(format!(
-                    "{long}\n{}",
-                    self.i18n.tr("toolbar-projection-tip")
-                ));
-            b.widget_info(|| WidgetInfo::labeled(Role::Button, true, long.clone()));
-            if b.clicked() {
-                self.call("view.set_camera", json!({ "projection": proj.next() }));
+                self.show_tree = !self.show_tree;
             }
             ui.separator();
-            ui.label(
-                RichText::new(self.i18n.tr("toolbar-group-display").to_uppercase())
-                    .small()
-                    .color(secondary),
-            );
-            let mode = self.session.display.render_mode;
-            let mut pick_mode = None;
-            let current = self.i18n.tr(&format!("render-mode-{}", mode.key()));
-            let r = egui::ComboBox::from_id_salt("render-mode")
-                .selected_text(current)
-                .show_ui(ui, |ui| {
-                    for (i, m) in murmel_engine::RenderMode::ALL.into_iter().enumerate() {
-                        let name = self.i18n.tr(&format!("render-mode-{}", m.key()));
-                        if ui
-                            .selectable_label(m == mode, format!("{}  {name}", i + 1))
-                            .clicked()
-                        {
-                            pick_mode = Some(m);
-                        }
-                    }
-                });
-            r.response
-                .on_hover_text(self.i18n.tr("toolbar-render-mode-tip"));
-            if let Some(m) = pick_mode.filter(|&m| m != mode) {
-                self.call("display.render_mode", json!({ "mode": m }));
-            }
-            let by = self.session.display.color_by;
-            let mut pick = None;
-            let label = self.i18n.tr("toolbar-color-by");
-            let current = self.i18n.tr(&format!("color-by-{}", by.key()));
-            let r = egui::ComboBox::from_id_salt("color-by")
-                .selected_text(format!("{label}: {current}"))
-                .show_ui(ui, |ui| {
-                    for c in murmel_engine::ColorBy::ALL {
-                        let name = self.i18n.tr(&format!("color-by-{}", c.key()));
-                        if ui.selectable_label(c == by, name).clicked() {
-                            pick = Some(c);
-                        }
-                    }
-                });
-            r.response
-                .on_hover_text(self.i18n.tr("toolbar-color-by-tip"));
-            if let Some(c) = pick.filter(|&c| c != by) {
-                self.call("display.color_by", json!({ "by": c }));
-            }
-            ui.separator();
-            self.clip_group(ui, secondary);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let props = self.i18n.tr("toolbar-properties");
-                if icon_button(
-                    ui,
-                    icon::INFO,
-                    &props,
-                    &self.i18n.tr("toolbar-properties-tip"),
-                    self.show_props,
-                )
-                .clicked()
-                {
-                    self.show_props = !self.show_props;
-                }
-                let tree = self.i18n.tr("toolbar-tree");
-                if icon_button(
-                    ui,
-                    icon::LAYERS,
-                    &tree,
-                    &self.i18n.tr("toolbar-tree-tip"),
-                    self.show_tree,
-                )
-                .clicked()
-                {
-                    self.show_tree = !self.show_tree;
-                }
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt("toolbar-groups")
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(ui, |ui| {
+                        let size = egui::vec2(0.0, ui.available_height());
+                        ui.allocate_ui_with_layout(
+                            size,
+                            Layout::left_to_right(Align::Center),
+                            |ui| self.toolbar_groups(ui),
+                        );
+                    });
             });
         });
+    }
+
+    /// The groups of the toolbar: Open, View, Display, Clip and Select.
+    fn toolbar_groups(&mut self, ui: &mut Ui) {
+        let secondary = color(self.palette(ui.ctx()).text_secondary);
+        let open = self.i18n.tr("toolbar-open");
+        let b = ui
+            .add(egui::Button::new(
+                RichText::new(format!("{}  {open}", icon::FOLDER_OPEN)).size(13.0),
+            ))
+            .on_hover_text(self.i18n.tr("toolbar-open-tip"));
+        if b.clicked() {
+            self.open_dialog();
+        }
+        ui.separator();
+        ui.label(
+            RichText::new(self.i18n.tr("toolbar-group-view").to_uppercase())
+                .small()
+                .color(secondary),
+        );
+        let fit = self.i18n.tr("toolbar-fit");
+        if icon_button(
+            ui,
+            icon::SCAN,
+            &fit,
+            &self.i18n.tr("toolbar-fit-tip"),
+            false,
+        )
+        .clicked()
+        {
+            self.call("view.fit", json!({}));
+        }
+        let home = self.i18n.tr("toolbar-home");
+        if icon_button(
+            ui,
+            icon::HOUSE,
+            &home,
+            &self.i18n.tr("toolbar-home-tip"),
+            false,
+        )
+        .clicked()
+        {
+            self.call("view.standard", json!({"view": "home"}));
+        }
+        let proj = self.session.camera.projection;
+        let glyph = if self.session.camera.is_orthographic() {
+            icon::SQUARE
+        } else {
+            icon::BOX
+        };
+        let short = self.i18n.tr(&format!("projection-short-{}", proj.key()));
+        let long = self.i18n.tr(&format!("projection-{}", proj.key()));
+        let b = ui
+            .add(egui::Button::new(RichText::new(format!(
+                "{glyph}  {short}"
+            ))))
+            .on_hover_text(format!(
+                "{long}\n{}",
+                self.i18n.tr("toolbar-projection-tip")
+            ));
+        b.widget_info(|| WidgetInfo::labeled(Role::Button, true, long.clone()));
+        if b.clicked() {
+            self.call("view.set_camera", json!({ "projection": proj.next() }));
+        }
+        ui.separator();
+        ui.label(
+            RichText::new(self.i18n.tr("toolbar-group-display").to_uppercase())
+                .small()
+                .color(secondary),
+        );
+        let mode = self.session.display.render_mode;
+        let mut pick_mode = None;
+        let current = self.i18n.tr(&format!("render-mode-{}", mode.key()));
+        let r = egui::ComboBox::from_id_salt("render-mode")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for (i, m) in murmel_engine::RenderMode::ALL.into_iter().enumerate() {
+                    let name = self.i18n.tr(&format!("render-mode-{}", m.key()));
+                    if ui
+                        .selectable_label(m == mode, format!("{}  {name}", i + 1))
+                        .clicked()
+                    {
+                        pick_mode = Some(m);
+                    }
+                }
+            });
+        r.response
+            .on_hover_text(self.i18n.tr("toolbar-render-mode-tip"));
+        if let Some(m) = pick_mode.filter(|&m| m != mode) {
+            self.call("display.render_mode", json!({ "mode": m }));
+        }
+        let by = self.session.display.color_by;
+        let mut pick = None;
+        let label = self.i18n.tr("toolbar-color-by");
+        let current = self.i18n.tr(&format!("color-by-{}", by.key()));
+        let r = egui::ComboBox::from_id_salt("color-by")
+            .selected_text(format!("{label}: {current}"))
+            .show_ui(ui, |ui| {
+                for c in murmel_engine::ColorBy::ALL {
+                    let name = self.i18n.tr(&format!("color-by-{}", c.key()));
+                    if ui.selectable_label(c == by, name).clicked() {
+                        pick = Some(c);
+                    }
+                }
+            });
+        r.response
+            .on_hover_text(self.i18n.tr("toolbar-color-by-tip"));
+        if let Some(c) = pick.filter(|&c| c != by) {
+            self.call("display.color_by", json!({ "by": c }));
+        }
+        ui.separator();
+        self.clip_group(ui, secondary);
+        ui.separator();
+        self.select_group(ui, secondary);
     }
 
     /// The Clip group of the toolbar: the axis buttons (X, Y, Z), the
@@ -453,6 +478,27 @@ impl MurmelApp {
         });
     }
 
+    /// The Select group: what a click picks (cells or faces).
+    fn select_group(&mut self, ui: &mut Ui, secondary: Color32) {
+        ui.label(
+            RichText::new(self.i18n.tr("toolbar-group-select").to_uppercase())
+                .small()
+                .color(secondary),
+        );
+        let now = self.session.display.pick;
+        for t in murmel_engine::PickTarget::ALL {
+            let label = self.i18n.tr(&format!("toolbar-pick-{}", t.key()));
+            let tip = self.i18n.tr(&format!("cmd-pick-{}", t.key()));
+            let b = ui
+                .add(egui::Button::new(RichText::new(&label).size(13.0)).selected(now == t))
+                .on_hover_text(&tip);
+            b.widget_info(|| WidgetInfo::selected(Role::Button, true, now == t, tip.clone()));
+            if b.clicked() && now != t {
+                self.call("select.filter", json!({ "target": t }));
+            }
+        }
+    }
+
     fn hint(&self) -> String {
         use murmel_engine::navigation::{Action, Button, Gesture};
         let nav = &self.session.navigation;
@@ -505,6 +551,24 @@ impl MurmelApp {
                 if let Some(g) = &self.gpu {
                     ui.label(RichText::new(g.adapter.clone()).small().color(secondary));
                 }
+                if let Some(p) = self
+                    .hover
+                    .as_ref()
+                    .and_then(|h| h.hit.as_ref())
+                    .and_then(|h| h["point"].as_array())
+                {
+                    let c = |k: usize| {
+                        format!("{:.4}", p.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0))
+                    };
+                    ui.label(
+                        RichText::new(self.i18n.tr_args(
+                            "status-cursor",
+                            &[("x", c(0).into()), ("y", c(1).into()), ("z", c(2).into())],
+                        ))
+                        .monospace()
+                        .color(secondary),
+                    );
+                }
                 let ms = ui.input(|i| i.stable_dt) * 1000.0;
                 ui.label(
                     RichText::new(
@@ -530,7 +594,18 @@ impl MurmelApp {
                     .on_hover_text(e.fix.unwrap_or(""));
                 } else if let Some(m) = &self.session.mesh {
                     let s = (m.surface.cells, m.surface.faces);
-                    if let Some(sel) = self.session.display.selection {
+                    let sel = &self.session.display.selection;
+                    if sel.len() > 1 {
+                        ui.label(
+                            RichText::new(
+                                self.i18n.tr_args(
+                                    "status-selected-many",
+                                    &[("count", sel.len().into())],
+                                ),
+                            )
+                            .small(),
+                        );
+                    } else if let Some(&sel) = sel.first() {
                         let id = sel.id(&m.mesh);
                         let (area, name) = id.split_once(':').unwrap_or(("mesh", ""));
                         let name = if area == "kind" {

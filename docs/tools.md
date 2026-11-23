@@ -24,10 +24,13 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
 | `display.color_by` | 1 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role or by the type of their cell. |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type. |
-| `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>), or show all; returns the hidden items and the visible counts. |
+| `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
 | `clip.set` | 1 | read | Set the clip plane: its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). |
 | `clip.clear` | 1 | read | Remove the clip plane; the whole mesh shows again. |
-| `select.item` | 1 | read | Select an item by id; its faces are highlighted and inspect.item shows it. |
+| `select.item` | 2 | read | Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected. |
+| `select.pick` | 1 | read | Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked. |
+| `select.filter` | 1 | read | Choose what a click in the viewport picks: cell (the default) or face. |
+| `inspect.at` | 1 | read | What lies under a screen point ndc (-1..1, y up), without selecting: the point, the cell with its type and zone, the face with its patch and role (null when nothing is there). The hover tooltip and the cursor coordinates use it. |
 | `select.clear` | 1 | read | Clear the selection. |
 | `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the presets and the config folder. |
@@ -563,12 +566,88 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 {
   "additionalProperties": false,
   "properties": {
+    "add": {
+      "type": "boolean"
+    },
     "item": {
       "type": "string"
     }
   },
   "required": [
     "item"
+  ],
+  "type": "object"
+}
+```
+
+### `select.pick`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "add": {
+      "type": "boolean"
+    },
+    "ndc": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "target": {
+      "enum": [
+        "cell",
+        "face"
+      ]
+    }
+  },
+  "required": [
+    "ndc"
+  ],
+  "type": "object"
+}
+```
+
+### `select.filter`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "target": {
+      "enum": [
+        "cell",
+        "face"
+      ]
+    }
+  },
+  "required": [
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+### `inspect.at`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "ndc": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    }
+  },
+  "required": [
+    "ndc"
   ],
   "type": "object"
 }

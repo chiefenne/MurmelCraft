@@ -7,8 +7,8 @@ use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::settings::{Settings, save_navigation, save_settings};
 use murmel_engine::{
-    Clip, ClipMode, ColorBy, Item, MeshColors, Projection, RenderMode, Rgb, ScreenAxis, Session,
-    StandardView, Theme, Visibility,
+    Clip, ClipMode, ColorBy, Item, MeshColors, PickTarget, Projection, RenderMode, Rgb, ScreenAxis,
+    Session, StandardView, Theme, Visibility,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -380,7 +380,9 @@ fn display_json(s: &Session) -> Value {
         "render_mode": d.render_mode,
         "clip": clip_json(s),
         "hidden": d.hidden.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
-        "selection": d.selection.map(|i| i.id(&m.mesh)),
+        "selection": d.selection.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
+        "isolated": d.isolated.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
+        "pick": d.pick,
         "visible_cells": cells,
         "visible_faces": faces,
         "colors": colors,
@@ -466,19 +468,119 @@ fn display_visibility(input: Value, s: &mut Session) -> Run {
 #[serde(deny_unknown_fields)]
 struct SelectInput {
     item: String,
+    /// Add to the selection (Shift); an item already selected leaves it.
+    #[serde(default)]
+    add: bool,
 }
 
 fn select_item(input: Value, s: &mut Session) -> Run {
     let i: SelectInput = parse(input)?;
     let it = item(s, &i.item)?;
-    s.display.selection = Some(it);
+    s.display.select(it, i.add);
     s.redraw();
     Ok(display_json(s))
 }
 
 fn select_clear(_: Value, s: &mut Session) -> Run {
-    s.display.selection = None;
+    s.display.selection.clear();
     s.redraw();
+    Ok(display_json(s))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AtInput {
+    ndc: [f64; 2],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PickInput {
+    ndc: [f64; 2],
+    #[serde(default)]
+    add: bool,
+    target: Option<PickTarget>,
+}
+
+/// What lies under `ndc`, as JSON: the cell, its type and zone, the face,
+/// its patch and role, the point.
+fn hit_json(
+    s: &Session,
+    ndc: [f64; 2],
+) -> Result<Option<(murmel_engine::pick::Hit, Value)>, Diagnostic> {
+    for v in ndc {
+        finite(v, "ndc")?;
+    }
+    let Some(m) = &s.mesh else {
+        return Err(Diagnostic::new("VIEW001", "no mesh is open"));
+    };
+    let Some(hit) = murmel_engine::pick::pick(&m.surface, &s.camera, ndc, s.aspect()) else {
+        return Ok(None);
+    };
+    let mesh = &m.mesh;
+    let none = murmel_mesh::NO_CELL;
+    let cell = (hit.cell != none).then_some(hit.cell as usize);
+    let face = (hit.face != none).then_some(hit.face as usize);
+    let patch = face
+        .and_then(|u| mesh.face_boundary.get(u).copied())
+        .filter(|&b| b != none)
+        .and_then(|b| mesh.boundary_patch.get(b as usize))
+        .and_then(|&p| mesh.patches.get(p as usize));
+    let v = json!({
+        "point": hit.point,
+        "cell": cell.map(|c| format!("cell:{c}")),
+        "kind": cell.and_then(|c| mesh.cell_kind.get(c)).map(|k| k.name()),
+        "zone": cell.and_then(|c| mesh.cell_zone.get(c)).and_then(|&z| mesh.zones.get(z as usize)),
+        "face": face.map(|u| format!("face:{u}")),
+        "patch": patch.map(|p| p.name.clone()),
+        "role": patch.map(|p| p.role.name()),
+        "section": face.is_none(),
+    });
+    Ok(Some((hit, v)))
+}
+
+fn inspect_at(input: Value, s: &mut Session) -> Run {
+    let i: AtInput = parse(input)?;
+    let hit = hit_json(s, i.ndc)?;
+    Ok(json!({"hit": hit.map(|h| h.1)}))
+}
+
+fn select_pick(input: Value, s: &mut Session) -> Run {
+    let i: PickInput = parse(input)?;
+    let target = i.target.unwrap_or(s.display.pick);
+    let hit = hit_json(s, i.ndc)?;
+    let none = murmel_mesh::NO_CELL;
+    let picked = hit.as_ref().and_then(|(h, _)| match target {
+        PickTarget::Cell if h.cell != none => Some(Item::Cell(h.cell)),
+        // A section belongs to its cell: a face pick there takes the cell.
+        PickTarget::Face if h.face != none => Some(Item::Face(h.face)),
+        _ if h.cell != none => Some(Item::Cell(h.cell)),
+        // A surface without cells: the face.
+        _ if h.face != none => Some(Item::Face(h.face)),
+        _ => None,
+    });
+    match picked {
+        Some(it) => s.display.select(it, i.add),
+        // A click on empty space clears, as in CAD tools; Shift keeps.
+        None if !i.add => s.display.selection.clear(),
+        None => {}
+    }
+    s.redraw();
+    let mut out = display_json(s);
+    out["hit"] = hit.map_or(Value::Null, |h| h.1);
+    out["picked"] = json!(picked.and_then(|it| s.mesh.as_ref().map(|m| it.id(&m.mesh))));
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FilterInput {
+    target: PickTarget,
+}
+
+fn select_filter(input: Value, s: &mut Session) -> Run {
+    let i: FilterInput = parse(input)?;
+    s.display.pick = i.target;
     Ok(display_json(s))
 }
 
@@ -493,7 +595,7 @@ fn inspect_item(input: Value, s: &mut Session) -> Run {
     need_mesh(s)?;
     let it = match &i.item {
         Some(id) => item(s, id)?,
-        None => s.display.selection.unwrap_or(Item::Mesh),
+        None => s.display.current().unwrap_or(Item::Mesh),
     };
     let Some(m) = &s.mesh else {
         return Err(Diagnostic::new("VIEW001", "no mesh is open"));
@@ -1023,7 +1125,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-display-visibility",
-        summary: "Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>), or show all; returns the hidden items and the visible counts.",
+        summary: "Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts.",
         outputs: &[],
         input_schema: || {
             object(
@@ -1071,13 +1173,62 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "select.item",
-        version: 1,
+        version: 2,
         action: Action::Read,
         label_key: "tool-select-item",
-        summary: "Select an item by id; its faces are highlighted and inspect.item shows it.",
+        summary: "Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected.",
         outputs: &[],
-        input_schema: || object(json!({"item": {"type": "string"}}), &["item"]),
+        input_schema: || {
+            object(
+                json!({"item": {"type": "string"}, "add": {"type": "boolean"}}),
+                &["item"],
+            )
+        },
         run: select_item,
+    },
+    Tool {
+        id: "select.pick",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-select-pick",
+        summary: "Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked.",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "ndc": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                    "add": {"type": "boolean"},
+                    "target": {"enum": ["cell", "face"]}
+                }),
+                &["ndc"],
+            )
+        },
+        run: select_pick,
+    },
+    Tool {
+        id: "select.filter",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-select-filter",
+        summary: "Choose what a click in the viewport picks: cell (the default) or face.",
+        outputs: &[],
+        input_schema: || object(json!({"target": {"enum": ["cell", "face"]}}), &["target"]),
+        run: select_filter,
+    },
+    Tool {
+        id: "inspect.at",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-inspect-at",
+        summary: "What lies under a screen point ndc (-1..1, y up), without selecting: the point, the cell with its type and zone, the face with its patch and role (null when nothing is there). The hover tooltip and the cursor coordinates use it.",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({"ndc": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}}),
+                &["ndc"],
+            )
+        },
+        run: inspect_at,
     },
     Tool {
         id: "select.clear",

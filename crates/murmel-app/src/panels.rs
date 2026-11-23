@@ -73,7 +73,7 @@ impl MurmelApp {
                         )),
                     })
                 }
-                Item::Mesh => {}
+                Item::Mesh | Item::Cell(_) | Item::Face(_) => {}
             }
         }
         patches.sort_by(|a, b| a.label.cmp(&b.label));
@@ -122,7 +122,7 @@ impl MurmelApp {
         if let Validity::Failed(why) = &m.validity {
             badge_tip = format!("{badge_tip}\n{}", why.join("\n"));
         }
-        let selection = self.session.display.selection;
+        let selection = self.session.display.selection.clone();
         let mut action: Option<(&'static str, Value)> = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
@@ -134,7 +134,7 @@ impl MurmelApp {
                     resp.widget_info(|| WidgetInfo::labeled(Role::Image, true, tip.clone()));
                     resp.on_hover_text(badge_tip.clone());
                     let root = ui.selectable_label(
-                        selection.is_none() || selection == Some(Item::Mesh),
+                        selection.is_empty() || selection == [Item::Mesh],
                         RichText::new(&file)
                             .family(egui::FontFamily::Name(crate::style::SEMIBOLD.into())),
                     );
@@ -187,7 +187,7 @@ impl MurmelApp {
         let mesh = &self.session.mesh.as_ref()?.mesh;
         let id = r.item.id(mesh);
         let hidden = self.session.display.is_hidden(r.item);
-        let selected = self.session.display.selection == Some(r.item);
+        let selected = self.session.display.is_selected(r.item);
         let mut action = None;
         ui.horizontal(|ui| {
             let eye = if hidden { icon::EYE_OFF } else { icon::EYE };
@@ -356,7 +356,7 @@ impl MurmelApp {
     fn refresh_props(&mut self) {
         let key = (
             self.session.surface_revision,
-            self.session.display.selection,
+            self.session.display.current(),
         );
         if self.session.mesh.is_none() {
             self.props = None;
@@ -399,6 +399,17 @@ impl MurmelApp {
             None => self.i18n.tr("props-area-mesh"),
         };
         ui.heading(heading);
+        let n = self.session.display.selection.len();
+        if n > 1 {
+            ui.label(
+                RichText::new(
+                    self.i18n
+                        .tr_args("props-more-selected", &[("count", (n - 1).into())]),
+                )
+                .small()
+                .color(secondary),
+            );
+        }
         ui.add_space(4.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
@@ -440,6 +451,7 @@ impl MurmelApp {
             Value::String(s) => match key {
                 "validity" => self.i18n.tr(&format!("validity-{s}")),
                 "role" => self.i18n.tr(&format!("role-{s}")),
+                "type" => self.i18n.tr(&format!("kind-{s}")),
                 "name"
                     if self
                         .props

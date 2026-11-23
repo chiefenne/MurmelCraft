@@ -158,7 +158,8 @@ impl Session {
         // A new mesh starts with everything shown and nothing selected;
         // the colouring stays.
         self.display.hidden.clear();
-        self.display.selection = None;
+        self.display.selection.clear();
+        self.display.isolated.clear();
         self.display.colors.clear();
         self.display.clip = None;
         let surface = Surface::build(&mesh, &self.tokens, &self.display);
@@ -188,7 +189,8 @@ impl Session {
     pub fn close(&mut self) {
         self.mesh = None;
         self.display.hidden.clear();
-        self.display.selection = None;
+        self.display.selection.clear();
+        self.display.isolated.clear();
         self.display.colors.clear();
         self.display.clip = None;
         self.surface_revision += 1;

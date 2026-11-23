@@ -85,10 +85,18 @@ const VIEW_KEYS: [(&str, &str); 6] = [
     ("bottom", "Ctrl+Alt+7"),
 ];
 
-fn selected(s: &Session) -> Option<String> {
+/// The ids of the selected items (the mesh left out); `None` when there
+/// are none.
+fn selected(s: &Session) -> Option<Vec<String>> {
     let m = s.mesh.as_ref()?;
-    let it = s.display.selection?;
-    (it != Item::Mesh).then(|| it.id(&m.mesh))
+    let ids: Vec<String> = s
+        .display
+        .selection
+        .iter()
+        .filter(|&&i| i != Item::Mesh)
+        .map(|i| i.id(&m.mesh))
+        .collect();
+    (!ids.is_empty()).then_some(ids)
 }
 
 /// Move the clip plane by `share` of its range (towards the side cut
@@ -395,7 +403,7 @@ pub fn commands() -> Vec<Command> {
         "selection",
         &["H"],
         Dynamic("display.visibility", |s| {
-            selected(s).map(|id| json!({"action": "hide", "items": [id]}))
+            selected(s).map(|ids| json!({"action": "hide", "items": ids}))
         }),
     ));
     v.push(cmd(
@@ -404,7 +412,7 @@ pub fn commands() -> Vec<Command> {
         "selection",
         &["I"],
         Dynamic("display.visibility", |s| {
-            selected(s).map(|id| json!({"action": "isolate", "items": [id]}))
+            selected(s).map(|ids| json!({"action": "isolate", "items": ids}))
         }),
     ));
     v.push(cmd(
@@ -421,15 +429,30 @@ pub fn commands() -> Vec<Command> {
         "cmd-fit-selection",
         "selection",
         &[],
-        Dynamic("view.fit", |s| selected(s).map(|id| json!({"item": id}))),
+        Dynamic("view.fit", |s| {
+            let m = s.mesh.as_ref()?;
+            let it = s.display.current().filter(|&i| i != Item::Mesh)?;
+            Some(json!({"item": it.id(&m.mesh)}))
+        }),
     ));
     v.push(cmd(
         "select.clear",
         "cmd-clear-selection",
         "selection",
         &["Escape"],
-        Dynamic("select.clear", |s| s.display.selection.map(|_| json!({}))),
+        Dynamic("select.clear", |s| {
+            (!s.display.selection.is_empty()).then(|| json!({}))
+        }),
     ));
+    for t in murmel_engine::PickTarget::ALL {
+        v.push(cmd(
+            format!("select.filter:{}", t.key()),
+            format!("cmd-pick-{}", t.key()),
+            "selection",
+            &[],
+            Tool("select.filter", json!({ "target": t })),
+        ));
+    }
     for t in ["dark", "light", "system"] {
         v.push(cmd(
             format!("settings.set_theme:{t}"),
@@ -478,6 +501,14 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     ("inspect.item", "the Properties panel shows it"),
     ("settings.get", "the Settings window shows it"),
     ("select.item", "needs an item: the model tree selects"),
+    (
+        "select.pick",
+        "needs a screen point: a click in the viewport picks",
+    ),
+    (
+        "inspect.at",
+        "needs a screen point: the hover tooltip and the status bar ask",
+    ),
     (
         "display.set_color",
         "needs a colour: the tree's context menu picks it",
@@ -638,7 +669,7 @@ mod tests {
                     c.id
                 ),
             }
-            if s.display.selection.is_none() {
+            if s.display.selection.is_empty() {
                 open(&mut s);
             }
         }

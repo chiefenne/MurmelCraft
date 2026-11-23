@@ -155,6 +155,9 @@ struct Geometry {
     index_count: u32,
     edges: Option<wgpu::Buffer>,
     edge_count: u32,
+    /// The outline of the picked cells and faces, drawn over everything.
+    outline: Option<wgpu::Buffer>,
+    outline_count: u32,
 }
 
 pub struct MeshRenderer {
@@ -162,6 +165,7 @@ pub struct MeshRenderer {
     bind_group: wgpu::BindGroup,
     face_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    outline_pipeline: wgpu::RenderPipeline,
     bg_pipeline: wgpu::RenderPipeline,
     geometry: Option<Geometry>,
     revision: Option<u64>,
@@ -291,6 +295,24 @@ impl MeshRenderer {
                 bias: Default::default(),
             },
         );
+        let outline_pipeline = pipeline(
+            "murmel-outline",
+            "vs_line",
+            "fs_line",
+            &[Some(wgpu::VertexBufferLayout {
+                array_stride: 24,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &line_attrs,
+            })],
+            wgpu::PrimitiveTopology::LineList,
+            wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            },
+        );
         let bg_pipeline = pipeline(
             "murmel-background",
             "vs_bg",
@@ -310,6 +332,7 @@ impl MeshRenderer {
             bind_group,
             face_pipeline,
             line_pipeline,
+            outline_pipeline,
             bg_pipeline,
             geometry: None,
             revision: None,
@@ -330,6 +353,11 @@ impl MeshRenderer {
             for i in 0..s.edge_positions.len() {
                 lines.extend_from_slice(&s.edge_positions[i]);
                 lines.extend_from_slice(&s.edge_colors[i]);
+            }
+            let mut outline = Vec::with_capacity(s.outline.len() * 6);
+            for p in &s.outline {
+                outline.extend_from_slice(p);
+                outline.extend_from_slice(&s.outline_color);
             }
             let buf = |label: &str, data: &[u8], usage| {
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -358,6 +386,14 @@ impl MeshRenderer {
                     )
                 }),
                 edge_count: s.edge_positions.len() as u32,
+                outline: (!outline.is_empty()).then(|| {
+                    buf(
+                        "murmel-outline",
+                        bytemuck::cast_slice(&outline),
+                        wgpu::BufferUsages::VERTEX,
+                    )
+                }),
+                outline_count: s.outline.len() as u32,
             }
         });
     }
@@ -486,6 +522,11 @@ impl MeshRenderer {
                     pass.set_pipeline(&self.line_pipeline);
                     pass.set_vertex_buffer(0, edges.slice(..));
                     pass.draw(0..geo.edge_count, 0..1);
+                }
+                if let Some(outline) = &geo.outline {
+                    pass.set_pipeline(&self.outline_pipeline);
+                    pass.set_vertex_buffer(0, outline.slice(..));
+                    pass.draw(0..geo.outline_count, 0..1);
                 }
             }
         }
