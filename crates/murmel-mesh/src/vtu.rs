@@ -437,7 +437,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<Mesh, MeshError> {
             format!("Points has {} values, {} expected", xyz.len(), 3 * h.points),
         ));
     }
-    mesh.points = xyz.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+    mesh.points = xyz.as_chunks::<3>().0.to_vec();
 
     let need = |name: &str| {
         find(arrays, Section::Cells, name)

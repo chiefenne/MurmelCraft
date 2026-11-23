@@ -6,8 +6,6 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.88"
-repository = "https://github.com/chiefenne/MurmelCraft"
 
 [workspace.dependencies]
 murmel-mesh = { path = "crates/murmel-mesh" }

@@ -644,8 +644,10 @@ pub fn diff_share(a: &[u8], b: &[u8], tol: u8) -> f64 {
         return 1.0;
     }
     let bad = a
-        .chunks_exact(4)
-        .zip(b.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .filter(|(p, q)| p.iter().zip(q.iter()).any(|(x, y)| x.abs_diff(*y) > tol))
         .count();
     bad as f64 / (a.len() / 4) as f64
