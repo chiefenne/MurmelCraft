@@ -14,7 +14,8 @@
 use std::path::{Path, PathBuf};
 
 use murmel_engine::{
-    ColorBy, Item, RenderMode, ScreenAxis, Session, StandardView, Tokens, Visibility,
+    Clip, ClipMode, ColorBy, Item, RenderMode, ScreenAxis, Session, StandardView, Tokens,
+    Visibility,
 };
 use murmel_render::{diff_share, read_png, render_session, write_png};
 
@@ -128,6 +129,43 @@ fn channel_cube_views_and_roll() {
     check_session("channel-front-rolled", &s);
 }
 
+/// V0.4 clip plane: the channel cut at x = centre and coloured by cell
+/// type, seen from the iso view (the cut faces the camera). The crinkle cut shows whole cells (the
+/// amber prism layers along the walls, the teal core between them); the
+/// flat cut shows the cells' sections in the plane.
+#[test]
+fn channel_clip_by_cell_type() {
+    for mode in ClipMode::ALL {
+        let mut s = session(StandardView::ISO);
+        s.display.color_by = ColorBy::CellType;
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        s.display.clip = Some(Clip {
+            origin: b.center(),
+            normal: [1.0, 0.0, 0.0],
+            mode,
+            enabled: true,
+        });
+        s.redraw();
+        check_session(&format!("channel-clip-{}", mode.key()), &s);
+    }
+}
+
+/// V0.4 cell types: with the prism layers hidden the core's polyhedra
+/// show as a closed block (V0.2 left holes where the layers were).
+#[test]
+fn channel_prisms_hidden_show_the_core() {
+    let mut s = session(StandardView::ISO);
+    s.display.color_by = ColorBy::CellType;
+    let m = s.mesh.as_ref().unwrap().mesh.clone();
+    s.display.set_visibility(
+        Visibility::Hide,
+        &[Item::Kind(murmel_mesh::CellKind::Prism)],
+        &m,
+    );
+    s.redraw();
+    check_session("channel-prisms-hidden", &s);
+}
+
 /// The image is not a blank gradient: the mesh covers a good part of the
 /// view and its edges are darker than its faces.
 #[test]
@@ -136,4 +174,26 @@ fn the_mesh_fills_the_view() {
     let bg = render_session(&Session::new(Tokens::builtin().unwrap()), 240, 160).unwrap();
     let covered = diff_share(&shot.rgba, &bg.rgba, 8);
     assert!(covered > 0.15, "mesh covers only {:.1} %", 100.0 * covered);
+}
+
+/// Invariant: offscreen renders from several threads at once share the
+/// one device (`Gpu::shared` hands out the same one) and all give the same
+/// picture. Each render used to create and drop its own Vulkan instance;
+/// Mesa 26 lavapipe crashed the test process (SIGSEGV) when that happened
+/// on several threads at once, which no single-threaded test shows.
+#[test]
+fn renders_on_many_threads_share_one_device() {
+    let a = murmel_render::Gpu::shared().unwrap() as *const _;
+    let b = murmel_render::Gpu::shared().unwrap() as *const _;
+    assert_eq!(a, b);
+    let s = session(StandardView::ISO);
+    let first = render_session(&s, 160, 120).unwrap().rgba;
+    std::thread::scope(|scope| {
+        let runs: Vec<_> = (0..6)
+            .map(|_| scope.spawn(|| render_session(&s, 160, 120).unwrap().rgba))
+            .collect();
+        for r in runs {
+            assert!(r.join().unwrap() == first);
+        }
+    });
 }

@@ -660,6 +660,7 @@ fn push_cell(mesh: &mut Mesh, zone: u32, kind: CellKind, zone_max: &mut Option<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NO_CELL;
 
     fn fixture(rel: &str) -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -728,6 +729,33 @@ mod tests {
                 .all(|&c| (c as usize) < m.cell_count())
         );
         assert_eq!(m.unique_faces, 2173);
+    }
+
+    /// Invariant: the face topology is consistent. Every distinct face has
+    /// an owner; exactly the 1747 interior faces have a neighbour; each
+    /// boundary polygon is a distinct face with no neighbour and points
+    /// back to its polygon; each cell face maps to a distinct face that
+    /// lists that cell. Picking, the crinkle clip and hiding cells all
+    /// walk this table; a wrong neighbour would open holes in the surface.
+    #[test]
+    fn face_topology_is_consistent() {
+        let m = read_vtu(&fixture("channel/foehncraft.vtu")).unwrap();
+        assert_eq!(m.face_owner.len(), 2173);
+        let interior = m.face_neighbour.iter().filter(|&&n| n != NO_CELL).count();
+        assert_eq!(interior, 1747);
+        for (b, &u) in m.boundary_face_id.iter().enumerate() {
+            assert_ne!(u, NO_CELL);
+            assert_eq!(m.face_neighbour[u as usize], NO_CELL);
+            assert_eq!(m.face_boundary[u as usize], b as u32);
+        }
+        for c in 0..m.cell_count() {
+            for f in m.cell_face_range(c) {
+                let u = m.cell_face_id[f] as usize;
+                let c = c as u32;
+                assert!(m.face_owner[u] == c || m.face_neighbour[u] == c);
+                assert_ne!(m.across(u, c), c);
+            }
+        }
     }
 
     const TET: &str = r#"<?xml version="1.0"?>

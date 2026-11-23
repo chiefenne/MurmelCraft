@@ -160,6 +160,7 @@ impl Session {
         self.display.hidden.clear();
         self.display.selection = None;
         self.display.colors.clear();
+        self.display.clip = None;
         let surface = Surface::build(&mesh, &self.tokens, &self.display);
         let digest = sha256(path);
         let validity = Validity::check(
@@ -189,6 +190,7 @@ impl Session {
         self.display.hidden.clear();
         self.display.selection = None;
         self.display.colors.clear();
+        self.display.clip = None;
         self.surface_revision += 1;
     }
 

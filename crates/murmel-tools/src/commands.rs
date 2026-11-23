@@ -60,6 +60,18 @@ impl Command {
     }
 }
 
+/// The palette groups in the order of the shortcut sheet; every command's
+/// group is one of them (a test checks).
+pub const GROUPS: &[&str] = &[
+    "view",
+    "file",
+    "window",
+    "display",
+    "clip",
+    "selection",
+    "settings",
+];
+
 /// The views with keys (the numeric keypad's layout: 1 front, 3 right,
 /// 7 top; Ctrl for the opposite view). egui cannot tell the keypad's
 /// digits from the top row's, so the views take Alt (decided 2026-11-23)
@@ -77,6 +89,15 @@ fn selected(s: &Session) -> Option<String> {
     let m = s.mesh.as_ref()?;
     let it = s.display.selection?;
     (it != Item::Mesh).then(|| it.id(&m.mesh))
+}
+
+/// Move the clip plane by `share` of its range (towards the side cut
+/// away for a positive share, so more is cut).
+fn clip_step(s: &Session, share: f64) -> Option<Value> {
+    let c = s.display.clip?;
+    let m = s.mesh.as_ref()?;
+    let (off, [lo, hi]) = c.offset(&m.mesh.bounds());
+    Some(json!({"offset": (off - share * (hi - lo)).clamp(lo, hi)}))
 }
 
 fn cmd(
@@ -302,6 +323,72 @@ pub fn commands() -> Vec<Command> {
             Tool("display.color_by", json!({"by": c})),
         ));
     }
+    for (axis, key) in [("x", "X"), ("y", "Y"), ("z", "Z")] {
+        v.push(cmd(
+            format!("clip.set:{axis}"),
+            format!("cmd-clip-{axis}"),
+            "clip",
+            &[key],
+            Tool("clip.set", json!({ "axis": axis })),
+        ));
+    }
+    v.push(cmd(
+        "clip.set:view",
+        "cmd-clip-view",
+        "clip",
+        &[],
+        Tool("clip.set", json!({"axis": "view"})),
+    ));
+    v.push(cmd(
+        "clip.set:flip",
+        "cmd-clip-flip",
+        "clip",
+        &["Shift+C"],
+        Dynamic("clip.set", |s| {
+            s.display.clip.map(|_| json!({"flip": true}))
+        }),
+    ));
+    for m in murmel_engine::ClipMode::ALL {
+        v.push(cmd(
+            format!("clip.set:{}", m.key()),
+            format!("cmd-clip-{}", m.key()),
+            "clip",
+            &[],
+            Tool("clip.set", json!({ "mode": m })),
+        ));
+    }
+    for (dir, step) in [("more", 0.05), ("less", -0.05)] {
+        v.push(cmd(
+            format!("clip.set:{dir}"),
+            format!("cmd-clip-{dir}"),
+            "clip",
+            &[],
+            Dynamic(
+                "clip.set",
+                if step > 0.0 {
+                    |s| clip_step(s, 0.05)
+                } else {
+                    |s| clip_step(s, -0.05)
+                },
+            ),
+        ));
+    }
+    v.push(cmd(
+        "clip.set:toggle",
+        "cmd-clip-toggle",
+        "clip",
+        &[],
+        Dynamic("clip.set", |s| {
+            s.display.clip.map(|c| json!({"enabled": !c.enabled}))
+        }),
+    ));
+    v.push(cmd(
+        "clip.clear",
+        "cmd-clip-clear",
+        "clip",
+        &[],
+        Dynamic("clip.clear", |s| s.display.clip.map(|_| json!({}))),
+    ));
     v.push(cmd(
         "display.visibility:hide",
         "cmd-hide",
@@ -490,6 +577,7 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), n, "duplicate command id");
         for c in &all {
+            assert!(GROUPS.contains(&c.group), "{}: group {}", c.id, c.group);
             assert_ne!(
                 english(&c.label_key),
                 c.label_key,

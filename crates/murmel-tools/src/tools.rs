@@ -7,8 +7,8 @@ use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::settings::{Settings, save_navigation, save_settings};
 use murmel_engine::{
-    ColorBy, Item, MeshColors, Projection, RenderMode, Rgb, ScreenAxis, Session, StandardView,
-    Theme, Visibility,
+    Clip, ClipMode, ColorBy, Item, MeshColors, Projection, RenderMode, Rgb, ScreenAxis, Session,
+    StandardView, Theme, Visibility,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -378,6 +378,7 @@ fn display_json(s: &Session) -> Value {
     json!({
         "color_by": d.color_by,
         "render_mode": d.render_mode,
+        "clip": clip_json(s),
         "hidden": d.hidden.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
         "selection": d.selection.map(|i| i.id(&m.mesh)),
         "visible_cells": cells,
@@ -501,6 +502,130 @@ fn inspect_item(input: Value, s: &mut Session) -> Run {
         "item": it.id(&m.mesh),
         "rows": murmel_engine::inspect::rows(m, &s.display, it),
     }))
+}
+
+// ---- clip plane ---------------------------------------------------------
+
+fn clip_json(s: &Session) -> Value {
+    let (Some(c), Some(m)) = (&s.display.clip, &s.mesh) else {
+        return Value::Null;
+    };
+    let (offset, range) = c.offset(&m.mesh.bounds());
+    json!({
+        "enabled": c.enabled,
+        "mode": c.mode,
+        "origin": c.origin,
+        "normal": c.normal,
+        "offset": offset,
+        "range": range,
+        "cells_shown": m.surface.cells,
+        "open_faces": m.surface.open_faces,
+    })
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum ClipAxis {
+    X,
+    Y,
+    Z,
+    View,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipSet {
+    axis: Option<ClipAxis>,
+    normal: Option<[f64; 3]>,
+    origin: Option<[f64; 3]>,
+    offset: Option<f64>,
+    mode: Option<ClipMode>,
+    #[serde(default)]
+    flip: bool,
+    enabled: Option<bool>,
+}
+
+fn clip_set(input: Value, s: &mut Session) -> Run {
+    let i: ClipSet = parse(input)?;
+    need_mesh(s)?;
+    if i.axis.is_some() && i.normal.is_some() {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "give either axis or normal, not both",
+        ));
+    }
+    if i.origin.is_some() && i.offset.is_some() {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "give either origin or offset, not both",
+        ));
+    }
+    let bounds = s
+        .mesh
+        .as_ref()
+        .map(|m| m.mesh.bounds())
+        .unwrap_or_else(murmel_mesh::Bounds::empty);
+    let mut c = s.display.clip.unwrap_or(Clip {
+        origin: bounds.center(),
+        normal: [1.0, 0.0, 0.0],
+        mode: ClipMode::Crinkle,
+        enabled: true,
+    });
+    if s.display.clip.is_none() {
+        c.enabled = true;
+    }
+    if let Some(a) = i.axis {
+        // The half nearer the eye is cut away, so the cut faces the
+        // camera.
+        let to_eye = s.camera.to_eye().to_array();
+        let toward = |k: usize| {
+            let mut n = [0.0; 3];
+            n[k] = if to_eye[k] < -1e-9 { -1.0 } else { 1.0 };
+            n
+        };
+        c.normal = match a {
+            ClipAxis::X => toward(0),
+            ClipAxis::Y => toward(1),
+            ClipAxis::Z => toward(2),
+            ClipAxis::View => to_eye,
+        };
+        c.enabled = true;
+    }
+    if let Some(n) = i.normal {
+        for v in n {
+            finite(v, "normal")?;
+        }
+        c.normal = murmel_engine::clip::unit(n)
+            .ok_or_else(|| Diagnostic::new("TOOL002", "normal must not be zero"))?;
+        c.enabled = true;
+    }
+    if i.flip {
+        c.normal = c.normal.map(|v| -v);
+    }
+    if let Some(o) = i.origin {
+        for v in o {
+            finite(v, "origin")?;
+        }
+        c.origin = o;
+    }
+    if let Some(off) = i.offset {
+        c.set_offset(&bounds, finite(off, "offset")?);
+    }
+    if let Some(m) = i.mode {
+        c.mode = m;
+    }
+    if let Some(e) = i.enabled {
+        c.enabled = e;
+    }
+    s.display.clip = Some(c);
+    s.redraw();
+    Ok(display_json(s))
+}
+
+fn clip_clear(_: Value, s: &mut Session) -> Run {
+    s.display.clip = None;
+    s.redraw();
+    Ok(display_json(s))
 }
 
 // ---- settings -----------------------------------------------------------
@@ -910,6 +1035,39 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: display_visibility,
+    },
+    Tool {
+        id: "clip.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-clip-set",
+        summary: "Set the clip plane: its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle).",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "axis": {"enum": ["x", "y", "z", "view"]},
+                    "normal": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                    "origin": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                    "offset": {"type": "number"},
+                    "mode": {"enum": ["crinkle", "flat"]},
+                    "flip": {"type": "boolean"},
+                    "enabled": {"type": "boolean"}
+                }),
+                &[],
+            )
+        },
+        run: clip_set,
+    },
+    Tool {
+        id: "clip.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-clip-clear",
+        summary: "Remove the clip plane; the whole mesh shows again.",
+        outputs: &[],
+        input_schema: no_input,
+        run: clip_clear,
     },
     Tool {
         id: "select.item",

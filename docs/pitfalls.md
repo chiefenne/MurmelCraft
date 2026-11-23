@@ -63,6 +63,19 @@ problem took more than a few minutes to understand.
   properties show no mean normal when the summed vector area is below 1e-6
   of the area.
 
+- **Name a cut point by its edge.** A flat clip makes new points where
+  edges cross the plane. Naming each by the edge's two node ids (not by
+  its coordinates) makes the cuts of neighbouring faces and cells meet,
+  so sections close. A node exactly on the plane counts as kept, which
+  gives zero-length edges but never a gap (`clip.rs`).
+- **The edge colour goes to the first face drawn.** Faces are drawn
+  selected first, then boundary faces in file order, then open faces; a
+  shared edge takes the first face's colour. Changing this order moves
+  patch-border colours in the render tests.
+- **Cut towards the camera.** `clip.set` by axis points the normal at the
+  eye, so the half nearer the viewer goes and the cut is in sight; a fixed
+  +axis normal hid the cut behind the mesh from the iso view.
+
 ## Library versions (2026-11)
 
 - **wgpu 30**: vertex buffer layouts and bind group layouts are `Option`s,
@@ -78,6 +91,10 @@ problem took more than a few minutes to understand.
   a dropped file's path is `DroppedFile::path()`.
 - **quick-xml 0.42**: `local_name().as_ref()` is a `&str`;
   `Attribute::unescape_value` is deprecated for `normalized_value(version)`.
+- **Mesa 26 lavapipe (CI image ubuntu-26.04)** crashed the render-test
+  process (SIGSEGV, about two runs in three) when each test created and
+  dropped its own Vulkan instance on its own thread; Mesa 25 never did.
+  Offscreen renders share one device (`Gpu::shared`) and take turns.
 
 ## Serde
 
