@@ -1053,6 +1053,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `TOOL002` | error | The input does not match the tool's input schema. | Compare the input with the schema in `murmel commands`. |
 | `VIEW001` | error | The tool needs an open mesh and none is open. | Call mesh.open first, or pass `mesh` to view.screenshot. |
 | `VIEW002` | error | No item of the open mesh has this id. | Use `mesh`, `zone:<name>`, `kind:<cell type>` or `patch:<name>`; mesh.info lists the names. |
+| `MCP001` | error | The MCP server refused a path outside its read or write roots. | Use a path below a --read-root (files read) or a --write-root (files written), or start the server with more roots. |
+| `MCP002` | error | The MCP server could not resolve a path (it does not exist, or its folder does not). | Check the path; relative paths resolve from the first --write-root. |
 | `SET001` | error | A settings file could not be written, or no config folder is known. | Set MURMEL_CONFIG_DIR to a writable folder. |
 | `SET002` | error | The navigation bindings bind one input to two actions. | Give each gesture, button and modifier combination one action. |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |

@@ -1046,13 +1046,13 @@ pub const JOURNALED: &[&str] = &[
 
 /// Tools that make no step, and why.
 pub const NOT_JOURNALED: &[(&str, &str)] = &[
-    ("system.info", "reads only"),
-    ("system.commands", "reads only"),
-    ("diag.codes", "reads only"),
+    ("system.info", READS_ONLY),
+    ("system.commands", READS_ONLY),
+    ("diag.codes", READS_ONLY),
     ("mesh.open", "a new mesh starts a new journal"),
     ("mesh.close", "closing the mesh ends its journal"),
-    ("mesh.info", "reads only"),
-    ("view.get_camera", "reads only"),
+    ("mesh.info", READS_ONLY),
+    ("view.get_camera", READS_ONLY),
     (
         "view.screenshot",
         "writes a file; a mesh or view it is given is for the picture",
@@ -1073,10 +1073,10 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
         "select.filter",
         "a mode of picking, not a change of the view",
     ),
-    ("inspect.at", "reads only"),
-    ("inspect.quality", "reads only"),
-    ("inspect.item", "reads only"),
-    ("settings.get", "reads only"),
+    ("inspect.at", READS_ONLY),
+    ("inspect.quality", READS_ONLY),
+    ("inspect.item", READS_ONLY),
+    ("settings.get", READS_ONLY),
     ("settings.set_theme", "settings are files, not undone"),
     ("settings.set_colors", "settings are files, not undone"),
     ("settings.set_view_cube", "settings are files, not undone"),
@@ -1084,8 +1084,19 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("journal.undo", "walks the journal"),
     ("journal.redo", "walks the journal"),
     ("journal.group", "groups the steps"),
-    ("journal.list", "reads only"),
+    ("journal.list", READS_ONLY),
 ];
+
+/// The reason in `NOT_JOURNALED` of a tool that changes nothing: no file,
+/// no camera, no display, no selection.
+pub const READS_ONLY: &str = "reads only";
+
+/// The tool only reads (the MCP server marks it read-only and idempotent).
+pub fn reads_only(id: &str) -> bool {
+    NOT_JOURNALED
+        .iter()
+        .any(|(t, why)| *t == id && *why == READS_ONLY)
+}
 
 pub(crate) fn journaled(id: &str) -> bool {
     JOURNALED.contains(&id)
@@ -1145,6 +1156,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-system-info",
         summary: "Version and platform of this build.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: system_info,
     },
@@ -1155,6 +1167,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-system-commands",
         summary: "The catalogue of every tool with its input schema.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: |_, _| Ok(crate::catalogue()),
     },
@@ -1165,6 +1178,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-diag-codes",
         summary: "The diagnostic codes with their severity, meaning and fix.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: diag_codes,
     },
@@ -1175,6 +1189,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-mesh-open",
         summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip).",
         outputs: &[],
+        reads: &["path"],
         input_schema: || {
             object(
                 json!({"path": {"type": "string", "description": "A .vtu file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)"}}),
@@ -1190,6 +1205,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-mesh-close",
         summary: "Drop the open mesh from the session.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: mesh_close,
     },
@@ -1200,6 +1216,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-mesh-info",
         summary: "Counts, zones, patches, metadata and evidence of the open mesh.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: mesh_info,
     },
@@ -1210,6 +1227,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-get-camera",
         summary: "The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: view_get,
     },
@@ -1220,6 +1238,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-set-camera",
         summary: "Set any of target, distance, yaw, pitch, roll, projection, field of view and viewport size.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1244,6 +1263,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-orbit",
         summary: "Turn the camera about the up axis (yaw) and tilt it (pitch), in degrees, about the target or about a world point pivot (the window passes the point under the cursor, or the centre of the shown faces over empty space).",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1263,6 +1283,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-pan",
         summary: "Move the view by a drag in pixels (x right, y down); the scene follows the pointer.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({"dx_px": {"type": "number"}, "dy_px": {"type": "number"}}),
@@ -1278,6 +1299,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-zoom",
         summary: "Scale the camera distance by factor (below 1 zooms in), keeping the point under cursor_ndc (-1..1, y up) in place.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1296,6 +1318,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-fit",
         summary: "Frame the faces shown, or the shown faces of one item (mesh, zone:<name>, kind:<cell type>, patch:<name>), from the current direction.",
         outputs: &[],
+        reads: &[],
         input_schema: || object(json!({"item": {"type": "string"}}), &[]),
         run: view_fit,
     },
@@ -1306,6 +1329,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-standard",
         summary: "Go to one of the 26 view-cube views (faces like front, edges like front_top, corners like front_right_top; parts in any order), iso or home, and fit; the roll is reset, and face views snap to orthographic in perspective_ortho_faces.",
         outputs: &[],
+        reads: &[],
         input_schema: || object(json!({"view": {"enum": StandardView::names()}}), &["view"]),
         run: view_standard,
     },
@@ -1316,6 +1340,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-rotate",
         summary: "Rotate the scene by deg degrees about a screen axis (x right, y up, z towards the viewer; right-hand rule, so +90 about z turns it counter-clockwise on screen). The view cube's roll arrows send z ±90.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({"axis": {"enum": ["x", "y", "z"]}, "deg": {"type": "number"}}),
@@ -1331,6 +1356,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-view-screenshot",
         summary: "Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use.",
         outputs: &["path"],
+        reads: &["mesh"],
         input_schema: || {
             object(
                 json!({
@@ -1353,6 +1379,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-display-render-mode",
         summary: "Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders).",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({"mode": {"enum": ["shaded_edges", "shaded", "wireframe", "feature_edges"]}}),
@@ -1368,6 +1395,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-display-color-by",
         summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1386,6 +1414,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-display-threshold",
         summary: "Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given).",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1404,6 +1433,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-display-set-color",
         summary: "Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1422,6 +1452,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-display-visibility",
         summary: "Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1440,6 +1471,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-clip-set",
         summary: "Set the clip plane: its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle).",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1463,6 +1495,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-clip-clear",
         summary: "Remove the clip plane; the whole mesh shows again.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: clip_clear,
     },
@@ -1473,6 +1506,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-select-item",
         summary: "Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({"item": {"type": "string"}, "add": {"type": "boolean"}}),
@@ -1488,6 +1522,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-select-pick",
         summary: "Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1507,6 +1542,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-select-filter",
         summary: "Choose what a click in the viewport picks: cell (the default) or face.",
         outputs: &[],
+        reads: &[],
         input_schema: || object(json!({"target": {"enum": ["cell", "face"]}}), &["target"]),
         run: select_filter,
     },
@@ -1517,6 +1553,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-inspect-at",
         summary: "What lies under a screen point ndc (-1..1, y up), without selecting: the point, the cell with its type and zone, the face with its patch and role (null when nothing is there). The hover tooltip and the cursor coordinates use it.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({"ndc": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}}),
@@ -1532,6 +1569,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-inspect-quality",
         summary: "Statistics of a cell quality metric over all cells (the current one when left out): min, max, mean and a histogram of bins equal-width bins (default 20); with above, the number of cells at or above that value.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1551,6 +1589,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-select-clear",
         summary: "Clear the selection.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: select_clear,
     },
@@ -1561,6 +1600,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-inspect-item",
         summary: "The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel.",
         outputs: &[],
+        reads: &[],
         input_schema: || object(json!({"item": {"type": "string"}}), &[]),
         run: inspect_item,
     },
@@ -1571,6 +1611,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-journal-undo",
         summary: "Undo the last step of the camera or the display (a call of a journalled tool, or one group of calls such as a mouse drag); the selection stays. undone is the tool of the step, null when there was none.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: journal_undo,
     },
@@ -1581,6 +1622,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-journal-redo",
         summary: "Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: journal_redo,
     },
@@ -1591,6 +1633,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-journal-group",
         summary: "Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps).",
         outputs: &[],
+        reads: &[],
         input_schema: || object(json!({"open": {"type": "boolean"}}), &["open"]),
         run: journal_group,
     },
@@ -1601,6 +1644,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-journal-list",
         summary: "The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: journal_list,
     },
@@ -1611,6 +1655,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-settings-get",
         summary: "The theme, the mesh colours, the navigation bindings, the view cube placement, the presets and the config folder.",
         outputs: &[],
+        reads: &[],
         input_schema: no_input,
         run: settings_get,
     },
@@ -1621,6 +1666,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-settings-set-theme",
         summary: "Switch the theme live (dark, light, system) and write settings.toml in the config folder.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({"theme": {"enum": ["dark", "light", "system"]}}),
@@ -1636,6 +1682,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-settings-set-colors",
         summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad); reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1659,6 +1706,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-settings-set-view-cube",
         summary: "Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({
@@ -1679,6 +1727,7 @@ pub static TOOLS: &[Tool] = &[
         label_key: "tool-settings-set-bindings",
         summary: "Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder.",
         outputs: &[],
+        reads: &[],
         input_schema: || {
             object(
                 json!({

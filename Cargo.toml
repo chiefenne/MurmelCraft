@@ -12,6 +12,7 @@ murmel-mesh = { path = "crates/murmel-mesh" }
 murmel-engine = { path = "crates/murmel-engine" }
 murmel-render = { path = "crates/murmel-render" }
 murmel-tools = { path = "crates/murmel-tools" }
+murmel-mcp = { path = "crates/murmel-mcp" }
 bytemuck = { version = "1.25", features = ["derive"] }
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "wgpu", "wayland", "x11", "persistence"] }
 egui = "0.37"

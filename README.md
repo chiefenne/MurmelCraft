@@ -6,7 +6,7 @@ The shared desktop viewer of [KoflCraft](https://github.com/chiefenne/KoflCraft)
 (polyhedral CFD mesher) and [FoehnCraft](https://github.com/chiefenne/Foehncraft)
 (CFD solver), named after the Murmeltier, the Alpine lookout. Rust, egui and
 eframe on wgpu; one engine with thin front ends, every action a registered
-tool that the window, the command line and (later) the MCP server share.
+tool that the window, the command line and the MCP server share.
 
 ## Status: V0.1
 
@@ -24,11 +24,14 @@ tool that the window, the command line and (later) the MCP server share.
 - Title bar, toolbar, viewport with view note and axis triad, status bar.
 - Headless screenshots with `murmel call view.screenshot`, checked by
   render tests in CI.
+- An MCP server for agents (`murmel mcp`, [docs/mcp.md](docs/mcp.md)): every
+  tool of the registry on one headless session, paths confined to read and
+  write roots, screenshots returned as images.
 
 Not yet (see the milestones of the UI spec): model tree, properties, colour
 by role or cell type (V0.2), view cube and command palette (V0.3), clip
 plane, picking, orbit about the point under the cursor and cursor
-coordinates (V0.4), MCP server (V1.0).
+coordinates (V0.4).
 
 ## Build and run
 
@@ -38,10 +41,11 @@ cargo run --release -p murmel-app -- test-fixtures/openfoam/dual_polyhedra
 cargo run --release -p murmel-cli -- call view.screenshot \
   --input '{"mesh": "test-fixtures/channel/foehncraft.vtu", "view": "iso", "path": "shot.png"}'
 cargo run -p murmel-cli -- commands --markdown   # docs/tools.md
+cargo run --release -p murmel-cli -- mcp --root .  # the MCP server on stdio
 ```
 
 Rules for contributors and agents: [AGENTS.md](AGENTS.md). Tools:
-[docs/tools.md](docs/tools.md). Lessons: [docs/pitfalls.md](docs/pitfalls.md).
+[docs/tools.md](docs/tools.md). MCP server: [docs/mcp.md](docs/mcp.md). Lessons: [docs/pitfalls.md](docs/pitfalls.md).
 
 MIT licence. Fonts Inter and JetBrains Mono (SIL OFL 1.1), icons Lucide
 (ISC); see [assets/PROVENANCE.md](assets/PROVENANCE.md).

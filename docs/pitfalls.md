@@ -143,3 +143,17 @@ problem took more than a few minutes to understand.
 - **A click is not a drag.** egui starts a drag only after its movement
   threshold, so a press without movement stays a click (pick), as the spec
   asks.
+
+## MCP server
+
+- **Relative paths start at the first write root.** The MCP server never
+  resolves a path from its own working folder (the client chose it, not
+  the person), so `test-fixtures/x.vtu` is looked for in the write root and
+  fails with `MCP002`; pass absolute paths or paths below the write root.
+- **A new path field must be declared.** The server confines only the input
+  fields a tool lists in `reads` or `outputs`; a test catches fields named
+  like paths (`path`, `mesh`, `file`, `folder`, `dir`, `output`), so name
+  path fields that way.
+- **Clippy in integration tests.** `allow-unwrap-in-tests` covers `#[test]`
+  functions and `#[cfg(test)]` modules, not helpers in a `tests/*.rs` file;
+  those files allow `clippy::unwrap_used` at the top (as `render.rs` does).

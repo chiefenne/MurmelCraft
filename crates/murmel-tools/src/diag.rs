@@ -49,6 +49,20 @@ const OWN: &[Code] = &[
         ),
     },
     Code {
+        code: "MCP001",
+        severity: Severity::Error,
+        meaning: "The MCP server refused a path outside its read or write roots.",
+        fix: Some(
+            "Use a path below a --read-root (files read) or a --write-root (files written), or start the server with more roots.",
+        ),
+    },
+    Code {
+        code: "MCP002",
+        severity: Severity::Error,
+        meaning: "The MCP server could not resolve a path (it does not exist, or its folder does not).",
+        fix: Some("Check the path; relative paths resolve from the first --write-root."),
+    },
+    Code {
         code: "SET001",
         severity: Severity::Error,
         meaning: "A settings file could not be written, or no config folder is known.",

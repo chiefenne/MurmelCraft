@@ -283,7 +283,8 @@ fn screenshot_writes_a_png() {
 
 /// Invariant (layering): the mesh and engine crates have no window and no
 /// GPU, so everything they do runs headless; only murmel-render touches
-/// wgpu and only murmel-app touches egui.
+/// wgpu and only murmel-app touches egui. The MCP server, like the CLI,
+/// reaches the renderer only through the tools.
 #[test]
 fn engine_has_no_window_or_gpu() {
     for (krate, banned) in [
@@ -298,6 +299,10 @@ fn engine_has_no_window_or_gpu() {
         ("murmel-render", &["egui", "eframe"][..]),
         ("murmel-tools", &["egui", "eframe"][..]),
         ("murmel-cli", &["egui", "eframe", "wgpu"][..]),
+        (
+            "murmel-mcp",
+            &["egui", "eframe", "wgpu", "murmel-render"][..],
+        ),
     ] {
         let toml =
             std::fs::read_to_string(root().join(format!("crates/{krate}/Cargo.toml"))).unwrap();
@@ -636,4 +641,95 @@ fn opens_an_openfoam_case() {
         &mut s,
     );
     assert_eq!(e.diagnostics[0].code, "MESH013");
+}
+
+/// Invariant: every input field that names a file or folder is declared,
+/// in `reads` (read) or `outputs` (written), and every declared field is in
+/// the tool's schema. The MCP server confines exactly these fields to its
+/// roots; a new path field left undeclared would let an agent read or
+/// write anywhere, and no other test looks at the schemas this way.
+#[test]
+fn every_path_field_is_declared() {
+    const PATH_NAMES: &[&str] = &["path", "mesh", "file", "folder", "dir", "output"];
+    for t in tools() {
+        let schema = t.input_schema();
+        let props = schema["properties"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        for name in props.keys() {
+            let pathlike = PATH_NAMES
+                .iter()
+                .any(|p| name == p || name.ends_with(&format!("_{p}")));
+            if pathlike {
+                assert!(
+                    t.reads.contains(&name.as_str()) || t.outputs.contains(&name.as_str()),
+                    "{}: field {name} names a path but is in neither reads nor outputs",
+                    t.id
+                );
+            }
+        }
+        for f in t.reads.iter().chain(t.outputs) {
+            assert!(
+                props.contains_key(*f),
+                "{}: declared field {f} is not in the schema",
+                t.id
+            );
+            assert_eq!(
+                props[*f]["type"], "string",
+                "{}: {f} must be a string",
+                t.id
+            );
+        }
+        assert!(
+            t.reads.iter().all(|f| !t.outputs.contains(f)),
+            "{}: a field is both read and written",
+            t.id
+        );
+    }
+}
+
+/// Invariant: a tool marked reads only (the MCP server tells clients it is
+/// read-only and idempotent) changes neither the camera, the display, the
+/// selection nor the journal, and writes no file. Breaks when such a tool
+/// starts changing the session while its reason still says reads only.
+#[test]
+fn reads_only_tools_change_nothing() {
+    let mut s = session();
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    assert!(call("select.item", json!({"item": "patch:walls"}), &mut s).ok());
+    assert!(
+        call(
+            "view.orbit",
+            json!({"yaw_deg": 10.0, "pitch_deg": 5.0}),
+            &mut s
+        )
+        .ok()
+    );
+    let mut ran = 0;
+    for t in tools().iter().filter(|t| crate::reads_only(t.id)) {
+        assert_eq!(t.action, crate::Action::Read, "{}", t.id);
+        assert!(t.outputs.is_empty(), "{}", t.id);
+        let before = (
+            murmel_engine::Snapshot::of(&s),
+            s.display.selection.clone(),
+            s.journal.clone(),
+        );
+        // Inputs that need a point take the centre of the view.
+        let input = match t.id {
+            "inspect.at" => json!({"ndc": [0.0, 0.0]}),
+            _ => json!({}),
+        };
+        let e = call(t.id, input, &mut s);
+        assert!(e.ok(), "{}: {:?}", t.id, e.diagnostics);
+        let after = (
+            murmel_engine::Snapshot::of(&s),
+            s.display.selection.clone(),
+            s.journal.clone(),
+        );
+        assert!(before == after, "{} changed the session", t.id);
+        ran += 1;
+    }
+    assert!(ran >= 10, "only {ran} reads-only tools");
 }
