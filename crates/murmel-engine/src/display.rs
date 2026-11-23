@@ -10,11 +10,13 @@
 //! the polyhedral core). The clip plane takes cells away the same way.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use murmel_mesh::{Bounds, CellKind, Mesh, NO_CELL};
 use serde::{Deserialize, Serialize};
 
 use crate::clip::Clip;
+use crate::quality::{Metric, Quality};
 use crate::theme::{Rgb, Tokens};
 
 /// What gives a boundary face its colour.
@@ -28,14 +30,17 @@ pub enum ColorBy {
     Patch,
     Role,
     CellType,
+    /// The cell quality metric `Display::metric`, on the quality ramp.
+    Quality,
 }
 
 impl ColorBy {
-    pub const ALL: [ColorBy; 4] = [
+    pub const ALL: [ColorBy; 5] = [
         ColorBy::Solid,
         ColorBy::Patch,
         ColorBy::Role,
         ColorBy::CellType,
+        ColorBy::Quality,
     ];
 
     pub fn key(self) -> &'static str {
@@ -44,6 +49,7 @@ impl ColorBy {
             ColorBy::Patch => "patch",
             ColorBy::Role => "role",
             ColorBy::CellType => "cell_type",
+            ColorBy::Quality => "quality",
         }
     }
 }
@@ -221,6 +227,14 @@ pub struct Display {
     pub colors: BTreeMap<Item, Rgb>,
     /// The clip plane, if one is set (`clip.set`).
     pub clip: Option<Clip>,
+    /// The metric colour mode quality shows.
+    pub metric: Metric,
+    /// In colour mode quality, cells better than this value of the metric
+    /// are hidden, so the bad cells stand out (`display.threshold`).
+    pub threshold: Option<f64>,
+    /// The quality of the open mesh's cells, computed the first time
+    /// colour mode quality is used (`Session::redraw`).
+    pub quality: Option<Arc<Quality>>,
 }
 
 impl Display {
@@ -295,6 +309,40 @@ impl Display {
         }
     }
 
+    /// The values of the shown metric, when colour mode quality is on and
+    /// the quality is computed.
+    pub fn quality_values(&self) -> Option<&[f32]> {
+        (self.color_by == ColorBy::Quality)
+            .then_some(self.quality.as_deref())
+            .flatten()
+            .map(|q| q.values(self.metric))
+    }
+
+    /// Whether the quality threshold hides cells now.
+    pub fn thresholding(&self) -> bool {
+        self.threshold.is_some() && self.quality_values().is_some()
+    }
+
+    /// The range of the shown metric over all cells, which the ramp and
+    /// the legend span.
+    pub fn quality_range(&self) -> Option<(f64, f64)> {
+        if self.color_by != ColorBy::Quality {
+            return None;
+        }
+        self.quality.as_ref()?.range(self.metric)
+    }
+
+    /// The quality colour of cell `c`, in colour mode quality.
+    fn quality_color(&self, tokens: &Tokens, c: usize, range: (f64, f64)) -> Option<Rgb> {
+        let x = *self.quality_values()?.get(c)? as f64;
+        let t = if range.1 > range.0 {
+            (x - range.0) / (range.1 - range.0)
+        } else {
+            0.0
+        };
+        Some(tokens.quality_color(t))
+    }
+
     /// The colour of boundary face `f` of `mesh` before shading.
     pub fn face_color(&self, mesh: &Mesh, tokens: &Tokens, f: usize) -> Rgb {
         let patch = mesh.boundary_patch.get(f).copied().unwrap_or(0);
@@ -326,6 +374,10 @@ impl Display {
                 Some(k) => set(Item::Kind(k)).unwrap_or_else(|| tokens.kind_color(k)),
                 None => tokens.mesh.role.unspecified,
             },
+            ColorBy::Quality => owner
+                .zip(self.quality_range())
+                .and_then(|(c, r)| self.quality_color(tokens, c, r))
+                .unwrap_or(tokens.mesh.role.unspecified),
         }
     }
 
@@ -335,6 +387,12 @@ impl Display {
     /// solid colour.
     pub fn cell_color(&self, mesh: &Mesh, tokens: &Tokens, c: usize) -> Rgb {
         let set = |i: Item| self.colors.get(&i).copied();
+        if let Some(q) = self
+            .quality_range()
+            .and_then(|r| self.quality_color(tokens, c, r))
+        {
+            return q;
+        }
         if self.color_by == ColorBy::CellType
             && let Some(&k) = mesh.cell_kind.get(c)
         {
@@ -391,6 +449,11 @@ impl Display {
         if !self.isolated.is_empty() && !self.isolated.contains(&Item::Cell(c as u32)) {
             return false;
         }
+        if let (Some(t), Some(v)) = (self.threshold, self.quality_values())
+            && v.get(c).is_some_and(|&x| (x as f64) < t)
+        {
+            return false;
+        }
         if self.hidden.is_empty() {
             return true;
         }
@@ -404,7 +467,7 @@ impl Display {
 
     /// Whether boundary face `f` is drawn.
     pub fn face_visible(&self, mesh: &Mesh, f: usize) -> bool {
-        if self.hidden.is_empty() {
+        if self.hidden.is_empty() && !self.thresholding() {
             return true;
         }
         if self.is_hidden(Item::Mesh) {
@@ -484,7 +547,11 @@ impl Display {
 
     /// Cells and boundary faces shown (the clip plane included).
     pub fn visible_counts(&self, mesh: &Mesh) -> (usize, usize) {
-        if self.hidden.is_empty() && self.isolated.is_empty() && self.active_clip().is_none() {
+        if self.hidden.is_empty()
+            && self.isolated.is_empty()
+            && self.active_clip().is_none()
+            && !self.thresholding()
+        {
             return (mesh.cell_count(), mesh.boundary.len());
         }
         let shown = self.shown_cells(mesh);

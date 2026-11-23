@@ -7,6 +7,7 @@ mod commands;
 mod cube;
 mod i18n;
 mod panels;
+mod quality;
 mod style;
 mod viewport;
 

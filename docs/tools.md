@@ -22,7 +22,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `view.rotate` | 1 | read | Rotate the scene by deg degrees about a screen axis (x right, y up, z towards the viewer; right-hand rule, so +90 about z turns it counter-clockwise on screen). The view cube's roll arrows send z ±90. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
-| `display.color_by` | 1 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role or by the type of their cell. |
+| `display.color_by` | 2 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold. |
+| `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
 | `clip.set` | 1 | read | Set the clip plane: its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). |
@@ -31,11 +32,12 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `select.pick` | 1 | read | Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked. |
 | `select.filter` | 1 | read | Choose what a click in the viewport picks: cell (the default) or face. |
 | `inspect.at` | 1 | read | What lies under a screen point ndc (-1..1, y up), without selecting: the point, the cell with its type and zone, the face with its patch and role (null when nothing is there). The hover tooltip and the cursor coordinates use it. |
+| `inspect.quality` | 1 | read | Statistics of a cell quality metric over all cells (the current one when left out): min, max, mean and a histogram of bins equal-width bins (default 20); with above, the number of cells at or above that value. |
 | `select.clear` | 1 | read | Clear the selection. |
 | `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the presets and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
-| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening; reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
+| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
 
 ## Inputs
@@ -431,12 +433,53 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "solid",
         "patch",
         "role",
-        "cell_type"
+        "cell_type",
+        "quality"
+      ]
+    },
+    "metric": {
+      "enum": [
+        "non_orthogonality",
+        "skewness",
+        "volume_ratio",
+        "face_count"
       ]
     }
   },
   "required": [
     "by"
+  ],
+  "type": "object"
+}
+```
+
+### `display.threshold`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "metric": {
+      "enum": [
+        "non_orthogonality",
+        "skewness",
+        "volume_ratio",
+        "face_count"
+      ]
+    },
+    "value": {
+      "oneOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "value"
   ],
   "type": "object"
 }
@@ -653,6 +696,34 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `inspect.quality`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "above": {
+      "type": "number"
+    },
+    "bins": {
+      "maximum": 200,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "metric": {
+      "enum": [
+        "non_orthogonality",
+        "skewness",
+        "volume_ratio",
+        "face_count"
+      ]
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `select.clear`
 
 ```json
@@ -744,6 +815,14 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "type": "string"
       },
       "minItems": 1,
+      "type": "array"
+    },
+    "quality": {
+      "items": {
+        "pattern": "^#[0-9A-Fa-f]{6}$",
+        "type": "string"
+      },
+      "minItems": 2,
       "type": "array"
     },
     "reset": {

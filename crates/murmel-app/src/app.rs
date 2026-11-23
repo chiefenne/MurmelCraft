@@ -43,6 +43,10 @@ pub struct MurmelApp {
     /// The rotate row under the view cube: axis and degrees.
     pub(crate) rotate_axis: murmel_engine::ScreenAxis,
     pub(crate) rotate_deg: f64,
+    /// The quality threshold while its slider is dragged (the surface is
+    /// rebuilt when the drag ends).
+    pub(crate) threshold_edit: Option<f64>,
+    pub(crate) histogram: Option<crate::quality::HistogramCache>,
 }
 
 impl MurmelApp {
@@ -85,6 +89,8 @@ impl MurmelApp {
             now: 0.0,
             rotate_axis: murmel_engine::ScreenAxis::Z,
             rotate_deg: 90.0,
+            threshold_edit: None,
+            histogram: None,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -377,28 +383,58 @@ impl MurmelApp {
             self.call("display.render_mode", json!({ "mode": m }));
         }
         let by = self.session.display.color_by;
+        let metric = self.session.display.metric;
         let mut pick = None;
         let label = self.i18n.tr("toolbar-color-by");
-        let current = self.i18n.tr(&format!("color-by-{}", by.key()));
+        let current = self.color_by_name();
         let r = egui::ComboBox::from_id_salt("color-by")
             .selected_text(format!("{label}: {current}"))
             .show_ui(ui, |ui| {
                 for c in murmel_engine::ColorBy::ALL {
+                    if c == murmel_engine::ColorBy::Quality {
+                        continue;
+                    }
                     let name = self.i18n.tr(&format!("color-by-{}", c.key()));
                     if ui.selectable_label(c == by, name).clicked() {
-                        pick = Some(c);
+                        pick = Some(json!({ "by": c }));
+                    }
+                }
+                ui.separator();
+                let quality = self.i18n.tr("color-by-quality");
+                for m in murmel_engine::Metric::ALL {
+                    let name = format!(
+                        "{quality}: {}",
+                        self.i18n.tr(&format!("metric-{}", m.key()))
+                    );
+                    let on = by == murmel_engine::ColorBy::Quality && m == metric;
+                    if ui.selectable_label(on, name).clicked() && !on {
+                        pick = Some(json!({"by": "quality", "metric": m}));
                     }
                 }
             });
         r.response
             .on_hover_text(self.i18n.tr("toolbar-color-by-tip"));
-        if let Some(c) = pick.filter(|&c| c != by) {
-            self.call("display.color_by", json!({ "by": c }));
+        if let Some(input) = pick.filter(|i| i["by"] != json!(by) || i.get("metric").is_some()) {
+            self.call("display.color_by", input);
         }
         ui.separator();
         self.clip_group(ui, secondary);
         ui.separator();
         self.select_group(ui, secondary);
+    }
+
+    /// The name of the colouring, with the metric in colour mode quality.
+    pub(crate) fn color_by_name(&self) -> String {
+        let d = &self.session.display;
+        let by = self.i18n.tr(&format!("color-by-{}", d.color_by.key()));
+        if d.color_by == murmel_engine::ColorBy::Quality {
+            format!(
+                "{by}: {}",
+                self.i18n.tr(&format!("metric-{}", d.metric.key()))
+            )
+        } else {
+            by
+        }
     }
 
     /// The Clip group of the toolbar: the axis buttons (X, Y, Z), the

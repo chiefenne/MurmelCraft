@@ -190,6 +190,21 @@ fn channel_prisms_hidden_show_the_core() {
     check_session("channel-prisms-hidden", &s);
 }
 
+/// V0.5 quality: colour by non-orthogonality on the quality ramp, with
+/// the threshold at a third of the range, so the best cells are gone and
+/// the faces they lay open show the colours of the cells behind.
+#[test]
+fn channel_quality_threshold() {
+    let mut s = session(StandardView::ISO);
+    s.display.color_by = ColorBy::Quality;
+    s.display.metric = murmel_engine::Metric::NonOrthogonality;
+    s.redraw();
+    let (lo, hi) = s.display.quality_range().unwrap();
+    s.display.threshold = Some(lo + (hi - lo) / 3.0);
+    s.redraw();
+    check_session("channel-quality-threshold", &s);
+}
+
 /// The image is not a blank gradient: the mesh covers a good part of the
 /// view and its edges are darker than its faces.
 #[test]

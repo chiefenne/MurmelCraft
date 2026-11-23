@@ -81,6 +81,8 @@ pub struct MeshTokens {
     pub axis_z: Rgb,
     pub selection: Rgb,
     pub selection_mix: f32,
+    /// The quality ramp, good to bad.
+    pub quality: Vec<Rgb>,
     pub role: RoleTokens,
     pub kind: KindTokens,
 }
@@ -120,6 +122,9 @@ impl Tokens {
         if t.mesh.patch.is_empty() {
             return Err("tokens.toml: empty patch palette".into());
         }
+        if t.mesh.quality.len() < 2 {
+            return Err("tokens.toml: the quality ramp needs two colours".into());
+        }
         Ok(t)
     }
 
@@ -141,6 +146,25 @@ impl Tokens {
             PatchRole::Interface => r.interface,
             PatchRole::Unspecified => r.unspecified,
         }
+    }
+
+    /// The quality ramp at `t` (0 good, 1 bad), linear between stops.
+    pub fn quality_color(&self, t: f64) -> Rgb {
+        let q = &self.mesh.quality;
+        let Some(&last) = q.last() else {
+            return self.mesh.solid;
+        };
+        if q.len() < 2 || !t.is_finite() {
+            return q[0];
+        }
+        let x = t.clamp(0.0, 1.0) * (q.len() - 1) as f64;
+        let i = (x.floor() as usize).min(q.len() - 2);
+        let f = x - i as f64;
+        if i + 1 >= q.len() {
+            return last;
+        }
+        let (a, b) = (q[i].0, q[i + 1].0);
+        Rgb([0, 1, 2].map(|k| (a[k] as f64 + (b[k] as f64 - a[k] as f64) * f).round() as u8))
     }
 
     pub fn kind_color(&self, kind: CellKind) -> Rgb {
@@ -174,6 +198,9 @@ pub struct MeshColors {
     /// Edges take the face colour darkened by this fraction (0 to 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge_darken: Option<f32>,
+    /// The quality ramp, good to bad (two colours or more).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quality: Vec<Rgb>,
 }
 
 impl MeshColors {
@@ -189,6 +216,9 @@ impl MeshColors {
         self.kind.extend(other.kind);
         if other.edge_darken.is_some() {
             self.edge_darken = other.edge_darken;
+        }
+        if !other.quality.is_empty() {
+            self.quality = other.quality;
         }
     }
 }
@@ -234,6 +264,11 @@ impl Tokens {
                 return Err(format!("edge_darken {d} is not between 0 and 1"));
             }
             m.edge_darken = d;
+        }
+        match c.quality.len() {
+            0 => {}
+            1 => return Err("the quality ramp needs two colours or more".into()),
+            _ => m.quality = c.quality.clone(),
         }
         Ok(t)
     }
@@ -394,5 +429,38 @@ mod tests {
         assert!(min_distance(&kinds, &VISION) >= 0.1);
         assert!(min_distance(&t.mesh.patch[..4], &VISION) >= 0.05);
         assert!(min_distance(&t.mesh.patch, &VISION[..1]) >= 0.07);
+    }
+
+    /// Invariant (UI spec: quality is sequential and colour-blind safe):
+    /// the quality ramp's OKLab lightness falls by at least 0.04 from each
+    /// stop to the next under normal vision and the three simulations, so
+    /// worse always reads darker; the ends map to the first and last stop.
+    /// Breaks when a stop is reordered or a hue-only step is added; the
+    /// palette test above checks only categorical colours.
+    #[test]
+    fn quality_ramp_is_sequential() {
+        let t = Tokens::builtin().unwrap();
+        let q = &t.mesh.quality;
+        for m in &VISION {
+            let l: Vec<f32> = q
+                .iter()
+                .map(|c| {
+                    let v = c.linear();
+                    oklab(m.map(|row| (0..3).map(|k| row[k] * v[k]).sum::<f32>().clamp(0.0, 1.0)))
+                        [0]
+                })
+                .collect();
+            for w in l.windows(2) {
+                assert!(w[0] - w[1] >= 0.04, "{l:?}");
+            }
+        }
+        assert_eq!(t.quality_color(0.0), q[0]);
+        assert_eq!(t.quality_color(1.0), *q.last().unwrap());
+        assert_eq!(t.quality_color(f64::NAN), q[0]);
+        let one = MeshColors {
+            quality: vec![q[0]],
+            ..MeshColors::default()
+        };
+        assert!(t.with_colors(&one).is_err());
     }
 }
