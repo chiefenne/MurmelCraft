@@ -1,0 +1,60 @@
+name: CI
+
+# Fast run on every pull request and push to main: format, clippy with
+# warnings as errors, and the tests (render tests on Mesa lavapipe, a
+# software Vulkan driver). A full run (later: long tests marked
+# #[ignore = "full run: ..."]) starts by hand (Actions > CI > Run workflow)
+# or with the pull-request label `full-ci`, after asking the maintainer.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  FULL: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Format
+        run: rustup component add rustfmt && cargo fmt --all --check
+
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select stable Rust
+        run: rustup update stable && rustup default stable && rustup component add clippy
+      - name: Cache the Cargo build
+        uses: Swatinem/rust-cache@v2
+      - name: Install Mesa lavapipe (software Vulkan for the render tests)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: |
+          if [ "$FULL" = "true" ]; then
+            cargo test --locked --workspace --all-targets -- --include-ignored
+          else
+            cargo test --locked --workspace --all-targets
+          fi
+      - name: Keep the rendered images when a render test fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-test
+          path: target/render-test/
+          if-no-files-found: ignore

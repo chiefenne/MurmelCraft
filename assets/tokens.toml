@@ -1,0 +1,47 @@
+# Design tokens of MurmelCraft (UI spec, "Design tokens, fonts and icons").
+# egui's Visuals and the wgpu viewport both read this file; no colour is
+# written anywhere else. Colours are sRGB hex.
+
+[dark]
+bg_app = "#16181B"
+bg_panel = "#1E2125"
+bg_raised = "#272B30"
+line = "#32373E"
+text_primary = "#E7E9EC"
+text_secondary = "#A2A9B2"
+viewport_top = "#30353C"
+viewport_bottom = "#191C20"
+accent = "#D671B4"
+status_ok = "#4CBB7A"
+status_warn = "#E5B54A"
+status_error = "#EF6B5B"
+
+[light]
+bg_app = "#EEF0F3"
+bg_panel = "#FFFFFF"
+bg_raised = "#F5F6F8"
+line = "#D7DBE0"
+text_primary = "#1C2026"
+text_secondary = "#5A626C"
+viewport_top = "#F8F9FB"
+viewport_bottom = "#D9DEE4"
+accent = "#A3337E"
+status_ok = "#2E8A53"
+status_warn = "#A9760F"
+status_error = "#C7402F"
+
+[mesh]
+# Twelve hues of our own, OKLCH at hue steps of 30 degrees from 20,
+# lightness 0.74 and 0.68 alternating, chroma 0.12.
+patch = [
+  "#ED8B8B", "#D38151", "#D2A249", "#9D9E3D", "#81BD74", "#32B08D",
+  "#24C1C9", "#32A5D4", "#7EABF6", "#988BDD", "#CC91DA", "#CF78A3",
+]
+# Edges take the face colour darkened by this fraction.
+edge_darken = 0.45
+# The logo colour (rose-1) for the placeholder mark.
+logo = "#B13E8B"
+# Axis triad: X red, Y green, Z blue (UI spec, Axis triad).
+axis_x = "#E5534B"
+axis_y = "#57AB5A"
+axis_z = "#539BF5"

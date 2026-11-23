@@ -1,0 +1,146 @@
+//! egui style from the design tokens (UI spec, "Design tokens, fonts and
+//! icons"): Inter and JetBrains Mono (SIL OFL), Lucide icons (ISC), the
+//! dark and light palettes, a 4 px grid and 6 px radius.
+
+use std::sync::Arc;
+
+use egui::{
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle,
+    Visuals,
+};
+use murmel_engine::theme::Palette;
+use murmel_engine::{Rgb, Tokens};
+
+pub const SEMIBOLD: &str = "semibold";
+pub const ICONS: &str = "icons";
+
+pub fn color(c: Rgb) -> Color32 {
+    Color32::from_rgb(c.0[0], c.0[1], c.0[2])
+}
+
+pub fn fonts() -> FontDefinitions {
+    let mut f = FontDefinitions::default();
+    let add = |f: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
+        f.font_data
+            .insert(name.to_string(), Arc::new(FontData::from_static(bytes)));
+    };
+    add(
+        &mut f,
+        "inter",
+        include_bytes!("../../../assets/fonts/Inter-Regular.ttf"),
+    );
+    add(
+        &mut f,
+        "inter-semibold",
+        include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"),
+    );
+    add(
+        &mut f,
+        "jetbrains-mono",
+        include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
+    );
+    add(
+        &mut f,
+        "lucide",
+        include_bytes!("../../../assets/icons/lucide-subset.ttf"),
+    );
+    let prop = f.families.entry(FontFamily::Proportional).or_default();
+    prop.insert(0, "inter".into());
+    prop.insert(1, "lucide".into());
+    let mono = f.families.entry(FontFamily::Monospace).or_default();
+    mono.insert(0, "jetbrains-mono".into());
+    f.families.insert(
+        FontFamily::Name(SEMIBOLD.into()),
+        vec!["inter-semibold".into(), "inter".into(), "lucide".into()],
+    );
+    f.families.insert(
+        FontFamily::Name(ICONS.into()),
+        vec!["lucide".into(), "inter".into()],
+    );
+    f
+}
+
+fn visuals(p: &Palette, dark: bool) -> Visuals {
+    let mut v = if dark {
+        Visuals::dark()
+    } else {
+        Visuals::light()
+    };
+    let r = CornerRadius::same(6);
+    v.panel_fill = color(p.bg_panel);
+    v.window_fill = color(p.bg_raised);
+    v.extreme_bg_color = color(p.bg_app);
+    v.faint_bg_color = color(p.bg_raised);
+    v.window_stroke = Stroke::new(1.0, color(p.line));
+    v.window_corner_radius = CornerRadius::same(8);
+    v.menu_corner_radius = CornerRadius::same(8);
+    v.hyperlink_color = color(p.accent);
+    v.selection.bg_fill = color(p.accent).gamma_multiply(0.35);
+    v.selection.stroke = Stroke::new(1.0, color(p.accent));
+    v.error_fg_color = color(p.status_error);
+    v.warn_fg_color = color(p.status_warn);
+    v.override_text_color = Some(color(p.text_primary));
+    let w = &mut v.widgets;
+    w.noninteractive.bg_fill = color(p.bg_panel);
+    w.noninteractive.weak_bg_fill = color(p.bg_panel);
+    w.noninteractive.bg_stroke = Stroke::new(1.0, color(p.line));
+    w.noninteractive.fg_stroke = Stroke::new(1.0, color(p.text_secondary));
+    w.noninteractive.corner_radius = r;
+    w.inactive.bg_fill = color(p.bg_raised);
+    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    w.inactive.bg_stroke = Stroke::NONE;
+    w.inactive.fg_stroke = Stroke::new(1.5, color(p.text_secondary));
+    w.inactive.corner_radius = r;
+    w.hovered.bg_fill = color(p.bg_raised);
+    w.hovered.weak_bg_fill = color(p.bg_raised);
+    w.hovered.bg_stroke = Stroke::new(1.0, color(p.line));
+    w.hovered.fg_stroke = Stroke::new(1.5, color(p.text_primary));
+    w.hovered.corner_radius = r;
+    w.active.bg_fill = color(p.accent).gamma_multiply(0.25);
+    w.active.weak_bg_fill = color(p.accent).gamma_multiply(0.25);
+    w.active.bg_stroke = Stroke::new(1.0, color(p.accent));
+    w.active.fg_stroke = Stroke::new(1.5, color(p.accent));
+    w.active.corner_radius = r;
+    w.open = w.active;
+    v
+}
+
+/// Install fonts and both themes' styles.
+pub fn install(ctx: &egui::Context, tokens: &Tokens) {
+    ctx.set_fonts(fonts());
+    for (theme, dark) in [(egui::Theme::Dark, true), (egui::Theme::Light, false)] {
+        ctx.style_mut_of(theme, |s| {
+            s.visuals = visuals(tokens.palette(dark), dark);
+            s.text_styles = [
+                (TextStyle::Body, FontId::proportional(13.0)),
+                (TextStyle::Button, FontId::proportional(13.0)),
+                (TextStyle::Small, FontId::proportional(12.0)),
+                (TextStyle::Monospace, FontId::monospace(12.0)),
+                (
+                    TextStyle::Heading,
+                    FontId::new(15.0, FontFamily::Name(SEMIBOLD.into())),
+                ),
+            ]
+            .into();
+            s.spacing.item_spacing = egui::vec2(8.0, 4.0);
+            s.spacing.button_padding = egui::vec2(8.0, 4.0);
+            s.spacing.interact_size.y = 28.0;
+            s.spacing.menu_margin = egui::Margin::same(8);
+        });
+    }
+}
+
+/// Lucide glyphs (codepoints of lucide-static 0.460.0, kept in the subset
+/// font `assets/icons/lucide-subset.ttf`).
+pub mod icon {
+    pub const FOLDER_OPEN: &str = "\u{E247}";
+    pub const SCAN: &str = "\u{E257}";
+    pub const HOUSE: &str = "\u{E0F8}";
+    pub const BOX: &str = "\u{E065}";
+    pub const SQUARE: &str = "\u{E16B}";
+    pub const SUN: &str = "\u{E17C}";
+    pub const MOON: &str = "\u{E122}";
+    pub const MONITOR: &str = "\u{E121}";
+    pub const SETTINGS: &str = "\u{E158}";
+    pub const ALERT: &str = "\u{E07B}";
+}

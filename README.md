@@ -1,2 +1,40 @@
 # MurmelCraft
-follows
+
+The shared desktop viewer of [KoflCraft](https://github.com/chiefenne/KoflCraft)
+(polyhedral CFD mesher) and [FoehnCraft](https://github.com/chiefenne/Foehncraft)
+(CFD solver), named after the Murmeltier, the Alpine lookout. Rust, egui and
+eframe on wgpu; one engine with thin front ends, every action a registered
+tool that the window, the command line and (later) the MCP server share.
+
+## Status: V0.1
+
+- Opens KoflCraft's `foehncraft.vtu` (VTK polyhedra, boundary polygons, zone
+  and patch names and roles) and the `mesh-evidence.json` beside it.
+- Shaded with edges, patch colours, orbit, pan, zoom to the cursor, fit,
+  home, the three projection modes (default: perspective with orthographic
+  faces), dark and light themes switched live.
+- Mouse presets (three-button, Apple, Fusion, ParaView), every binding
+  editable through `settings.set_bindings` and saved in `navigation.toml`.
+- Title bar, toolbar, viewport with view note and axis triad, status bar.
+- Headless screenshots with `murmel call view.screenshot`, checked by
+  render tests in CI.
+
+Not yet (see the milestones of the UI spec): model tree, properties, colour
+by role or cell type (V0.2), view cube and command palette (V0.3), clip
+plane, picking, orbit about the point under the cursor and cursor
+coordinates (V0.4), OpenFOAM polyMesh, MCP server, journal and undo (V1.0).
+
+## Build and run
+
+```sh
+cargo run --release -p murmel-app -- test-fixtures/channel/foehncraft.vtu
+cargo run --release -p murmel-cli -- call view.screenshot \
+  --input '{"mesh": "test-fixtures/channel/foehncraft.vtu", "view": "iso", "path": "shot.png"}'
+cargo run -p murmel-cli -- commands --markdown   # docs/tools.md
+```
+
+Rules for contributors and agents: [AGENTS.md](AGENTS.md). Tools:
+[docs/tools.md](docs/tools.md). Lessons: [docs/pitfalls.md](docs/pitfalls.md).
+
+MIT licence. Fonts Inter and JetBrains Mono (SIL OFL 1.1), icons Lucide
+(ISC); see [assets/PROVENANCE.md](assets/PROVENANCE.md).

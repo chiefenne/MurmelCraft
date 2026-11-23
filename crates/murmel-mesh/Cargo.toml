@@ -1,0 +1,15 @@
+[package]
+name = "murmel-mesh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mesh model and readers of MurmelCraft: KoflCraft's foehncraft.vtu (VTK polyhedra) and mesh-evidence.json"
+
+[dependencies]
+base64.workspace = true
+quick-xml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
