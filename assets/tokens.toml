@@ -59,6 +59,15 @@ axis_z = "#539BF5"
 # their own, and their edges take it whole.
 selection = "#FF4FB8"
 selection_mix = 0.2
+# Cell quality (colour by quality): a sequential ramp of our own from
+# good to bad, OKLCH lightness 0.94 down to 0.44 in even steps, hue 105
+# (pale yellow) to 25 (deep red), chroma rising to the sRGB gamut. The
+# falling lightness keeps the order readable under colour-vision
+# deficiencies (see the theme tests).
+quality = [
+  "#F2EFB8", "#EAD78F", "#E5BD65", "#E1A13B", "#DB8406",
+  "#CD6A01", "#BE4F04", "#B22C01", "#9E0117",
+]
 
 # Patch roles (UI spec, Colour by): wall grey, inlet blue, outlet orange,
 # symmetry green, interface violet, unspecified sand. Searched in OKLCH

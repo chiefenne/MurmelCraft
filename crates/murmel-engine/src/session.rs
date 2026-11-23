@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use murmel_mesh::{Evidence, Mesh, MeshError};
 
 use crate::camera::Camera;
-use crate::display::{Display, Item};
+use crate::display::{ColorBy, Display, Item};
 use crate::navigation::Navigation;
+use crate::quality::Quality;
 use crate::surface::Surface;
 use crate::theme::{MeshColors, Theme, Tokens};
 
@@ -109,6 +110,14 @@ pub fn sha256(path: &Path) -> String {
     }
 }
 
+/// Compute the cell quality of `mesh` the first time colour mode quality
+/// needs it; it is kept until another mesh opens.
+fn ensure_quality(display: &mut Display, mesh: &Mesh) {
+    if display.color_by == ColorBy::Quality && display.quality.is_none() {
+        display.quality = Some(std::sync::Arc::new(Quality::compute(mesh)));
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Session {
     pub tokens: Tokens,
@@ -162,6 +171,9 @@ impl Session {
         self.display.isolated.clear();
         self.display.colors.clear();
         self.display.clip = None;
+        self.display.threshold = None;
+        self.display.quality = None;
+        ensure_quality(&mut self.display, &mesh);
         let surface = Surface::build(&mesh, &self.tokens, &self.display);
         let digest = sha256(path);
         let validity = Validity::check(
@@ -193,6 +205,8 @@ impl Session {
         self.display.isolated.clear();
         self.display.colors.clear();
         self.display.clip = None;
+        self.display.threshold = None;
+        self.display.quality = None;
         self.surface_revision += 1;
     }
 
@@ -209,6 +223,7 @@ impl Session {
     /// Build the surface again after a change of `display`.
     pub fn redraw(&mut self) {
         if let Some(m) = &mut self.mesh {
+            ensure_quality(&mut self.display, &m.mesh);
             m.surface = Surface::build(&m.mesh, &self.tokens, &self.display);
         }
         self.surface_revision += 1;

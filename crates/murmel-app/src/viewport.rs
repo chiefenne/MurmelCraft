@@ -70,7 +70,11 @@ impl MurmelApp {
         let cam = self.shown_camera(ui.ctx());
         self.draw_mesh(ui, frame, rect, dark, &cam);
         self.overlays(ui, rect, dark, &cam);
-        self.legend(ui, rect, dark);
+        if self.session.display.color_by == murmel_engine::ColorBy::Quality {
+            self.quality_legend(ui, rect, dark);
+        } else {
+            self.legend(ui, rect, dark);
+        }
         self.clip_gizmo(ui, rect, &cam, dark);
         self.view_cube(ui, rect, &cam, dark);
 
@@ -130,12 +134,7 @@ impl MurmelApp {
                 ("view", view.into()),
                 ("cells", count(cells).into()),
                 ("faces", count(faces).into()),
-                (
-                    "colour",
-                    self.i18n
-                        .tr(&format!("color-by-{}", self.session.display.color_by.key()))
-                        .into(),
-                ),
+                ("colour", self.color_by_name().into()),
             ],
         )
     }

@@ -81,6 +81,12 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | palette | Colour by: patch | `display.color_by` `{"by":"patch"}` |
 | palette | Colour by: patch role | `display.color_by` `{"by":"role"}` |
 | palette | Colour by: cell type | `display.color_by` `{"by":"cell_type"}` |
+| palette | Colour by: quality, non-orthogonality | `display.color_by` `{"by":"quality","metric":"non_orthogonality"}` |
+| palette | Colour by: quality, skewness | `display.color_by` `{"by":"quality","metric":"skewness"}` |
+| palette | Colour by: quality, volume ratio | `display.color_by` `{"by":"quality","metric":"volume_ratio"}` |
+| palette | Colour by: quality, face count | `display.color_by` `{"by":"quality","metric":"face_count"}` |
+| palette | Quality: show only the worst 10 % of cells | `display.threshold` (input from the session) |
+| palette | Quality: show all cells again | `display.threshold` (input from the session) |
 | palette | Clip along the view direction | `clip.set` `{"axis":"view"}` |
 | palette | Clip: crinkle cut (whole cells) | `clip.set` `{"mode":"crinkle"}` |
 | palette | Clip: flat cut | `clip.set` `{"mode":"flat"}` |

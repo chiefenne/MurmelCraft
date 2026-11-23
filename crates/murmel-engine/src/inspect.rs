@@ -366,6 +366,27 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
     }
 }
 
+/// The worst non-orthogonality (degrees) and skewness over the faces of
+/// cell `c`, as the Properties panel shows them.
+pub fn cell_quality(m: &Mesh, c: usize) -> (f64, f64) {
+    let centroid = cell_centroid(m, c);
+    let (mut worst_no, mut worst_skew) = (0.0f64, 0.0f64);
+    for f in m.cell_face_range(c) {
+        let Some(&u) = m.cell_face_id.get(f) else {
+            continue;
+        };
+        let other = m.across(u as usize, c as u32);
+        let (fc, s) = face_centre_area(m, m.faces.get(f));
+        let nb = (other != NO_CELL).then(|| cell_centroid(m, other as usize));
+        let (no, skew) = face_quality(fc, s, centroid, nb);
+        worst_no = worst_no.max(no);
+        if let Some(sk) = skew {
+            worst_skew = worst_skew.max(sk);
+        }
+    }
+    (worst_no, worst_skew)
+}
+
 /// The rows of cell `c` (UI spec, Properties: a cell).
 fn cell_rows(m: &Mesh, display: &Display, c: usize) -> Vec<Row> {
     if c >= m.cell_count() {
@@ -375,25 +396,14 @@ fn cell_rows(m: &Mesh, display: &Display, c: usize) -> Vec<Row> {
     let mut nodes: Vec<u32> = m.cell(c).flatten().copied().collect();
     nodes.sort_unstable();
     nodes.dedup();
-    let mut neighbours = Vec::new();
-    let (mut worst_no, mut worst_skew) = (0.0f64, 0.0f64);
-    for f in m.cell_face_range(c) {
-        let Some(&u) = m.cell_face_id.get(f) else {
-            continue;
-        };
-        let u = u as usize;
-        let other = m.across(u, c as u32);
-        let (fc, s) = face_centre_area(m, m.faces.get(f));
-        let nb = (other != NO_CELL).then(|| cell_centroid(m, other as usize));
-        let (no, skew) = face_quality(fc, s, centroid, nb);
-        worst_no = worst_no.max(no);
-        if let Some(sk) = skew {
-            worst_skew = worst_skew.max(sk);
-        }
-        if other != NO_CELL {
-            neighbours.push(other);
-        }
-    }
+    let neighbours: Vec<u32> = m
+        .cell_face_range(c)
+        .filter_map(|f| m.cell_face_id.get(f))
+        .map(|&u| m.across(u as usize, c as u32))
+        .filter(|&o| o != NO_CELL)
+        .collect();
+    let (worst_no, worst_skew) = cell_quality(m, c);
+    let mut neighbours = neighbours;
     neighbours.sort_unstable();
     neighbours.dedup();
     let kind = m.cell_kind.get(c).map_or("polyhedron", |k| k.name());

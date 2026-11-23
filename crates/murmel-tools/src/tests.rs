@@ -305,7 +305,7 @@ fn display_selection_and_properties() {
 
     let e = call("display.color_by", json!({"by": "cell_type"}), &mut s);
     assert_eq!(e.result["color_by"], "cell_type");
-    let e = call("display.color_by", json!({"by": "quality"}), &mut s);
+    let e = call("display.color_by", json!({"by": "speed"}), &mut s);
     assert_eq!(e.diagnostics[0].code, "TOOL002");
 
     let e = call("select.item", json!({"item": "patch:inlet"}), &mut s);
@@ -393,4 +393,50 @@ fn clip_plane_tools() {
     let e = call("inspect.item", json!({}), &mut s);
     assert!(e.ok());
     assert!(s.display.clip.is_none());
+}
+
+/// Invariant: quality colouring and its threshold go through tools only.
+/// A threshold hides the cells below it (fewer cells shown, and exactly as
+/// many as inspect.quality counts at or above it), null shows them all
+/// again, and changing the metric drops the threshold. Breaks when the
+/// threshold is applied to another metric or not to the visible counts;
+/// the engine tests check the values, not the tools.
+#[test]
+fn quality_colouring_and_threshold() {
+    let mut s = session();
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    let e = call(
+        "display.color_by",
+        json!({"by": "quality", "metric": "volume_ratio"}),
+        &mut s,
+    );
+    assert_eq!(e.result["color_by"], "quality");
+    assert_eq!(e.result["quality"]["metric"], "volume_ratio");
+    let range = e.result["quality"]["range"].as_array().unwrap().clone();
+    assert!(range[0].as_f64().unwrap() >= 1.0);
+    let all = e.result["visible_cells"].as_u64().unwrap();
+    let q = call("inspect.quality", json!({"bins": 8}), &mut s);
+    assert_eq!(q.result["cells"].as_u64(), Some(all));
+    assert_eq!(q.result["histogram"].as_array().unwrap().len(), 8);
+    let mid = (q.result["min"].as_f64().unwrap() + q.result["max"].as_f64().unwrap()) / 2.0;
+    let q = call("inspect.quality", json!({"above": mid}), &mut s);
+    let above = q.result["above"]["cells"].as_u64().unwrap();
+    let e = call("display.threshold", json!({"value": mid}), &mut s);
+    let shown = e.result["visible_cells"].as_u64().unwrap();
+    assert_eq!(shown, above);
+    assert!(shown < all, "{shown} of {all}");
+    assert_eq!(e.result["quality"]["threshold"], json!(mid));
+    let e = call("display.threshold", json!({"value": null}), &mut s);
+    assert_eq!(e.result["visible_cells"].as_u64(), Some(all));
+    call("display.threshold", json!({"value": mid}), &mut s);
+    let e = call(
+        "display.color_by",
+        json!({"by": "quality", "metric": "skewness"}),
+        &mut s,
+    );
+    assert_eq!(e.result["quality"]["threshold"], serde_json::Value::Null);
+    assert_eq!(e.result["visible_cells"].as_u64(), Some(all));
+    let e = call("inspect.quality", json!({"bins": 0}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
 }

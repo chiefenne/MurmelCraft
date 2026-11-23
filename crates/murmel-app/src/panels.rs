@@ -542,6 +542,8 @@ impl MurmelApp {
                 .filter(|&i| !d.is_hidden(i))
                 .filter_map(|i| d.item_color(mesh, t, i).map(|c| (c, name(i))))
                 .collect(),
+            // The quality legend (quality.rs) takes its place.
+            ColorBy::Quality => Vec::new(),
         };
         if entries.is_empty() {
             return;
@@ -586,7 +588,7 @@ fn murmel_mesh_roles(mesh: &murmel_mesh::Mesh) -> Vec<murmel_mesh::PatchRole> {
 }
 
 /// A number with up to six significant digits, without trailing zeros.
-fn number(x: f64) -> String {
+pub(crate) fn number(x: f64) -> String {
     if x == 0.0 || !x.is_finite() {
         return format!("{x}");
     }

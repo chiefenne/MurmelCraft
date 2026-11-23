@@ -7,8 +7,8 @@ use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::settings::{Settings, save_navigation, save_settings};
 use murmel_engine::{
-    Clip, ClipMode, ColorBy, Item, MeshColors, PickTarget, Projection, RenderMode, Rgb, ScreenAxis,
-    Session, StandardView, Theme, Visibility,
+    Clip, ClipMode, ColorBy, Item, MeshColors, Metric, PickTarget, Projection, Quality, RenderMode,
+    Rgb, ScreenAxis, Session, StandardView, Theme, Visibility,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -386,6 +386,18 @@ fn display_json(s: &Session) -> Value {
         "visible_cells": cells,
         "visible_faces": faces,
         "colors": colors,
+        "quality": quality_json(s),
+    })
+}
+
+/// The metric, its range over the cells (in colour mode quality) and the
+/// threshold.
+fn quality_json(s: &Session) -> Value {
+    let d = &s.display;
+    json!({
+        "metric": d.metric,
+        "range": d.quality_range().map(|(a, b)| [a, b]),
+        "threshold": d.threshold,
     })
 }
 
@@ -393,6 +405,9 @@ fn display_json(s: &Session) -> Value {
 #[serde(deny_unknown_fields)]
 struct ColorByInput {
     by: ColorBy,
+    /// The metric of colour mode quality; left out keeps the current one.
+    #[serde(default)]
+    metric: Option<Metric>,
 }
 
 #[derive(Deserialize)]
@@ -411,8 +426,89 @@ fn display_render_mode(input: Value, s: &mut Session) -> Run {
 fn display_color_by(input: Value, s: &mut Session) -> Run {
     let i: ColorByInput = parse(input)?;
     s.display.color_by = i.by;
+    if let Some(m) = i.metric {
+        if m != s.display.metric {
+            // A threshold is a value of one metric; it means nothing in
+            // another.
+            s.display.threshold = None;
+        }
+        s.display.metric = m;
+    }
     s.redraw();
     Ok(display_json(s))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThresholdInput {
+    /// Hide cells whose metric is below this value; null shows them again.
+    value: Option<f64>,
+    #[serde(default)]
+    metric: Option<Metric>,
+}
+
+fn display_threshold(input: Value, s: &mut Session) -> Run {
+    let i: ThresholdInput = parse(input)?;
+    need_mesh(s)?;
+    if let Some(v) = i.value
+        && !v.is_finite()
+    {
+        return Err(Diagnostic::new("TOOL002", "value must be a finite number"));
+    }
+    s.display.color_by = ColorBy::Quality;
+    if let Some(m) = i.metric {
+        s.display.metric = m;
+    }
+    s.display.threshold = i.value;
+    s.redraw();
+    Ok(display_json(s))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QualityInput {
+    #[serde(default)]
+    metric: Option<Metric>,
+    #[serde(default = "default_bins")]
+    bins: usize,
+    /// Also count the cells at or above this value.
+    #[serde(default)]
+    above: Option<f64>,
+}
+
+fn default_bins() -> usize {
+    20
+}
+
+fn inspect_quality(input: Value, s: &mut Session) -> Run {
+    let i: QualityInput = parse(input)?;
+    if !(1..=200).contains(&i.bins) {
+        return Err(Diagnostic::new("TOOL002", "bins must be between 1 and 200"));
+    }
+    let Some(m) = &s.mesh else {
+        return Err(Diagnostic::new("VIEW001", "no mesh is open"));
+    };
+    if s.display.quality.is_none() {
+        s.display.quality = Some(std::sync::Arc::new(Quality::compute(&m.mesh)));
+    }
+    let Some(q) = &s.display.quality else {
+        return Err(Diagnostic::new("VIEW001", "no mesh is open"));
+    };
+    let metric = i.metric.unwrap_or(s.display.metric);
+    let stats = q.stats(metric, i.bins);
+    let above = i
+        .above
+        .map(|a| q.values(metric).iter().filter(|&&x| x as f64 >= a).count());
+    Ok(json!({
+        "metric": metric,
+        "unit": metric.unit(),
+        "cells": stats.cells,
+        "min": stats.min,
+        "max": stats.max,
+        "mean": stats.mean,
+        "histogram": stats.histogram,
+        "above": i.above.map(|a| json!({"value": a, "cells": above})),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -1089,18 +1185,39 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "display.color_by",
-        version: 1,
+        version: 2,
         action: Action::Read,
         label_key: "tool-display-color-by",
-        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role or by the type of their cell.",
+        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold.",
         outputs: &[],
         input_schema: || {
             object(
-                json!({"by": {"enum": ["solid", "patch", "role", "cell_type"]}}),
+                json!({
+                    "by": {"enum": ["solid", "patch", "role", "cell_type", "quality"]},
+                    "metric": {"enum": ["non_orthogonality", "skewness", "volume_ratio", "face_count"]}
+                }),
                 &["by"],
             )
         },
         run: display_color_by,
+    },
+    Tool {
+        id: "display.threshold",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-display-threshold",
+        summary: "Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given).",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "value": {"oneOf": [{"type": "number"}, {"type": "null"}]},
+                    "metric": {"enum": ["non_orthogonality", "skewness", "volume_ratio", "face_count"]}
+                }),
+                &["value"],
+            )
+        },
+        run: display_threshold,
     },
     Tool {
         id: "display.set_color",
@@ -1231,6 +1348,25 @@ pub static TOOLS: &[Tool] = &[
         run: inspect_at,
     },
     Tool {
+        id: "inspect.quality",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-inspect-quality",
+        summary: "Statistics of a cell quality metric over all cells (the current one when left out): min, max, mean and a histogram of bins equal-width bins (default 20); with above, the number of cells at or above that value.",
+        outputs: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "metric": {"enum": ["non_orthogonality", "skewness", "volume_ratio", "face_count"]},
+                    "bins": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "above": {"type": "number"}
+                }),
+                &[],
+            )
+        },
+        run: inspect_quality,
+    },
+    Tool {
         id: "select.clear",
         version: 1,
         action: Action::Read,
@@ -1280,7 +1416,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-settings-set-colors",
-        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening; reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
+        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad); reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
         outputs: &[],
         input_schema: || {
             object(
@@ -1290,6 +1426,7 @@ pub static TOOLS: &[Tool] = &[
                     "role": {"type": "object", "propertyNames": {"enum": ["wall", "inlet", "outlet", "symmetry", "interface", "unspecified"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
                     "kind": {"type": "object", "propertyNames": {"enum": ["polyhedron", "prism", "hexahedron", "tetrahedron", "pyramid"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
                     "edge_darken": {"type": "number", "minimum": 0, "maximum": 1},
+                    "quality": {"type": "array", "items": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}, "minItems": 2},
                     "reset": {"type": "boolean"}
                 }),
                 &[],

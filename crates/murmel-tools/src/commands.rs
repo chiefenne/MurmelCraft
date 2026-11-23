@@ -8,7 +8,9 @@
 //! The table is data, so the window, the shortcut sheet, `docs/keys.md`
 //! and the tests all read the same keys.
 
-use murmel_engine::{ColorBy, Item, Projection, RenderMode, Session, StandardView};
+use murmel_engine::{
+    ColorBy, Item, Metric, Projection, Quality, RenderMode, Session, StandardView,
+};
 use serde_json::{Value, json};
 
 /// What a command does.
@@ -97,6 +99,27 @@ fn selected(s: &Session) -> Option<Vec<String>> {
         .map(|i| i.id(&m.mesh))
         .collect();
     (!ids.is_empty()).then_some(ids)
+}
+
+/// The value of the current quality metric at or above which `share` of
+/// the cells lie (the worst ones); `None` without a mesh.
+fn worst_share(s: &Session, share: f64) -> Option<f64> {
+    let m = s.mesh.as_ref()?;
+    let owned;
+    let q = match &s.display.quality {
+        Some(q) => q.as_ref(),
+        None => {
+            owned = Quality::compute(&m.mesh);
+            &owned
+        }
+    };
+    let mut v: Vec<f32> = q.values(s.display.metric).to_vec();
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_unstable_by(|a, b| a.total_cmp(b));
+    let k = ((v.len() as f64 * (1.0 - share)).floor() as usize).min(v.len() - 1);
+    Some(v[k] as f64)
 }
 
 /// Move the clip plane by `share` of its range (towards the side cut
@@ -322,7 +345,7 @@ pub fn commands() -> Vec<Command> {
         &["C"],
         Window(None),
     ));
-    for c in ColorBy::ALL {
+    for c in ColorBy::ALL.into_iter().filter(|&c| c != ColorBy::Quality) {
         v.push(cmd(
             format!("display.color_by:{}", c.key()),
             format!("cmd-color-by-{}", c.key()),
@@ -331,6 +354,33 @@ pub fn commands() -> Vec<Command> {
             Tool("display.color_by", json!({"by": c})),
         ));
     }
+    for m in Metric::ALL {
+        v.push(cmd(
+            format!("display.color_by:quality-{}", m.key()),
+            format!("cmd-color-by-quality-{}", m.key()),
+            "display",
+            &[],
+            Tool("display.color_by", json!({"by": "quality", "metric": m})),
+        ));
+    }
+    v.push(cmd(
+        "display.threshold:worst",
+        "cmd-threshold-worst",
+        "display",
+        &[],
+        Dynamic("display.threshold", |s| {
+            worst_share(s, 0.1).map(|t| json!({ "value": t }))
+        }),
+    ));
+    v.push(cmd(
+        "display.threshold:clear",
+        "cmd-threshold-clear",
+        "display",
+        &[],
+        Dynamic("display.threshold", |s| {
+            s.display.threshold.map(|_| json!({ "value": null }))
+        }),
+    ));
     for (axis, key) in [("x", "X"), ("y", "Y"), ("z", "Z")] {
         v.push(cmd(
             format!("clip.set:{axis}"),
@@ -512,6 +562,10 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     (
         "display.set_color",
         "needs a colour: the tree's context menu picks it",
+    ),
+    (
+        "inspect.quality",
+        "the quality legend shows the range and the histogram",
     ),
 ];
 

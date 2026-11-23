@@ -116,6 +116,9 @@ mod tests {
         for c in murmel_engine::ColorBy::ALL {
             assert!(t.has(&format!("color-by-{}", c.key())));
         }
+        for m in murmel_engine::Metric::ALL {
+            assert!(t.has(&format!("metric-{}", m.key())));
+        }
         for k in murmel_mesh::CellKind::ALL {
             assert!(t.has(&format!("kind-{}", k.name())));
         }
