@@ -9,7 +9,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `system.info` | 1 | read | Version and platform of this build. |
 | `system.commands` | 1 | read | The catalogue of every tool with its input schema. |
 | `diag.codes` | 1 | read | The diagnostic codes with their severity, meaning and fix. |
-| `mesh.open` | 1 | read | Load a .vtu (KoflCraft's foehncraft.vtu) and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones and patches. |
+| `mesh.open` | 2 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). |
 | `mesh.close` | 1 | read | Drop the open mesh from the session. |
 | `mesh.info` | 1 | read | Counts, zones, patches, metadata and evidence of the open mesh. |
 | `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport. |
@@ -87,6 +87,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "additionalProperties": false,
   "properties": {
     "path": {
+      "description": "A .vtu file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)",
       "type": "string"
     }
   },
@@ -1066,6 +1067,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `MESH010` | error | The mesh has no volume cells and no boundary faces. | Open a volume mesh. |
 | `MESH012` | error | The file has more than one Piece. | Write the mesh as one Piece. |
 | `MESH011` | warning | mesh-evidence.json beside the mesh cannot be read; the mesh opens without it. | Write the evidence again with KoflCraft or remove it. |
+| `MESH013` | error | The folder holds no OpenFOAM mesh, or the polyMesh lacks one of points, faces, owner, neighbour and boundary. | Open a case folder, its constant folder or the polyMesh folder itself. |
+| `MESH014` | error | An OpenFOAM file is malformed: no FoamFile header, or a list or dictionary is broken. | Write the mesh again; the file may be truncated or edited by hand. |
+| `MESH015` | error | The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces). | Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch. |
 | `RENDER001` | error | No GPU adapter was found (no driver, or no software renderer such as Mesa lavapipe). | Install a Vulkan, Metal or DirectX 12 driver; on a headless Linux machine install mesa-vulkan-drivers. |
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |
 | `RENDER003` | error | The screenshot size is outside 1 to 8192 pixels per side. | Pass width and height between 1 and 8192. |

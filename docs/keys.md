@@ -8,6 +8,7 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | Keys | Command | Calls |
 |---|---|---|
 | `Ctrl + O` | Open mesh… | window, then `mesh.open` |
+| `Ctrl + Shift + O` | Open OpenFOAM case folder… | window, then `mesh.open` |
 | `Ctrl + K` | Command palette | window |
 | `F1` | Keyboard shortcuts | window |
 | `T` | Show or hide the model tree | window |

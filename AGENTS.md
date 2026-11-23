@@ -125,14 +125,14 @@ the same code path in the fast run.
 
 | Path | What |
 |---|---|
-| `crates/murmel-mesh` | `.vtu` reader (VTK polyhedra 42, `region`, zone and boundary names and roles), `mesh-evidence.json`, mesh model and summary |
+| `crates/murmel-mesh` | `.vtu` reader (VTK polyhedra 42, `region`, zone and boundary names and roles), OpenFOAM `polyMesh` reader (ascii, binary, gzip, `cellZones`), `mesh-evidence.json`, mesh model and summary |
 | `crates/murmel-engine` | session, tool journal (undo and redo), camera (turntable with roll, three projection modes, 26 cube views, rotation about screen axes), view cube geometry, navigation bindings and presets, tokens and user colours, settings files, triangulated surface and feature edges |
 | `crates/murmel-render` | wgpu renderer for the window and offscreen PNGs, render tests |
 | `crates/murmel-tools` | tool registry, result envelope, diagnostic codes, `docs/tools.md`; command table (keys and palette), `docs/keys.md` |
 | `crates/murmel-cli` | `murmel`, the command line of the registry |
 | `crates/murmel-app` | `murmelcraft`, the egui + eframe window: panels, viewport, view cube, command palette, shortcut sheet |
 | `assets/` | tokens, fonts, icons, translations, with provenance |
-| `test-fixtures/` | KoflCraft meshes, with provenance |
+| `test-fixtures/` | KoflCraft meshes and OpenFOAM polyMesh cases, with provenance |
 
 The UI spec is the maintainer's document "MurmelCraft mesh viewer UI spec";
 its milestones (V0.1 … V2) order the work.

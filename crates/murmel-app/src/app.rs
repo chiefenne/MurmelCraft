@@ -193,8 +193,24 @@ impl MurmelApp {
     pub(crate) fn open_dialog(&mut self) {
         let picked = rfd::FileDialog::new()
             .set_title(self.i18n.tr("toolbar-open-tip"))
-            .add_filter("VTK unstructured grid", &["vtu"])
+            .add_filter(
+                self.i18n.tr("open-filter-meshes"),
+                &["vtu", "foam", "OpenFOAM"],
+            )
+            .add_filter(self.i18n.tr("open-filter-vtu"), &["vtu"])
+            .add_filter(self.i18n.tr("open-filter-foam"), &["foam", "OpenFOAM"])
+            .add_filter(self.i18n.tr("open-filter-all"), &["*"])
             .pick_file();
+        if let Some(p) = picked {
+            self.open_path(p);
+        }
+    }
+
+    /// Pick an OpenFOAM case, `constant` or `polyMesh` folder.
+    pub(crate) fn open_folder_dialog(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .set_title(self.i18n.tr("cmd-open-folder"))
+            .pick_folder();
         if let Some(p) = picked {
             self.open_path(p);
         }

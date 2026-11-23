@@ -264,10 +264,11 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 .path
                 .file_name()
                 .map_or(String::new(), |f| f.to_string_lossy().into_owned());
-            let mut v = vec![
-                row("file", file),
-                row("format", "VTK unstructured grid (.vtu)"),
-            ];
+            let format = match m.metadata.get("openfoam_format") {
+                Some(f) => format!("OpenFOAM polyMesh ({f})"),
+                None => "VTK unstructured grid (.vtu)".into(),
+            };
+            let mut v = vec![row("file", file), row("format", format)];
             if let Some(ver) = ev
                 .and_then(|e| e.koflcraft_version.clone())
                 .or_else(|| m.metadata.get("koflcraft_version").cloned())
@@ -319,6 +320,12 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ];
             if let Some(t) = ep.and_then(|e| e.foehncraft_type.clone()) {
                 v.push(row("foehncraft_type", t));
+            }
+            if let Some(t) = m
+                .metadata
+                .get(&format!("openfoam_patch_type.{}", patch.name))
+            {
+                v.push(row("openfoam_type", t.clone()));
             }
             v.push(row("faces", s.faces));
             v.push(unit("area", round(s.area, 9), "m²"));
@@ -566,6 +573,7 @@ mod tests {
             evidence: None,
             evidence_problem: None,
             digest: String::new(),
+            files: Vec::new(),
             validity: Validity::NoEvidence,
         };
         let d = Display::default();

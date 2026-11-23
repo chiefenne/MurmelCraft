@@ -23,8 +23,12 @@ pub struct OpenMesh {
     /// Why the evidence beside the mesh could not be read (MESH011).
     pub evidence_problem: Option<MeshError>,
     pub surface: Surface,
-    /// SHA-256 of the mesh file, hex.
+    /// SHA-256 of the mesh file, hex. A mesh of several files (an
+    /// OpenFOAM polyMesh) gets the SHA-256 of its `files` listed as
+    /// `sha256sum` prints them (`<hex>  <name>` lines).
     pub digest: String,
+    /// The name and SHA-256 (hex) of each file the mesh was read from.
+    pub files: Vec<(String, String)>,
     /// The validity badge of the tree root.
     pub validity: Validity,
 }
@@ -48,11 +52,11 @@ impl Validity {
         }
     }
 
-    /// Check `mesh` (read from `path`, with SHA-256 `digest`) against its
-    /// evidence.
+    /// Check `mesh`, read from `files` (name and SHA-256 of each), against
+    /// its evidence: every file the evidence lists must match, and the
+    /// mesh file (the `.vtu`, or the polyMesh's `faces`) must be listed.
     pub fn check(
-        path: &Path,
-        digest: &str,
+        files: &[(String, String)],
         mesh: &Mesh,
         evidence: Option<&Evidence>,
         problem: Option<&MeshError>,
@@ -64,15 +68,24 @@ impl Validity {
             return Validity::NoEvidence;
         };
         let mut why = Vec::new();
-        let name = path
-            .file_name()
-            .map_or(String::new(), |f| f.to_string_lossy().into_owned());
-        match e.digest(&name) {
-            Some(d) if d.eq_ignore_ascii_case(digest) => {}
-            Some(_) => why.push(format!(
-                "{name} differs from the file the evidence describes"
-            )),
-            None => why.push(format!("the evidence does not list {name}")),
+        let mut listed = 0;
+        for (name, digest) in files {
+            // OpenFOAM's compressed files are checked by their plain name.
+            let plain = name.strip_suffix(".gz").unwrap_or(name);
+            match e.digest(name).or_else(|| e.digest(plain)) {
+                Some(d) if d.eq_ignore_ascii_case(digest) => listed += 1,
+                Some(_) => {
+                    listed += 1;
+                    why.push(format!(
+                        "{name} differs from the file the evidence describes"
+                    ));
+                }
+                None => {}
+            }
+        }
+        if listed == 0 {
+            let name = files.first().map_or("the mesh file", |f| f.0.as_str());
+            why.push(format!("the evidence does not list {name}"));
         }
         if let Some(c) = e.cells
             && c as usize != mesh.cell_count()
@@ -102,14 +115,19 @@ impl Validity {
 
 /// SHA-256 of a file, hex; empty when it cannot be read.
 pub fn sha256(path: &Path) -> String {
-    use sha2::{Digest, Sha256};
     match std::fs::read(path) {
-        Ok(bytes) => Sha256::digest(&bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect(),
+        Ok(bytes) => sha256_bytes(&bytes),
         Err(_) => String::new(),
     }
+}
+
+/// SHA-256 of bytes, hex.
+pub fn sha256_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Compute the cell quality of `mesh` the first time colour mode quality
@@ -167,11 +185,21 @@ impl Session {
 
     /// Read a mesh and its evidence, replace the open one and fit the view.
     pub fn open(&mut self, path: &Path) -> Result<&OpenMesh, MeshError> {
-        let mesh = murmel_mesh::read(path)?;
-        let (evidence, evidence_problem) = match Evidence::beside(path) {
+        let mut mesh = murmel_mesh::read(path)?;
+        // The evidence sits beside the mesh file: beside the .vtu, or in
+        // the polyMesh folder among its files.
+        let first = mesh
+            .files
+            .first()
+            .cloned()
+            .unwrap_or_else(|| path.to_path_buf());
+        let (evidence, evidence_problem) = match Evidence::beside(&first) {
             Ok(e) => (e, None),
             Err(e) => (None, Some(e)),
         };
+        if let Some(e) = &evidence {
+            mesh.apply_evidence_roles(e);
+        }
         // A new mesh starts with everything shown and nothing selected;
         // the colouring stays. Its journal starts empty.
         self.journal.clear();
@@ -184,14 +212,27 @@ impl Session {
         self.display.quality = None;
         ensure_quality(&mut self.display, &mesh);
         let surface = Surface::build(&mesh, &self.tokens, &self.display);
-        let digest = sha256(path);
-        let validity = Validity::check(
-            path,
-            &digest,
-            &mesh,
-            evidence.as_ref(),
-            evidence_problem.as_ref(),
-        );
+        let files: Vec<(String, String)> = mesh
+            .files
+            .iter()
+            .map(|f| {
+                let name = f
+                    .file_name()
+                    .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+                (name, sha256(f))
+            })
+            .collect();
+        let digest = match files.as_slice() {
+            [(_, d)] => d.clone(),
+            _ => sha256_bytes(
+                files
+                    .iter()
+                    .map(|(n, d)| format!("{d}  {n}\n"))
+                    .collect::<String>()
+                    .as_bytes(),
+            ),
+        };
+        let validity = Validity::check(&files, &mesh, evidence.as_ref(), evidence_problem.as_ref());
         if let Some(b) = &surface.bounds {
             self.camera.fit(b, self.aspect());
         }
@@ -203,6 +244,7 @@ impl Session {
             evidence_problem,
             surface,
             digest,
+            files,
             validity,
         }))
     }
@@ -295,14 +337,37 @@ mod tests {
         assert_eq!(m.validity, Validity::Valid);
         let (mesh, ev) = (m.mesh.clone(), m.evidence.clone());
         let stale = Validity::check(
-            &fixture("channel/foehncraft.vtu"),
-            "00",
+            &[("foehncraft.vtu".into(), "00".into())],
             &mesh,
             ev.as_ref(),
             None,
         );
         assert!(matches!(stale, Validity::Failed(w) if w.len() == 1));
         let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
+        assert_eq!(m.validity, Validity::NoEvidence);
+    }
+
+    /// Invariant: KoflCraft's OpenFOAM export is checked file by file
+    /// against the evidence in its polyMesh folder (green), one changed
+    /// file turns it red, and a polyMesh without evidence is amber. A
+    /// check of only one file, or of the folder path, would show green on
+    /// an edited `owner`.
+    #[test]
+    fn validity_of_a_polymesh() {
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let m = s.open(&fixture("openfoam/box")).unwrap();
+        assert_eq!(m.validity, Validity::Valid, "{:?}", m.validity);
+        assert_eq!(m.files.len(), 6);
+        assert_eq!(m.digest.len(), 64);
+        let (mesh, ev) = (m.mesh.clone(), m.evidence.clone());
+        let mut files = m.files.clone();
+        files[2].1 = "00".into();
+        let stale = Validity::check(&files, &mesh, ev.as_ref(), None);
+        assert!(
+            matches!(stale, Validity::Failed(w) if w == ["owner differs from the file the evidence describes"])
+        );
+        let m = s.open(&fixture("openfoam/channel_ascii")).unwrap();
         assert_eq!(m.validity, Validity::NoEvidence);
     }
 }

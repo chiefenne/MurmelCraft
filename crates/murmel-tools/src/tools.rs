@@ -94,7 +94,8 @@ fn mesh_summary(s: &Session) -> Value {
     }
     json!({
         "path": m.path,
-        "format": "vtu",
+        "format": if m.mesh.metadata.contains_key("openfoam_format") { "openfoam" } else { "vtu" },
+        "files": m.files.iter().map(|(n, d)| json!({"name": n, "sha256": d})).collect::<Vec<_>>(),
         "summary": m.mesh.summary(),
         "metadata": m.mesh.metadata,
         "evidence": m.evidence,
@@ -1169,12 +1170,17 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "mesh.open",
-        version: 1,
+        version: 2,
         action: Action::Read,
         label_key: "tool-mesh-open",
-        summary: "Load a .vtu (KoflCraft's foehncraft.vtu) and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones and patches.",
+        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip).",
         outputs: &[],
-        input_schema: || object(json!({"path": {"type": "string"}}), &["path"]),
+        input_schema: || {
+            object(
+                json!({"path": {"type": "string", "description": "A .vtu file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)"}}),
+                &["path"],
+            )
+        },
         run: mesh_open,
     },
     Tool {

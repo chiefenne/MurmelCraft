@@ -13,16 +13,18 @@
 
 mod boundary;
 pub mod evidence;
+pub mod polymesh;
 mod vtu;
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 pub use boundary::NO_CELL;
 pub use evidence::{Evidence, EvidencePatch};
+pub use polymesh::{PolyMeshFiles, read_polymesh, read_polymesh_bytes};
 pub use vtu::{read_vtu, read_vtu_str};
 
 /// A failure to read a mesh, with its diagnostic code.
@@ -112,6 +114,21 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "MESH011",
         "mesh-evidence.json beside the mesh cannot be read; the mesh opens without it.",
         "Write the evidence again with KoflCraft or remove it.",
+    ),
+    (
+        "MESH013",
+        "The folder holds no OpenFOAM mesh, or the polyMesh lacks one of points, faces, owner, neighbour and boundary.",
+        "Open a case folder, its constant folder or the polyMesh folder itself.",
+    ),
+    (
+        "MESH014",
+        "An OpenFOAM file is malformed: no FoamFile header, or a list or dictionary is broken.",
+        "Write the mesh again; the file may be truncated or edited by hand.",
+    ),
+    (
+        "MESH015",
+        "The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces).",
+        "Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch.",
     ),
 ];
 
@@ -294,6 +311,9 @@ pub struct Mesh {
     /// True when the boundary was found from the cells (the file had no
     /// boundary polygons).
     pub boundary_extracted: bool,
+    /// The files the mesh was read from: the `.vtu`, or the files of an
+    /// OpenFOAM `polyMesh` (empty when read from memory).
+    pub files: Vec<PathBuf>,
 }
 
 /// Counts and extent of a mesh, as `mesh.open` reports them.
@@ -400,6 +420,17 @@ impl Mesh {
         if o == c { n } else { o }
     }
 
+    /// Take the patch roles KoflCraft recorded in its evidence (a patch map
+    /// may have set them, BC-04); patches the evidence does not name keep
+    /// the role the file gave.
+    pub fn apply_evidence_roles(&mut self, evidence: &Evidence) {
+        for p in &mut self.patches {
+            if let Some(role) = evidence.patch(&p.name).and_then(|e| e.role.as_deref()) {
+                p.role = PatchRole::parse(role);
+            }
+        }
+    }
+
     /// The bounds of the points the boundary uses (all points when there
     /// is no boundary).
     pub fn bounds(&self) -> Bounds {
@@ -463,9 +494,19 @@ impl Mesh {
     }
 }
 
-/// Read a mesh file by its extension (`.vtu` only in V0.1).
+/// Read a mesh: a `.vtu` file, or an OpenFOAM mesh given by its case,
+/// `constant` or `polyMesh` folder, a `.foam` file in the case or one of
+/// the polyMesh files ([`polymesh::is_openfoam`]).
 pub fn read(path: &Path) -> Result<Mesh, MeshError> {
-    read_vtu(path)
+    let vtu = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("vtu"));
+    if !vtu && polymesh::is_openfoam(path) {
+        return read_polymesh(path);
+    }
+    let mut mesh = read_vtu(path)?;
+    mesh.files = vec![path.to_path_buf()];
+    Ok(mesh)
 }
 
 #[cfg(test)]

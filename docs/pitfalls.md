@@ -96,6 +96,13 @@ problem took more than a few minutes to understand.
   dropped its own Vulkan instance on its own thread; Mesa 25 never did.
   Offscreen renders share one device (`Gpu::shared`) and take turns.
 
+## Mesh model
+
+- **`Polygons::default()` is not `Polygons::new()`.** The derived default
+  has no leading 0 in `start`, so pushing into it shifts every polygon by
+  one. Build a `Mesh` with `faces: Polygons::new()` and
+  `boundary: Polygons::new()`.
+
 ## Serde
 
 - **`flatten` and `deny_unknown_fields` do not combine.** A flattened
@@ -112,6 +119,19 @@ problem took more than a few minutes to understand.
   `boundary_roles` are VTK `String` arrays written as byte values with a
   zero after each string; each string is `id=name`. `region` is the zone of
   a volume cell and the patch of a boundary polygon (type 7).
+- **OpenFOAM faces turn from the owner to the neighbour.** A face is
+  outward for its owner only; the neighbour's copy is reversed (first node
+  kept) before it joins the neighbour's cell. The reader's tests check that
+  every cell closes (Newell's area vectors sum to zero) and has a positive
+  volume.
+- **OpenFOAM binary lists.** The count, `(`, then the raw values, then
+  `)`; no comment or white space is skipped inside. Widths and byte order
+  come from the header's `arch` (`LSB;label=32;scalar=64` when absent).
+  `faceCompactList` is two label lists: N + 1 offsets, then the nodes.
+- **OpenFOAM evidence lives in the polyMesh folder.** KoflCraft's
+  `export … openfoam DIR` writes `mesh-evidence.json` among the polyMesh
+  files and lists the digest of each; the validity badge checks them all
+  (a `.gz` file is looked up by its plain name).
 - **Prism layers are polyhedra.** KoflCraft writes its layer cells as type
   42; the cell type comes from the faces (2 triangles and 3 quads: prism).
 

@@ -66,6 +66,7 @@ impl MurmelApp {
         if let Run::Window(_) = c.run {
             match c.id.as_str() {
                 "window.open" => self.open_dialog(),
+                "window.open_folder" => self.open_folder_dialog(),
                 "window.screenshot" => self.screenshot_dialog(),
                 "window.palette" => self.open_palette(String::new()),
                 "window.shortcuts" => self.shortcuts_open = !self.shortcuts_open,

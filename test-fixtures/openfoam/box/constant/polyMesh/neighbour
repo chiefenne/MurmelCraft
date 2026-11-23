@@ -1,0 +1,19 @@
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       labelList;
+    note        "nPoints:21 nCells:4 nFaces:22 nInternalFaces:6";
+    location    "constant/polyMesh";
+    object      neighbour;
+}
+
+6
+(
+1
+2
+3
+2
+3
+3
+)

@@ -12,6 +12,10 @@ tool that the window, the command line and (later) the MCP server share.
 
 - Opens KoflCraft's `foehncraft.vtu` (VTK polyhedra, boundary polygons, zone
   and patch names and roles) and the `mesh-evidence.json` beside it.
+- Opens OpenFOAM meshes: a case, `constant` or `polyMesh` folder, or a
+  `.foam` file in the case (ascii, binary and gzip files, `cellZones`),
+  such as KoflCraft's `export … openfoam`; the evidence in the polyMesh
+  folder is checked file by file.
 - Shaded with edges, patch colours, orbit, pan, zoom to the cursor, fit,
   home, the three projection modes (default: perspective with orthographic
   faces), dark and light themes switched live.
@@ -24,12 +28,13 @@ tool that the window, the command line and (later) the MCP server share.
 Not yet (see the milestones of the UI spec): model tree, properties, colour
 by role or cell type (V0.2), view cube and command palette (V0.3), clip
 plane, picking, orbit about the point under the cursor and cursor
-coordinates (V0.4), OpenFOAM polyMesh, MCP server, journal and undo (V1.0).
+coordinates (V0.4), MCP server (V1.0).
 
 ## Build and run
 
 ```sh
 cargo run --release -p murmel-app -- test-fixtures/channel/foehncraft.vtu
+cargo run --release -p murmel-app -- test-fixtures/openfoam/dual_polyhedra
 cargo run --release -p murmel-cli -- call view.screenshot \
   --input '{"mesh": "test-fixtures/channel/foehncraft.vtu", "view": "iso", "path": "shot.png"}'
 cargo run -p murmel-cli -- commands --markdown   # docs/tools.md
