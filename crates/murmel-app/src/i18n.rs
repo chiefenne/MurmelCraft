@@ -81,6 +81,7 @@ mod tests {
             include_str!("panels.rs"),
             include_str!("commands.rs"),
             include_str!("cube.rs"),
+            include_str!("focus.rs"),
         ];
         for s in src {
             for part in s

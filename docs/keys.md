@@ -14,6 +14,8 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | `T` | Show or hide the model tree | window |
 | `P` | Show or hide the properties | window |
 | `Ctrl + F` | Filter the model tree | window |
+| `F6` | Next region (title bar, toolbar, tree, viewport, properties, status) | window |
+| `Shift + F6` | Previous region | window |
 | `F` | Fit view | `view.fit` `{}` |
 | `Home` | Home view | `view.standard` `{"view":"home"}` |
 | `Alt + 1` | Front | `view.standard` `{"view":"front"}` |

@@ -43,6 +43,17 @@ pub fn key_text(key: &str) -> String {
         .join(" + ")
 }
 
+/// The keys a focused widget uses itself: the arrows (with or without
+/// Shift) and Esc.
+fn widget_key(s: &KeyboardShortcut) -> bool {
+    let plain = !s.modifiers.command && !s.modifiers.alt;
+    plain
+        && matches!(
+            s.logical_key,
+            Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Escape
+        )
+}
+
 /// The palette's state while it is open.
 #[derive(Default)]
 pub struct Palette {
@@ -77,6 +88,8 @@ impl MurmelApp {
                     self.focus_filter = true;
                 }
                 "window.settings" => self.settings_open = true,
+                "window.next_region" => self.cycle_region(ctx, true),
+                "window.previous_region" => self.cycle_region(ctx, false),
                 "window.color_by" => {
                     let q = self.i18n.tr("toolbar-color-by");
                     self.open_palette(q);
@@ -120,12 +133,25 @@ impl MurmelApp {
             )
         });
         let typing = ctx.text_edit_focused();
+        // A widget the keyboard reached keeps the arrows (tree rows,
+        // sliders, the next button) and Esc (leave it); the viewport and
+        // a clicked button leave them to the view (docs/pitfalls.md).
+        let widget_keys = self.focus.widget_keys();
         for (s, c) in keyed {
             // Only a text field keeps the keys; a clicked button must not
             // swallow F, H or Esc (docs/pitfalls.md). The palette and the
             // filter work from a text field too.
-            let always = matches!(c.id.as_str(), "window.palette" | "window.filter");
+            let always = matches!(
+                c.id.as_str(),
+                "window.palette"
+                    | "window.filter"
+                    | "window.next_region"
+                    | "window.previous_region"
+            );
             if typing && !always {
+                continue;
+            }
+            if widget_keys && widget_key(&s) {
                 continue;
             }
             if self.palette.is_some() && c.id != "window.palette" {

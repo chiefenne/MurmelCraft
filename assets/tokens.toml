@@ -28,7 +28,9 @@ viewport_bottom = "#D9DEE4"
 accent = "#AD3285"
 status_ok = "#2E8A53"
 status_warn = "#A9760F"
-status_error = "#C7402F"
+# Darkened from #C7402F (4.38:1 on bg_app) so the status bar's error
+# text reaches WCAG AA, 4.66:1 (2026-11-23, accessibility pass).
+status_error = "#C03D2D"
 
 [mesh]
 # The default colour of the mesh (colour mode solid), decided by the

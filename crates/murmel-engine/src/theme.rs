@@ -340,8 +340,14 @@ mod tests {
         assert_eq!(toml::from_str::<MeshColors>(&text).unwrap(), c);
     }
 
-    /// WCAG relative luminance contrast of primary text on the panel and of
-    /// the accent on the app background: at least AA (4.5 and 3).
+    /// Invariant (WCAG 2.2 AA, 1.4.3 and 1.4.11): in both themes, primary
+    /// and secondary text reach 4.5:1 on every background text sits on
+    /// (app, panel, raised); the error text of the status bar reaches
+    /// 4.5:1 on the app background; the accent (focus ring, selection
+    /// outline) and the status dots reach 3:1 on the backgrounds they are
+    /// drawn on, the focus ring also on both ends of the viewport
+    /// gradient. Breaks when a token is lightened or darkened past these;
+    /// no other test reads the palettes' contrast.
     #[test]
     fn contrast_is_aa() {
         fn lum(c: Rgb) -> f32 {
@@ -353,10 +359,40 @@ mod tests {
             (x.max(y) + 0.05) / (x.min(y) + 0.05)
         }
         let t = Tokens::builtin().unwrap();
-        for p in [&t.dark, &t.light] {
-            assert!(ratio(p.text_primary, p.bg_panel) >= 4.5);
-            assert!(ratio(p.text_secondary, p.bg_panel) >= 4.5);
-            assert!(ratio(p.accent, p.bg_app) >= 3.0);
+        for (theme, p) in [("dark", &t.dark), ("light", &t.light)] {
+            let check = |what: &str, fg: Rgb, bg: (&str, Rgb), min: f32| {
+                let r = ratio(fg, bg.1);
+                assert!(
+                    r >= min,
+                    "{theme}: {what} on {} is {r:.2}:1, below {min}",
+                    bg.0
+                );
+            };
+            let text_bgs = [
+                ("bg_app", p.bg_app),
+                ("bg_panel", p.bg_panel),
+                ("bg_raised", p.bg_raised),
+            ];
+            for bg in text_bgs {
+                check("text_primary", p.text_primary, bg, 4.5);
+                check("text_secondary", p.text_secondary, bg, 4.5);
+                check("accent", p.accent, bg, 3.0);
+            }
+            for bg in [
+                ("viewport_top", p.viewport_top),
+                ("viewport_bottom", p.viewport_bottom),
+            ] {
+                check("accent", p.accent, bg, 3.0);
+                check("text_secondary", p.text_secondary, bg, 4.5);
+            }
+            check("status_error", p.status_error, ("bg_app", p.bg_app), 4.5);
+            for (what, c) in [
+                ("status_ok", p.status_ok),
+                ("status_warn", p.status_warn),
+                ("status_error", p.status_error),
+            ] {
+                check(what, c, ("bg_panel", p.bg_panel), 3.0);
+            }
         }
     }
 

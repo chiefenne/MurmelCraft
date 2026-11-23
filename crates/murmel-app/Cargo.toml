@@ -24,5 +24,8 @@ serde_json.workspace = true
 unic-langid.workspace = true
 wgpu.workspace = true
 
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["eframe"] }
+
 [lints]
 workspace = true

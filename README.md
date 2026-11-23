@@ -27,6 +27,9 @@ tool that the window, the command line and the MCP server share.
 - An MCP server for agents (`murmel mcp`, [docs/mcp.md](docs/mcp.md)): every
   tool of the registry on one headless session, paths confined to read and
   write roots, screenshots returned as images.
+- Keyboard and screen-reader use ([docs/accessibility.md](docs/accessibility.md)):
+  F6 between the regions, a visible focus ring, AccessKit names for every
+  pane and control, palettes checked for WCAG AA contrast.
 
 Not yet (see the milestones of the UI spec): model tree, properties, colour
 by role or cell type (V0.2), view cube and command palette (V0.3), clip

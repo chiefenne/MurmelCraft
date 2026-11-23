@@ -89,13 +89,24 @@ impl MurmelApp {
         let secondary = color(p.text_secondary);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(icon::SEARCH).color(secondary));
+            // The search glyph is painted, not a label: it would be read
+            // as a private-use character.
+            let (g, _) = ui.allocate_exact_size(egui::vec2(14.0, 20.0), Sense::hover());
+            ui.painter().text(
+                g.center(),
+                egui::Align2::CENTER_CENTER,
+                icon::SEARCH,
+                egui::FontId::proportional(13.0),
+                secondary,
+            );
             let hint = self.i18n.tr("tree-filter");
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.tree_filter)
                     .hint_text(hint)
                     .desired_width(f32::INFINITY),
             );
+            crate::focus::set_name(ui, r.id, &self.i18n.tr("cmd-filter"));
+            self.focus.offer(crate::focus::Region::Tree, &r);
             if std::mem::take(&mut self.focus_filter) {
                 r.request_focus();
             }
@@ -221,6 +232,23 @@ impl MurmelApp {
                 RichText::new(&r.label)
             };
             let label = ui.selectable_label(selected, text);
+            let row = self.i18n.tr_args(
+                if matches!(r.item, Item::Patch(_)) {
+                    "tree-row-faces"
+                } else {
+                    "tree-row-cells"
+                },
+                &[
+                    ("item", r.label.clone().into()),
+                    ("count", count(r.count).into()),
+                ],
+            );
+            let row = if hidden {
+                self.i18n.tr_args("tree-row-hidden", &[("row", row.into())])
+            } else {
+                row
+            };
+            label.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, row.clone()));
             let label = match &r.tip {
                 Some(t) => label.on_hover_text(t),
                 None => label,
@@ -411,7 +439,7 @@ impl MurmelApp {
             );
         }
         ui.add_space(4.0);
-        egui::ScrollArea::vertical()
+        let out = egui::ScrollArea::vertical()
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 // Label and value columns of fixed shares of the panel,
@@ -419,6 +447,7 @@ impl MurmelApp {
                 // values never widen the panel.
                 let width = ui.available_width();
                 let label_w = (width * 0.48).round();
+                let mut first: Option<egui::Response> = None;
                 for r in &c.rows {
                     let key = r["key"].as_str().unwrap_or("");
                     let mut label = self.i18n.tr(&format!("prop-{key}"));
@@ -450,13 +479,28 @@ impl MurmelApp {
                                 self.i18n
                                     .tr_args("props-copy", &[("value", value.clone().into())]),
                             );
+                        // Read as "Cells: 776", and the first row is where
+                        // F6 lands.
+                        let name = self.i18n.tr_args(
+                            "prop-row-name",
+                            &[
+                                ("label", label.clone().into()),
+                                ("value", value.clone().into()),
+                            ],
+                        );
+                        crate::focus::set_name(ui, resp.id, &name);
+                        first.get_or_insert(resp.clone());
                         if resp.clicked() {
                             ui.ctx().copy_text(value.clone());
                         }
                     });
                     ui.add_space(2.0);
                 }
+                first
             });
+        if let Some(r) = out.inner {
+            self.focus.offer(crate::focus::Region::Properties, &r);
+        }
     }
 
     fn format_value(&self, key: &str, v: &Value) -> String {
