@@ -6,6 +6,7 @@
 //! murmel keys [--markdown]
 //! murmel call TOOL_ID [--input FILE|-|JSON]
 //! murmel run --script FILE
+//! murmel mcp --read-root DIR --write-root DIR
 //! murmel diag codes
 //! murmel info
 //! ```
@@ -23,6 +24,9 @@ const USAGE: &str = "Usage: murmel COMMAND
                                         run one tool and print its result envelope
   murmel run --script FILE              run a JSON list of {\"tool\", \"input\"} calls
                                         in one session; stops at the first failure
+  murmel mcp --root DIR                 the MCP server for agents on stdio, confined
+                                        to DIR (or --read-root DIR --write-root DIR);
+                                        `murmel mcp --help` for more
   murmel diag codes                     the diagnostic codes
   murmel info                           version and platform
 
@@ -144,6 +148,10 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
 }
 
 fn main() -> ExitCode {
+    let mut os = std::env::args_os().skip(1);
+    if os.next().is_some_and(|a| a == "mcp") {
+        return murmel_mcp::main(os.collect());
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
         Ok(c) => c,

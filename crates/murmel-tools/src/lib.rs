@@ -1,7 +1,7 @@
 //! The tool registry of MurmelCraft (UI spec, "Viewer tools in the
 //! registry"). Every control in the window calls one of these tools; the
-//! CLI (`murmel call ID --input in.json`) and, later, the MCP server call
-//! the same ids. Every call ends in the same result envelope
+//! CLI (`murmel call ID --input in.json`) and the MCP server
+//! (`murmel mcp`, crate `murmel-mcp`) call the same ids. Every call ends in the same result envelope
 //! (`murmelcraft.tool-result`), as in KoflCraft (AG-12) and FoehnCraft
 //! (D196).
 //!
@@ -10,7 +10,8 @@
 //!
 //! Tools change the session only; the kind `write-files` marks the tools
 //! that also write files and names them (`outputs`), so an approval table
-//! can judge a call before it runs.
+//! can judge a call before it runs; `reads` names the input fields that are
+//! paths the call reads, so the MCP server can confine both.
 
 pub mod commands;
 mod diag;
@@ -25,7 +26,7 @@ use serde_json::{Value, json};
 
 pub use diag::{Code, Severity, code, codes};
 pub use markdown::markdown;
-pub use tools::{JOURNALED, NOT_JOURNALED};
+pub use tools::{JOURNALED, NOT_JOURNALED, READS_ONLY, reads_only};
 
 pub const RESULT_FORMAT: &str = "murmelcraft.tool-result";
 pub const CATALOGUE_FORMAT: &str = "murmelcraft.tool-catalogue";
@@ -76,6 +77,8 @@ pub struct Tool {
     pub summary: &'static str,
     /// Input fields that name files the call writes.
     pub outputs: &'static [&'static str],
+    /// Input fields that name files or folders the call reads.
+    pub reads: &'static [&'static str],
     input_schema: fn() -> Value,
     run: RunFn,
 }
@@ -111,7 +114,8 @@ pub struct Envelope {
 }
 
 impl Envelope {
-    fn failed(tool: &str, version: u32, d: Diagnostic) -> Self {
+    /// A failed call of `tool` (also a call refused before it ran).
+    pub fn failed(tool: &str, version: u32, d: Diagnostic) -> Self {
         let exit_code = if d.code.starts_with("TOOL") { 2 } else { 1 };
         Self {
             format: RESULT_FORMAT.into(),
@@ -189,6 +193,7 @@ pub fn catalogue() -> Value {
             "label_key": t.label_key,
             "summary": t.summary,
             "outputs": t.outputs,
+            "reads": t.reads,
             "input_schema": t.input_schema(),
         })).collect::<Vec<_>>(),
     })

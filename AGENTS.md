@@ -22,18 +22,24 @@ The method is the ArtCraft Craft Anything method of KoflCraft and FoehnCraft:
 
 - **MUST** add every action a front end performs as a tool of the registry
   (`crates/murmel-tools`, ids `area.verb`). A click, a key, a menu item, the
-  CLI and (later) the MCP server all call the same tool id; panels read the
-  session and never change it directly.
+  CLI and the MCP server (`murmel mcp`, [docs/mcp.md](docs/mcp.md)) all call
+  the same tool id; panels read the session and never change it directly.
 - **MUST** keep the layers (a test checks them): `murmel-mesh` (readers, no
   GPU) → `murmel-engine` (session, camera, bindings, tokens, no window, no
   GPU) → `murmel-render` (wgpu, no egui) → `murmel-tools` (registry) →
-  front ends `murmel-cli` and `murmel-app` (egui + eframe).
+  front ends `murmel-cli`, `murmel-mcp` and `murmel-app` (egui + eframe).
 - **MUST** name model items by the ids the tree and the tools share:
   `mesh`, `zone:<name>`, `kind:<cell type>`, `patch:<name>`
   (`murmel_engine::Item`). A change of display state (colour, visibility,
   selection) goes through `Session::redraw`, which rebuilds the surface.
 - **MUST** mark a tool that writes files `write-files` and name what it
-  writes (`outputs`), so an approval table can judge a call before it runs.
+  writes (`outputs`), so an approval table can judge a call before it runs,
+  and name the input fields that are paths it reads (`reads`); the MCP
+  server confines exactly these fields to its roots (a test checks fields
+  named like paths).
+- **MUST** give a tool that changes nothing the `NOT_JOURNALED` reason
+  `READS_ONLY` and no other tool that reason: MCP clients are told such a
+  tool is read-only and idempotent (a test checks it changes nothing).
 - **MUST** regenerate `docs/tools.md` with
   `cargo run -p murmel-cli -- commands --markdown > docs/tools.md` (a test
   fails when it is out of date).
@@ -129,7 +135,8 @@ the same code path in the fast run.
 | `crates/murmel-engine` | session, tool journal (undo and redo), camera (turntable with roll, three projection modes, 26 cube views, rotation about screen axes), view cube geometry, navigation bindings and presets, tokens and user colours, settings files, triangulated surface and feature edges |
 | `crates/murmel-render` | wgpu renderer for the window and offscreen PNGs, render tests |
 | `crates/murmel-tools` | tool registry, result envelope, diagnostic codes, `docs/tools.md`; command table (keys and palette), `docs/keys.md` |
-| `crates/murmel-cli` | `murmel`, the command line of the registry |
+| `crates/murmel-cli` | `murmel`, the command line of the registry; `murmel mcp` starts the MCP server |
+| `crates/murmel-mcp` | the MCP server (stdio, MCP 2025-11-25): the registry for agents on one headless session, paths confined to read and write roots, screenshots returned as images ([docs/mcp.md](docs/mcp.md)) |
 | `crates/murmel-app` | `murmelcraft`, the egui + eframe window: panels, viewport, view cube, command palette, shortcut sheet |
 | `assets/` | tokens, fonts, icons, translations, with provenance |
 | `test-fixtures/` | KoflCraft meshes and OpenFOAM polyMesh cases, with provenance |

@@ -1,0 +1,25 @@
+[package]
+name = "murmel-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The MCP server of MurmelCraft: the tool registry over stdio for agents, headless, confined to read and write roots"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "murmel-mcp"
+path = "src/main.rs"
+
+[dependencies]
+murmel-engine.workspace = true
+murmel-tools.workspace = true
+base64.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+png.workspace = true
+
+[lints]
+workspace = true

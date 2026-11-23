@@ -1778,6 +1778,7 @@ name = "murmel-cli"
 version = "0.1.0"
 dependencies = [
  "murmel-engine",
+ "murmel-mcp",
  "murmel-tools",
  "serde_json",
 ]
@@ -1792,6 +1793,17 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "murmel-mcp"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "murmel-engine",
+ "murmel-tools",
+ "png",
+ "serde_json",
 ]
 
 [[package]]
