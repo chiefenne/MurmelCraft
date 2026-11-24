@@ -1,10 +1,12 @@
-//! The cells of a VTKHDF `UnstructuredGrid`, built on all threads from
-//! the datasets where they lie in the file. The cells are walked in
-//! ranges in two passes, as the `.vtu` reader walks its own
-//! (`vtu/cells.rs`): each range first checks its cells and counts what
-//! they give, then writes that at the place the counts give. The mesh is
-//! the one a single walk in file order builds, and the first bad cell in
-//! file order gives the error.
+//! The cells of a VTKHDF `UnstructuredGrid`, built on all threads. The
+//! cells are walked in units of `UNIT` cells in two passes, as the `.vtu`
+//! reader walks its own (`vtu/cells.rs`): each unit first checks its
+//! cells and counts what they give, then writes that at the place the
+//! counts give. A unit reads only the rows of the datasets its cells use
+//! (a window, [`Sets`]), and each thread walks a run of units one after
+//! the other, so a grid of any size is read a few units at a time. The
+//! mesh is the one a single walk in file order builds, and the first bad
+//! cell in file order gives the error.
 
 use std::cmp::max;
 use std::ops::Range;
@@ -17,8 +19,8 @@ use crate::vtu::{
 };
 use crate::{CellKind, MeshError, Polygons, par};
 
-/// Fewest cells a thread walks.
-const MIN_CELLS: usize = 1 << 14;
+/// The cells of a unit (the last has the rest).
+const UNIT: usize = 1 << 15;
 
 /// A partition as the file counts it, and where its rows start in each
 /// dataset (after the partitions before it).
@@ -120,8 +122,237 @@ pub(super) struct Input<'a> {
     pub zone_data: Option<&'a Values<'a>>,
     pub zone: Option<u32>,
     pub points: &'a PointMap,
+}
+
+/// The datasets of the cells, by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Set {
+    Types,
+    Offsets,
+    Connectivity,
+    PolyhedronOffsets,
+    PolyhedronToFaces,
+    FaceOffsets,
+    FaceConnectivity,
+    /// `CellData/vtkGhostType`
+    Ghost,
+    /// `CellData/zone`
+    Zone,
+}
+
+/// Where the cells' datasets come from.
+pub(super) trait Sets: Sync {
+    /// The values of `set` with (at least) the values `rows` (element
+    /// numbers; those past the end are left out), numbered as in the
+    /// whole dataset; `None` when the grid has no such dataset.
+    fn rows(&self, set: Set, rows: Range<usize>) -> Result<Option<Values<'_>>, MeshError>;
+}
+
+/// What the cells of a grid need besides the datasets.
+#[derive(Clone, Copy)]
+pub(super) struct Grid<'a> {
+    pub parts: &'a [Part],
+    /// Whether the grid has the polyhedron datasets.
+    pub poly: bool,
+    /// The zone of every cell, when the grid has one.
+    pub zone: Option<u32>,
+    pub points: &'a PointMap,
     /// The mesh points, for turning polyhedra outward.
     pub xyz: &'a [[f64; 3]],
+}
+
+/// The partitions a walk of rows `cells` enters, in order, each with the
+/// rows of its own that the walk reads (local to the partition): the
+/// partitions without cells at its start, and with `last` those after its
+/// end, so that the walks of consecutive ranges enter every partition
+/// once.
+fn spans(
+    parts: &[Part],
+    cells: Range<usize>,
+    last: bool,
+) -> impl Iterator<Item = (usize, Range<usize>)> + '_ {
+    // the first partition that ends after the first cell, or starts at it
+    // without cells
+    let mut p = parts.partition_point(|q| {
+        let end = q.cell_at + q.cells;
+        end < cells.start || (end == cells.start && q.cells > 0)
+    });
+    let mut row = cells.start;
+    std::iter::from_fn(move || {
+        if p >= parts.len() || !(row < cells.end || last) {
+            return None;
+        }
+        let part = parts[p];
+        let until = cells.end.min(part.cell_at + part.cells).max(row);
+        let span = (p, row - part.cell_at..until - part.cell_at);
+        row = until;
+        p += 1;
+        Some(span)
+    })
+}
+
+/// The rows of the datasets a walk of rows `cells` reads, and the
+/// values in them. A row range is widened to all the rows the walk may
+/// read after its checks: the connectivity between the offsets of the
+/// cells (clamped to their partition's count), and so on, so that the
+/// walk never reads a value outside its window.
+struct Window<'s> {
+    types: Values<'s>,
+    offsets: Values<'s>,
+    conn: Values<'s>,
+    poly: Option<[Values<'s>; 4]>,
+    ghost: Option<Values<'s>>,
+    zone: Option<Values<'s>>,
+}
+
+/// The smallest range holding `a` and `b` (an empty one holds nothing).
+fn join(a: Range<usize>, b: Range<usize>) -> Range<usize> {
+    if a.is_empty() {
+        b
+    } else if b.is_empty() {
+        a
+    } else {
+        a.start.min(b.start)..a.end.max(b.end)
+    }
+}
+
+/// The values `at + lo .. at + hi` of `v` read as positions into
+/// `0..=count` (clamped), as the range of `[min, max)` they span, shifted
+/// by `base`; nothing when `count` is negative.
+fn reach(v: &Values, at: usize, rows: Range<usize>, count: i64, base: usize) -> Range<usize> {
+    let Ok(count) = usize::try_from(count) else {
+        return 0..0;
+    };
+    let held = v.held();
+    let (mut lo, mut hi) = (usize::MAX, 0);
+    for i in at + rows.start..at + rows.end {
+        if held.contains(&i) {
+            let x = v.int(i).clamp(0, count as i64) as usize;
+            lo = lo.min(x);
+            hi = hi.max(x);
+        }
+    }
+    if lo > hi { 0..0 } else { base + lo..base + hi }
+}
+
+impl<'s> Window<'s> {
+    /// The window of the walk of rows `cells`; without `points`, the rows
+    /// of `Connectivity` and `FaceConnectivity` are left out (their length
+    /// is kept).
+    fn of(
+        grid: &Grid,
+        sets: &'s dyn Sets,
+        cells: Range<usize>,
+        last: bool,
+        points: bool,
+    ) -> Result<Self, MeshError> {
+        let spans: Vec<(usize, Range<usize>)> = spans(grid.parts, cells.clone(), last)
+            .filter(|(_, r)| !r.is_empty())
+            .collect();
+        let need = |set: Set, rows: Range<usize>| -> Result<Values<'s>, MeshError> {
+            Ok(sets.rows(set, rows)?.unwrap_or(Values::none()))
+        };
+        let parts = grid.parts;
+        // a cell's offsets and the one after its last
+        let offset_rows = |at: fn(&Part) -> usize| {
+            spans.iter().fold(0..0, |all, (p, r)| {
+                let a = at(&parts[*p]);
+                join(all, a + r.start..a + r.end + 1)
+            })
+        };
+        let types = need(Set::Types, cells.clone())?;
+        let ghost = sets.rows(Set::Ghost, cells.clone())?;
+        let zone = sets.rows(Set::Zone, cells.clone())?;
+        let offsets = need(Set::Offsets, offset_rows(|p| p.offset_at))?;
+        let conn_rows = spans.iter().fold(0..0, |all, (p, r)| {
+            let q = &parts[*p];
+            join(
+                all,
+                reach(&offsets, q.offset_at, r.start..r.end + 1, q.conn, q.conn_at),
+            )
+        });
+        let conn = need(Set::Connectivity, if points { conn_rows } else { 0..0 })?;
+        let poly = if grid.poly {
+            let po = need(Set::PolyhedronOffsets, offset_rows(|p| p.poly_offset_at))?;
+            let to_rows = spans.iter().fold(0..0, |all, (p, r)| {
+                let q = &parts[*p];
+                join(
+                    all,
+                    reach(
+                        &po,
+                        q.poly_offset_at,
+                        r.start..r.end + 1,
+                        q.to_faces,
+                        q.to_faces_at,
+                    ),
+                )
+            });
+            let to_faces = need(Set::PolyhedronToFaces, to_rows)?;
+            // each face its offset and the one after, partition by
+            // partition (local rows of FaceOffsets)
+            let mut face_rows = 0..0;
+            let mut faces = Vec::with_capacity(spans.len());
+            for (p, r) in &spans {
+                let q = &parts[*p];
+                let k = reach(&po, q.poly_offset_at, r.start..r.end + 1, q.to_faces, 0);
+                let f = reach(&to_faces, q.to_faces_at, k, q.faces.saturating_sub(1), 0);
+                let rows_of = usize::try_from(q.faces).map_or(0, |n| n + 1);
+                let f = f.start.min(rows_of)..(f.end + 2).min(rows_of);
+                face_rows = join(
+                    face_rows,
+                    q.face_offset_at + f.start..q.face_offset_at + f.end,
+                );
+                faces.push((q, f));
+            }
+            let fo = need(Set::FaceOffsets, face_rows)?;
+            let fc_rows = faces.iter().fold(0..0, |all, (q, f)| {
+                join(
+                    all,
+                    reach(
+                        &fo,
+                        q.face_offset_at,
+                        f.clone(),
+                        q.face_conn,
+                        q.face_conn_at,
+                    ),
+                )
+            });
+            let fc = need(Set::FaceConnectivity, if points { fc_rows } else { 0..0 })?;
+            Some([po, to_faces, fo, fc])
+        } else {
+            None
+        };
+        Ok(Window {
+            types,
+            offsets,
+            conn,
+            poly,
+            ghost,
+            zone,
+        })
+    }
+
+    fn input<'a>(&'a self, grid: &Grid<'a>) -> Input<'a> {
+        Input {
+            parts: grid.parts,
+            types: &self.types,
+            offsets: &self.offsets,
+            conn: &self.conn,
+            poly: self
+                .poly
+                .as_ref()
+                .map(|[offsets, to_faces, face_offsets, face_conn]| Poly {
+                    offsets,
+                    to_faces,
+                    face_offsets,
+                    face_conn,
+                }),
+            ghost: self.ghost.as_ref(),
+            zone_data: self.zone.as_ref(),
+            zone: grid.zone,
+            points: grid.points,
+        }
+    }
 }
 
 /// What the cells of a grid became. Face and node numbers start at 0
@@ -184,11 +415,21 @@ fn enter(input: &Input, part: Part) -> Result<Here, MeshError> {
     Ok(here)
 }
 
+/// What a walk does with the point ids of the faces.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Points {
+    /// Nothing: only their number counts, and `Connectivity` and
+    /// `FaceConnectivity` are not read.
+    Skip,
+    /// Check that each is in its partition.
+    Check,
+    /// Check them and hand on their mesh points.
+    Map,
+}
+
 /// What a walk hands on, cell by cell.
 trait Sink {
-    /// Whether it needs the mesh points of the faces (a count needs only
-    /// their number; the points are checked either way).
-    const POINTS: bool;
+    const POINTS: Points;
     /// A face of the volume cell being read.
     fn face(&mut self, nodes: &[u32]);
     /// The volume cell whose faces came before ends; a polyhedron's faces
@@ -197,12 +438,22 @@ trait Sink {
     fn polygon(&mut self, nodes: &[u32]);
 }
 
-/// The point of local id `v` in partition `here` (0 when `map` is
-/// false: the id is only checked).
-fn point(input: &Input, here: &Here, v: i64, map: bool) -> Result<u32, MeshError> {
+/// The point of the local id at row `i` of `ids` in partition `here` (0
+/// unless `how` maps it; not read when `how` skips it).
+fn point(
+    input: &Input,
+    here: &Here,
+    ids: &Values,
+    i: usize,
+    how: Points,
+) -> Result<u32, MeshError> {
+    if how == Points::Skip {
+        return Ok(0);
+    }
+    let v = ids.int(i);
     let n = here.part.points;
     match usize::try_from(v).ok().filter(|&v| v < n) {
-        Some(v) if map => Ok(input.points.get(here.part.point_at + v)),
+        Some(v) if how == Points::Map => Ok(input.points.get(here.part.point_at + v)),
         Some(_) => Ok(0),
         None => Err(MeshError::new(
             "MESH006",
@@ -227,21 +478,13 @@ fn walk<S: Sink>(
     last: bool,
     sink: &mut S,
 ) -> Result<(), MeshError> {
-    // the first partition that ends after the first cell, or starts at it
-    // without cells
-    let mut p = input.parts.partition_point(|q| {
-        let end = q.cell_at + q.cells;
-        end < cells.start || (end == cells.start && q.cells > 0)
-    });
     let mut ids: Vec<u32> = Vec::with_capacity(64);
     let mut face: Vec<u32> = Vec::with_capacity(16);
-    let mut row = cells.start;
-    while p < input.parts.len() && (row < cells.end || last) {
+    for (p, rows) in spans(input.parts, cells, last) {
         let here = enter(input, input.parts[p])?;
         let part = here.part;
-        let until = cells.end.min(part.cell_at + part.cells);
-        for r in row..until {
-            let c = r - part.cell_at;
+        for c in rows {
+            let r = part.cell_at + c;
             if input.ghost.is_some_and(|g| g.int(r) & 1 != 0) {
                 continue;
             }
@@ -286,7 +529,7 @@ fn walk<S: Sink>(
                 }
                 ids.clear();
                 for i in nodes {
-                    ids.push(point(input, &here, input.conn.int(i), S::POINTS)?);
+                    ids.push(point(input, &here, input.conn, i, S::POINTS)?);
                 }
                 for f in table {
                     face.clear();
@@ -324,8 +567,8 @@ fn walk<S: Sink>(
                         .ok_or_else(|| MeshError::new("MESH009", format!("cell {c}: face {f}")))?;
                     face.clear();
                     for i in fr {
-                        let v = poly.face_conn.int(part.face_conn_at + i);
-                        face.push(point(input, &here, v, S::POINTS)?);
+                        let i = part.face_conn_at + i;
+                        face.push(point(input, &here, poly.face_conn, i, S::POINTS)?);
                     }
                     faces += 1;
                     match face.len() {
@@ -345,7 +588,7 @@ fn walk<S: Sink>(
                 }
                 face.clear();
                 for i in nodes {
-                    face.push(point(input, &here, input.conn.int(i), S::POINTS)?);
+                    face.push(point(input, &here, input.conn, i, S::POINTS)?);
                 }
                 sink.polygon(&face);
             } else {
@@ -355,8 +598,6 @@ fn walk<S: Sink>(
                 ));
             }
         }
-        row = until.max(row);
-        p += 1;
     }
     Ok(())
 }
@@ -385,22 +626,27 @@ impl Count {
     }
 }
 
-impl Sink for Count {
-    const POINTS: bool = false;
+/// A count of what a walk gives; with `CHECK` it checks the point ids,
+/// else it does not read them.
+#[derive(Default)]
+struct Tally<const CHECK: bool>(Count);
+
+impl<const CHECK: bool> Sink for Tally<CHECK> {
+    const POINTS: Points = if CHECK { Points::Check } else { Points::Skip };
 
     fn face(&mut self, nodes: &[u32]) {
-        self.faces += 1;
-        self.nodes += nodes.len();
+        self.0.faces += 1;
+        self.0.nodes += nodes.len();
     }
 
     fn cell(&mut self, zone: u32, _: CellKind, _: usize, _: bool) {
-        self.cells += 1;
-        self.zone_max = max(self.zone_max, Some(zone));
+        self.0.cells += 1;
+        self.0.zone_max = max(self.0.zone_max, Some(zone));
     }
 
     fn polygon(&mut self, nodes: &[u32]) {
-        self.polygons += 1;
-        self.polygon_nodes += nodes.len();
+        self.0.polygons += 1;
+        self.0.polygon_nodes += nodes.len();
     }
 }
 
@@ -448,7 +694,7 @@ impl Write<'_> {
 }
 
 impl Sink for Write<'_> {
-    const POINTS: bool = true;
+    const POINTS: Points = Points::Map;
 
     fn face(&mut self, nodes: &[u32]) {
         let (f, at) = (self.done.faces, self.done.nodes);
@@ -489,21 +735,68 @@ fn pieces<T>(data: &mut [T], at: impl Iterator<Item = usize>) -> Vec<&mut [T]> {
     par::split_mut(data, &cuts)
 }
 
-/// Build the cells of the `total` rows of `input`.
-pub(super) fn read(input: &Input, total: usize) -> Result<Cells, MeshError> {
-    let ranges = par::ranges(total, MIN_CELLS);
-    let n = ranges.len();
-    let numbered: Vec<(usize, Range<usize>)> = ranges.into_iter().enumerate().collect();
-    let counts = par::each(numbered.clone(), |(i, r)| {
-        let mut count = Count::default();
-        walk(input, r, i + 1 == n, &mut count).map(|()| count)
+/// `f` for each of `items` on all threads, each thread taking a run of
+/// consecutive items one after the other; results in order.
+fn in_runs<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    let mut items = items.into_iter();
+    let runs: Vec<Vec<T>> = par::ranges(items.len(), 1)
+        .into_iter()
+        .map(|r| items.by_ref().take(r.len()).collect())
+        .collect();
+    par::each(runs, |run| run.into_iter().map(&f).collect::<Vec<R>>())
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Where each of the units `numbered` starts in the arrays, and their
+/// sum; the first error in file order. With `CHECK` the point ids are
+/// read and checked, else they are not read.
+fn tally<const CHECK: bool>(
+    grid: &Grid,
+    sets: &dyn Sets,
+    numbered: &[(usize, Range<usize>)],
+) -> Result<(Vec<Count>, Count), MeshError> {
+    let n = numbered.len();
+    let counts = in_runs(numbered.to_vec(), |(i, r)| {
+        let last = i + 1 == n;
+        let window = Window::of(grid, sets, r.clone(), last, CHECK)?;
+        let mut tally = Tally::<CHECK>::default();
+        walk(&window.input(grid), r, last, &mut tally).map(|()| tally.0)
     });
-    let mut base = Vec::with_capacity(counts.len());
+    let mut base = Vec::with_capacity(n);
     let mut all = Count::default();
     for count in counts {
         base.push(all);
         all = all.plus(count?);
     }
+    Ok((base, all))
+}
+
+/// Build the cells of the `total` rows of `grid`, reading the datasets
+/// from `sets` a unit at a time.
+pub(super) fn read(grid: &Grid, sets: &dyn Sets, total: usize) -> Result<Cells, MeshError> {
+    read_in(grid, sets, total, UNIT)
+}
+
+/// [`read`] in units of `unit` cells.
+fn read_in(grid: &Grid, sets: &dyn Sets, total: usize, unit: usize) -> Result<Cells, MeshError> {
+    let unit = unit.max(1);
+    let numbered: Vec<(usize, Range<usize>)> = (0..total.div_ceil(unit).max(1))
+        .map(|i| (i, (i * unit).min(total)..((i + 1) * unit).min(total)))
+        .collect();
+    let n = numbered.len();
+    // The counts do not depend on the point ids, so the first pass reads
+    // none; the walk that writes checks them. When the first pass meets a
+    // bad cell, a pass that checks the ids finds the first bad one, which
+    // may be a point id before it.
+    let (base, all) = match tally::<false>(grid, sets, &numbered) {
+        Ok(counted) => counted,
+        Err(e) => {
+            tally::<true>(grid, sets, &numbered)?;
+            return Err(e);
+        }
+    };
 
     let mut polys = Polygons {
         start: vec![0; all.faces + 1],
@@ -559,7 +852,7 @@ pub(super) fn read(input: &Input, total: usize) -> Result<Cells, MeshError> {
         let write = Write {
             base,
             done: Count::default(),
-            xyz: input.xyz,
+            xyz: grid.xyz,
             face_end,
             least,
             nodes,
@@ -573,8 +866,10 @@ pub(super) fn read(input: &Input, total: usize) -> Result<Cells, MeshError> {
         };
         jobs.push((i, r, write));
     }
-    for written in par::each(jobs, |(i, r, mut write)| {
-        walk(input, r, i + 1 == n, &mut write)
+    for written in in_runs(jobs, |(i, r, mut write)| {
+        let last = i + 1 == n;
+        let window = Window::of(grid, sets, r.clone(), last, true)?;
+        walk(&window.input(grid), r, last, &mut write)
     }) {
         written?;
     }
@@ -607,7 +902,7 @@ mod tests {
 
     /// The datasets of an `UnstructuredGrid` and the mesh points.
     #[derive(Clone, Default)]
-    struct Grid {
+    struct Data {
         poly: bool,
         points: Vec<i64>,
         cells: Vec<i64>,
@@ -627,7 +922,7 @@ mod tests {
         xyz: Vec<[f64; 3]>,
     }
 
-    impl Grid {
+    impl Data {
         fn parts(&self) -> Vec<Part> {
             let counts = [&self.faces[..], &self.to_face_ids[..], &self.face_ids[..]];
             parts(
@@ -647,10 +942,10 @@ mod tests {
     /// `kinds` in a mixed order: polyhedra of 4 to 8 faces of 3 to 6
     /// points, standard cells, polygons of 3 to 6 points; every 9th cell
     /// from the 5th a ghost; zones 0 to 2.
-    fn grid(sizes: &[usize], kinds: &[i64]) -> Grid {
-        let mut g = Grid {
+    fn grid(sizes: &[usize], kinds: &[i64]) -> Data {
+        let mut g = Data {
             poly: kinds.contains(&POLYHEDRON),
-            ..Grid::default()
+            ..Data::default()
         };
         let mut seed = 11u64;
         let mut next = |m: u64| {
@@ -732,35 +1027,79 @@ mod tests {
         Option<u32>,
     );
 
-    fn read_on(threads: usize, g: &Grid, map: &PointMap) -> Result<Got, (&'static str, String)> {
-        let v = Values::of_ints;
-        let (types, offsets, conn, ghost) = (v(&g.types), v(&g.offsets), v(&g.conn), v(&g.ghost));
-        let (po, tf, fo, fc) = (
-            v(&g.poly_offsets),
-            v(&g.to_faces),
-            v(&g.face_offsets),
-            v(&g.face_conn),
-        );
-        let zone = Values::of_floats(&g.zone);
+    /// The datasets of [`Data`] as a file hands them out: the rows asked
+    /// for (a window), or each dataset whole.
+    struct Windows<'a> {
+        d: &'a Data,
+        whole: bool,
+    }
+
+    impl Sets for Windows<'_> {
+        fn rows(&self, set: Set, rows: Range<usize>) -> Result<Option<Values<'_>>, MeshError> {
+            let d = self.d;
+            let poly = matches!(
+                set,
+                Set::PolyhedronOffsets
+                    | Set::PolyhedronToFaces
+                    | Set::FaceOffsets
+                    | Set::FaceConnectivity
+            );
+            if poly && !d.poly {
+                return Ok(None);
+            }
+            let window = |len: usize| {
+                if self.whole {
+                    0..len
+                } else {
+                    let start = rows.start.min(len);
+                    start..rows.end.clamp(start, len)
+                }
+            };
+            let ints: &[i64] = match set {
+                Set::Types => &d.types,
+                Set::Offsets => &d.offsets,
+                Set::Connectivity => &d.conn,
+                Set::PolyhedronOffsets => &d.poly_offsets,
+                Set::PolyhedronToFaces => &d.to_faces,
+                Set::FaceOffsets => &d.face_offsets,
+                Set::FaceConnectivity => &d.face_conn,
+                Set::Ghost => &d.ghost,
+                Set::Zone => {
+                    let r = window(d.zone.len());
+                    return Ok(Some(Values::of_floats_in(&d.zone, r)));
+                }
+            };
+            Ok(Some(Values::of_ints_in(ints, window(ints.len()))))
+        }
+    }
+
+    /// The units the tests read in: one cell, a few, a size that ends
+    /// inside partitions, and more than any test grid holds.
+    const UNITS: [usize; 6] = [1, 2, 3, 7, 16, 1000];
+
+    /// The cells of `g` read on `threads` threads in units of `unit`
+    /// cells, each unit given only its window of the datasets; a `unit`
+    /// of 0 reads one unit from the whole datasets (one walk).
+    fn read_on(
+        threads: usize,
+        unit: usize,
+        g: &Data,
+        map: &PointMap,
+    ) -> Result<Got, (&'static str, String)> {
         let parts = g.parts();
-        let input = Input {
+        let grid = Grid {
             parts: &parts,
-            types: &types,
-            offsets: &offsets,
-            conn: &conn,
-            poly: g.poly.then_some(Poly {
-                offsets: &po,
-                to_faces: &tf,
-                face_offsets: &fo,
-                face_conn: &fc,
-            }),
-            ghost: Some(&ghost),
-            zone_data: Some(&zone),
+            poly: g.poly,
             zone: None,
             points: map,
             xyz: &g.xyz,
         };
-        par::with_threads(threads, || read(&input, g.total()))
+        let sets = Windows {
+            d: g,
+            whole: unit == 0,
+        };
+        let unit = if unit == 0 { usize::MAX } else { unit };
+        par::with_threads(threads, || read_in(&grid, &sets, g.total(), unit))
             .map(|c| {
                 (
                     c.polys, c.least, c.cell_end, c.zone, c.kind, c.rows, c.boundary, c.zone_max,
@@ -771,7 +1110,7 @@ mod tests {
 
     /// The point maps the tests use: an offset, and rows joined out of
     /// order.
-    fn maps(g: &Grid) -> [PointMap; 2] {
+    fn maps(g: &Data) -> [PointMap; 2] {
         let rows = g.points.len() * POINTS;
         [
             PointMap::Offset(3),
@@ -780,7 +1119,7 @@ mod tests {
     }
 
     /// What one walk must give, checked against the datasets.
-    fn check(g: &Grid, map: &PointMap, got: &Got) {
+    fn check(g: &Data, map: &PointMap, got: &Got) {
         let (polys, least, cell_end, zone, kind, rows, boundary, zone_max) = got;
         let parts = g.parts();
         let keep = |want: &dyn Fn(i64) -> bool| -> Vec<u32> {
@@ -856,19 +1195,22 @@ mod tests {
         assert_eq!(*zone_max, zone.iter().copied().max());
     }
 
-    /// Invariant: the cells built on several threads are exactly those
-    /// of one walk in file order, for partitions of any size (those
-    /// without cells first, between others, at a range's edge and last),
-    /// with ghosts, every cell type, with and without polyhedron
-    /// datasets, and points by an offset or joined out of order; and the
-    /// one walk gives what the reader promises: no ghost, the row of each
-    /// cell kept, the polygons as boundary faces, each face's smallest
-    /// point, standard cells with their own points, polyhedra turned
-    /// outward. Breaks when a range starts reading at its partition's
-    /// first row instead of its own, takes another partition's bases,
-    /// orients a polyhedron with faces of the cell before, or writes its
-    /// pieces where the counts of the ranges before do not put them. The
-    /// reader tests read small files, which stay on one thread.
+    /// Invariant: the cells built in units of any size on any number of
+    /// threads, each unit given only its window of the datasets, are
+    /// exactly those of one walk over the whole datasets in file order,
+    /// for partitions of any size (those without cells first, between
+    /// others, at a unit's edge and last), with ghosts, every cell type,
+    /// with and without polyhedron datasets, and points by an offset or
+    /// joined out of order; and the one walk gives what the reader
+    /// promises: no ghost, the row of each cell kept, the polygons as
+    /// boundary faces, each face's smallest point, standard cells with
+    /// their own points, polyhedra turned outward. Breaks when a unit
+    /// starts reading at its partition's first row instead of its own,
+    /// takes another partition's bases, misses a row of its window (the
+    /// offset after its last cell, a face of its last polyhedron), orients
+    /// a polyhedron with faces of the cell before, or writes its pieces
+    /// where the counts of the units before do not put them. The reader
+    /// tests read small files, which fit in one unit.
     #[test]
     fn threads_give_the_cells_of_one_walk() {
         let layouts: [&[usize]; 7] = [
@@ -884,14 +1226,16 @@ mod tests {
             for kinds in [&MIXED[..], &STANDARD[..]] {
                 let g = grid(sizes, kinds);
                 for map in &maps(&g) {
-                    let one = read_on(1, &g, map).unwrap();
+                    let one = read_on(1, 0, &g, map).unwrap();
                     check(&g, map, &one);
-                    for threads in 2..=7 {
-                        assert_eq!(
-                            read_on(threads, &g, map).unwrap(),
-                            one,
-                            "{sizes:?}, {threads} threads"
-                        );
+                    for threads in 1..=5 {
+                        for unit in UNITS {
+                            assert_eq!(
+                                read_on(threads, unit, &g, map).unwrap(),
+                                one,
+                                "{sizes:?}, {threads} threads, units of {unit}"
+                            );
+                        }
                     }
                 }
             }
@@ -899,19 +1243,24 @@ mod tests {
     }
 
     /// A change that makes row `r` of partition `p` bad.
-    type Spoil = dyn Fn(&mut Grid, &Part, usize);
+    type Spoil = dyn Fn(&mut Data, &Part, usize);
     /// A change that makes partition `p` bad.
-    type SpoilPart = dyn Fn(&mut Grid, usize);
+    type SpoilPart = dyn Fn(&mut Data, usize);
 
-    /// Invariant: a bad cell or partition gives the error of one walk in
-    /// file order on any number of threads: the first bad one's, even
-    /// when a later range holds another; and every partition is checked,
-    /// those without cells too, at a range's edge or after the last cell.
-    /// Breaks when the ranges' errors are taken in the order the threads
-    /// finish, a range reports a partition that a range before it checks
-    /// first, or a partition without cells at a range's edge or the end
-    /// is checked by no range. The reader's error tests read small files,
-    /// which stay on one thread.
+    /// Invariant: a bad cell or partition gives the error of one walk
+    /// over the whole datasets in file order, in units of any size on any
+    /// number of threads: the first bad one's, even when a later unit
+    /// holds another; and every partition is checked, those without cells
+    /// too, at a unit's edge or after the last cell; an offset that points
+    /// outside its dataset is reported, not cut off by a unit's window; a
+    /// bad point id (which the counting pass does not read) is reported
+    /// before a bad cell after it, and alone. Breaks when the units' errors
+    /// are taken in the order the threads finish, a unit reports a
+    /// partition that a unit before it checks first, a partition without
+    /// cells at a unit's edge or the end is checked by no unit, a window
+    /// clamps a bad offset into range, or the error of the counting pass
+    /// is reported without looking for a bad point id before it. The
+    /// reader's error tests read small files, which fit in one unit.
     #[test]
     fn threads_report_the_first_bad_cell_or_partition() {
         let sizes = [0, 30, 0, 30, 0, 0, 60, 0];
@@ -920,14 +1269,16 @@ mod tests {
         let map = PointMap::Offset(0);
         // a later bad cell
         let later = 119;
-        let same = |g: &Grid| {
-            let one = read_on(1, g, &map).unwrap_err();
-            for threads in 2..=7 {
-                assert_eq!(
-                    read_on(threads, g, &map).unwrap_err(),
-                    one,
-                    "{threads} threads"
-                );
+        let same = |g: &Data| {
+            let one = read_on(1, 0, g, &map).unwrap_err();
+            for threads in 1..=5 {
+                for unit in UNITS {
+                    assert_eq!(
+                        read_on(threads, unit, g, &map).unwrap_err(),
+                        one,
+                        "{threads} threads, units of {unit}"
+                    );
+                }
             }
             one
         };
@@ -937,7 +1288,7 @@ mod tests {
                 .rfind(|p| p.cell_at <= r && r < p.cell_at + p.cells)
                 .unwrap()
         };
-        let cells: [(&Spoil, &dyn Fn(i64) -> bool); 5] = [
+        let cells: [(&Spoil, &dyn Fn(i64) -> bool); 8] = [
             (&|g, _, r| g.types[r] = 99, &|_| true),
             (&|g, _, r| g.zone[r] = -1.0, &|_| true),
             (
@@ -953,6 +1304,30 @@ mod tests {
             ),
             (
                 &|g, p, r| g.poly_offsets[p.poly_offset_at + r - p.cell_at + 1] = -5,
+                &|t| t == POLYHEDRON,
+            ),
+            (
+                &|g, p, r| {
+                    let i = g.poly_offsets[p.poly_offset_at + r - p.cell_at] as usize;
+                    g.to_faces[p.to_faces_at + i] = 1_000_000;
+                },
+                &|t| t == POLYHEDRON,
+            ),
+            (
+                &|g, p, r| {
+                    let i = g.poly_offsets[p.poly_offset_at + r - p.cell_at] as usize;
+                    let f = g.to_faces[p.to_faces_at + i] as usize;
+                    g.face_offsets[p.face_offset_at + f + 1] = 1_000_000;
+                },
+                &|t| t == POLYHEDRON,
+            ),
+            (
+                &|g, p, r| {
+                    let i = g.poly_offsets[p.poly_offset_at + r - p.cell_at] as usize;
+                    let f = g.to_faces[p.to_faces_at + i] as usize;
+                    let j = g.face_offsets[p.face_offset_at + f] as usize;
+                    g.face_conn[p.face_conn_at + j] = 1_000;
+                },
                 &|t| t == POLYHEDRON,
             ),
         ];
@@ -992,7 +1367,7 @@ mod tests {
         }
         // datasets shorter than the counts: the last partition (no cells),
         // the last with cells, and an early bad cell before either
-        let short: [&dyn Fn(&mut Grid); 3] = [
+        let short: [&dyn Fn(&mut Data); 3] = [
             &|g| {
                 g.offsets.pop();
             },

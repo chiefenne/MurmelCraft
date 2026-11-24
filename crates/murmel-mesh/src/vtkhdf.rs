@@ -28,7 +28,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 use crate::field::{Field, Location, Results, group_vectors, parse_units};
-use crate::hdf5::{H5, Object, Target, Value, Values};
+use crate::hdf5::{Dataset, H5, Object, Target, Value, Values};
 use crate::{Mesh, MeshError, Patch, Polygons, boundary, par};
 
 mod cells;
@@ -583,14 +583,6 @@ struct GridRead {
     point_rows: Option<Vec<u32>>,
 }
 
-/// The dataset `name` of `obj`, read where it lies.
-fn values<'h>(h: &'h H5, obj: &Object, name: &str) -> Result<Values<'h>, MeshError> {
-    let o = h
-        .child(obj, name)?
-        .ok_or_else(|| bad(format!("no {name} dataset")))?;
-    h.int_values(&h.dataset(&o)?)
-}
-
 /// The integer dataset `name` of subgroup `group`, when there is one,
 /// read where it lies.
 fn optional_values<'h>(
@@ -651,6 +643,70 @@ fn points_of(xyz: &Values, n: usize) -> Vec<[f64; 3]> {
     out
 }
 
+/// The datasets of a grid's cells: those that lie whole in the file are
+/// read a window of rows at a time, the others (chunked) once.
+struct GridSets<'h> {
+    h: &'h H5,
+    sets: Vec<(cells::Set, Source<'h>)>,
+}
+
+enum Source<'h> {
+    /// Read by rows; `true` for numbers (else integers are expected).
+    Rows(Dataset, bool),
+    Whole(Values<'h>),
+}
+
+impl<'h> GridSets<'h> {
+    /// Add dataset `ds` as `set`, checked as reading it whole would check
+    /// it; gives how many values it has.
+    fn add(&mut self, set: cells::Set, ds: &Dataset, numbers: bool) -> Result<usize, MeshError> {
+        let h = self.h;
+        let rows = h.reads_rows(ds);
+        let read = |r: std::ops::Range<usize>| {
+            if numbers {
+                h.values_in(ds, r)
+            } else {
+                h.int_values_in(ds, r)
+            }
+        };
+        let (source, len) = if rows {
+            let len = read(0..0)?.len();
+            (Source::Rows(ds.clone(), numbers), len)
+        } else {
+            let v = read(0..usize::MAX)?;
+            let len = v.len();
+            (Source::Whole(v), len)
+        };
+        self.sets.push((set, source));
+        Ok(len)
+    }
+}
+
+impl cells::Sets for GridSets<'_> {
+    fn rows(
+        &self,
+        set: cells::Set,
+        rows: std::ops::Range<usize>,
+    ) -> Result<Option<Values<'_>>, MeshError> {
+        let Some((_, source)) = self.sets.iter().find(|(s, _)| *s == set) else {
+            return Ok(None);
+        };
+        Ok(Some(match source {
+            Source::Rows(ds, true) => self.h.values_in(ds, rows)?,
+            Source::Rows(ds, false) => self.h.int_values_in(ds, rows)?,
+            Source::Whole(v) => v.view(),
+        }))
+    }
+}
+
+/// The dataset `name` of `obj`.
+fn dataset_of(h: &H5, obj: &Object, name: &str) -> Result<Dataset, MeshError> {
+    let o = h
+        .child(obj, name)?
+        .ok_or_else(|| bad(format!("no {name} dataset")))?;
+    h.dataset(&o)
+}
+
 impl Builder {
     /// Read an UnstructuredGrid block (all its partitions). Ghost cells
     /// (`vtkGhostType` with the duplicate bit) are left out, and points
@@ -686,16 +742,29 @@ impl Builder {
                 format!("Points has {} values for {total_points} points", xyz.len()),
             ));
         }
-        let types = values(h, g, "Types")?;
-        let offsets = values(h, g, "Offsets")?;
-        let conn = values(h, g, "Connectivity")?;
+        use cells::Set;
+        let mut sets = GridSets {
+            h,
+            sets: Vec::new(),
+        };
+        for (set, name) in [
+            (Set::Types, "Types"),
+            (Set::Offsets, "Offsets"),
+            (Set::Connectivity, "Connectivity"),
+        ] {
+            sets.add(set, &dataset_of(h, g, name)?, false)?;
+        }
         let poly = h.child(g, "PolyhedronOffsets")?.is_some();
-        let poly_sets = if poly {
+        let poly_counts = if poly {
+            for (set, name) in [
+                (Set::PolyhedronOffsets, "PolyhedronOffsets"),
+                (Set::PolyhedronToFaces, "PolyhedronToFaces"),
+                (Set::FaceOffsets, "FaceOffsets"),
+                (Set::FaceConnectivity, "FaceConnectivity"),
+            ] {
+                sets.add(set, &dataset_of(h, g, name)?, false)?;
+            }
             Some((
-                values(h, g, "PolyhedronOffsets")?,
-                values(h, g, "PolyhedronToFaces")?,
-                values(h, g, "FaceOffsets")?,
-                values(h, g, "FaceConnectivity")?,
                 ints(h, g, "NumberOfFaces")?,
                 ints(h, g, "NumberOfPolyhedronToFaceIds")?,
                 ints(h, g, "NumberOfFaceConnectivityIds")?,
@@ -703,19 +772,26 @@ impl Builder {
         } else {
             None
         };
-        let zone_data = match h.child(g, "CellData")? {
-            Some(cd) => match h.child(&cd, "zone")? {
-                Some(z) => Some(h.values(&h.dataset(&z)?)?),
+        let cell_data = h.child(g, "CellData")?;
+        let zone_data = match &cell_data {
+            Some(cd) => match h.child(cd, "zone")? {
+                Some(z) => Some(sets.add(Set::Zone, &h.dataset(&z)?, true)?),
                 None => None,
             },
             None => None,
         };
-        let ghost = optional_values(h, g, "CellData", "vtkGhostType")?;
+        let ghost = match &cell_data {
+            Some(cd) => match h.child(cd, "vtkGhostType")? {
+                Some(o) => Some(sets.add(Set::Ghost, &h.dataset(&o)?, false)?),
+                None => None,
+            },
+            None => None,
+        };
         let total_cells: usize = nc
             .iter()
             .map(|&n| count(n, "cells"))
             .sum::<Result<_, _>>()?;
-        if ghost.as_ref().is_some_and(|v| v.len() != total_cells) {
+        if ghost.is_some_and(|n| n != total_cells) {
             return Err(MeshError::new(
                 "MESH005",
                 "CellData/vtkGhostType does not have one value per cell",
@@ -752,34 +828,19 @@ impl Builder {
             self.least = Vec::new();
             self.mesh.boundary = Polygons::new();
         }
-        let counts = poly_sets
+        let counts = poly_counts
             .as_ref()
-            .map(|(.., nf, np2f, nfc)| [&nf[..], &np2f[..], &nfc[..]]);
+            .map(|(nf, np2f, nfc)| [&nf[..], &np2f[..], &nfc[..]]);
         let part_list = cells::parts(&np, &nc, &ncon, counts);
         let t = crate::profile::span("read.cells");
-        let read =
-            cells::read(
-                &cells::Input {
-                    parts: &part_list,
-                    types: &types,
-                    offsets: &offsets,
-                    conn: &conn,
-                    poly: poly_sets.as_ref().map(
-                        |(offsets, to_faces, face_offsets, face_conn, ..)| cells::Poly {
-                            offsets,
-                            to_faces,
-                            face_offsets,
-                            face_conn,
-                        },
-                    ),
-                    ghost: ghost.as_ref(),
-                    zone_data: zone_data.as_ref(),
-                    zone,
-                    points: &points,
-                    xyz: &self.mesh.points,
-                },
-                total_cells,
-            )?;
+        let grid = cells::Grid {
+            parts: &part_list,
+            poly,
+            zone,
+            points: &points,
+            xyz: &self.mesh.points,
+        };
+        let read = cells::read(&grid, &sets, total_cells)?;
         drop(t);
         // back to the phase of reading the datasets (the window's text)
         drop(crate::profile::span("read.vtkhdf"));

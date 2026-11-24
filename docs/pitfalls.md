@@ -275,13 +275,23 @@ problem took more than a few minutes to understand.
   (`MESH016`); `opening_a_path_reads_what_the_bytes_read` compares every
   fixture read both ways. `H5::from_bytes` holds the whole file, as
   before.
-- **The VTKHDF cells are read in ranges, in two passes**
-  (`vtkhdf/cells.rs`), as the `.vtu` cells are. A range checks each
-  partition when it comes to it; a partition without cells is checked by
-  the range at whose first row it lies, and the last range checks those
-  after the last cell, so every partition is checked once, in file
-  order. A new check of a partition goes into `enter`, which both passes
-  call.
+- **The VTKHDF cells are read in units, in two passes**
+  (`vtkhdf/cells.rs`), as the `.vtu` cells are in ranges. A unit checks
+  each partition when it comes to it; a partition without cells is
+  checked by the unit at whose first row it lies, and the last unit
+  checks those after the last cell, so every partition is checked once,
+  in file order. A new check of a partition goes into `enter`, which
+  both passes call.
+- **A unit of VTKHDF cells holds only its window of each dataset**
+  (`Window::of`): the rows its cells use, found from the offsets it read
+  before. `hdf5::Values::int` of a row outside the window panics, so a
+  new dataset the walk reads, or a new row of one (a neighbour's offset,
+  say), goes into `Window::of` first; `threads_give_the_cells_of_one_walk`
+  reads in units of 1 to 1,000 cells against one walk over the whole
+  datasets. The counting pass does not read `Connectivity` and
+  `FaceConnectivity` (`Points::Skip`): a check that needs the point ids
+  belongs in the walk that writes, and the counting pass's error is
+  reported only after a pass that reads the ids finds nothing before it.
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,
