@@ -355,6 +355,23 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ]
         }
         Item::Cell(c) => cell_rows(m, display, c as usize),
+        Item::Clip(k) => {
+            let Some(c) = display.clips.get(k as usize) else {
+                return Vec::new();
+            };
+            let (offset, range) = c.offset(&m.bounds());
+            vec![
+                row("name", format!("{}", k + 1)),
+                row("mode", c.mode.key()),
+                row("enabled", c.enabled),
+                unit("origin", vec3(c.origin, 6), "m"),
+                row("normal", vec3(c.normal, 4)),
+                unit("offset", round(offset, 6), "m"),
+                unit("offset_min", round(range[0], 6), "m"),
+                unit("offset_max", round(range[1], 6), "m"),
+                row("current", display.current_clip() == Some(k as usize)),
+            ]
+        }
         Item::Face(u) => face_rows(m, display, u as usize),
         Item::Kind(k) => {
             let cells = m.cell_kind.iter().filter(|&&x| x == k).count();

@@ -126,7 +126,7 @@ fn worst_share(s: &Session, share: f64) -> Option<f64> {
 /// Move the clip plane by `share` of its range (towards the side cut
 /// away for a positive share, so more is cut).
 fn clip_step(s: &Session, share: f64) -> Option<Value> {
-    let c = s.display.clip?;
+    let c = *s.display.clip()?;
     let m = s.mesh.as_ref()?;
     let (off, [lo, hi]) = c.offset(&m.mesh.bounds());
     Some(json!({"offset": (off - share * (hi - lo)).clamp(lo, hi)}))
@@ -137,7 +137,9 @@ type Input = fn(&Session) -> Option<Value>;
 
 /// A tilt of the clip plane, when there is one.
 fn tilt(s: &Session, axis: &str, deg: f64) -> Option<Value> {
-    s.display.clip.map(|_| json!({ "axis": axis, "deg": deg }))
+    s.display
+        .clip()
+        .map(|_| json!({ "axis": axis, "deg": deg }))
 }
 
 /// The saved view `by` places after the one the camera is at (the first
@@ -480,6 +482,28 @@ pub fn commands() -> Vec<Command> {
         ));
     }
     v.push(cmd(
+        "clip.set:new",
+        "cmd-clip-new",
+        "clip",
+        &["Alt+C"],
+        Dynamic("clip.set", |s| {
+            (s.mesh.is_some() && s.display.clips.len() < crate::tools::MAX_CLIPS)
+                .then(|| json!({"new": true, "axis": "x"}))
+        }),
+    ));
+    v.push(cmd(
+        "select.item:next_clip",
+        "cmd-clip-next",
+        "clip",
+        &[],
+        Dynamic("select.item", |s| {
+            let m = s.mesh.as_ref()?;
+            let n = s.display.clips.len();
+            let k = (s.display.current_clip()? + 1) % n;
+            Some(json!({"item": murmel_engine::Item::Clip(k as u32).id(&m.mesh)}))
+        }),
+    ));
+    v.push(cmd(
         "clip.set:view",
         "cmd-clip-view",
         "clip",
@@ -492,7 +516,7 @@ pub fn commands() -> Vec<Command> {
         "clip",
         &["Shift+C"],
         Dynamic("clip.set", |s| {
-            s.display.clip.map(|_| json!({"flip": true}))
+            s.display.clip().map(|_| json!({"flip": true}))
         }),
     ));
     for m in murmel_engine::ClipMode::ALL {
@@ -549,7 +573,7 @@ pub fn commands() -> Vec<Command> {
         "clip",
         &[],
         Dynamic("clip.set", |s| {
-            s.display.clip.map(|c| json!({"enabled": !c.enabled}))
+            s.display.clip().map(|c| json!({"enabled": !c.enabled}))
         }),
     ));
     v.push(cmd(
@@ -557,7 +581,16 @@ pub fn commands() -> Vec<Command> {
         "cmd-clip-clear",
         "clip",
         &[],
-        Dynamic("clip.clear", |s| s.display.clip.map(|_| json!({}))),
+        Dynamic("clip.clear", |s| s.display.clip().map(|_| json!({}))),
+    ));
+    v.push(cmd(
+        "clip.clear:all",
+        "cmd-clip-clear-all",
+        "clip",
+        &[],
+        Dynamic("clip.clear", |s| {
+            (!s.display.clips.is_empty()).then(|| json!({"all": true}))
+        }),
     ));
     v.push(cmd(
         "display.visibility:hide",
@@ -721,7 +754,6 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "the window groups each mouse gesture and run of wheel steps itself",
     ),
     ("journal.list", "for scripts; undo and redo walk it"),
-    ("select.item", "needs an item: the model tree selects"),
     (
         "select.pick",
         "needs a screen point: a click in the viewport picks",
@@ -879,6 +911,11 @@ mod tests {
             assert!(crate::call("select.item", json!({"item": "patch:inlet"}), s).ok());
             // A saved view, so the commands that step through them apply.
             assert!(crate::call("views.save", json!({}), s).ok());
+            // Two clip planes, so removing the current one leaves one for
+            // "remove all".
+            for _ in 0..2 {
+                assert!(crate::call("clip.set", json!({"new": true}), s).ok());
+            }
         };
         open(&mut s);
         for c in commands() {

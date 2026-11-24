@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 
 pub use diag::{Code, Severity, code, codes};
 pub use markdown::markdown;
-pub use tools::{JOURNALED, NOT_JOURNALED, READS_ONLY, reads_only};
+pub use tools::{JOURNALED, MAX_CLIPS, NOT_JOURNALED, READS_ONLY, reads_only};
 
 pub const RESULT_FORMAT: &str = "murmelcraft.tool-result";
 pub const CATALOGUE_FORMAT: &str = "murmelcraft.tool-catalogue";

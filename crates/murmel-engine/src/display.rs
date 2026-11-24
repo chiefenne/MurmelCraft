@@ -111,6 +111,9 @@ pub enum Item {
     Cell(u32),
     /// A distinct face (`Mesh::face_owner` index).
     Face(u32),
+    /// A clip plane, by index into `Display::clips`; its id counts from
+    /// one (`clip:1` is the first plane).
+    Clip(u32),
 }
 
 impl Item {
@@ -131,6 +134,7 @@ impl Item {
             ),
             Item::Cell(c) => format!("cell:{c}"),
             Item::Face(f) => format!("face:{f}"),
+            Item::Clip(i) => format!("clip:{}", i + 1),
         }
     }
 
@@ -171,6 +175,13 @@ impl Item {
                 .ok()
                 .filter(|&f| (f as usize) < mesh.unique_faces)
                 .map(Item::Face),
+            // Whether the plane exists is the display's to say
+            // (`Display::has`).
+            "clip" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&n| n >= 1)
+                .map(|n| Item::Clip(n - 1)),
             _ => None,
         }
     }
@@ -232,8 +243,9 @@ pub struct Display {
     /// mesh's and the zones' colours show in colour mode solid, a patch's
     /// in solid and patch, a cell type's in cell type.
     pub colors: BTreeMap<Item, Rgb>,
-    /// The clip plane, if one is set (`clip.set`).
-    pub clip: Option<Clip>,
+    /// The clip planes (`clip.set`), in the order they were added. A cell
+    /// shows when every enabled plane keeps it; flat planes slice.
+    pub clips: Vec<Clip>,
     /// The metric colour mode quality shows.
     pub metric: Metric,
     /// In colour mode quality, cells better than this value of the metric
@@ -287,6 +299,25 @@ impl Display {
 
     /// Apply a visibility change to `items` of `mesh`.
     pub fn set_visibility(&mut self, v: Visibility, items: &[Item], mesh: &Mesh) {
+        // A clip plane's eye turns its cut on and off; planes are never
+        // in `hidden`.
+        for &i in items {
+            if let Item::Clip(k) = i
+                && let Some(c) = self.clips.get_mut(k as usize)
+            {
+                match v {
+                    Visibility::Show | Visibility::Isolate => c.enabled = true,
+                    Visibility::Hide => c.enabled = false,
+                    Visibility::ShowAll => {}
+                }
+            }
+        }
+        let kept: Vec<Item> = items
+            .iter()
+            .copied()
+            .filter(|i| !matches!(i, Item::Clip(_)))
+            .collect();
+        let items = kept.as_slice();
         match v {
             Visibility::ShowAll => {
                 self.hidden.clear();
@@ -457,18 +488,79 @@ impl Display {
             .unwrap_or(tokens.mesh.solid)
     }
 
-    /// The clip plane if it cuts now.
+    /// The index of the clip plane that tools and the viewport handle act
+    /// on: the clip plane selected last, else the one added last.
+    pub fn current_clip(&self) -> Option<usize> {
+        self.selection
+            .iter()
+            .rev()
+            .find_map(|&i| match i {
+                Item::Clip(k) if (k as usize) < self.clips.len() => Some(k as usize),
+                _ => None,
+            })
+            .or_else(|| self.clips.len().checked_sub(1))
+    }
+
+    /// The current clip plane (`current_clip`), on or off.
+    pub fn clip(&self) -> Option<&Clip> {
+        self.clips.get(self.current_clip()?)
+    }
+
+    pub fn current_clip_mut(&mut self) -> Option<&mut Clip> {
+        let k = self.current_clip()?;
+        self.clips.get_mut(k)
+    }
+
+    /// The current clip plane if it cuts now.
     pub fn active_clip(&self) -> Option<&Clip> {
-        self.clip.as_ref().filter(|c| c.enabled)
+        self.clip().filter(|c| c.enabled)
+    }
+
+    /// Every clip plane that cuts now.
+    pub fn active_clips(&self) -> impl Iterator<Item = &Clip> {
+        self.clips.iter().filter(|c| c.enabled)
+    }
+
+    /// Whether `item` exists in this display (clip planes do not exist
+    /// in the mesh; every other item does once `Item::parse` found it).
+    pub fn has(&self, item: Item) -> bool {
+        match item {
+            Item::Clip(k) => (k as usize) < self.clips.len(),
+            _ => true,
+        }
+    }
+
+    /// Remove clip plane `k`: the selection forgets it, and the planes
+    /// after it move up one (their ids with them).
+    pub fn remove_clip(&mut self, k: usize) -> Option<Clip> {
+        if k >= self.clips.len() {
+            return None;
+        }
+        let c = self.clips.remove(k);
+        let k = k as u32;
+        self.selection.retain(|&i| i != Item::Clip(k));
+        for i in &mut self.selection {
+            if let Item::Clip(j) = i
+                && *j > k
+            {
+                *j -= 1;
+            }
+        }
+        Some(c)
+    }
+
+    /// Whether point `p` is kept by every clip plane that cuts.
+    pub fn clips_keep(&self, p: [f64; 3]) -> bool {
+        self.active_clips().all(|c| c.keeps(p))
     }
 
     /// The cells shown: not hidden (by zone, cell type or the mesh) and
-    /// kept by the clip plane.
+    /// kept by every clip plane that cuts.
     pub fn shown_cells(&self, mesh: &Mesh) -> Vec<bool> {
         let mut shown: Vec<bool> = (0..mesh.cell_count())
             .map(|c| self.cell_visible(mesh, c))
             .collect();
-        if let Some(clip) = self.active_clip() {
+        for clip in self.active_clips() {
             let keeps: Vec<bool> = mesh.points.iter().map(|&p| clip.keeps(p)).collect();
             for (s, k) in shown.iter_mut().zip(crate::clip::kept_cells(mesh, &keeps)) {
                 *s &= k;
@@ -558,6 +650,7 @@ impl Display {
             Item::Kind(k) => owner.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
             Item::Cell(c) => owner == Some(c as usize),
             Item::Face(u) => mesh.boundary_face_id.get(f) == Some(&u),
+            Item::Clip(_) => false,
         }
     }
 
@@ -587,6 +680,13 @@ impl Display {
                 }
                 return (!b.is_empty()).then_some(b);
             }
+            // The plane's section of the mesh's box.
+            Some(Item::Clip(i)) => {
+                for p in self.clips.get(i as usize)?.box_section(&mesh.bounds()) {
+                    b.add(p);
+                }
+                return (!b.is_empty()).then_some(b);
+            }
             _ => {}
         }
         for (f, face) in mesh.boundary.iter().enumerate() {
@@ -604,20 +704,19 @@ impl Display {
     pub fn visible_counts(&self, mesh: &Mesh) -> (usize, usize) {
         if self.hidden.is_empty()
             && self.isolated.is_empty()
-            && self.active_clip().is_none()
+            && self.active_clips().next().is_none()
             && !self.thresholding()
         {
             return (mesh.cell_count(), mesh.boundary.len());
         }
         let shown = self.shown_cells(mesh);
         let cells = shown.iter().filter(|&&s| s).count();
-        let clip = self.active_clip();
         let faces = (0..mesh.boundary.len())
             .filter(|&f| {
                 self.face_visible(mesh, f)
                     && match mesh.boundary_owner.get(f).copied() {
                         Some(c) if c != NO_CELL => shown[c as usize],
-                        _ => clip.is_none_or(|cl| {
+                        _ => self.active_clips().all(|cl| {
                             mesh.boundary
                                 .get(f)
                                 .iter()

@@ -135,12 +135,12 @@ mod tests {
         cam.fit(&b, aspect);
         let eye_dir = cam.to_eye();
         let d = Display {
-            clip: Some(crate::Clip {
+            clips: vec![crate::Clip {
                 origin: b.center(),
                 normal: [eye_dir.x.signum(), 0.0, 0.0],
                 mode: crate::ClipMode::Crinkle,
                 enabled: true,
-            }),
+            }],
             ..Display::default()
         };
         let s = Surface::build(&mesh, &t, &d);

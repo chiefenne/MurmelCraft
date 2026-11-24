@@ -70,6 +70,9 @@ pub struct ClipDrag {
     /// Which side of the pivot each arc sits on (+1 or -1), kept for the
     /// drag so the arcs do not jump.
     pub sides: [f64; 2],
+    /// The clip plane dragged (0-based); a drag ends when another plane
+    /// becomes the current one.
+    pub plane: usize,
 }
 
 /// Where a handle is on screen this frame: the middle of its centre line
@@ -353,6 +356,15 @@ impl MurmelApp {
             self.clip_drag = None;
             return;
         };
+        // The handles belong to the current plane (selected, else added
+        // last); the calls name it, so the drag stays on it.
+        let Some(current) = self.session.display.current_clip() else {
+            return;
+        };
+        if self.clip_drag.is_some_and(|d| d.plane != current) {
+            self.clip_drag = None;
+        }
+        let plane = current + 1;
         let Some(m) = &self.session.mesh else { return };
         let bounds = m.mesh.bounds();
         let section = c.box_section(&bounds);
@@ -550,6 +562,7 @@ impl MurmelApp {
                     axis: sh.tilt.map(|t| t.0).unwrap_or(n),
                     start_normal: n,
                     sides,
+                    plane: current,
                 });
             }
             if !resp.dragged() {
@@ -573,7 +586,7 @@ impl MurmelApp {
                         if metres != 0.0 {
                             let (off, [lo, hi]) = c.offset(&bounds);
                             let v = (off + metres).clamp(lo, hi);
-                            self.call("clip.set", json!({ "offset": v }));
+                            self.call("clip.set", json!({ "plane": plane, "offset": v }));
                         }
                     }
                 }
@@ -592,7 +605,7 @@ impl MurmelApp {
                             let deg = rad.to_degrees();
                             self.call(
                                 "clip.rotate",
-                                json!({ "axis": axis, "deg": deg, "pivot": pivot }),
+                                json!({ "plane": plane, "axis": axis, "deg": deg, "pivot": pivot }),
                             );
                         }
                     }

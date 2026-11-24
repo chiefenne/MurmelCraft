@@ -28,7 +28,7 @@ use crate::session::Session;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.1";
+pub const SESSION_VERSION: &str = "1.2";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -59,7 +59,12 @@ pub struct DisplayState {
     pub selection: Vec<String>,
     /// Colours set on items (`display.set_color`), by item id.
     pub colors: BTreeMap<String, Rgb>,
+    /// The one clip plane of format 1.0 and 1.1; read, never written.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub clip: Option<Clip>,
+    /// The clip planes, in order (1.2).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub clips: Vec<Clip>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -166,7 +171,12 @@ impl SessionFile {
                 isolated: ids(&mut d.isolated.iter()),
                 selection: ids(&mut d.selection.iter()),
                 colors,
-                clip: if s.mesh.is_some() { d.clip } else { None },
+                clip: None,
+                clips: if s.mesh.is_some() {
+                    d.clips.clone()
+                } else {
+                    Vec::new()
+                },
             },
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
@@ -219,7 +229,11 @@ impl SessionFile {
             v.name = name.clone();
             names.push(name);
         }
-        if let Some(clip) = &mut f.display.clip {
+        // A 1.0 or 1.1 file names one plane.
+        if let Some(c) = f.display.clip.take() {
+            f.display.clips.insert(0, c);
+        }
+        for clip in &mut f.display.clips {
             if !clip.origin.iter().all(|v| v.is_finite()) {
                 return Err(Refused("the clip origin needs finite numbers".into()));
             }
@@ -302,7 +316,7 @@ impl Session {
         d.isolated.clear();
         d.selection.clear();
         d.colors.clear();
-        d.clip = None;
+        d.clips.clear();
         d.views.clear();
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
@@ -326,7 +340,12 @@ impl Session {
                 .iter()
                 .filter_map(|(id, c)| find(id).map(|i| (i, *c)))
                 .collect();
-            d.clip = s.clip;
+            d.clips = s.clips;
+            // Clip planes the file selects but does not have.
+            d.selection.retain(|&i| match i {
+                Item::Clip(k) => (k as usize) < d.clips.len(),
+                _ => true,
+            });
             d.views = f.views;
         }
         self.journal.clear();

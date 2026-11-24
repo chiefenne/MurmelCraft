@@ -211,7 +211,7 @@ impl Session {
         self.display.selection.clear();
         self.display.isolated.clear();
         self.display.colors.clear();
-        self.display.clip = None;
+        self.display.clips.clear();
         self.display.threshold = None;
         self.display.quality = None;
         self.display.views.clear();
@@ -261,7 +261,7 @@ impl Session {
         self.display.selection.clear();
         self.display.isolated.clear();
         self.display.colors.clear();
-        self.display.clip = None;
+        self.display.clips.clear();
         self.display.threshold = None;
         self.display.quality = None;
         self.display.views.clear();

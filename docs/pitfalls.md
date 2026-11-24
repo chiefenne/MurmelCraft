@@ -90,6 +90,15 @@ problem took more than a few minutes to understand.
   selected first, then boundary faces in file order, then open faces; a
   shared edge takes the first face's colour. Changing this order moves
   patch-border colours in the render tests.
+- **Several flat planes cut in turn.** With more than one flat clip a
+  cut point is named by the plane and the two corners of the edge it
+  cuts, and corners may be cut points of earlier planes. Faces are cut by
+  the planes in the order they were added, and a cell's section by plane
+  k is taken from the cell as the planes before k left it (their sections
+  included); then the corner where two planes meet a face has the same
+  name in the face and in both sections, and the cut stays closed. A
+  section taken from the whole, uncut cell would name those corners
+  differently and leave holes.
 - **Cut towards the camera.** `clip.set` by axis points the normal at the
   eye, so the half nearer the viewer goes and the cut is in sight; a fixed
   +axis normal hid the cut behind the mesh from the iso view.

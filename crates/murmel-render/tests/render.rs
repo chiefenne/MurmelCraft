@@ -141,15 +141,37 @@ fn channel_clip_by_cell_type() {
         let mut s = session(StandardView::ISO);
         s.display.color_by = ColorBy::CellType;
         let b = s.mesh.as_ref().unwrap().mesh.bounds();
-        s.display.clip = Some(Clip {
+        s.display.clips = vec![Clip {
             origin: b.center(),
             normal: [1.0, 0.0, 0.0],
             mode,
             enabled: true,
-        });
+        }];
         s.redraw();
         check_session(&format!("channel-clip-{}", mode.key()), &s);
     }
+}
+
+/// Several clip planes: a flat cut along x and a flat cut along y
+/// take a quarter out of the channel, so the corner where the two
+/// sections meet shows (cells by type, iso view).
+#[test]
+fn channel_two_flat_clips() {
+    let mut s = session(StandardView::ISO);
+    s.display.color_by = ColorBy::CellType;
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    // Normals towards the eye, as clip.set by axis gives them.
+    let e = s.camera.to_eye();
+    s.display.clips = [[e.x.signum(), 0.0, 0.0], [0.0, e.y.signum(), 0.0]]
+        .map(|normal| Clip {
+            origin: b.center(),
+            normal,
+            mode: ClipMode::Flat,
+            enabled: true,
+        })
+        .to_vec();
+    s.redraw();
+    check_session("channel-two-flat-clips", &s);
 }
 
 /// V0.4 picking: a crinkle cut by cell type with one core polyhedron
@@ -160,12 +182,12 @@ fn channel_picked_cell() {
     let mut s = session(StandardView::ISO);
     s.display.color_by = ColorBy::CellType;
     let b = s.mesh.as_ref().unwrap().mesh.bounds();
-    s.display.clip = Some(Clip {
+    s.display.clips = vec![Clip {
         origin: b.center(),
         normal: [1.0, 0.0, 0.0],
         mode: ClipMode::Crinkle,
         enabled: true,
-    });
+    }];
     s.redraw();
     let m = s.mesh.as_ref().unwrap();
     let hit = murmel_engine::pick::pick(&m.surface, &s.camera, [0.0, 0.0], s.aspect()).unwrap();
@@ -252,12 +274,12 @@ fn openfoam_dual_polyhedra_clipped() {
     s.fit();
     s.display.color_by = ColorBy::CellType;
     let b = s.mesh.as_ref().unwrap().mesh.bounds();
-    s.display.clip = Some(Clip {
+    s.display.clips = vec![Clip {
         normal: [1.0, 0.0, 0.0],
         origin: b.center(),
         mode: ClipMode::Flat,
         enabled: true,
-    });
+    }];
     s.redraw();
     check_session("openfoam-dual-clip-flat", &s);
 }

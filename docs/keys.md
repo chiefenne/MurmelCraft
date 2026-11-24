@@ -48,6 +48,7 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | `X` | Clip normal to X | `clip.set` `{"axis":"x"}` |
 | `Y` | Clip normal to Y | `clip.set` `{"axis":"y"}` |
 | `Z` | Clip normal to Z | `clip.set` `{"axis":"z"}` |
+| `Alt + C` | Add a clip plane | `clip.set` (input from the session) |
 | `Shift + C` | Flip the clip side | `clip.set` (input from the session) |
 | `Alt + Shift + Up` | Clip plane: cut more away | `clip.set` (input from the session) |
 | `Alt + Shift + Down` | Clip plane: cut less away | `clip.set` (input from the session) |
@@ -105,11 +106,13 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | palette | Colour by: quality, face count | `display.color_by` `{"by":"quality","metric":"face_count"}` |
 | palette | Quality: show only the worst 10 % of cells | `display.threshold` (input from the session) |
 | palette | Quality: show all cells again | `display.threshold` (input from the session) |
+| palette | Next clip plane | `select.item` (input from the session) |
 | palette | Clip along the view direction | `clip.set` `{"axis":"view"}` |
 | palette | Clip: crinkle cut (whole cells) | `clip.set` `{"mode":"crinkle"}` |
 | palette | Clip: flat cut | `clip.set` `{"mode":"flat"}` |
 | palette | Turn the clip plane on or off | `clip.set` (input from the session) |
-| palette | Remove the clip plane | `clip.clear` (input from the session) |
+| palette | Remove the current clip plane | `clip.clear` (input from the session) |
+| palette | Remove all clip planes | `clip.clear` (input from the session) |
 | palette | Fit the selection | `view.fit` (input from the session) |
 | palette | Click picks cells | `select.filter` `{"target":"cell"}` |
 | palette | Click picks faces | `select.filter` `{"target":"face"}` |

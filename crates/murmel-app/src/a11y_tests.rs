@@ -100,6 +100,23 @@ fn every_control_has_a_clean_name() {
     h.run_steps(3);
     assert_eq!(problems(&h), Vec::<String>::new(), "patch, clip, quality");
     h.get_by_label("Clip mode: Crinkle");
+    // A second clip plane: both rows are named, the current one says so.
+    h.state_mut()
+        .call("clip.set", serde_json::json!({"new": true, "axis": "y"}));
+    h.run_steps(2);
+    assert_eq!(problems(&h), Vec::<String>::new(), "two clip planes");
+    assert!(named(&h, "Clip 1: X · Crinkle"), "first plane");
+    let names: Vec<String> = h
+        .root()
+        .children_recursive()
+        .filter_map(|n| n.accesskit_node().label())
+        .filter(|l| l.starts_with("Clip 2"))
+        .collect();
+    assert!(
+        names.iter().any(|l| l.ends_with("Y · Crinkle, current")),
+        "current plane: {names:?}"
+    );
+    assert!(named(&h, "Add clip plane (Alt + C)"), "add button");
     // A saved view (Ctrl + B names it in the person's language), and its
     // name field while it is renamed.
     h.state_mut().save_view();
@@ -237,30 +254,34 @@ fn clip_handles_drag_and_undo() {
     let spot = |h: &Harness<'_, MurmelApp>, k: Handle| {
         *h.state().clip_spots.iter().find(|s| s.handle == k).unwrap()
     };
-    let start = h.state().session.display.clip.unwrap();
+    let start = *h.state().session.display.clip().unwrap();
     assert_eq!(h.state().clip_spots.len(), 3);
 
     let s = spot(&h, Handle::Slide);
     let cam = h.state().session.camera.clone();
     drag(&mut h, s.at, s.dir * 40.0, 6);
-    let slid = h.state().session.display.clip.unwrap();
+    let slid = *h.state().session.display.clip().unwrap();
     assert_eq!(slid.normal, start.normal, "a slide does not turn");
     assert!(slid.distance(start.origin).abs() > 1e-6, "the plane moved");
     assert_eq!(h.state().session.camera, cam, "the view did not orbit");
     h.state_mut().call("journal.undo", serde_json::json!({}));
-    assert_eq!(h.state().session.display.clip, Some(start), "one undo step");
+    assert_eq!(
+        h.state().session.display.clip().copied(),
+        Some(start),
+        "one undo step"
+    );
 
     h.run_steps(2);
     for k in [Handle::TiltU, Handle::TiltV] {
         let s = spot(&h, k);
         drag(&mut h, s.at, s.dir * 30.0, 6);
-        let tilted = h.state().session.display.clip.unwrap();
+        let tilted = *h.state().session.display.clip().unwrap();
         let cos: f64 = (0..3).map(|i| tilted.normal[i] * start.normal[i]).sum();
         assert!(cos < 0.999, "{k:?} turned the plane: {cos}");
         assert_eq!(h.state().session.camera, cam, "the view did not orbit");
         h.state_mut().call("journal.undo", serde_json::json!({}));
         assert_eq!(
-            h.state().session.display.clip,
+            h.state().session.display.clip().copied(),
             Some(start),
             "{k:?}: one undo step"
         );
