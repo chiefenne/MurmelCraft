@@ -67,6 +67,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Shift + Z` | Slice normal to Z | `slice.set` `{"axis":"z"}` |
 | `Alt + S` | Add a slice | `slice.set` (input from the session) |
 | `Alt + I` | Add an iso-surface | `iso.set` (input from the session) |
+| `Alt + V` | Vector arrows: show or hide | `arrows.set` (input from the session) |
 | `H` | Hide the selection | `display.visibility` (input from the session) |
 | `I` | Isolate the selection | `display.visibility` (input from the session) |
 | `Alt + H` | Show all | `display.visibility` (input from the session) |
@@ -158,6 +159,15 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Iso-surface: show or hide | `iso.set` (input from the session) |
 | palette | Remove the iso-surface | `iso.clear` (input from the session) |
 | palette | Remove all iso-surfaces | `iso.clear` (input from the session) |
+| palette | Vector arrows: on the surface too, or not | `arrows.set` (input from the session) |
+| palette | Vector arrows: only the part in the slice, or all of it | `arrows.set` (input from the session) |
+| palette | Vector arrows: more of them | `arrows.set` (input from the session) |
+| palette | Vector arrows: fewer of them | `arrows.set` (input from the session) |
+| palette | Vector arrows: longer | `arrows.set` (input from the session) |
+| palette | Vector arrows: shorter | `arrows.set` (input from the session) |
+| palette | Vector arrows: solid colour | `arrows.set` (input from the session) |
+| palette | Vector arrows: coloured by the field shown | `arrows.set` (input from the session) |
+| palette | Remove the vector arrows | `arrows.clear` (input from the session) |
 | palette | Mesh beside slices: faint outline | `display.mesh_look` `{"look":"outline"}` |
 | palette | Mesh beside slices: faces | `display.mesh_look` `{"look":"faces"}` |
 | palette | Delete all measurements and probes | `measure.remove` (input from the session) |

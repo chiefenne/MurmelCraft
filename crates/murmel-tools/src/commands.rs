@@ -817,6 +817,120 @@ pub fn commands() -> Vec<Command> {
             (!s.display.isos.is_empty()).then(|| json!({"all": true}))
         }),
     ));
+    // Vector arrows: Alt + V shows them (on the slices; the field shown
+    // if it is a vector, else the file's first) or hides them again.
+    v.push(cmd(
+        "arrows.set:toggle",
+        "cmd-arrows-toggle",
+        "slice",
+        &["Alt+V"],
+        Dynamic("arrows.set", |s| {
+            let m = s.mesh.as_ref()?;
+            match &s.display.arrows {
+                Some(a) => Some(json!({"enabled": !a.enabled})),
+                None => {
+                    let vector = m
+                        .fields
+                        .names()
+                        .iter()
+                        .any(|n| m.fields.get(n).is_some_and(|f| f.is_vector()));
+                    vector.then(|| json!({"enabled": true}))
+                }
+            }
+        }),
+    ));
+    v.push(cmd(
+        "arrows.set:surface",
+        "cmd-arrows-surface",
+        "slice",
+        &[],
+        Dynamic("arrows.set", |s| {
+            s.display
+                .arrows
+                .as_ref()
+                .map(|a| json!({"surface": !a.surface}))
+        }),
+    ));
+    v.push(cmd(
+        "arrows.set:in_plane",
+        "cmd-arrows-in-plane",
+        "slice",
+        &[],
+        Dynamic("arrows.set", |s| {
+            s.display
+                .arrows
+                .as_ref()
+                .map(|a| json!({"in_plane": !a.in_plane}))
+        }),
+    ));
+    v.push(cmd(
+        "arrows.set:denser",
+        "cmd-arrows-denser",
+        "slice",
+        &[],
+        Dynamic("arrows.set", |s| {
+            let a = s.display.arrows.as_ref()?;
+            let d = (a.density * 3 / 2).min(murmel_engine::glyph::MAX_DENSITY);
+            (d != a.density).then(|| json!({"density": d}))
+        }),
+    ));
+    v.push(cmd(
+        "arrows.set:sparser",
+        "cmd-arrows-sparser",
+        "slice",
+        &[],
+        Dynamic("arrows.set", |s| {
+            let a = s.display.arrows.as_ref()?;
+            let d = (a.density * 2 / 3).max(murmel_engine::glyph::MIN_DENSITY);
+            (d != a.density).then(|| json!({"density": d}))
+        }),
+    ));
+    v.push(cmd(
+        "arrows.set:longer",
+        "cmd-arrows-longer",
+        "slice",
+        &[],
+        Dynamic("arrows.set", |s| {
+            let a = s.display.arrows.as_ref()?;
+            let x = (a.scale * 1.5).min(murmel_engine::glyph::MAX_SCALE);
+            (x != a.scale).then(|| json!({"scale": x}))
+        }),
+    ));
+    v.push(cmd(
+        "arrows.set:shorter",
+        "cmd-arrows-shorter",
+        "slice",
+        &[],
+        Dynamic("arrows.set", |s| {
+            let a = s.display.arrows.as_ref()?;
+            Some(json!({"scale": a.scale / 1.5}))
+        }),
+    ));
+    for c in murmel_engine::IsoColor::ALL {
+        v.push(cmd(
+            format!("arrows.set:{}", c.key()),
+            format!("cmd-arrows-{}", c.key()),
+            "slice",
+            &[],
+            match c {
+                murmel_engine::IsoColor::Solid => Dynamic("arrows.set", |s| {
+                    s.display.arrows.as_ref().map(|_| json!({"color": "solid"}))
+                }),
+                murmel_engine::IsoColor::Field => Dynamic("arrows.set", |s| {
+                    s.display.arrows.as_ref().map(|_| json!({"color": "field"}))
+                }),
+            },
+        ));
+    }
+    v.push(cmd(
+        "arrows.clear",
+        "cmd-arrows-clear",
+        "slice",
+        &[],
+        Dynamic("arrows.clear", |s| {
+            s.display.arrows.as_ref().map(|_| json!({}))
+        }),
+    ));
     for l in murmel_engine::MeshLook::ALL {
         v.push(cmd(
             format!("display.mesh_look:{}", l.key()),

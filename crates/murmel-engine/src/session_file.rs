@@ -8,7 +8,8 @@
 //! by their tree ids), the clip planes (since 1.2), the saved views (named
 //! cameras, since format 1.1), the measurements and probes (since 1.3),
 //! the field shown and each field's style (since 1.4), the slices,
-//! iso-surfaces and the mesh's look beside them (since 1.5),
+//! iso-surfaces and the mesh's look beside them (since 1.5), the
+//! vector arrows (since 1.6),
 //! the user's mesh colours and the view cube placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
 //! `settings.toml` (decided 2026-11-24).
@@ -28,13 +29,14 @@ use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Item, PickTarget, RenderMode, SavedView};
 use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, RangeMode};
+use crate::glyph::Arrows;
 use crate::measure::{Measurement, Probe};
 use crate::quality::Metric;
 use crate::session::Session;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.5";
+pub const SESSION_VERSION: &str = "1.6";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -92,6 +94,9 @@ pub struct DisplayState {
     /// What the mesh looks like while slices or iso-surfaces show (1.5).
     #[serde(skip_serializing_if = "is_outline")]
     pub mesh_look: MeshLook,
+    /// The vector arrows (1.6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrows: Option<Arrows>,
 }
 
 fn is_outline(l: &MeshLook) -> bool {
@@ -231,6 +236,11 @@ impl SessionFile {
                     Vec::new()
                 },
                 mesh_look: d.mesh_look,
+                arrows: if s.mesh.is_some() {
+                    d.arrows.clone()
+                } else {
+                    None
+                },
             },
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
@@ -373,6 +383,18 @@ impl SessionFile {
                 )));
             }
         }
+        if let Some(a) = &f.display.arrows
+            && (a.field.is_empty()
+                || !(crate::glyph::MIN_DENSITY..=crate::glyph::MAX_DENSITY).contains(&a.density)
+                || !(a.scale.is_finite() && a.scale > 0.0 && a.scale <= crate::glyph::MAX_SCALE))
+        {
+            return Err(Refused(format!(
+                "arrows: a field, a density of {} to {} and a scale above 0 up to {}",
+                crate::glyph::MIN_DENSITY,
+                crate::glyph::MAX_DENSITY,
+                crate::glyph::MAX_SCALE
+            )));
+        }
         if let Some(t) = f.display.threshold
             && !t.is_finite()
         {
@@ -455,6 +477,7 @@ impl Session {
         d.probes.clear();
         d.slices.clear();
         d.isos.clear();
+        d.arrows = None;
         d.mesh_look = s.mesh_look;
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
@@ -523,6 +546,22 @@ impl Session {
                     }
                 }
             }
+            // Arrows of a field this result does not have, or of one
+            // without three components, are left out.
+            d.arrows = s.arrows.filter(|a| {
+                let vector = m.fields.get(&a.field).is_some_and(|f| f.is_vector());
+                if !vector {
+                    let id = format!("field:{}", a.field);
+                    if !missing.contains(&id) {
+                        missing.push(id);
+                    }
+                }
+                vector
+            });
+            if d.arrows.is_none() {
+                d.selection.retain(|&i| i != Item::Arrows);
+                d.colors.remove(&Item::Arrows);
+            }
             let (ns, ni) = (d.slices.len(), d.isos.len());
             d.selection.retain(|&i| match i {
                 Item::Slice(k) => (k as usize) < ns,
@@ -562,7 +601,8 @@ mod tests {
     }
 
     /// Invariant: a file of another format, a newer major version, a zero
-    /// camera distance or a zero clip normal is refused before anything
+    /// camera distance, a zero clip normal or arrows out of range is
+    /// refused before anything
     /// changes; a session from a different tool would otherwise reset
     /// the view to defaults.
     #[test]
@@ -607,6 +647,25 @@ mod tests {
                 serde_json::json!({"pressure": {"mode": "banded", "range": {"fixed": {"min": 0.0, "max": 2.0}}}}))
             .is_ok()
         );
+        // Arrows (1.6): a density of 4 to 200 and a scale in (0, 100].
+        let arrows = |extra: serde_json::Value| {
+            let mut a = serde_json::json!({"field": "velocity", "enabled": true});
+            for (k, x) in extra.as_object().unwrap() {
+                a[k] = x.clone();
+            }
+            with(&|v| v["display"]["arrows"] = a.clone())
+        };
+        assert!(arrows(serde_json::json!({"density": 40, "scale": 2.5, "in_plane": true})).is_ok());
+        for bad in [
+            serde_json::json!({"density": 3}),
+            serde_json::json!({"density": 201}),
+            serde_json::json!({"scale": 0.0}),
+            serde_json::json!({"scale": 101.0}),
+            serde_json::json!({"field": ""}),
+            serde_json::json!({"shape": "cone"}),
+        ] {
+            assert!(arrows(bad.clone()).is_err(), "{bad}");
+        }
         assert!(with(&|v| v["camera"]["distance"] = 0.0.into()).is_err());
         assert!(with(&|v| v["surprise"] = 1.into()).is_err());
         assert!(

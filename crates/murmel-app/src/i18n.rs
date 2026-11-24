@@ -108,11 +108,16 @@ mod tests {
                         "iso.set",
                         serde_json::json!({"new": true, "field": "pressure"}),
                     ),
+                    ("arrows.set", serde_json::json!({})),
                 ] {
                     let e = murmel_tools::call(tool, input, &mut s);
                     assert!(e.ok(), "{tool}: {:?}", e.diagnostics);
                 }
-                extra.extend([murmel_engine::Item::Slice(0), murmel_engine::Item::Iso(0)]);
+                extra.extend([
+                    murmel_engine::Item::Slice(0),
+                    murmel_engine::Item::Iso(0),
+                    murmel_engine::Item::Arrows,
+                ]);
             }
             let (Some(m), d) = (&s.mesh, &s.display) else {
                 unreachable!()

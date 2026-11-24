@@ -434,6 +434,42 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ]);
             v
         }
+        Item::Arrows => {
+            let Some(a) = &display.arrows else {
+                return Vec::new();
+            };
+            let f = open.fields.get(&a.field);
+            let mut v = vec![
+                row("field", a.field.clone()),
+                row("enabled", a.enabled),
+                row("on_surface", a.surface),
+                row("in_plane", a.in_plane),
+                row("density", a.density),
+                unit("spacing", round(a.spacing(m), 6), "m"),
+                row("scale", a.scale),
+            ];
+            // With the part in the plane only, the longest arrow depends
+            // on the slices (the surface reports it).
+            let longest = f
+                .filter(|_| !a.in_plane)
+                .and_then(|_| {
+                    let choice = crate::field::FieldChoice {
+                        name: a.field.clone(),
+                        component: crate::field::Component::Magnitude,
+                    };
+                    open.fields.values_cached(m, &choice)
+                })
+                .and_then(|v| v.range)
+                .map(|r| r.1);
+            if let Some(top) = longest {
+                v.push(match f.and_then(|f| f.unit.clone()) {
+                    Some(u) => unit("longest", top, u),
+                    None => row("longest", top),
+                });
+            }
+            v.push(row("color", a.color.key()));
+            v
+        }
         Item::Face(u) => face_rows(m, display, u as usize),
         Item::Measure(n) => display.measurement(n).map_or_else(Vec::new, measure_rows),
         Item::Probe(n) => {

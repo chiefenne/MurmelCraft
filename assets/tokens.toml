@@ -86,6 +86,9 @@ line_mix = 0.85
 # that reads on both the dark and the light viewport without competing
 # with the colours inside.
 outline = "#7A8089"
+# Vector arrows drawn in a solid colour: a light cool grey that stands
+# out against the dark viewport and against the coloured slices.
+arrow = "#E8ECF2"
 
 # Patch roles (UI spec, Colour by): wall grey, inlet blue, outlet orange,
 # symmetry green, interface violet, unspecified sand. Searched in OKLCH

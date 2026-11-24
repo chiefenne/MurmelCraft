@@ -84,7 +84,8 @@ impl MurmelApp {
                 | Item::Measure(_)
                 | Item::Probe(_)
                 | Item::Slice(_)
-                | Item::Iso(_) => {}
+                | Item::Iso(_)
+                | Item::Arrows => {}
             }
         }
         patches.sort_by(|a, b| a.label.cmp(&b.label));
@@ -692,6 +693,7 @@ impl MurmelApp {
                 };
                 format!("{} · {name}", self.i18n.tr(&format!("props-area-{area}")))
             }
+            None if c.item == "arrows" => self.i18n.tr("props-area-arrows"),
             None => self.i18n.tr("props-area-mesh"),
         };
         ui.heading(heading);

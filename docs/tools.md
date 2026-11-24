@@ -33,7 +33,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
 | `field.style` | 1 | read | Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values by inverse distance weighting, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes viridis, or cool_warm for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
-| `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type. |
+| `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>, iso:<n>, arrows), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type, an iso-surface's and the arrows' colours when they are solid. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
 | `clip.set` | 2 | read | Set a clip plane (plane: its number, clip:1 is the first; left out: the current plane, the one selected last or else added last; new: add one, up to 8): its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). A cell shows when every enabled plane keeps it; flat planes slice in the order they were added. |
 | `clip.rotate` | 1 | read | Tilt a clip plane (plane: its number; left out: the current plane) by deg degrees about an axis through pivot (right-hand rule). The axis is a screen axis (x right, y up, z towards the viewer, as in view.rotate) or a world vector; the pivot defaults to the centre of the plane inside the mesh's box, so the plane stays in the mesh. The window's tilt arcs and Alt + arrow keys call it. |
@@ -43,6 +43,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `slice.clear` | 1 | read | Remove a slice (slice: its number; left out: the current slice), or all of them (all); the slices after it move up one. |
 | `iso.set` | 1 | read | Add or change an iso-surface (iso: its number, iso:1 is the first; left out: the current one; new: add one, up to 8): the surface where field (with component for a vector; left out: its own field, else the field shown, else the file's first) takes value (left out: its own value, or the middle of the field's range for a new one or a new field). color solid gives it a colour of its own (the patch hues in turn, or display.set_color on iso:<n>); field colours it by the field on the colour bar in that field's style. Made by marching tetrahedra in every cell shown (cell centroid, face centres and nodes), so it closes across cells; clip planes cut it. |
 | `iso.clear` | 1 | read | Remove an iso-surface (iso: its number; left out: the current one), or all of them (all); those after it move up one. |
+| `arrows.set` | 1 | read | Show or change the vector arrows: shaded 3D arrows of a vector field (field: left out, their own, else the field shown if it is a vector, else the file's first vector) on every slice shown, on an even square grid anchored at the mesh's centre, and on the mesh surface shown when surface is true (one boundary face per cube of the grid). density is the arrows across the mesh's largest extent (4 to 200, 25 by default); the length follows the magnitude, the field's largest being 0.9 of a spacing times scale (above 0, up to 100). in_plane draws only the part of the vector in each slice's plane, the longest of those then 0.9 of a spacing. color solid gives them a colour of their own (display.set_color on arrows), field the colour of the field on the colour bar there. enabled false keeps the settings and draws none. At most 10 000 are drawn (capped in the result). |
+| `arrows.clear` | 1 | read | Remove the vector arrows and their settings. |
 | `display.mesh_look` | 1 | read | What the mesh looks like while slices or iso-surfaces show: outline (the default: its feature edges only, faint, so what is inside stands out; a click then picks the slices) or faces (as the render mode says). |
 | `select.item` | 2 | read | Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected. |
 | `select.pick` | 1 | read | Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked. |
@@ -1274,6 +1276,57 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `arrows.set`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "color": {
+      "enum": [
+        "solid",
+        "field"
+      ]
+    },
+    "density": {
+      "maximum": 200,
+      "minimum": 4,
+      "type": "integer"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "field": {
+      "type": "string"
+    },
+    "in_plane": {
+      "type": "boolean"
+    },
+    "scale": {
+      "exclusiveMinimum": 0,
+      "maximum": 100.0,
+      "type": "number"
+    },
+    "surface": {
+      "type": "boolean"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `arrows.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `display.mesh_look`
 
 ```json
@@ -2352,6 +2405,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `SLICE003` | error | A series has a count outside 1 to 64 or a spacing that is not positive. | Give count 1 to 64, and a positive spacing or none (the planes then spread through the mesh). |
 | `ISO001` | error | No iso-surface has this number. | Iso-surfaces count from 1 (iso:1); the isos list of the result names them. |
 | `ISO002` | error | The display has the most iso-surfaces it holds (8). | Remove one with iso.clear, or change one with iso.set. |
+| `ARROW001` | error | Arrows need a vector field (one with x, y and z components), and the field named or the open mesh has none. | Name a vector field (field.list shows each field's components), or open a result with velocity. |
+| `ARROW002` | error | The arrows' density is outside 4 to 200, or their scale is not above 0 and up to 100. | Give density 4 to 200 (arrows across the mesh's largest extent) and a scale above 0, up to 100. |
 | `MCP001` | error | The MCP server refused a path outside its read or write roots. | Use a path below a --read-root (files read) or a --write-root (files written), or start the server with more roots. |
 | `MCP002` | error | The MCP server could not resolve a path (it does not exist, or its folder does not). | Check the path; relative paths resolve from the first --write-root. |
 | `LIVE001` | error | No MurmelCraft window listens for agents (none is open, agents are switched off in its Settings, or the platform has no live bridge yet). | Open MurmelCraft and switch on Settings > Agents > Let agents drive this window, or start the MCP server without --live for a headless session. |

@@ -73,6 +73,13 @@ pub struct Surface {
     /// everything in `outline_color` (linear).
     pub outline: Vec<[f32; 3]>,
     pub outline_color: [f32; 3],
+    /// Vector arrows drawn, and whether more were wanted than drawn
+    /// ([`crate::glyph::MAX_ARROWS`]).
+    pub arrows: usize,
+    pub arrows_capped: bool,
+    /// The magnitude an arrow 0.9 of a spacing long stands for (times
+    /// the scale); 0 without arrows.
+    pub arrow_longest: f64,
 }
 
 /// A corner of a drawn polygon: a mesh node, or a point where a clip
@@ -414,7 +421,10 @@ impl Surface {
         // lines): its triangles are left out, so a click picks what is
         // inside.
         let faint = display.outline_mesh();
-        let mesh_triangles = !(display.extracts_shown() && !display.mesh_faces());
+        // Without its faces, the mesh gives no triangles (the renderer
+        // draws faces for slices, iso-surfaces and arrows).
+        let extras = display.extracts_shown() || display.arrows_shown();
+        let mesh_triangles = !(extras && !display.mesh_faces());
         let features = (display.render_mode == RenderMode::FeatureEdges || faint).then(|| {
             feature_edges(
                 polys
@@ -584,7 +594,7 @@ impl Surface {
         }
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
         s.field_range = drawn.range();
-        if display.extracts_shown() {
+        if extras {
             crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
         }
         s.outline_color = sel.linear();
@@ -787,7 +797,12 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         Item::Kind(k) => cell.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
         Item::Cell(c) => poly.cell == c,
         Item::Face(u) => poly.face == u,
-        Item::Clip(_) | Item::Measure(_) | Item::Probe(_) | Item::Slice(_) | Item::Iso(_) => false,
+        Item::Clip(_)
+        | Item::Measure(_)
+        | Item::Probe(_)
+        | Item::Slice(_)
+        | Item::Iso(_)
+        | Item::Arrows => false,
     })
 }
 

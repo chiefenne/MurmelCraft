@@ -107,6 +107,22 @@ const OWN: &[Code] = &[
         fix: Some("Remove one with iso.clear, or change one with iso.set."),
     },
     Code {
+        code: "ARROW001",
+        severity: Severity::Error,
+        meaning: "Arrows need a vector field (one with x, y and z components), and the field named or the open mesh has none.",
+        fix: Some(
+            "Name a vector field (field.list shows each field's components), or open a result with velocity.",
+        ),
+    },
+    Code {
+        code: "ARROW002",
+        severity: Severity::Error,
+        meaning: "The arrows' density is outside 4 to 200, or their scale is not above 0 and up to 100.",
+        fix: Some(
+            "Give density 4 to 200 (arrows across the mesh's largest extent) and a scale above 0, up to 100.",
+        ),
+    },
+    Code {
         code: "MCP001",
         severity: Severity::Error,
         meaning: "The MCP server refused a path outside its read or write roots.",

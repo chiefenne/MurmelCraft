@@ -158,6 +158,7 @@ fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
     d.probes.clear();
     d.slices.clear();
     d.isos.clear();
+    d.arrows = None;
     d.field_values = None;
     if d.field
         .as_ref()
@@ -423,6 +424,7 @@ impl Session {
         self.display.probes.clear();
         self.display.slices.clear();
         self.display.isos.clear();
+        self.display.arrows = None;
         self.display.field_values = None;
         self.surface_revision += 1;
     }

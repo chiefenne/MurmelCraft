@@ -1944,14 +1944,91 @@ fn slice_and_iso_tools() {
     assert!(!s.display.outline_mesh());
 }
 
-/// Invariant (session format 1.5): slices (with their series),
-/// iso-surfaces (field, value, colour mode, own colour) and the mesh's
-/// look come back from a session file and draw the same surface; an
-/// iso-surface of a field the result does not have is skipped and
+/// Invariant: arrows.set takes the field shown when it is a vector (else
+/// the file's first vector), draws arrows on the slices shown and, with
+/// surface, on the mesh; it refuses a mesh without fields (FIELD001), a
+/// scalar (ARROW001), an unknown field (FIELD002) and a density or scale
+/// out of range (ARROW002); a change is one undo step; Alt + V shows and
+/// hides them; arrows.clear removes them with their colour. A front end
+/// that called it with bad input would otherwise draw nothing and report
+/// success.
+#[test]
+fn arrow_tools() {
+    let mut s = session();
+    let vtu = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({ "path": vtu }), &mut s).ok());
+    let e = call("arrows.set", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "FIELD001");
+
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    let by = json!({"by": "field", "field": "pressure"});
+    assert!(call("display.color_by", by, &mut s).ok());
+    // The field shown is a scalar: the file's first vector.
+    let before = s.journal.undo.len();
+    let e = call("arrows.set", json!({}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.journal.undo.len(), before + 1);
+    let a = &e.result["arrows"];
+    assert_eq!(a["field"], "velocity");
+    assert_eq!(a["density"], 25);
+    assert_eq!(a["color"], "solid");
+    assert_eq!(a["id"], "arrows");
+    // No slice and not on the surface: none drawn yet.
+    assert_eq!(a["drawn"], 0);
+    assert!(call("slice.set", json!({"axis": "z"}), &mut s).ok());
+    let e = call("arrows.set", json!({"color": "field"}), &mut s);
+    let drawn = e.result["arrows"]["drawn"].as_u64().unwrap();
+    assert!(drawn > 100, "{drawn}");
+    let e = call("arrows.set", json!({"surface": true}), &mut s);
+    assert!(e.result["arrows"]["drawn"].as_u64().unwrap() > drawn);
+    let e = call("arrows.set", json!({"in_plane": true}), &mut s);
+    assert!(e.result["arrows"]["longest"].as_f64().unwrap() > 0.0);
+    for (bad, code) in [
+        (json!({"field": "pressure"}), "ARROW001"),
+        (json!({"field": "lava"}), "FIELD002"),
+        (json!({"density": 3}), "ARROW002"),
+        (json!({"density": 201}), "ARROW002"),
+        (json!({"scale": 0.0}), "ARROW002"),
+        (json!({"scale": 101.0}), "ARROW002"),
+        (json!({"shape": "cone"}), "TOOL002"),
+    ] {
+        let e = call("arrows.set", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, code, "{bad}");
+    }
+    // Alt + V hides and shows them.
+    let toggle = crate::commands::commands()
+        .into_iter()
+        .find(|c| c.keys.contains(&"Alt+V"))
+        .unwrap();
+    assert_eq!(toggle.id, "arrows.set:toggle");
+    let crate::commands::Run::Dynamic(tool, input) = toggle.run else {
+        panic!("Alt+V is not a tool call");
+    };
+    let e = call(tool, input(&s).unwrap(), &mut s);
+    assert_eq!(e.result["arrows"]["enabled"], false);
+    assert_eq!(s.mesh.as_ref().unwrap().surface.arrows, 0);
+    let colour = json!({"item": "arrows", "color": "#ABCDEF"});
+    assert!(call("display.set_color", colour, &mut s).ok());
+    let e = call("arrows.clear", json!({}), &mut s);
+    assert!(e.result["arrows"].is_null());
+    assert!(s.display.colors.is_empty());
+    // Without arrows, Alt + V adds them.
+    let e = call(tool, input(&s).unwrap(), &mut s);
+    assert_eq!(e.result["arrows"]["enabled"], true);
+}
+
+/// Invariant (session format 1.6): slices (with their series),
+/// iso-surfaces (field, value, colour mode, own colour), the mesh's
+/// look and the arrows (with their colour) come back from a session
+/// file and draw the same surface; an iso-surface or arrows of a field
+/// the result does not have (or arrows of a scalar) are skipped and
 /// reported. Without them in the file a saved result view would come
 /// back without its slices.
 #[test]
 fn extract_sessions_round_trip() {
+    use murmel_engine::Item;
+    use serde_json::Value;
     let dir = std::env::temp_dir().join(format!("murmel-extract-session-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("extracts.murmel");
@@ -1968,10 +2045,14 @@ fn extract_sessions_round_trip() {
     let colour = json!({"item": "iso:1", "color": "#123456"});
     assert!(call("display.set_color", colour, &mut s).ok());
     assert!(call("display.mesh_look", json!({"look": "faces"}), &mut s).ok());
+    let arrows = json!({"surface": true, "density": 30, "scale": 1.5, "color": "field"});
+    assert!(call("arrows.set", arrows, &mut s).ok());
+    let colour = json!({"item": "arrows", "color": "#ABCDEF"});
+    assert!(call("display.set_color", colour, &mut s).ok());
     let e = call("session.save", json!({"path": file}), &mut s);
     assert!(e.ok(), "{:?}", e.diagnostics);
     let text = std::fs::read_to_string(&file).unwrap();
-    assert!(text.contains("\"format_version\": \"1.5\""), "{text}");
+    assert!(text.contains("\"format_version\": \"1.6\""), "{text}");
 
     let mut t = session();
     let e = call("session.load", json!({"path": file}), &mut t);
@@ -1979,6 +2060,8 @@ fn extract_sessions_round_trip() {
     assert_eq!(t.display.slices, s.display.slices);
     assert_eq!(t.display.isos, s.display.isos);
     assert_eq!(t.display.mesh_look, s.display.mesh_look);
+    assert_eq!(t.display.arrows, s.display.arrows);
+    assert!(t.display.arrows.as_ref().is_some_and(|a| a.surface));
     assert_eq!(t.display.colors, s.display.colors);
     let (a, b) = (
         &s.mesh.as_ref().unwrap().surface,
@@ -1994,6 +2077,21 @@ fn extract_sessions_round_trip() {
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert_eq!(e.result["skipped"], json!(["field:tke"]));
     assert_eq!(u.display.isos.len(), 1);
+    // Arrows of a scalar field are left out, with their colour.
+    let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    v["display"]["arrows"]["field"] = json!("pressure");
+    std::fs::write(&file, v.to_string()).unwrap();
+    let mut w = session();
+    let e = call("session.load", json!({"path": file}), &mut w);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(
+        e.result["skipped"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("field:pressure"))
+    );
+    assert!(w.display.arrows.is_none());
+    assert!(!w.display.colors.contains_key(&Item::Arrows));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

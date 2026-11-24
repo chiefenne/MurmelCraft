@@ -455,6 +455,43 @@ fn field_iso_surfaces() {
     check_session("field-iso-surfaces", &s);
 }
 
+/// Stage 3 vector arrows (decided 2026-11-24: even spacing, length by
+/// magnitude, solid or by the field, shaded 3D arrows): the duct's
+/// velocity on its horizontal mid-plane, coloured by speed, with solid
+/// arrows 20 across, longest in the core and short at the side walls.
+/// Arrows that leave the grid, lose their length, turn inside out (dark
+/// on the lit side) or take the wrong colour token move pixels here.
+#[test]
+fn field_arrows_on_a_slice() {
+    let mut s = field_session("speed", murmel_mesh::Component::Magnitude);
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    let mut slice = murmel_engine::Slice::new(b.center(), [0.0, 0.0, 1.0]);
+    slice.origin[2] += 0.013;
+    s.display.slices = vec![slice];
+    let mut a = murmel_engine::Arrows::new("velocity");
+    a.density = 20;
+    s.display.arrows = Some(a);
+    s.redraw();
+    check_session("field-arrows-slice", &s);
+}
+
+/// Stage 3 vector arrows on the surface (on request), coloured by the
+/// field on the colour bar: one arrow per cube of a 12-across grid on
+/// the duct's faces, over the speed-coloured mesh. Thinning that keeps
+/// every face, arrows on hidden sides, or a lost field colour move
+/// pixels here; the slice picture has neither.
+#[test]
+fn field_arrows_on_the_surface() {
+    let mut s = field_session("speed", murmel_mesh::Component::Magnitude);
+    let mut a = murmel_engine::Arrows::new("velocity");
+    a.density = 12;
+    a.surface = true;
+    a.color = murmel_engine::IsoColor::Field;
+    s.display.arrows = Some(a);
+    s.redraw();
+    check_session("field-arrows-surface", &s);
+}
+
 /// Export (the maintainer's cards of 2026-11-24, "same look as on
 /// screen"): the channel coloured by patch at 1.5 times a 320 x 213
 /// viewport, edges 1.5 pixels wide, with the patch legend top left and

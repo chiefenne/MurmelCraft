@@ -5,11 +5,14 @@
 //! removes it), the buttons that add them, and while they show, whether
 //! the mesh draws as its faint outline or with its faces (decided
 //! 2026-11-24). The colour bar's part (a click places an iso-surface,
-//! marks at their values) is here too. Every change calls a tool.
+//! marks at their values) is here too. The vector arrows (stage 3) have a
+//! row of their own, with their density and length below it. Every change
+//! calls a tool.
 
 use egui::{Align, Layout, Pos2, Rect, RichText, Role, Sense, Stroke, Ui, WidgetInfo};
 use murmel_engine::Item;
 use murmel_engine::extract::{IsoColor, MAX_ISOS, MAX_SLICES, MeshLook};
+use murmel_engine::glyph::{MAX_DENSITY, MAX_SCALE, MIN_DENSITY};
 use murmel_engine::legend::Ramp;
 use serde_json::{Value, json};
 
@@ -75,6 +78,15 @@ impl MurmelApp {
         )
     }
 
+    /// The label of the arrows: their field.
+    pub(crate) fn arrows_label(&self) -> String {
+        let Some(a) = &self.session.display.arrows else {
+            return String::new();
+        };
+        self.i18n
+            .tr_args("tree-arrows-label", &[("field", a.field.clone().into())])
+    }
+
     /// An eye button that turns a row's item on or off.
     fn eye(
         &self,
@@ -119,6 +131,12 @@ impl MurmelApp {
             .mesh
             .as_ref()
             .is_some_and(|m| !m.fields.is_empty());
+        let has_vector = self.session.mesh.as_ref().is_some_and(|m| {
+            m.fields
+                .names()
+                .iter()
+                .any(|n| m.fields.get(n).is_some_and(|f| f.is_vector()))
+        });
         let d = &self.session.display;
         let secondary = color(p.text_secondary);
         let mut action = None;
@@ -304,6 +322,137 @@ impl MurmelApp {
                     });
                 });
             }
+            if let Some(a) = &d.arrows {
+                let item = Item::Arrows;
+                let id = item.id(mesh);
+                let label = self.arrows_label();
+                let tokens = &self.session.tokens;
+                ui.horizontal(|ui| {
+                    if self.eye(ui, a.enabled, &label, p).clicked() {
+                        action = Some(("arrows.set", json!({"enabled": !a.enabled})));
+                    }
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+                    match a.color {
+                        IsoColor::Solid => {
+                            let rgb = d
+                                .item_color(mesh, tokens, item)
+                                .unwrap_or(tokens.mesh.field.arrow);
+                            ui.painter().rect_filled(rect, 2.0, color(rgb));
+                        }
+                        IsoColor::Field => {
+                            let none = tokens.mesh.field.none;
+                            let (lo, hi) = ramp_ends.unwrap_or((none, none));
+                            let half = Rect::from_min_max(rect.min, rect.center_bottom());
+                            ui.painter().rect_filled(half, 0.0, color(lo));
+                            let rest = Rect::from_min_max(rect.center_top(), rect.max);
+                            ui.painter().rect_filled(rest, 0.0, color(hi));
+                        }
+                    }
+                    let selected = d.is_selected(item);
+                    let text = if a.enabled {
+                        RichText::new(&label)
+                    } else {
+                        RichText::new(&label).color(secondary)
+                    };
+                    let r = ui.selectable_label(selected, text);
+                    r.widget_info(|| {
+                        WidgetInfo::selected(Role::Button, true, selected, label.clone())
+                    });
+                    let r = r.on_hover_text(self.i18n.tr("tree-arrows-tip"));
+                    if r.clicked() {
+                        action = Some(("select.item", json!({ "item": id })));
+                    }
+                    r.context_menu(|ui| {
+                        let mut surface = a.surface;
+                        if ui
+                            .checkbox(&mut surface, self.i18n.tr("prop-on_surface"))
+                            .changed()
+                        {
+                            action = Some(("arrows.set", json!({ "surface": surface })));
+                            ui.close();
+                        }
+                        let mut in_plane = a.in_plane;
+                        if ui
+                            .checkbox(&mut in_plane, self.i18n.tr("prop-in_plane"))
+                            .changed()
+                        {
+                            action = Some(("arrows.set", json!({ "in_plane": in_plane })));
+                            ui.close();
+                        }
+                        ui.separator();
+                        for (key, call) in [
+                            (
+                                "cmd-arrows-solid",
+                                ("arrows.set", json!({"color": "solid"})),
+                            ),
+                            (
+                                "cmd-arrows-field",
+                                ("arrows.set", json!({"color": "field"})),
+                            ),
+                        ] {
+                            if ui.button(self.i18n.tr(key)).clicked() {
+                                action = Some(call);
+                                ui.close();
+                            }
+                        }
+                        if a.color == IsoColor::Solid
+                            && ui.button(self.i18n.tr("tree-color-edit")).clicked()
+                        {
+                            action = Some(("window.color", json!({"item": id, "label": label})));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(self.i18n.tr("tree-arrows-remove")).clicked() {
+                            action = Some(("arrows.clear", json!({})));
+                            ui.close();
+                        }
+                    });
+                });
+                // How many and how long, under the row.
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    let name = self.i18n.tr("tree-arrows-density");
+                    ui.label(RichText::new(&name).small());
+                    let mut n = a.density;
+                    let r = ui
+                        .add(
+                            egui::DragValue::new(&mut n)
+                                .range(MIN_DENSITY..=MAX_DENSITY)
+                                .speed(0.25),
+                        )
+                        .on_hover_text(self.i18n.tr("tree-arrows-density-tip"));
+                    r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name.clone()));
+                    if n != a.density {
+                        action = Some(("arrows.set", json!({ "density": n })));
+                    }
+                    let name = self.i18n.tr("tree-arrows-scale");
+                    ui.label(RichText::new(&name).small());
+                    let mut x = a.scale;
+                    let r = ui
+                        .add(
+                            egui::DragValue::new(&mut x)
+                                .range(0.01..=MAX_SCALE)
+                                .speed(0.02)
+                                .max_decimals(2),
+                        )
+                        .on_hover_text(self.i18n.tr("tree-arrows-scale-tip"));
+                    r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name.clone()));
+                    if x != a.scale && x > 0.0 {
+                        action = Some(("arrows.set", json!({ "scale": x })));
+                    }
+                });
+                // Nothing to draw them on yet.
+                if a.enabled && !a.surface && !d.slices.iter().any(|x| x.enabled) {
+                    ui.horizontal(|ui| {
+                        ui.add_space(24.0);
+                        ui.label(
+                            RichText::new(self.i18n.tr("tree-arrows-nowhere"))
+                                .small()
+                                .color(secondary),
+                        );
+                    });
+                }
+            }
             // One button per line, indented like the rows' labels.
             let adds = [
                 (
@@ -317,6 +466,12 @@ impl MurmelApp {
                     "tree-iso-new",
                     "tree-iso-new-tip",
                     ("iso.set", json!({"new": true})),
+                ),
+                (
+                    has_vector && d.arrows.is_none(),
+                    "tree-arrows-new",
+                    "tree-arrows-new-tip",
+                    ("arrows.set", json!({})),
                 ),
             ];
             for (show, key, tip, call) in adds {
