@@ -213,7 +213,8 @@ pub fn color_range(display: &Display, shown: Option<(f64, f64)>) -> Option<(f64,
     let p = display.parcel_data.as_deref()?;
     let whole = || range_of(p, choice, 0..p.len());
     let r = match v.range {
-        RangeMode::Field => whole()?,
+        // Parcels have no range over the steps; the step's whole range.
+        RangeMode::Field | RangeMode::Steps => whole()?,
         RangeMode::Shown => shown?,
         RangeMode::Symmetric => {
             let (a, b) = whole()?;

@@ -12,6 +12,28 @@
 //! | `lambda2` | `lambda2` | the middle eigenvalue of S² + Ω²; vortices where λ₂ < 0 (J. Jeong and F. Hussain, "On the identification of a vortex", J. Fluid Mech. 285, 1995) | 1/s² |
 //! | `total-pressure` | `total_pressure` | p + ½ ρ u·u | Pa |
 //! | `pressure-coefficient` | `pressure_coefficient` | (p − p_ref) / (½ ρ_ref U_ref²) | - |
+//! | `enstrophy` | `enstrophy` | ½ ω·ω | 1/s² |
+//! | `strain-rate` | `strain_rate` | √(2 S:S), the shear rate | 1/s |
+//! | `relative-velocity` | `relative_velocity` (vector) | **w** = **c** − **Ω** × (**x** − **x**₀) | m/s |
+//! | `frame-velocity` | `frame_velocity` (vector) | **u** = **Ω** × (**x** − **x**₀) | m/s |
+//! | `velocity-radial`, `-circumferential`, `-axial`, `-meridional` | `velocity_radial` … | c_r, c_u, c_a, c_m = (c_r² + c_a²)^½ about the axis of the cell's frame | m/s |
+//! | `relative-velocity-circumferential` | `relative_velocity_circumferential` | w_u = c_u − u_u | m/s |
+//! | `flow-angle`, `relative-flow-angle` | `flow_angle`, `relative_flow_angle` | α = atan2(c_m, c_u), β = atan2(c_m, −w_u) | ° |
+//! | `relative-total-pressure` | `relative_total_pressure` | p + ½ ρ w·w | Pa |
+//! | `rothalpy` | `rothalpy` | I = p/ρ + ½ w·w − ½ u·u | m²/s² |
+//! | `dissipation-rate`, `specific-dissipation-rate` | `dissipation_rate`, `specific_dissipation_rate` | ε = C_μ k ω, ω = ε/(C_μ k) | m²/s³, 1/s |
+//! | `time-scale`, `length-scale` | `time_scale`, `length_scale` | T = k/ε = 1/(C_μ ω) (the bounded T of ζ-f where the file has it), L = k^{3/2}/ε | s, m |
+//! | `viscosity-ratio` | `viscosity_ratio` | ν_t/ν | - |
+//! | `reynolds-stress-xx` … `-xz` | `reynolds_stress_xx` … | ⅔ k δᵢⱼ − 2 ν_t Sᵢⱼ (Boussinesq) | m²/s² |
+//! | `wall-distance` | `wall_distance` | the distance of the cell centroid to the nearest wall face ([`crate::walls`]) | m |
+//!
+//! The turbomachinery quantities take the turning zones of
+//! [`crate::turbo`]; those, the turbulence ones and the wall distance
+//! are computed in the cells, as FoehnCraft writes them. FoehnCraft's
+//! other fields (y⁺, wall shear stress, the wall treatment's u_τ and y*,
+//! the invariant features, the wall normal of elliptic blending and the
+//! curvature correction) belong to its turbulence model and come from
+//! `foehn post derive`.
 //!
 //! The names and units are the ones FoehnCraft writes, so a result with
 //! FoehnCraft's own derived fields and one derived here read alike; a
@@ -45,53 +67,111 @@ use crate::defaults::Kind;
 use crate::field::FieldSet;
 use crate::session::Session;
 
-/// A quantity MurmelCraft derives itself.
+/// A quantity MurmelCraft derives itself: one field each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Quantity {
     Vorticity,
     QCriterion,
     Lambda2,
+    Enstrophy,
+    StrainRate,
     TotalPressure,
     PressureCoefficient,
+    RelativeVelocity,
+    FrameVelocity,
+    VelocityRadial,
+    VelocityCircumferential,
+    VelocityAxial,
+    VelocityMeridional,
+    RelativeVelocityCircumferential,
+    FlowAngle,
+    RelativeFlowAngle,
+    RelativeTotalPressure,
+    Rothalpy,
+    DissipationRate,
+    SpecificDissipationRate,
+    TimeScale,
+    LengthScale,
+    ViscosityRatio,
+    ReynoldsStressXx,
+    ReynoldsStressYy,
+    ReynoldsStressZz,
+    ReynoldsStressXy,
+    ReynoldsStressYz,
+    ReynoldsStressXz,
+    WallDistance,
 }
 
 /// The groups of the catalogue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Group {
-    /// Vorticity, Q and λ₂: where the flow turns.
+    /// Vorticity, Q, λ₂, enstrophy and strain rate: where the flow turns.
     Vortices,
     /// Total pressure and its coefficient.
     Pressure,
+    /// The velocities of rotating machinery ([`crate::turbo`]).
+    Turbomachinery,
+    /// The scales of a two-equation turbulence model.
+    Turbulence,
+    /// The distance to the walls.
+    Wall,
 }
 
 impl Group {
-    pub const ALL: [Group; 2] = [Group::Vortices, Group::Pressure];
+    pub const ALL: [Group; 5] = [
+        Group::Vortices,
+        Group::Pressure,
+        Group::Turbomachinery,
+        Group::Turbulence,
+        Group::Wall,
+    ];
 
     pub fn key(self) -> &'static str {
         match self {
             Group::Vortices => "vortices",
             Group::Pressure => "pressure",
+            Group::Turbomachinery => "turbomachinery",
+            Group::Turbulence => "turbulence",
+            Group::Wall => "wall",
         }
     }
 }
 
 /// A field a quantity is computed from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Input {
     /// A vector of three components.
     Velocity,
     /// A scalar.
     Pressure,
+    /// The turbulent kinetic energy k (m²/s²).
+    K,
+    /// The second variable of the turbulence model: ω (1/s) or ε
+    /// (m²/s³), told apart by name, else by unit.
+    Dissipation,
+    /// The eddy viscosity ν_t (m²/s).
+    NuT,
 }
 
 impl Input {
+    pub const ALL: [Input; 5] = [
+        Input::Velocity,
+        Input::Pressure,
+        Input::K,
+        Input::Dissipation,
+        Input::NuT,
+    ];
+
     pub fn key(self) -> &'static str {
         match self {
             Input::Velocity => "velocity",
             Input::Pressure => "pressure",
+            Input::K => "k",
+            Input::Dissipation => "dissipation",
+            Input::NuT => "nu_t",
         }
     }
 
@@ -100,35 +180,102 @@ impl Input {
         match self {
             Input::Velocity => &["velocity", "U", "u", "vel", "Velocity"],
             Input::Pressure => &["pressure", "p", "static_pressure", "Pressure"],
+            Input::K => &["k", "turbulent_kinetic_energy", "tke", "K"],
+            Input::Dissipation => &[
+                "omega",
+                "epsilon",
+                "specific_dissipation",
+                "turbulent_dissipation",
+                "Omega",
+                "Epsilon",
+            ],
+            Input::NuT => &[
+                "nu_t",
+                "nut",
+                "turbulent_viscosity",
+                "eddy_viscosity",
+                "Nut",
+            ],
         }
     }
 
     fn components(self) -> usize {
         match self {
             Input::Velocity => 3,
-            Input::Pressure => 1,
+            _ => 1,
         }
     }
 }
 
 impl Quantity {
-    pub const ALL: [Quantity; 5] = [
+    pub const ALL: [Quantity; 30] = [
         Quantity::Vorticity,
         Quantity::QCriterion,
         Quantity::Lambda2,
+        Quantity::Enstrophy,
+        Quantity::StrainRate,
         Quantity::TotalPressure,
         Quantity::PressureCoefficient,
+        Quantity::RelativeVelocity,
+        Quantity::FrameVelocity,
+        Quantity::VelocityRadial,
+        Quantity::VelocityCircumferential,
+        Quantity::VelocityAxial,
+        Quantity::VelocityMeridional,
+        Quantity::RelativeVelocityCircumferential,
+        Quantity::FlowAngle,
+        Quantity::RelativeFlowAngle,
+        Quantity::RelativeTotalPressure,
+        Quantity::Rothalpy,
+        Quantity::DissipationRate,
+        Quantity::SpecificDissipationRate,
+        Quantity::TimeScale,
+        Quantity::LengthScale,
+        Quantity::ViscosityRatio,
+        Quantity::ReynoldsStressXx,
+        Quantity::ReynoldsStressYy,
+        Quantity::ReynoldsStressZz,
+        Quantity::ReynoldsStressXy,
+        Quantity::ReynoldsStressYz,
+        Quantity::ReynoldsStressXz,
+        Quantity::WallDistance,
     ];
 
-    /// The name in tools and session files (FoehnCraft's `[output]
-    /// derived` names).
+    /// The name in tools and session files: FoehnCraft's `[output]
+    /// derived` name for a quantity of one field, else the field's name
+    /// with dashes.
     pub fn key(self) -> &'static str {
         match self {
             Quantity::Vorticity => "vorticity",
             Quantity::QCriterion => "q-criterion",
             Quantity::Lambda2 => "lambda2",
+            Quantity::Enstrophy => "enstrophy",
+            Quantity::StrainRate => "strain-rate",
             Quantity::TotalPressure => "total-pressure",
             Quantity::PressureCoefficient => "pressure-coefficient",
+            Quantity::RelativeVelocity => "relative-velocity",
+            Quantity::FrameVelocity => "frame-velocity",
+            Quantity::VelocityRadial => "velocity-radial",
+            Quantity::VelocityCircumferential => "velocity-circumferential",
+            Quantity::VelocityAxial => "velocity-axial",
+            Quantity::VelocityMeridional => "velocity-meridional",
+            Quantity::RelativeVelocityCircumferential => "relative-velocity-circumferential",
+            Quantity::FlowAngle => "flow-angle",
+            Quantity::RelativeFlowAngle => "relative-flow-angle",
+            Quantity::RelativeTotalPressure => "relative-total-pressure",
+            Quantity::Rothalpy => "rothalpy",
+            Quantity::DissipationRate => "dissipation-rate",
+            Quantity::SpecificDissipationRate => "specific-dissipation-rate",
+            Quantity::TimeScale => "time-scale",
+            Quantity::LengthScale => "length-scale",
+            Quantity::ViscosityRatio => "viscosity-ratio",
+            Quantity::ReynoldsStressXx => "reynolds-stress-xx",
+            Quantity::ReynoldsStressYy => "reynolds-stress-yy",
+            Quantity::ReynoldsStressZz => "reynolds-stress-zz",
+            Quantity::ReynoldsStressXy => "reynolds-stress-xy",
+            Quantity::ReynoldsStressYz => "reynolds-stress-yz",
+            Quantity::ReynoldsStressXz => "reynolds-stress-xz",
+            Quantity::WallDistance => "wall-distance",
         }
     }
 
@@ -136,60 +283,180 @@ impl Quantity {
         Quantity::ALL.into_iter().find(|q| q.key() == s)
     }
 
-    /// The name of the field it makes.
+    /// The name of the field it makes: FoehnCraft's dataset name (a
+    /// vector without its `_x`, `_y`, `_z`, as MurmelCraft reads it).
     pub fn field(self) -> &'static str {
         match self {
             Quantity::Vorticity => "vorticity",
             Quantity::QCriterion => "q_criterion",
             Quantity::Lambda2 => "lambda2",
+            Quantity::Enstrophy => "enstrophy",
+            Quantity::StrainRate => "strain_rate",
             Quantity::TotalPressure => "total_pressure",
             Quantity::PressureCoefficient => "pressure_coefficient",
+            Quantity::RelativeVelocity => "relative_velocity",
+            Quantity::FrameVelocity => "frame_velocity",
+            Quantity::VelocityRadial => "velocity_radial",
+            Quantity::VelocityCircumferential => "velocity_circumferential",
+            Quantity::VelocityAxial => "velocity_axial",
+            Quantity::VelocityMeridional => "velocity_meridional",
+            Quantity::RelativeVelocityCircumferential => "relative_velocity_circumferential",
+            Quantity::FlowAngle => "flow_angle",
+            Quantity::RelativeFlowAngle => "relative_flow_angle",
+            Quantity::RelativeTotalPressure => "relative_total_pressure",
+            Quantity::Rothalpy => "rothalpy",
+            Quantity::DissipationRate => "dissipation_rate",
+            Quantity::SpecificDissipationRate => "specific_dissipation_rate",
+            Quantity::TimeScale => "time_scale",
+            Quantity::LengthScale => "length_scale",
+            Quantity::ViscosityRatio => "viscosity_ratio",
+            Quantity::ReynoldsStressXx => "reynolds_stress_xx",
+            Quantity::ReynoldsStressYy => "reynolds_stress_yy",
+            Quantity::ReynoldsStressZz => "reynolds_stress_zz",
+            Quantity::ReynoldsStressXy => "reynolds_stress_xy",
+            Quantity::ReynoldsStressYz => "reynolds_stress_yz",
+            Quantity::ReynoldsStressXz => "reynolds_stress_xz",
+            Quantity::WallDistance => "wall_distance",
         }
     }
 
     /// Its unit, for a pressure in Pa.
     pub fn unit(self) -> &'static str {
+        use Quantity::*;
         match self {
-            Quantity::Vorticity => "1/s",
-            Quantity::QCriterion | Quantity::Lambda2 => "1/s²",
-            Quantity::TotalPressure => "Pa",
-            Quantity::PressureCoefficient => "-",
+            Vorticity | StrainRate | SpecificDissipationRate => "1/s",
+            QCriterion | Lambda2 | Enstrophy => "1/s²",
+            TotalPressure | RelativeTotalPressure => "Pa",
+            PressureCoefficient | ViscosityRatio => "-",
+            RelativeVelocity
+            | FrameVelocity
+            | VelocityRadial
+            | VelocityCircumferential
+            | VelocityAxial
+            | VelocityMeridional
+            | RelativeVelocityCircumferential => "m/s",
+            FlowAngle | RelativeFlowAngle => "°",
+            Rothalpy => "m²/s²",
+            DissipationRate => "m²/s³",
+            TimeScale => "s",
+            LengthScale | WallDistance => "m",
+            ReynoldsStressXx | ReynoldsStressYy | ReynoldsStressZz | ReynoldsStressXy
+            | ReynoldsStressYz | ReynoldsStressXz => "m²/s²",
         }
     }
 
     /// The formula, as the catalogue shows it.
     pub fn formula(self) -> &'static str {
+        use Quantity::*;
         match self {
-            Quantity::Vorticity => "ω = ∇ × u",
-            Quantity::QCriterion => "Q = ½ (‖Ω‖² − ‖S‖²)",
-            Quantity::Lambda2 => "λ₂ of S² + Ω²",
-            Quantity::TotalPressure => "p + ½ ρ u·u",
-            Quantity::PressureCoefficient => "(p − p_ref) / (½ ρ_ref U_ref²)",
+            Vorticity => "ω = ∇ × u",
+            QCriterion => "Q = ½ (‖Ω‖² − ‖S‖²)",
+            Lambda2 => "λ₂ of S² + Ω²",
+            Enstrophy => "½ ω·ω",
+            StrainRate => "√(2 S:S)",
+            TotalPressure => "p + ½ ρ u·u",
+            PressureCoefficient => "(p − p_ref) / (½ ρ_ref U_ref²)",
+            RelativeVelocity => "w = c − Ω × (x − x₀)",
+            FrameVelocity => "u = Ω × (x − x₀)",
+            VelocityRadial => "c_r = c·e_r",
+            VelocityCircumferential => "c_u = c·e_θ",
+            VelocityAxial => "c_a = c·e_a",
+            VelocityMeridional => "c_m = √(c_r² + c_a²)",
+            RelativeVelocityCircumferential => "w_u = c_u − u_u",
+            FlowAngle => "α = atan2(c_m, c_u)",
+            RelativeFlowAngle => "β = atan2(c_m, −w_u)",
+            RelativeTotalPressure => "p + ½ ρ w·w",
+            Rothalpy => "I = p/ρ + ½ w·w − ½ u·u",
+            DissipationRate => "ε = C_μ k ω",
+            SpecificDissipationRate => "ω = ε / (C_μ k)",
+            TimeScale => "T = k/ε = 1/(C_μ ω)",
+            LengthScale => "L = k^1.5 / ε",
+            ViscosityRatio => "ν_t / ν",
+            ReynoldsStressXx => "2/3 k − 2 ν_t S_xx",
+            ReynoldsStressYy => "2/3 k − 2 ν_t S_yy",
+            ReynoldsStressZz => "2/3 k − 2 ν_t S_zz",
+            ReynoldsStressXy => "−2 ν_t S_xy",
+            ReynoldsStressYz => "−2 ν_t S_yz",
+            ReynoldsStressXz => "−2 ν_t S_xz",
+            WallDistance => "d = distance to the nearest wall face",
         }
     }
 
     pub fn group(self) -> Group {
+        use Quantity::*;
         match self {
-            Quantity::Vorticity | Quantity::QCriterion | Quantity::Lambda2 => Group::Vortices,
-            Quantity::TotalPressure | Quantity::PressureCoefficient => Group::Pressure,
+            Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate => Group::Vortices,
+            TotalPressure | PressureCoefficient => Group::Pressure,
+            RelativeVelocity
+            | FrameVelocity
+            | VelocityRadial
+            | VelocityCircumferential
+            | VelocityAxial
+            | VelocityMeridional
+            | RelativeVelocityCircumferential
+            | FlowAngle
+            | RelativeFlowAngle
+            | RelativeTotalPressure
+            | Rothalpy => Group::Turbomachinery,
+            DissipationRate
+            | SpecificDissipationRate
+            | TimeScale
+            | LengthScale
+            | ViscosityRatio
+            | ReynoldsStressXx
+            | ReynoldsStressYy
+            | ReynoldsStressZz
+            | ReynoldsStressXy
+            | ReynoldsStressYz
+            | ReynoldsStressXz => Group::Turbulence,
+            WallDistance => Group::Wall,
         }
     }
 
     pub fn inputs(self) -> &'static [Input] {
+        use Quantity::*;
         match self {
-            Quantity::Vorticity | Quantity::QCriterion | Quantity::Lambda2 => &[Input::Velocity],
-            Quantity::TotalPressure => &[Input::Pressure, Input::Velocity],
-            Quantity::PressureCoefficient => &[Input::Pressure],
+            Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate => &[Input::Velocity],
+            TotalPressure | RelativeTotalPressure | Rothalpy => &[Input::Pressure, Input::Velocity],
+            PressureCoefficient => &[Input::Pressure],
+            FrameVelocity | WallDistance => &[],
+            RelativeVelocity
+            | VelocityRadial
+            | VelocityCircumferential
+            | VelocityAxial
+            | VelocityMeridional
+            | RelativeVelocityCircumferential
+            | FlowAngle
+            | RelativeFlowAngle => &[Input::Velocity],
+            DissipationRate | SpecificDissipationRate | TimeScale | LengthScale => {
+                &[Input::K, Input::Dissipation]
+            }
+            ViscosityRatio => &[Input::NuT],
+            ReynoldsStressXx | ReynoldsStressYy | ReynoldsStressZz | ReynoldsStressXy
+            | ReynoldsStressYz | ReynoldsStressXz => &[Input::Velocity, Input::K, Input::NuT],
         }
     }
 
     /// The reference values it uses, by their keys in [`Reference`].
     pub fn references(self) -> &'static [&'static str] {
+        use Quantity::*;
         match self {
-            Quantity::Vorticity | Quantity::QCriterion | Quantity::Lambda2 => &[],
-            Quantity::TotalPressure => &["density"],
-            Quantity::PressureCoefficient => &["density", "pressure", "velocity"],
+            TotalPressure | RelativeTotalPressure | Rothalpy => &["density"],
+            PressureCoefficient => &["density", "pressure", "velocity"],
+            DissipationRate | SpecificDissipationRate | TimeScale | LengthScale => &["c_mu"],
+            ViscosityRatio => &["viscosity"],
+            _ => &[],
         }
+    }
+
+    /// Whether it takes the turning zones of a [`crate::turbo::Rotation`].
+    pub fn turns(self) -> bool {
+        self.group() == Group::Turbomachinery
+    }
+
+    /// Whether it takes the wall patches.
+    pub fn walls(self) -> bool {
+        self == Quantity::WallDistance
     }
 
     /// The quantity that makes field `name`, if one does.
@@ -197,7 +464,6 @@ impl Quantity {
         Quantity::ALL.into_iter().find(|q| q.field() == name)
     }
 }
-
 /// Built-in reference density: air at sea level in the ICAO standard
 /// atmosphere (kg/m³).
 pub const AIR_DENSITY: f64 = 1.225;
@@ -214,7 +480,33 @@ pub struct Reference {
     pub pressure: f64,
     /// U_ref (m/s), above 0.
     pub velocity: f64,
+    /// The kinematic viscosity ν of the fluid (m²/s), above 0, for the
+    /// viscosity ratio.
+    #[serde(default = "air_viscosity")]
+    pub viscosity: f64,
+    /// C_μ of the turbulence model (β* of SST), above 0, for the scales
+    /// of ω and ε.
+    #[serde(default = "standard_c_mu")]
+    pub c_mu: f64,
 }
+
+/// Built-in kinematic viscosity: air at sea level in the ICAO standard
+/// atmosphere, μ = 1.7894e-5 Pa s over ρ = 1.225 kg/m³ (m²/s).
+pub const AIR_VISCOSITY: f64 = 1.7894e-5 / AIR_DENSITY;
+/// Built-in C_μ: 0.09, that of every model of FoehnCraft (β* of SST).
+pub const C_MU: f64 = 0.09;
+
+fn air_viscosity() -> f64 {
+    AIR_VISCOSITY
+}
+
+fn standard_c_mu() -> f64 {
+    C_MU
+}
+
+/// The keys of [`Reference`], in the order of [`start_reference`]'s
+/// sources.
+pub const REFERENCE_KEYS: [&str; 5] = ["density", "pressure", "velocity", "viscosity", "c_mu"];
 
 impl Default for Reference {
     fn default() -> Self {
@@ -222,6 +514,32 @@ impl Default for Reference {
             density: AIR_DENSITY,
             pressure: 0.0,
             velocity: 1.0,
+            viscosity: AIR_VISCOSITY,
+            c_mu: C_MU,
+        }
+    }
+}
+
+impl Reference {
+    /// The value of key `k` of [`REFERENCE_KEYS`].
+    pub fn get(&self, k: usize) -> f64 {
+        [
+            self.density,
+            self.pressure,
+            self.velocity,
+            self.viscosity,
+            self.c_mu,
+        ][k]
+    }
+
+    /// Value `k` of [`REFERENCE_KEYS`], to edit.
+    pub fn get_mut(&mut self, k: usize) -> &mut f64 {
+        match k {
+            0 => &mut self.density,
+            1 => &mut self.pressure,
+            2 => &mut self.velocity,
+            3 => &mut self.viscosity,
+            _ => &mut self.c_mu,
         }
     }
 }
@@ -241,6 +559,15 @@ impl Reference {
                 "reference velocity {} must be above 0 and finite",
                 self.velocity
             ));
+        }
+        if !(ok(self.viscosity) && self.viscosity > 0.0) {
+            return Err(format!(
+                "kinematic viscosity {} must be above 0 and finite",
+                self.viscosity
+            ));
+        }
+        if !(ok(self.c_mu) && self.c_mu > 0.0) {
+            return Err(format!("C_mu {} must be above 0 and finite", self.c_mu));
         }
         if !ok(self.pressure) {
             return Err(format!(
@@ -270,37 +597,57 @@ pub enum Source {
 /// there with every default filled in): ρ_ref from `[output.reference]
 /// density`, else `[fluid] density` when it is a number; p_ref from
 /// `[output.reference] pressure`; U_ref from `[output.reference]
-/// velocity`, else `[output.coefficients] velocity`. Each `None` the
-/// case does not give.
-pub fn case_reference(result: &Path) -> Option<[Option<f64>; 3]> {
+/// velocity`, else `[output.coefficients] velocity`; ν from `[fluid]
+/// viscosity` (μ) over `[fluid] density` when both are numbers; C_μ from
+/// `[turbulence.constants]` (`beta_star` for SST, `c_mu_eq` for the ζ-f
+/// family, else `c_mu`). Each `None` the case does not give, in the
+/// order of [`REFERENCE_KEYS`].
+pub fn case_reference(result: &Path) -> Option<[Option<f64>; 5]> {
     let file = result.parent()?.join("case.resolved.toml");
     let text = std::fs::read_to_string(file).ok()?;
     let case: toml::Table = toml::from_str(&text).ok()?;
-    let number = |path: &[&str]| -> Option<f64> {
+    let value = |path: &[&str]| -> Option<&toml::Value> {
         let mut at = case.get(path[0])?;
         for k in &path[1..] {
             at = at.get(k)?;
         }
+        Some(at)
+    };
+    let number = |path: &[&str]| -> Option<f64> {
+        let at = value(path)?;
         at.as_float()
             .or_else(|| at.as_integer().map(|i| i as f64))
             .filter(|x| x.is_finite())
     };
+    let fluid_density = number(&["fluid", "density"]).filter(|&x| x > 0.0);
     let density = number(&["output", "reference", "density"])
-        .or_else(|| number(&["fluid", "density"]))
-        .filter(|&x| x > 0.0);
+        .filter(|&x| x > 0.0)
+        .or(fluid_density);
     let pressure = number(&["output", "reference", "pressure"]);
     let velocity = number(&["output", "reference", "velocity"])
         .or_else(|| number(&["output", "coefficients", "velocity"]))
         .filter(|&x| x > 0.0);
-    let found = [density, pressure, velocity];
+    let viscosity = number(&["fluid", "viscosity"])
+        .filter(|&x| x > 0.0)
+        .zip(fluid_density)
+        .map(|(mu, rho)| mu / rho);
+    let model = value(&["turbulence", "model"]).and_then(|m| m.as_str());
+    let key = match model {
+        Some("k-omega-sst") => "beta_star",
+        Some("k-epsilon-zeta-f" | "k-epsilon-zeta-f0" | "elliptic-blending-k-epsilon") => "c_mu_eq",
+        _ => "c_mu",
+    };
+    let c_mu = number(&["turbulence", "constants", key]).filter(|&x| x > 0.0);
+    let found = [density, pressure, velocity, viscosity, c_mu];
     found.iter().any(Option::is_some).then_some(found)
 }
 
 /// The reference values a new derived field of `s` starts from, each
-/// with where it came from: FoehnCraft's case beside the result, else
-/// the user's default, else built in (air at sea level, p_ref 0, U_ref
-/// the largest speed of the velocity, 1 m/s without one).
-pub fn start_reference(s: &Session) -> (Reference, [Source; 3]) {
+/// with where it came from (in the order of [`REFERENCE_KEYS`]):
+/// FoehnCraft's case beside the result, else the user's default, else
+/// built in (air at sea level, p_ref 0, U_ref the largest speed of the
+/// velocity, 1 m/s without one, C_μ 0.09).
+pub fn start_reference(s: &Session) -> (Reference, [Source; 5]) {
     let case = s.mesh.as_ref().and_then(|m| case_reference(&m.path));
     let speed = s
         .fields()
@@ -311,20 +658,15 @@ pub fn start_reference(s: &Session) -> (Reference, [Source; 3]) {
         .map(|(_, hi)| hi)
         .filter(|&x| x > 0.0 && x.is_finite() && x <= MAX_REFERENCE);
     let built = Reference {
-        density: AIR_DENSITY,
-        pressure: 0.0,
         velocity: speed.unwrap_or(1.0),
+        ..Reference::default()
     };
     let mine = s.defaults.apply(Kind::Reference, built);
     let mut r = mine;
-    let mut from = [Source::BuiltIn; 3];
-    for (k, key) in ["density", "pressure", "velocity"].into_iter().enumerate() {
+    let mut from = [Source::BuiltIn; 5];
+    for (k, key) in REFERENCE_KEYS.into_iter().enumerate() {
         if let Some(x) = case.and_then(|c| c[k]) {
-            match k {
-                0 => r.density = x,
-                1 => r.pressure = x,
-                _ => r.velocity = x,
-            }
+            *r.get_mut(k) = x;
             from[k] = Source::Case;
         } else if s.defaults.get(Kind::Reference, key).is_some() {
             from[k] = Source::Defaults;
@@ -357,10 +699,32 @@ pub struct Recipe {
     /// The pressure field; left out, found by its name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressure: Option<String>,
-    /// The reference values (total pressure, pressure coefficient).
+    /// The turbulent kinetic energy; left out, found by its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub k: Option<String>,
+    /// ω or ε; left out, found by its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dissipation: Option<String>,
+    /// The eddy viscosity; left out, found by its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nu_t: Option<String>,
+    /// The reference values and constants (pressure and turbulence
+    /// quantities).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<Reference>,
+    /// The turning zones (turbomachinery quantities); left out, every
+    /// cell about the z axis, not turning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<crate::turbo::Rotation>,
+    /// The wall patches (wall distance); left out, the patches whose
+    /// role is wall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub walls: Option<Vec<String>>,
 }
+
+/// The ζ-f family's bounded turbulence time scale, which FoehnCraft
+/// writes beside k and ε; the time scale takes it where it is.
+const TURBULENT_TIME_SCALE: &str = "turbulent_time_scale";
 
 impl Recipe {
     pub fn new(quantity: Quantity) -> Recipe {
@@ -368,7 +732,12 @@ impl Recipe {
             quantity,
             velocity: None,
             pressure: None,
+            k: None,
+            dissipation: None,
+            nu_t: None,
             reference: None,
+            rotation: None,
+            walls: None,
         }
     }
 
@@ -377,21 +746,40 @@ impl Recipe {
         self.quantity.field()
     }
 
+    /// The field named for `input`, if one is.
+    pub fn named(&self, input: Input) -> Option<&String> {
+        match input {
+            Input::Velocity => self.velocity.as_ref(),
+            Input::Pressure => self.pressure.as_ref(),
+            Input::K => self.k.as_ref(),
+            Input::Dissipation => self.dissipation.as_ref(),
+            Input::NuT => self.nu_t.as_ref(),
+        }
+    }
+
+    /// Name `field` for `input`.
+    pub fn set_input(&mut self, input: Input, field: Option<String>) {
+        let slot = match input {
+            Input::Velocity => &mut self.velocity,
+            Input::Pressure => &mut self.pressure,
+            Input::K => &mut self.k,
+            Input::Dissipation => &mut self.dissipation,
+            Input::NuT => &mut self.nu_t,
+        };
+        *slot = field;
+    }
+
     /// The field it reads for `input`: the one named, else the first
     /// field of the result that fits by name and shape.
     pub fn input(&self, set: &FieldSet, input: Input) -> Option<String> {
-        let named = match input {
-            Input::Velocity => &self.velocity,
-            Input::Pressure => &self.pressure,
-        };
-        if let Some(n) = named {
+        if let Some(n) = self.named(input) {
             return Some(n.clone());
         }
         find_input(set, input)
     }
 
-    /// The fields of `set` it reads: its inputs, and the density fields
-    /// the pressure quantities take.
+    /// The fields of `set` it reads: its inputs, the density fields the
+    /// pressure quantities take and the time scale of ζ-f.
     pub fn reads(&self, set: &FieldSet) -> Vec<String> {
         let mut out: Vec<String> = self
             .quantity
@@ -399,12 +787,15 @@ impl Recipe {
             .iter()
             .filter_map(|&i| self.input(set, i))
             .collect();
-        if !self.quantity.references().is_empty() {
+        if self.quantity.references().contains(&"density") {
             for n in ["density", "rho"] {
                 if set.get(n).is_some() {
                     out.push(n.into());
                 }
             }
+        }
+        if self.quantity == Quantity::TimeScale && set.get(TURBULENT_TIME_SCALE).is_some() {
+            out.push(TURBULENT_TIME_SCALE.into());
         }
         out
     }
@@ -516,6 +907,10 @@ pub enum Refusal {
     Cycle(String),
     /// Making a field again would break field `.0`, made from it: why.
     Breaks(String, Box<Refusal>),
+    /// Turning zones that cannot be used: why (FIELD016).
+    Rotation(String),
+    /// No wall face to measure the distance to: why (FIELD017).
+    Walls(String),
 }
 
 impl Refusal {
@@ -534,6 +929,8 @@ impl Refusal {
             Refusal::BadName(_) => "FIELD014",
             Refusal::Cycle(_) => "FIELD015",
             Refusal::Breaks(_, r) => r.code(),
+            Refusal::Rotation(_) => "FIELD016",
+            Refusal::Walls(_) => "FIELD017",
         }
     }
 
@@ -558,7 +955,9 @@ impl Refusal {
             | Refusal::Unknown(why)
             | Refusal::Type(why)
             | Refusal::BadName(why)
-            | Refusal::Cycle(why) => why.clone(),
+            | Refusal::Cycle(why)
+            | Refusal::Rotation(why)
+            | Refusal::Walls(why) => why.clone(),
             Refusal::Breaks(n, r) => {
                 format!("{n} is made from it and would fail: {}", r.message())
             }
@@ -619,9 +1018,12 @@ fn input_fields<'a>(
 
 /// The fields `recipe` makes on `mesh` from the fields of `set`, with the
 /// reference values `reference` when it has none of its own. Each is
-/// named [`Quantity::field`], on cells for the quantities of the
-/// velocity gradient, and wherever the inputs are for the pressure ones.
+/// named [`Quantity::field`]: on cells for the quantities of the
+/// velocity gradient, rotating machinery, turbulence and walls (a node
+/// field read there as the mean of each cell's nodes), and wherever the
+/// inputs are for the total pressure and its coefficient.
 pub fn compute(mesh: &Mesh, set: &FieldSet, recipe: &Recipe) -> Result<Vec<Field>, Refusal> {
+    use Quantity::*;
     if set.is_empty() {
         return Err(Refusal::NoFields);
     }
@@ -638,101 +1040,388 @@ pub fn compute(mesh: &Mesh, set: &FieldSet, recipe: &Recipe) -> Result<Vec<Field
         let n = recipe.input(set, input).ok_or(Refusal::Missing(input))?;
         input_fields(set, mesh, input, &n)
     };
-    match q {
-        Quantity::Vorticity | Quantity::QCriterion | Quantity::Lambda2 => {
-            let u = need(Input::Velocity)?;
-            let Some(g) = u
-                .iter()
-                .find(|f| f.location != Location::Boundary)
-                .and_then(|f| set.velocity_gradient(mesh, f))
-            else {
-                return Err(Refusal::Shape(
+    let gradient = || -> Result<Vec<[[f64; 3]; 3]>, Refusal> {
+        let u = need(Input::Velocity)?;
+        u.iter()
+            .find(|f| f.location != Location::Boundary)
+            .and_then(|f| set.velocity_gradient(mesh, f))
+            .ok_or_else(|| {
+                Refusal::Shape(
                     Input::Velocity,
                     "is only on the boundary faces; the gradient needs it in the cells or at the nodes"
                         .into(),
-                ));
-            };
+                )
+            })
+    };
+    let cell = |components: usize, values: Vec<f64>, unit: Option<String>| Field {
+        name: name.into(),
+        unit: Some(unit.unwrap_or_else(|| q.unit().into())),
+        location: Location::Cell,
+        components,
+        values,
+    };
+    match q {
+        Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate => {
+            let g = gradient()?;
             let (components, values) = match q {
-                Quantity::Vorticity => (3, g.iter().flat_map(|g| vorticity(*g)).collect()),
-                Quantity::QCriterion => (1, g.iter().map(|g| kinematics(*g).0).collect()),
-                _ => (1, g.iter().map(|g| kinematics(*g).1).collect()),
+                Vorticity => (3, g.iter().flat_map(|g| vorticity(*g)).collect()),
+                QCriterion => (1, g.iter().map(|g| kinematics(*g).0).collect()),
+                Lambda2 => (1, g.iter().map(|g| kinematics(*g).1).collect()),
+                Enstrophy => (
+                    1,
+                    g.iter()
+                        .map(|g| 0.5 * vorticity(*g).iter().map(|w| w * w).sum::<f64>())
+                        .collect(),
+                ),
+                _ => (1, g.iter().map(|g| strain_rate(*g)).collect()),
             };
-            Ok(vec![Field {
-                name: name.into(),
-                unit: Some(q.unit().into()),
-                location: Location::Cell,
-                components,
-                values,
-            }])
+            Ok(vec![cell(components, values, None)])
         }
-        Quantity::TotalPressure | Quantity::PressureCoefficient => {
-            let p = need(Input::Pressure)?;
-            let u = if q == Quantity::TotalPressure {
-                need(Input::Velocity)?
+        TotalPressure | PressureCoefficient => pressure_fields(set, recipe, &reference, need),
+        _ if q.turns() => {
+            let rotation = recipe.rotation.clone().unwrap_or_default();
+            let frames = rotation.frames(mesh).map_err(Refusal::Rotation)?;
+            let x = set.places(mesh, Location::Cell);
+            let c = if q.inputs().contains(&Input::Velocity) {
+                Some(cell_input(mesh, set, Input::Velocity, &need(Input::Velocity)?)?.0)
             } else {
-                Vec::new()
+                None
             };
-            let mut out = Vec::new();
-            for pf in &p {
-                let uf = u.iter().find(|f| f.location == pf.location);
-                if q == Quantity::TotalPressure && uf.is_none() {
-                    continue;
-                }
-                let kin = kinematic(pf.unit.as_deref());
-                let rho_field = (!kin)
+            // p, its unit and ρ in each cell for the pressure ones.
+            let pressure = if q.inputs().contains(&Input::Pressure) {
+                let (p, f) = cell_input(mesh, set, Input::Pressure, &need(Input::Pressure)?)?;
+                let kin = kinematic(f.unit.as_deref());
+                let rho = (!kin)
                     .then(|| {
                         ["density", "rho"].into_iter().find_map(|n| {
-                            set.at(n, pf.location)
-                                .filter(|f| f.components == 1 && f.len() == pf.len())
+                            let fs: Vec<&Field> = [Location::Cell, Location::Point]
+                                .into_iter()
+                                .filter_map(|l| set.at(n, l))
+                                .filter(|f| f.components == 1 && FieldSet::fits(f, mesh))
+                                .collect();
+                            cell_input(mesh, set, Input::Pressure, &fs)
+                                .ok()
+                                .map(|r| r.0)
                         })
                     })
                     .flatten();
-                let rho = |i: usize| {
-                    if kin {
-                        1.0
-                    } else {
-                        rho_field.map_or(reference.density, |f| f.values[i])
-                    }
-                };
-                let dynamic = if kin {
-                    0.5 * reference.velocity * reference.velocity
-                } else {
-                    0.5 * reference.density * reference.velocity * reference.velocity
-                };
-                let values: Vec<f64> = (0..pf.len())
-                    .map(|i| {
-                        let pv = pf.values[i];
-                        match uf {
-                            Some(uf) => {
-                                let v = uf.value(i).unwrap_or(&[f64::NAN; 3]);
-                                let uu: f64 = v.iter().map(|x| x * x).sum();
-                                pv + 0.5 * rho(i) * uu
-                            }
-                            None => (pv - reference.pressure) / dynamic,
+                Some((p, kin, f.unit.clone(), rho))
+            } else {
+                None
+            };
+            let n = mesh.cell_count();
+            let k = if matches!(q, RelativeVelocity | FrameVelocity) {
+                3
+            } else {
+                1
+            };
+            let values: Vec<f64> = murmel_mesh::par::map(n, 4096, |r| {
+                let mut out = Vec::with_capacity(r.len() * k);
+                for i in r {
+                    let cv = c
+                        .as_ref()
+                        .map_or([0.0; 3], |c| [c[3 * i], c[3 * i + 1], c[3 * i + 2]]);
+                    let frame = frames[i].map(|z| &rotation.zones[z as usize]);
+                    let axis = frame.unwrap_or(&rotation.zones[0]);
+                    let t = crate::turbo::turbo(cv, x[i], frame, axis);
+                    let half = |v: [f64; 3]| 0.5 * (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+                    match q {
+                        RelativeVelocity => out.extend(t.w),
+                        FrameVelocity => out.extend(t.u),
+                        VelocityRadial => out.push(t.c_r),
+                        VelocityCircumferential => out.push(t.c_u),
+                        VelocityAxial => out.push(t.c_a),
+                        VelocityMeridional => out.push(t.c_m),
+                        RelativeVelocityCircumferential => out.push(t.w_u),
+                        FlowAngle => out.push(t.alpha),
+                        RelativeFlowAngle => out.push(t.beta),
+                        _ => {
+                            let Some((p, kin, _, rho)) = pressure.as_ref() else {
+                                out.push(f64::NAN);
+                                continue;
+                            };
+                            let rho = if *kin {
+                                1.0
+                            } else {
+                                rho.as_ref().map_or(reference.density, |r| r[i])
+                            };
+                            out.push(if q == RelativeTotalPressure {
+                                p[i] + rho * half(t.w)
+                            } else {
+                                p[i] / rho + half(t.w) - half(t.u)
+                            });
                         }
-                    })
-                    .collect();
-                let unit = match (q, kin) {
-                    (Quantity::TotalPressure, true) => pf.unit.clone(),
-                    _ => Some(q.unit().into()),
-                };
-                out.push(Field {
-                    name: name.into(),
-                    unit,
-                    location: pf.location,
-                    components: 1,
-                    values,
-                });
+                    }
+                }
+                out
+            })
+            .concat();
+            // A kinematic pressure gives a relative total pressure in its
+            // own unit.
+            let unit = match (&pressure, q) {
+                (Some((_, true, u, _)), RelativeTotalPressure) => u.clone(),
+                _ => None,
+            };
+            Ok(vec![cell(k, values, unit)])
+        }
+        DissipationRate | SpecificDissipationRate | TimeScale | LengthScale => {
+            let (kv, _) = cell_input(mesh, set, Input::K, &need(Input::K)?)?;
+            let wf = need(Input::Dissipation)?;
+            let (wv, f) = cell_input(mesh, set, Input::Dissipation, &wf)?;
+            let epsilon = is_epsilon(&f.name, f.unit.as_deref());
+            let bounded = (q == TimeScale)
+                .then(|| {
+                    let fs: Vec<&Field> = [Location::Cell, Location::Point]
+                        .into_iter()
+                        .filter_map(|l| set.at(TURBULENT_TIME_SCALE, l))
+                        .filter(|f| f.components == 1 && FieldSet::fits(f, mesh))
+                        .collect();
+                    cell_input(mesh, set, Input::K, &fs).ok().map(|r| r.0)
+                })
+                .flatten();
+            let slot = match q {
+                DissipationRate => 0,
+                SpecificDissipationRate => 1,
+                TimeScale => 2,
+                _ => 3,
+            };
+            let values = (0..kv.len())
+                .map(|i| {
+                    scales(
+                        kv[i],
+                        wv[i],
+                        epsilon,
+                        bounded.as_ref().map(|t| t[i]),
+                        reference.c_mu,
+                    )[slot]
+                })
+                .collect();
+            Ok(vec![cell(1, values, None)])
+        }
+        ViscosityRatio => {
+            let (nt, _) = cell_input(mesh, set, Input::NuT, &need(Input::NuT)?)?;
+            let values = nt.iter().map(|v| v / reference.viscosity).collect();
+            Ok(vec![cell(1, values, None)])
+        }
+        ReynoldsStressXx | ReynoldsStressYy | ReynoldsStressZz | ReynoldsStressXy
+        | ReynoldsStressYz | ReynoldsStressXz => {
+            let g = gradient()?;
+            let (kv, _) = cell_input(mesh, set, Input::K, &need(Input::K)?)?;
+            let (nt, _) = cell_input(mesh, set, Input::NuT, &need(Input::NuT)?)?;
+            let slot = match q {
+                ReynoldsStressXx => 0,
+                ReynoldsStressYy => 1,
+                ReynoldsStressZz => 2,
+                ReynoldsStressXy => 3,
+                ReynoldsStressYz => 4,
+                _ => 5,
+            };
+            let values = (0..g.len())
+                .map(|i| reynolds_stress(g[i], kv[i], nt[i])[slot])
+                .collect();
+            Ok(vec![cell(1, values, None)])
+        }
+        WallDistance => {
+            let walls = recipe.walls.clone().unwrap_or_else(|| {
+                mesh.patches
+                    .iter()
+                    .filter(|p| p.role == murmel_mesh::PatchRole::Wall)
+                    .map(|p| p.name.clone())
+                    .collect()
+            });
+            let patches = || {
+                mesh.patches
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            if walls.is_empty() {
+                return Err(Refusal::Walls(format!(
+                    "no patch is a wall; name the wall patches (the mesh's patches: {})",
+                    patches()
+                )));
             }
-            if out.is_empty() {
-                return Err(Refusal::Shape(
-                    Input::Velocity,
-                    "is not where the pressure is (cells, nodes or boundary faces)".into(),
-                ));
+            if let Some(w) = walls
+                .iter()
+                .find(|w| !mesh.patches.iter().any(|p| &p.name == *w))
+            {
+                return Err(Refusal::Walls(format!(
+                    "the mesh has no patch {w}; its patches are {}",
+                    patches()
+                )));
             }
-            Ok(out)
+            let x = set.places(mesh, Location::Cell);
+            let d = crate::walls::wall_distance(mesh, &walls, x).ok_or_else(|| {
+                Refusal::Walls(format!("the patches {} have no face", walls.join(", ")))
+            })?;
+            Ok(vec![cell(1, d, None)])
+        }
+        _ => unreachable!("every quantity has its branch"),
+    }
+}
+
+/// The total pressure or its coefficient wherever the pressure is.
+fn pressure_fields<'a>(
+    set: &'a FieldSet,
+    recipe: &Recipe,
+    reference: &Reference,
+    need: impl Fn(Input) -> Result<Vec<&'a Field>, Refusal>,
+) -> Result<Vec<Field>, Refusal> {
+    let q = recipe.quantity;
+    let name = q.field();
+    let p = need(Input::Pressure)?;
+    let u = if q == Quantity::TotalPressure {
+        need(Input::Velocity)?
+    } else {
+        Vec::new()
+    };
+    let mut out = Vec::new();
+    for pf in &p {
+        let uf = u.iter().find(|f| f.location == pf.location);
+        if q == Quantity::TotalPressure && uf.is_none() {
+            continue;
+        }
+        let kin = kinematic(pf.unit.as_deref());
+        let rho_field = (!kin)
+            .then(|| {
+                ["density", "rho"].into_iter().find_map(|n| {
+                    set.at(n, pf.location)
+                        .filter(|f| f.components == 1 && f.len() == pf.len())
+                })
+            })
+            .flatten();
+        let rho = |i: usize| {
+            if kin {
+                1.0
+            } else {
+                rho_field.map_or(reference.density, |f| f.values[i])
+            }
+        };
+        let dynamic = if kin {
+            0.5 * reference.velocity * reference.velocity
+        } else {
+            0.5 * reference.density * reference.velocity * reference.velocity
+        };
+        let values: Vec<f64> = (0..pf.len())
+            .map(|i| {
+                let pv = pf.values[i];
+                match uf {
+                    Some(uf) => {
+                        let v = uf.value(i).unwrap_or(&[f64::NAN; 3]);
+                        let uu: f64 = v.iter().map(|x| x * x).sum();
+                        pv + 0.5 * rho(i) * uu
+                    }
+                    None => (pv - reference.pressure) / dynamic,
+                }
+            })
+            .collect();
+        let unit = match (q, kin) {
+            (Quantity::TotalPressure, true) => pf.unit.clone(),
+            _ => Some(q.unit().into()),
+        };
+        out.push(Field {
+            name: name.into(),
+            unit,
+            location: pf.location,
+            components: 1,
+            values,
+        });
+    }
+    if out.is_empty() {
+        return Err(Refusal::Shape(
+            Input::Velocity,
+            "is not where the pressure is (cells, nodes or boundary faces)".into(),
+        ));
+    }
+    Ok(out)
+}
+
+/// The values of `input` in each cell from its fields `found` (the cell
+/// field, else the mean of each cell's nodes), with the field taken.
+fn cell_input<'a>(
+    mesh: &Mesh,
+    set: &FieldSet,
+    input: Input,
+    found: &[&'a Field],
+) -> Result<(Vec<f64>, &'a Field), Refusal> {
+    if let Some(f) = found.iter().find(|f| f.location == Location::Cell) {
+        return Ok((f.values.clone(), f));
+    }
+    if let Some(f) = found.iter().find(|f| f.location == Location::Point) {
+        return Ok((set.cell_means(mesh, &f.values, f.components), f));
+    }
+    Err(Refusal::Shape(
+        input,
+        "is only on the boundary faces; it is needed in the cells or at the nodes".into(),
+    ))
+}
+
+/// Whether the second turbulence variable `name` (unit `unit`) is ε,
+/// not ω: by its name, else by its unit (m²/s³).
+fn is_epsilon(name: &str, unit: Option<&str>) -> bool {
+    let n = name.to_lowercase();
+    if n.contains("eps") || n.contains("turbulent_dissipation") {
+        return true;
+    }
+    if n.contains("omega") || n.contains("specific") {
+        return false;
+    }
+    unit.is_some_and(|u| {
+        let u: String = u.chars().filter(|c| !c.is_whitespace()).collect();
+        matches!(
+            u.as_str(),
+            "m2/s3" | "m²/s³" | "m^2/s^3" | "m2s-3" | "m2.s-3"
+        )
+    })
+}
+
+/// ε, ω, the time scale and L = k^{3/2}/ε of one cell from k, the
+/// second variable `w` (ε when `epsilon`, else ω), the bounded time
+/// scale of ζ-f where there is one, and C_μ (β* of SST), as FoehnCraft's
+/// `turbulence-scales` computes them; every denominator is floored at
+/// 10⁻³⁰⁰ (a fluid at rest).
+pub fn scales(k: f64, w: f64, epsilon: bool, bounded: Option<f64>, c_mu: f64) -> [f64; 4] {
+    let tiny = 1e-300;
+    let k = k.max(0.0);
+    let (eps, omega) = if epsilon {
+        (w, w / (c_mu * k).max(tiny))
+    } else {
+        (c_mu * k * w, w)
+    };
+    let t = bounded.unwrap_or(if epsilon {
+        k / eps.max(tiny)
+    } else {
+        1.0 / (c_mu * omega).max(tiny)
+    });
+    [eps, omega, t, k * k.sqrt() / eps.max(tiny)]
+}
+
+/// The Boussinesq Reynolds stress ⅔ k δᵢⱼ − 2 ν_t Sᵢⱼ of the velocity
+/// gradient `g`, components xx, yy, zz, xy, yz, xz.
+pub fn reynolds_stress(g: [[f64; 3]; 3], k: f64, nu_t: f64) -> [f64; 6] {
+    let s = |i: usize, j: usize| 0.5 * (g[i][j] + g[j][i]);
+    let iso = 2.0 / 3.0 * k.max(0.0);
+    [
+        iso - 2.0 * nu_t * s(0, 0),
+        iso - 2.0 * nu_t * s(1, 1),
+        iso - 2.0 * nu_t * s(2, 2),
+        -2.0 * nu_t * s(0, 1),
+        -2.0 * nu_t * s(1, 2),
+        -2.0 * nu_t * s(0, 2),
+    ]
+}
+
+/// √(2 S:S) of the velocity gradient `g`, the shear rate.
+pub fn strain_rate(g: [[f64; 3]; 3]) -> f64 {
+    let mut ss = 0.0;
+    for i in 0..3 {
+        for j in 0..3 {
+            let s = 0.5 * (g[i][j] + g[j][i]);
+            ss += s * s;
         }
     }
+    (2.0 * ss).sqrt()
 }
 
 /// ω = ∇ × u of the velocity gradient `g` (gᵢⱼ = ∂uᵢ/∂xⱼ).
@@ -877,12 +1566,18 @@ mod tests {
         assert_eq!(case_reference(&result), None);
         std::fs::write(
             dir.join("case.resolved.toml"),
-            "[fluid]\ndensity = 998.2\n[output.reference]\npressure = 101325.0\n[output.coefficients]\nvelocity = 2\n",
+            "[fluid]\ndensity = 998.2\nviscosity = 0.001\n[output.reference]\npressure = 101325.0\n[output.coefficients]\nvelocity = 2\n[turbulence]\nmodel = \"k-omega-sst\"\n[turbulence.constants]\nbeta_star = 0.1\nc_mu = 0.5\n",
         )
         .unwrap();
         assert_eq!(
             case_reference(&result),
-            Some([Some(998.2), Some(101325.0), Some(2.0)])
+            Some([
+                Some(998.2),
+                Some(101325.0),
+                Some(2.0),
+                Some(0.001 / 998.2),
+                Some(0.1)
+            ])
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -955,6 +1650,219 @@ mod tests {
         }
     }
 
+    fn cells(m: &Mesh) -> Vec<[f64; 3]> {
+        (0..m.cell_count())
+            .map(|c| crate::inspect::cell_centroid(m, c))
+            .collect()
+    }
+
+    fn scalar_cells(name: &str, unit: &str, values: Vec<f64>) -> Field {
+        Field {
+            name: name.into(),
+            unit: Some(unit.into()),
+            location: Location::Cell,
+            components: 1,
+            values,
+        }
+    }
+
+    /// Invariant: enstrophy is ½ ω·ω and the strain rate √(2 S:S) of
+    /// a velocity linear in space, in every cell. Breaks when the
+    /// strain sums the antisymmetric part.
+    #[test]
+    fn enstrophy_and_strain_rate() {
+        let (m, set) = polyhedra(|m| {
+            vec![Field {
+                name: "velocity".into(),
+                unit: Some("m/s".into()),
+                location: Location::Cell,
+                components: 3,
+                values: cells(m).iter().flat_map(|&x| linear(x)).collect(),
+            }]
+        });
+        let w = vorticity(G);
+        let want = 0.5 * w.iter().map(|x| x * x).sum::<f64>();
+        let e = compute(&m, &set, &Recipe::new(Quantity::Enstrophy)).unwrap();
+        assert!(e[0].values.iter().all(|v| (v - want).abs() < 1e-6));
+        let mut ss = 0.0;
+        for i in 0..3 {
+            for j in 0..3 {
+                ss += (0.5 * (G[i][j] + G[j][i])).powi(2);
+            }
+        }
+        let s = compute(&m, &set, &Recipe::new(Quantity::StrainRate)).unwrap();
+        assert_eq!(s[0].unit.as_deref(), Some("1/s"));
+        assert!(
+            s[0].values
+                .iter()
+                .all(|v| (v - (2.0 * ss).sqrt()).abs() < 1e-6)
+        );
+    }
+
+    /// Invariant: a fluid turning with the rotor as a solid body has no
+    /// relative velocity, all its absolute velocity is swirl (α = 0),
+    /// its frame velocity is Ω × x, and its rothalpy is p/ρ − ½ u·u.
+    /// Breaks when a cell is seen in the wrong frame or **u** takes the
+    /// wrong sign.
+    #[test]
+    fn turbomachinery_of_a_solid_body_rotation() {
+        let rpm = 600.0;
+        let w = rpm * std::f64::consts::TAU / 60.0;
+        let (m, set) = polyhedra(|m| {
+            let x = cells(m);
+            vec![
+                Field {
+                    name: "velocity".into(),
+                    unit: Some("m/s".into()),
+                    location: Location::Cell,
+                    components: 3,
+                    values: x.iter().flat_map(|p| [-w * p[1], w * p[0], 0.0]).collect(),
+                },
+                scalar_cells("pressure", "Pa", vec![100.0; x.len()]),
+            ]
+        });
+        let rotation = crate::turbo::Rotation {
+            zones: vec![crate::turbo::Turning {
+                rpm,
+                ..Default::default()
+            }],
+            frame: None,
+        };
+        let make = |q: Quantity| {
+            let mut r = Recipe::new(q);
+            r.rotation = Some(rotation.clone());
+            r.reference = Some(Reference {
+                density: 2.0,
+                ..Default::default()
+            });
+            compute(&m, &set, &r).unwrap().remove(0)
+        };
+        let x = cells(&m);
+        let rel = make(Quantity::RelativeVelocity);
+        assert!(rel.is_vector());
+        assert!(rel.values.iter().all(|v| v.abs() < 1e-9));
+        let frame = make(Quantity::FrameVelocity);
+        for (c, p) in x.iter().enumerate() {
+            let u = frame.value(c).unwrap();
+            assert!((u[0] + w * p[1]).abs() < 1e-9 && (u[1] - w * p[0]).abs() < 1e-9);
+        }
+        let alpha = make(Quantity::FlowAngle);
+        assert_eq!(alpha.unit.as_deref(), Some("°"));
+        let cu = make(Quantity::VelocityCircumferential);
+        let roth = make(Quantity::Rothalpy);
+        let rtp = make(Quantity::RelativeTotalPressure);
+        for (c, p) in x.iter().enumerate() {
+            let r2 = p[0] * p[0] + p[1] * p[1];
+            if r2 < 1e-6 {
+                continue;
+            }
+            assert!(alpha.values[c].abs() < 1e-6, "{}", alpha.values[c]);
+            assert!((cu.values[c] - w * r2.sqrt()).abs() < 1e-9);
+            assert!((roth.values[c] - (50.0 - 0.5 * w * w * r2)).abs() < 1e-9);
+            assert!((rtp.values[c] - 100.0).abs() < 1e-9);
+        }
+        // A zone the mesh does not have.
+        let mut r = Recipe::new(Quantity::VelocityAxial);
+        r.rotation = Some(crate::turbo::Rotation {
+            zones: vec![crate::turbo::Turning {
+                zone: Some("impeller".into()),
+                ..Default::default()
+            }],
+            frame: None,
+        });
+        assert_eq!(compute(&m, &set, &r).map_err(|e| e.code()), Err("FIELD016"));
+    }
+
+    /// Invariant: the turbulence scales follow from k and ω, or from k
+    /// and ε, as FoehnCraft computes them; the viscosity ratio is ν_t/ν
+    /// and the Reynolds stress the Boussinesq estimate, exact for a
+    /// linear velocity. Breaks when ω and ε are told apart wrongly.
+    #[test]
+    fn turbulence_scales() {
+        let fields = |second: &str, unit: &str, v: f64| {
+            let (m, set) = polyhedra(|m| {
+                let n = m.cell_count();
+                vec![
+                    Field {
+                        name: "velocity".into(),
+                        unit: Some("m/s".into()),
+                        location: Location::Cell,
+                        components: 3,
+                        values: cells(m).iter().flat_map(|&x| linear(x)).collect(),
+                    },
+                    scalar_cells("k", "m2/s2", vec![2.0; n]),
+                    scalar_cells(second, unit, vec![v; n]),
+                    scalar_cells("nu_t", "m2/s", vec![0.01; n]),
+                ]
+            });
+            (m, set)
+        };
+        let get = |m: &Mesh, set: &FieldSet, q: Quantity| {
+            let mut r = Recipe::new(q);
+            r.reference = Some(Reference {
+                viscosity: 1e-5,
+                ..Default::default()
+            });
+            compute(m, set, &r).unwrap().remove(0).values[3]
+        };
+        let (m, set) = fields("omega", "1/s", 10.0);
+        let eps = get(&m, &set, Quantity::DissipationRate);
+        assert!((eps - 0.09 * 2.0 * 10.0).abs() < 1e-12);
+        assert!((get(&m, &set, Quantity::SpecificDissipationRate) - 10.0).abs() < 1e-12);
+        assert!((get(&m, &set, Quantity::TimeScale) - 1.0 / 0.9).abs() < 1e-12);
+        assert!((get(&m, &set, Quantity::LengthScale) - 2f64.powf(1.5) / eps).abs() < 1e-12);
+        assert!((get(&m, &set, Quantity::ViscosityRatio) - 1000.0).abs() < 1e-9);
+        let xy = get(&m, &set, Quantity::ReynoldsStressXy);
+        assert!((xy - (-2.0 * 0.01 * 0.5 * (G[0][1] + G[1][0]))).abs() < 1e-8);
+        let xx = get(&m, &set, Quantity::ReynoldsStressXx);
+        assert!((xx - (4.0 / 3.0 - 2.0 * 0.01 * G[0][0])).abs() < 1e-8);
+        // ε by its name.
+        let (m, set) = fields("epsilon", "m2/s3", 1.8);
+        assert!((get(&m, &set, Quantity::SpecificDissipationRate) - 10.0).abs() < 1e-12);
+        assert!((get(&m, &set, Quantity::TimeScale) - 2.0 / 1.8).abs() < 1e-12);
+        // Without ν_t.
+        let (m, set) = polyhedra(|m| vec![scalar_cells("k", "m2/s2", vec![1.0; m.cell_count()])]);
+        assert_eq!(
+            compute(&m, &set, &Recipe::new(Quantity::ViscosityRatio)),
+            Err(Refusal::Missing(Input::NuT))
+        );
+        assert!(is_epsilon("eps", None) && !is_epsilon("omega", Some("m2/s3")));
+        assert!(is_epsilon("w2", Some("m²/s³")) && !is_epsilon("w2", Some("1/s")));
+    }
+
+    /// Invariant: the wall distance of each cell is that of its centroid
+    /// to the nearest named wall: in a box with walls at y = min and y =
+    /// max, the smaller of the two gaps. Without a wall patch it is
+    /// refused. Breaks when faces of other patches are taken.
+    #[test]
+    fn wall_distance_in_a_box() {
+        let (m, set) = polyhedra(|m| vec![scalar_cells("p", "Pa", vec![0.0; m.cell_count()])]);
+        let (lo, hi) = m
+            .points
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
+                (a.min(p[1]), b.max(p[1]))
+            });
+        let mut r = Recipe::new(Quantity::WallDistance);
+        r.walls = Some(vec!["ymin".into(), "ymax".into()]);
+        let d = compute(&m, &set, &r).unwrap().remove(0);
+        assert_eq!(d.unit.as_deref(), Some("m"));
+        for (c, x) in cells(&m).iter().enumerate() {
+            let want = (x[1] - lo).min(hi - x[1]);
+            assert!(
+                (d.values[c] - want).abs() < 1e-9,
+                "{c}: {} {want}",
+                d.values[c]
+            );
+        }
+        assert_eq!(
+            compute(&m, &set, &Recipe::new(Quantity::WallDistance)).map_err(|e| e.code()),
+            Err("FIELD017")
+        );
+        r.walls = Some(vec!["lid".into()]);
+        assert_eq!(compute(&m, &set, &r).map_err(|e| e.code()), Err("FIELD017"));
+    }
+
     /// Invariant: total pressure is p + ½ ρ u·u and the pressure
     /// coefficient (p − p_ref) / (½ ρ_ref U_ref²) wherever the pressure
     /// is; a kinematic pressure takes no density, and a density field
@@ -985,6 +1893,7 @@ mod tests {
             density: 2.0,
             pressure: 10.0,
             velocity: 5.0,
+            ..Default::default()
         };
         let mut recipe = Recipe::new(Quantity::TotalPressure);
         recipe.reference = Some(r);

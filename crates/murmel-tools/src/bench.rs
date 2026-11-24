@@ -93,6 +93,8 @@ pub struct Options {
     /// Draw offscreen frames (needs a GPU or a software driver).
     pub render: bool,
     pub size: [u32; 2],
+    /// Time the field stages too ([`fields`]).
+    pub fields: bool,
 }
 
 impl Default for Options {
@@ -101,6 +103,7 @@ impl Default for Options {
             repeat: 1,
             render: true,
             size: [1280, 720],
+            fields: true,
         }
     }
 }
@@ -412,6 +415,10 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
         }
     }
 
+    if opts.fields {
+        fields(&mut session, &mut st, r)?;
+    }
+
     Ok(json!({
         "format": BENCH_FORMAT,
         "format_version": "1.0",
@@ -436,6 +443,136 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
         },
     }))
+}
+
+/// The tool calls of one run of a stage.
+type Steps = Vec<(&'static str, Value)>;
+
+/// Run tool `id` on `session`, its failure as the error.
+fn tool(session: &mut Session, id: &str, input: Value) -> Result<Value, String> {
+    let e = crate::call(id, input, session);
+    if e.exit_code == 0 {
+        Ok(e.result)
+    } else {
+        Err(format!("{id}: {:?}", e.diagnostics))
+    }
+}
+
+/// The field stages: two fields of the cells (a scalar `p` and a
+/// swirling vector `U`, functions of each cell's centroid, so every mesh,
+/// the honeycomb included, has results), then colouring by them, a slice and its steps, an
+/// iso-surface and its steps, and arrows on the slice, each through its
+/// tool as an agent or the window calls it.
+fn fields(session: &mut Session, st: &mut Stages, r: usize) -> Result<(), String> {
+    session.display.clips.clear();
+    session.redraw();
+    let Some(m) = &session.mesh else {
+        return Ok(());
+    };
+    let b = m.mesh.bounds();
+    let (c, h) = (
+        b.center(),
+        [0, 1, 2].map(|k| 0.5 * (b.max[k] - b.min[k]).max(1e-30)),
+    );
+    // Coordinates scaled to -1..1 over the mesh's box.
+    let made = st.time("field.make", 1, || {
+        let mesh = &m.mesh;
+        let unit = |q: [f64; 3]| [0, 1, 2].map(|k| (q[k] - c[k]) / h[k]);
+        let at: Vec<[f64; 3]> = murmel_mesh::par::collect(mesh.cell_count(), 1 << 14, |r| {
+            r.map(|i| unit(murmel_engine::inspect::cell_centroid(mesh, i)))
+                .collect()
+        });
+        let p = at
+            .iter()
+            .map(|q| (3.0 * q[0]).sin() * (2.0 * q[1]).cos() + 0.5 * q[2])
+            .collect();
+        let u = at
+            .iter()
+            .flat_map(|q| [-q[1], q[0], 0.2 + 0.1 * q[2]])
+            .collect();
+        let field = |name: &str, components, values| murmel_mesh::field::Field {
+            name: name.into(),
+            unit: None,
+            location: murmel_mesh::field::Location::Cell,
+            components,
+            values,
+        };
+        murmel_mesh::field::Results {
+            fields: vec![field("p", 1, p), field("U", 3, u)],
+            ..Default::default()
+        }
+    });
+    if let Some(m) = &mut session.mesh {
+        m.fields = std::sync::Arc::new(murmel_engine::FieldSet::new(made));
+    }
+    let stage = |st: &mut Stages,
+                 session: &mut Session,
+                 name: &str,
+                 repeat: usize,
+                 calls: &mut dyn FnMut(usize) -> Steps|
+     -> Result<(), String> {
+        let mut k = 0;
+        let out = st.time(name, repeat, || -> Result<(), String> {
+            murmel_mesh::profile::record(true);
+            for (id, input) in calls(k) {
+                tool(session, id, input)?;
+            }
+            k += 1;
+            Ok(())
+        });
+        out?;
+        let mut note = session
+            .mesh
+            .as_ref()
+            .map_or(Value::Null, |m| surface_note(&m.surface));
+        note["phases"] = phases();
+        st.note(note);
+        Ok(())
+    };
+    let by = |name: &str| json!({"by": "field", "field": name});
+    // The first colouring makes the field's node values; colouring by it
+    // again builds the surface alone.
+    stage(st, session, "field.color", 1, &mut |_| {
+        vec![("display.color_by", by("p"))]
+    })?;
+    stage(st, session, "field.switch", 1, &mut |_| {
+        vec![("display.color_by", by("U"))]
+    })?;
+    stage(st, session, "field.color.again", r, &mut |k| {
+        vec![("display.color_by", by(if k % 2 == 0 { "p" } else { "U" }))]
+    })?;
+    stage(st, session, "field.style", r.max(3), &mut |k| {
+        let range = if k % 2 == 0 { "symmetric" } else { "field" };
+        vec![("field.style", json!({"range": range}))]
+    })?;
+    tool(session, "display.color_by", by("p"))?;
+    let at = |f: f64| [b.min[0] + f * (b.max[0] - b.min[0]), c[1], c[2]];
+    stage(st, session, "slice.set", 1, &mut |_| {
+        vec![(
+            "slice.set",
+            json!({"new": true, "axis": "x", "origin": at(0.5)}),
+        )]
+    })?;
+    // A step of a slice drag, as the window takes it.
+    stage(st, session, "slice.step", r.max(5), &mut |k| {
+        let f = 0.5 + 0.01 * (k + 1) as f64;
+        vec![("slice.set", json!({"origin": at(f)}))]
+    })?;
+    stage(st, session, "iso.set", 1, &mut |_| {
+        vec![("iso.set", json!({"new": true, "field": "p", "value": 0.25}))]
+    })?;
+    stage(st, session, "iso.step", r.max(3), &mut |k| {
+        vec![("iso.set", json!({"value": 0.25 + 0.05 * (k + 1) as f64}))]
+    })?;
+    tool(session, "iso.clear", json!({"all": true}))?;
+    stage(st, session, "arrows.set", 1, &mut |_| {
+        vec![("arrows.set", json!({"field": "U"}))]
+    })?;
+    stage(st, session, "slice.step.arrows", r.max(3), &mut |k| {
+        let f = 0.45 - 0.01 * (k + 1) as f64;
+        vec![("slice.set", json!({"origin": at(f)}))]
+    })?;
+    Ok(())
 }
 
 /// A short table of a `run` report for the terminal.
@@ -494,7 +631,8 @@ mod tests {
     }
 
     /// Invariant: `make` writes every format and `run` reads each back to
-    /// the same cell count and reports every stage with a time. A stage
+    /// the same cell count and reports every stage with a time, the field
+    /// stages (made through their tools) drawing something. A stage
     /// that failed silently, or a format the readers refuse, would leave
     /// the benchmark's numbers meaningless.
     #[test]
@@ -519,6 +657,14 @@ mod tests {
             let stages = report["stages"].as_array().unwrap();
             assert!(stages.len() >= 9);
             assert!(stages.iter().all(|s| s["median_ms"].as_f64().is_some()));
+            // the field stages ran through their tools
+            for name in ["field.color", "slice.step", "iso.step", "slice.step.arrows"] {
+                let st = stages.iter().find(|s| s["stage"] == name);
+                assert!(
+                    st.is_some_and(|s| s["triangles"].as_u64() > Some(0)),
+                    "{name}"
+                );
+            }
             assert!(!table(&report).is_empty());
         }
         let _ = std::fs::remove_dir_all(&dir);

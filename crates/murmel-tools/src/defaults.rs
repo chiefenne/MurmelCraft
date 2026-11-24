@@ -24,11 +24,16 @@ pub(crate) fn fresh<T: Serialize + DeserializeOwned>(s: &Session, kind: Kind, it
 /// own yet and a default style is saved, so a field shown for the first
 /// time starts from it; fields with a style keep it.
 pub(crate) fn adopt_style(s: &mut Session, name: &str) {
-    if s.defaults.of(Kind::FieldStyle).is_none() || s.display.field_styles.contains_key(name) {
+    let series = s.series.is_some();
+    if (s.defaults.of(Kind::FieldStyle).is_none() && !series)
+        || s.display.field_styles.contains_key(name)
+    {
         return;
     }
     let st = fresh(s, Kind::FieldStyle, FieldStyle::default());
     s.display.field_styles.insert(name.to_string(), st);
+    // While a series is open, a field first shown spans every step.
+    crate::series::steps_by_default_one(s, Some(name));
 }
 
 fn not_a_default(m: String) -> Diagnostic {
@@ -110,6 +115,10 @@ pub(crate) fn settings_set_default(input: Value, s: &mut Session) -> Run {
                     .clone()
                     .or_else(|| s.display.field.as_ref().map(|c| c.name.clone()))
                     .and_then(|name| serde_json::to_value(s.display.style_of(&name)).ok()),
+                Kind::Player => s
+                    .series
+                    .as_ref()
+                    .and_then(|r| serde_json::to_value(r.playback).ok()),
                 _ => None,
             };
             (kind, current)

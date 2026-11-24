@@ -1311,6 +1311,8 @@ fn derived_fields_from_the_window() {
     assert!(named(&h, "Show Vorticity") && named(&h, "Remove Vorticity"));
     assert_eq!(problems(&h), Vec::<String>::new(), "a field computed");
     // A reference value kept as your default.
+    h.get_by_label("Pressure").click();
+    h.run_steps(3);
     h.get_by(|n| n.role() == Role::SpinButton && n.label().as_deref() == Some("Density ρ_ref"))
         .click_secondary();
     h.run_steps(2);
@@ -1321,6 +1323,44 @@ fn derived_fields_from_the_window() {
         h.state().session.defaults.get(Kind::Reference, "density"),
         Some(&serde_json::json!(1.225))
     );
+    // Turbomachinery: the turning zone typed in the window reaches the
+    // recipe, and its speed can be kept as your default.
+    h.get_by_label("Turbomachinery").click();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "turbomachinery");
+    h.state_mut().derived.rotation.as_mut().unwrap().0.zones[0].rpm = 1500.0;
+    h.run_steps(2);
+    h.get_by_label("Compute Relative velocity").click();
+    h.run_steps(3);
+    let r = h
+        .state()
+        .session
+        .fields()
+        .unwrap()
+        .recipe("relative_velocity")
+        .cloned()
+        .unwrap_or_else(|| panic!("not computed: {:?}", h.state().error));
+    assert_eq!(r.rotation.unwrap().zones[0].rpm, 1500.0);
+    h.get_by(|n| {
+        n.role() == Role::SpinButton && n.label().as_deref() == Some("Speed of turning zone 1")
+    })
+    .click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Save Speed of rotation as your default")
+        .click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.defaults.get(Kind::Rotation, "rpm"),
+        Some(&serde_json::json!(1500.0))
+    );
+    // Turbulence and walls: shown with their inputs and walls.
+    for g in ["Turbulence", "Wall"] {
+        h.get_by_label(g).click();
+        h.run_steps(3);
+        assert_eq!(problems(&h), Vec::<String>::new(), "{g}");
+    }
+    h.get_by_label("Vortices").click();
+    h.run_steps(3);
     h.get_by_label("Remove Vorticity").click();
     h.run_steps(3);
     assert!(
@@ -1384,6 +1424,119 @@ fn player_bar_steps_and_plays() {
     }
     let at = seen.iter().position(|p| p == "Viewport").unwrap();
     assert_eq!(seen[at + 1], "Player", "{seen:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant: a playing series reads its next step ahead on a thread of
+/// its own and shows every step in turn. Breaks if the player waited
+/// for a reading that never came, or skipped steps.
+#[test]
+fn playing_reads_ahead() {
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-ahead-play-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fields = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    for step in [10, 20, 30] {
+        std::fs::copy(&fields, dir.join(format!("fields_{step:06}.vtkhdf"))).unwrap();
+    }
+    let app = h.state_mut();
+    assert!(
+        app.call("series.open", serde_json::json!({"path": dir}))
+            .is_some()
+    );
+    assert!(
+        app.call(
+            "series.play",
+            serde_json::json!({"playing": true, "rate": 60.0, "loop": false})
+        )
+        .is_some()
+    );
+    let mut seen = Vec::new();
+    for _ in 0..400 {
+        h.run_steps(1);
+        let r = h.state().session.series.as_ref().unwrap();
+        if seen.last() != Some(&r.entry().step) {
+            seen.push(r.entry().step);
+        }
+        if !r.playback.playing {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(seen, vec![10, 20, 30]);
+    assert!(h.state().ahead.is_none(), "nothing left reading");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant (the maintainer's card of 2026-11-24, "Range over all
+/// steps"): with a series open, a field shown is coloured over every
+/// step, read by the window on a thread of its own; the range then
+/// spans the steps and stays while the player steps on. Breaks if the
+/// window never started the reading, or the colours rescaled per step.
+#[test]
+fn range_over_the_steps_reads_in_the_background() {
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-steps-range-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let vtu = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/box/foehncraft.vtu"),
+    )
+    .unwrap();
+    for (step, factor) in [(10, 1.0f64), (20, 3.0)] {
+        let values: Vec<String> = (0..20)
+            .map(|k| {
+                if k < 4 {
+                    (factor * (k + 1) as f64).to_string()
+                } else {
+                    "nan".into()
+                }
+            })
+            .collect();
+        let array = format!(
+            "<DataArray type=\"Float64\" Name=\"t\" format=\"ascii\">\n{}\n</DataArray>\n</CellData>",
+            values.join("\n")
+        );
+        std::fs::write(
+            dir.join(format!("s_{step}.vtu")),
+            vtu.replacen("      </CellData>", &array, 1),
+        )
+        .unwrap();
+    }
+    let m = serde_json::json!({"format": "foehncraft.series", "format_version": 1, "entries": [
+        {"step": 10, "files": {"fields": "s_10.vtu"}},
+        {"step": 20, "files": {"fields": "s_20.vtu"}}]});
+    std::fs::write(dir.join("series.json"), m.to_string()).unwrap();
+    let app = h.state_mut();
+    assert!(
+        app.call(
+            "series.open",
+            serde_json::json!({"path": dir.join("series.json")})
+        )
+        .is_some()
+    );
+    assert!(
+        app.call(
+            "display.color_by",
+            serde_json::json!({"by": "field", "field": "t"})
+        )
+        .is_some()
+    );
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().session.field_range() == Some((1.0, 12.0)) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(h.state().session.field_range(), Some((1.0, 12.0)));
+    h.get_by_label("Next step").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.field_range(), Some((1.0, 12.0)));
+    assert_eq!(problems(&h), Vec::<String>::new(), "player bar");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

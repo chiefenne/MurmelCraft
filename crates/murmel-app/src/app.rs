@@ -51,6 +51,8 @@ pub struct MurmelApp {
     pub(crate) now: f64,
     /// When the player last showed a step (while a series plays).
     pub(crate) played_at: Option<f64>,
+    /// The next step of the playing series, read on its own thread.
+    pub(crate) ahead: Option<crate::player::Ahead>,
     /// The edges hidden while the view moves when frames with them are
     /// slow.
     pub(crate) moving_edges: crate::edges::MovingEdges,
@@ -100,6 +102,9 @@ pub struct MurmelApp {
     pub(crate) derived: crate::derived::DerivedWindow,
     /// The Probe history window and its reading.
     pub(crate) history: crate::probe_history::HistoryWindow,
+    /// The colour range over the steps of a series, read on its own
+    /// thread (range mode steps).
+    pub(crate) steps_range: crate::player::StepsRangeJob,
     /// The movie being made on its own thread, if one is.
     pub(crate) movie_job: Option<crate::movie_dialog::MovieJob>,
     /// The large mesh being read on its own thread, if one is.
@@ -201,6 +206,7 @@ impl MurmelApp {
             shortcuts_open: false,
             flight: None,
             played_at: None,
+            ahead: None,
             now: 0.0,
             moving_edges: Default::default(),
             rotate_axis: murmel_engine::ScreenAxis::Z,
@@ -226,6 +232,7 @@ impl MurmelApp {
             derived: Default::default(),
             movie_job: None,
             history: Default::default(),
+            steps_range: Default::default(),
             opening: None,
             background_bytes: crate::opening::BACKGROUND_BYTES,
             #[cfg(test)]
@@ -1455,6 +1462,7 @@ impl eframe::App for MurmelApp {
         self.poll_probe_history(&ctx);
         self.probe_history_window(&ctx);
         self.play_series(&ctx);
+        self.read_steps_range(&ctx);
         self.poll_opening(&ctx);
         self.poll_blocks(&ctx);
         self.poll_preview(&ctx);

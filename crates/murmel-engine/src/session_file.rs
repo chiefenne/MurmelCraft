@@ -16,7 +16,8 @@
 //! series walked and the step shown (since 1.13), the fields of your
 //! formulas beside the derived ones (since 1.14), the mesh's BLAKE3
 //! hash in place of its SHA-256 (since 1.15), whether an overview's
-//! block boxes show (since 1.16), the user's mesh
+//! block boxes show (since 1.16), the colour range over every step of a
+//! series (range `steps`, since 1.17), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -48,7 +49,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.16";
+pub const SESSION_VERSION: &str = "1.17";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 

@@ -5,6 +5,7 @@
 //! change this state only through the tools of `murmel-tools`.
 
 pub mod animation;
+mod bins;
 pub mod block_boxes;
 pub mod blocks;
 pub mod calc;
@@ -40,10 +41,13 @@ pub mod series;
 pub mod session;
 pub mod session_file;
 pub mod settings;
+pub mod steps_range;
 pub mod stream;
 pub mod surface;
 mod tets;
 pub mod theme;
+pub mod turbo;
+pub mod walls;
 
 pub use camera::{Camera, Projection, ScreenAxis, StandardView};
 pub use clip::{Clip, ClipMode};
@@ -60,7 +64,7 @@ pub use navigation::Navigation;
 pub use quality::{Metric, Quality};
 pub use region::{Region, RegionCells, Shape};
 pub use session::{
-    Fit, Loaded, OpenMesh, OpenMode, Session, Validity, load, load_checked, load_with,
+    Fit, Loaded, OpenMesh, OpenMode, Session, StepAhead, Validity, load, load_checked, load_with,
 };
 pub use session_file::SessionFile;
 pub use stream::{Direction, Look, Seed, Stream};

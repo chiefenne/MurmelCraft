@@ -263,13 +263,12 @@ pub fn color_range(
     let whole = if a.in_plane {
         drawn
     } else {
-        fields
-            .and_then(|f| f.values_cached(mesh, &a.magnitude()))
-            .and_then(|v| v.range)
-            .or(drawn)
+        fields.and_then(|f| f.range(mesh, &a.magnitude())).or(drawn)
     };
     let r = match style.range {
-        RangeMode::Field => whole?,
+        // Over the steps of a series the arrows keep the step's range
+        // for now: the steps' ranges are kept for the mesh colouring.
+        RangeMode::Field | RangeMode::Steps => whole?,
         RangeMode::Shown => drawn?,
         RangeMode::Symmetric => {
             let (lo, hi) = whole?;

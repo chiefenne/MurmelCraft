@@ -7,8 +7,10 @@
 
 use std::path::PathBuf;
 
-use murmel_engine::Session;
+use murmel_engine::field::{Component, FieldChoice, RangeMode};
+use murmel_engine::history::Failure;
 use murmel_engine::series::{MAX_RATE, MIN_RATE, Series};
+use murmel_engine::{FieldStyle, Session, steps_range};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -181,7 +183,10 @@ struct OpenInput {
 
 pub(crate) fn series_open(input: Value, s: &mut Session) -> Run {
     let i: OpenInput = parse(input)?;
-    let r = Series::read(&i.path).map_err(|e| Diagnostic::new("SERIES001", e.0))?;
+    let mut r = Series::read(&i.path).map_err(|e| Diagnostic::new("SERIES001", e.0))?;
+    // Your player defaults: its speed and loop (paused all the same).
+    r.playback = crate::defaults::fresh(s, murmel_engine::defaults::Kind::Player, r.playback);
+    r.playback.playing = false;
     let k = match i.step {
         Some(st) => r.index_of_step(st).ok_or_else(|| missing_step(&r, st))?,
         None => 0,
@@ -192,11 +197,195 @@ pub(crate) fn series_open(input: Value, s: &mut Session) -> Run {
         s.series = keep;
         return Err(d);
     }
+    steps_by_default(s);
     // The charts of the run's tables, when its folder has them (D268).
     crate::charts::open_beside(s, &opened);
     let mut out = done(s)?;
     out["charts"] = crate::charts::charts_json(s);
     Ok(out)
+}
+
+/// While a series is open the mesh's colour spans every step (the
+/// maintainer's card of 2026-11-24, "Range over all steps"): fields
+/// coloured over their whole range at one step, the default, take range
+/// steps; a range shown, symmetric or fixed stays.
+pub(crate) fn steps_by_default(s: &mut Session) {
+    if s.series.is_none() {
+        return;
+    }
+    for st in s.display.field_styles.values_mut() {
+        if st.range == RangeMode::Field {
+            st.range = RangeMode::Steps;
+        }
+    }
+    if let Some(c) = s.display.field.clone()
+        && !s.display.field_styles.contains_key(&c.name)
+    {
+        let st = crate::defaults::fresh(
+            s,
+            murmel_engine::defaults::Kind::FieldStyle,
+            FieldStyle::default(),
+        );
+        s.display.field_styles.insert(c.name.clone(), st);
+        steps_by_default_one(s, Some(&c.name));
+    }
+}
+
+/// Range field becomes range steps for field `name` (all when `None`)
+/// while a series is open.
+pub(crate) fn steps_by_default_one(s: &mut Session, name: Option<&str>) {
+    if s.series.is_none() {
+        return;
+    }
+    for (n, st) in s.display.field_styles.iter_mut() {
+        if name.is_none_or(|x| x == n) && st.range == RangeMode::Field {
+            st.range = RangeMode::Steps;
+        }
+    }
+}
+
+/// The field whose range over the steps is wanted: `name` and
+/// `component` given, else the field shown.
+fn choice_of(
+    s: &Session,
+    name: Option<String>,
+    component: Option<Component>,
+) -> Option<FieldChoice> {
+    match name {
+        Some(name) => Some(FieldChoice {
+            name,
+            component: component.unwrap_or_default(),
+        }),
+        None => s.display.field.clone().map(|mut c| {
+            if let Some(k) = component {
+                c.component = k;
+            }
+            c
+        }),
+    }
+}
+
+/// The range over the steps of `choice` as reported: the range kept so
+/// far, the steps read and the total. Null without a series or a mesh.
+fn range_json(s: &Session, choice: &FieldChoice) -> Value {
+    let (Some(r), Some(m)) = (&s.series, &s.mesh) else {
+        return Value::Null;
+    };
+    let k = steps_range::key(r, &m.fields, choice);
+    match steps_range::cached(&s.steps_ranges, &k) {
+        Some(x) => json!({
+            "field": choice.name,
+            "component": choice.component,
+            "range": x.range.map(|(a, b)| [a, b]),
+            "read": x.read,
+            "total": x.total,
+            "complete": x.complete(),
+        }),
+        None => json!({
+            "field": choice.name,
+            "component": choice.component,
+            "range": null,
+            "read": 0,
+            "total": r.len(),
+            "complete": false,
+        }),
+    }
+}
+
+/// The range over the steps of the field shown when it is coloured with
+/// range mode steps (null else), as field results report it.
+pub(crate) fn steps_range_json(s: &Session) -> Value {
+    match steps_choice(s) {
+        Some(c) => range_json(s, &c),
+        None => Value::Null,
+    }
+}
+
+/// The field shown when a series is open and its style's range is steps.
+pub fn steps_choice(s: &Session) -> Option<FieldChoice> {
+    s.series.as_ref()?;
+    let v = s.field_values()?;
+    (s.field_style().range == RangeMode::Steps).then(|| v.choice.clone())
+}
+
+/// Whether the range over the steps of the field shown is still to be
+/// read (range mode steps, a series open, not every step read).
+pub fn steps_range_pending(s: &Session) -> Option<String> {
+    let c = steps_choice(s)?;
+    let (r, m) = (s.series.as_ref()?, s.mesh.as_ref()?);
+    let k = steps_range::key(r, &m.fields, &c);
+    let done = steps_range::cached(&s.steps_ranges, &k).is_some_and(|x| x.complete());
+    (!done).then_some(k)
+}
+
+/// Read the range over the steps of `choice` now (kept for the series).
+fn read_range(s: &Session, choice: &FieldChoice) -> Result<(), Diagnostic> {
+    let (Some(r), Some(m)) = (&s.series, &s.mesh) else {
+        return Err(no_series());
+    };
+    steps_range::read(
+        &m.mesh,
+        &m.fields,
+        r,
+        choice,
+        &s.steps_ranges,
+        &crate::probe::progress(),
+    )
+    .map(|_| ())
+    .map_err(|f| match f {
+        Failure::Nothing(why) => Diagnostic::new("SERIES004", why),
+        Failure::Cancelled => {
+            Diagnostic::new("SERIES004", "the range over the steps was cancelled")
+        }
+    })
+}
+
+/// Before a picture or a movie is made headless: read the range over
+/// the steps of the field shown when range mode steps needs it, so the
+/// first frame has the colours of the last.
+pub(crate) fn ensure_steps_range(s: &Session) -> Result<(), Diagnostic> {
+    if steps_range_pending(s).is_none() {
+        return Ok(());
+    }
+    match steps_choice(s) {
+        Some(c) => read_range(s, &c),
+        None => Ok(()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RangeInput {
+    #[serde(default)]
+    field: Option<String>,
+    #[serde(default)]
+    component: Option<Component>,
+}
+
+pub(crate) fn series_range(input: Value, s: &mut Session) -> Run {
+    let i: RangeInput = parse(input)?;
+    crate::tools::need_mesh(s)?;
+    if s.series.is_none() {
+        return Err(no_series());
+    }
+    let Some(c) = choice_of(s, i.field, i.component) else {
+        return Err(Diagnostic::new(
+            "SERIES004",
+            "no field is shown; give field, or colour by one with display.color_by",
+        ));
+    };
+    read_range(s, &c)?;
+    Ok(range_json(s, &c))
+}
+
+pub(crate) fn series_range_schema() -> Value {
+    object(
+        json!({
+            "field": {"type": "string", "description": "The field (default: the field shown)"},
+            "component": {"enum": ["magnitude", "x", "y", "z"], "description": "A vector's scalar (default: the one shown, else magnitude)"}
+        }),
+        &[],
+    )
 }
 
 fn missing_step(r: &Series, st: u64) -> Diagnostic {

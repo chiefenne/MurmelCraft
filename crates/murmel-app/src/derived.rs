@@ -21,7 +21,10 @@ use std::collections::BTreeMap;
 use egui::{RichText, Role, Ui, WidgetInfo};
 use murmel_engine::calc::{FUNCTIONS, Formula};
 use murmel_engine::defaults::Kind;
-use murmel_engine::derive::{self, Group, Input, Made, Quantity, Reference, Source};
+use murmel_engine::derive::{
+    self, Group, Input, Made, Quantity, REFERENCE_KEYS, Reference, Source,
+};
+use murmel_engine::turbo::{self, Rotation, Turning};
 use serde_json::{Value, json};
 
 use crate::app::MurmelApp;
@@ -37,7 +40,15 @@ pub struct DerivedWindow {
     /// The reference values being edited, and where each came from
     /// (`None`: typed here); taken from the session when the window
     /// opens.
-    pub reference: Option<(Reference, [Option<Source>; 3])>,
+    pub reference: Option<(Reference, [Option<Source>; 5])>,
+    /// The turning zones being edited and where they came from (`None`:
+    /// typed here); taken from the session when the window opens.
+    pub rotation: Option<(Rotation, Option<Source>)>,
+    /// The wall patches of the wall distance; taken from the session
+    /// when the window opens.
+    pub walls: Option<Vec<String>>,
+    /// The group of quantities shown.
+    pub group: Option<Group>,
     /// The formula being written: the field it makes, its text, its
     /// unit.
     pub name: String,
@@ -51,13 +62,16 @@ pub struct DerivedWindow {
     pub formulas_tab: bool,
 }
 
-const REFERENCE_KEYS: [&str; 3] = ["density", "pressure", "velocity"];
+/// The units of [`REFERENCE_KEYS`], as the window shows them.
+const REFERENCE_UNITS: [&str; 5] = [" kg/m³", " Pa", " m/s", " m²/s", ""];
 
 impl MurmelApp {
     /// Open the window, its reference values fresh from the session.
     pub(crate) fn open_derived(&mut self) {
         self.derived.open = true;
         self.derived.reference = None;
+        self.derived.rotation = None;
+        self.derived.walls = None;
     }
 
     /// Open the window with the keyboard in the formula field (the
@@ -68,22 +82,55 @@ impl MurmelApp {
         self.derived.focus_formula = true;
     }
 
-    /// The reference values the window starts from: those of the
-    /// pressure coefficient when it is computed, else where new fields
-    /// start from.
-    fn start_reference(&self) -> (Reference, [Option<Source>; 3]) {
+    /// The reference values the window starts from: those of a computed
+    /// quantity that has them, else where new fields start from.
+    fn start_reference(&self) -> (Reference, [Option<Source>; 5]) {
         let own = self.session.fields().and_then(|f| {
-            f.recipe(Quantity::PressureCoefficient.field())
-                .or_else(|| f.recipe(Quantity::TotalPressure.field()))
-                .and_then(|r| r.reference)
+            f.made().iter().find_map(|m| match m {
+                Made::Quantity(r) => r.reference,
+                Made::Formula(_) => None,
+            })
         });
         match own {
-            Some(r) => (r, [None; 3]),
+            Some(r) => (r, [None; 5]),
             None => {
                 let (r, from) = derive::start_reference(&self.session);
                 (r, from.map(Some))
             }
         }
+    }
+
+    /// The turning zones the window starts from: those of a computed
+    /// turbomachinery quantity, else where new ones start from.
+    fn start_rotation(&self) -> (Rotation, Option<Source>) {
+        let own = self.session.fields().and_then(|f| {
+            f.made().iter().find_map(|m| match m {
+                Made::Quantity(r) => r.rotation.clone(),
+                Made::Formula(_) => None,
+            })
+        });
+        match own {
+            Some(r) => (r, None),
+            None => {
+                let (r, from) = turbo::start_rotation(&self.session);
+                (r, Some(from))
+            }
+        }
+    }
+
+    /// The wall patches the window starts from: those of the computed
+    /// wall distance, else the case's walls or the wall patches.
+    fn start_walls(&self) -> Vec<String> {
+        let own = self
+            .session
+            .fields()
+            .and_then(|f| f.recipe(Quantity::WallDistance.field()))
+            .and_then(|r| r.walls.clone());
+        own.or_else(|| {
+            let m = self.session.mesh.as_ref()?;
+            Some(murmel_engine::walls::find_walls(&m.mesh, Some(&m.path)))
+        })
+        .unwrap_or_default()
     }
 
     pub(crate) fn derived_window(&mut self, ctx: &egui::Context) {
@@ -92,6 +139,12 @@ impl MurmelApp {
         }
         if self.derived.reference.is_none() {
             self.derived.reference = Some(self.start_reference());
+        }
+        if self.derived.rotation.is_none() {
+            self.derived.rotation = Some(self.start_rotation());
+        }
+        if self.derived.walls.is_none() {
+            self.derived.walls = Some(self.start_walls());
         }
         let p = self.palette(ctx).clone();
         let mut w = self.derived.clone();
@@ -134,20 +187,63 @@ impl MurmelApp {
                             .small()
                             .color(secondary),
                     );
-                    for group in Group::ALL {
-                        ui.add_space(6.0);
-                        ui.label(
-                            RichText::new(self.i18n.tr(&format!("derived-group-{}", group.key())))
-                                .strong(),
-                        );
-                        for q in Quantity::ALL.into_iter().filter(|q| q.group() == group) {
-                            self.derived_row(ui, set, q, &mut w, secondary, &mut calls);
-                            ui.add_space(4.0);
+                    // One group at a time: thirty rows do not fit a
+                    // window.
+                    let group = w.group.unwrap_or(Group::Vortices);
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for g in Group::ALL {
+                            let name = self.i18n.tr(&format!("derived-group-{}", g.key()));
+                            if ui.selectable_label(group == g, name).clicked() {
+                                w.group = Some(g);
+                            }
                         }
-                        if group == Group::Pressure {
-                            self.reference_block(ui, &mut w, secondary, &mut calls);
+                    });
+                    // The values the group's quantities take come first,
+                    // so they stay in view above the rows.
+                    match group {
+                        Group::Pressure => self.reference_block(
+                            ui,
+                            "derived-reference",
+                            &[0, 1, 2],
+                            &mut w,
+                            secondary,
+                            &mut calls,
+                        ),
+                        Group::Turbomachinery => {
+                            self.rotation_block(ui, &mut w, secondary, &mut calls);
+                            self.reference_block(
+                                ui,
+                                "derived-reference-rotor",
+                                &[0],
+                                &mut w,
+                                secondary,
+                                &mut calls,
+                            );
                         }
+                        Group::Turbulence => self.reference_block(
+                            ui,
+                            "derived-reference-turbulence",
+                            &[3, 4],
+                            &mut w,
+                            secondary,
+                            &mut calls,
+                        ),
+                        Group::Wall => self.walls_block(ui, &mut w, secondary),
+                        Group::Vortices => {}
                     }
+                    ui.add_space(6.0);
+                    // Only the rows scroll: a scroll area around the whole
+                    // window lost its clicks (docs/pitfalls.md).
+                    egui::ScrollArea::vertical()
+                        .id_salt("derived-rows")
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            for q in Quantity::ALL.into_iter().filter(|q| q.group() == group) {
+                                self.derived_row(ui, set, q, &mut w, secondary, &mut calls);
+                                ui.add_space(4.0);
+                            }
+                        });
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(self.i18n.tr("derived-foehncraft"))
@@ -230,11 +326,9 @@ impl MurmelApp {
                     .cloned()
                     .filter(|n| options.contains(n))
                     .or_else(|| {
-                        let named = match input {
-                            Input::Velocity => recipe.and_then(|r| r.velocity.clone()),
-                            Input::Pressure => recipe.and_then(|r| r.pressure.clone()),
-                        };
-                        named.or_else(|| derive::find_input(set, input))
+                        recipe
+                            .and_then(|r| r.named(input).cloned())
+                            .or_else(|| derive::find_input(set, input))
                     });
                 let what = self.i18n.tr(&format!("derived-input-{}", input.key()));
                 if options.is_empty() {
@@ -307,6 +401,17 @@ impl MurmelApp {
                         {
                             input["reference"] = json!(r);
                         }
+                        if q.turns()
+                            && let Some((r, _)) = &w.rotation
+                        {
+                            input["rotation"] = json!(r);
+                        }
+                        if q.walls()
+                            && let Some(walls) = &w.walls
+                            && !walls.is_empty()
+                        {
+                            input["walls"] = json!(walls);
+                        }
                         calls.push(("field.derive", input));
                     }
                 }
@@ -333,12 +438,14 @@ impl MurmelApp {
         });
     }
 
-    /// The reference values of the pressure quantities: ρ_ref, p_ref and
-    /// U_ref, each with where it came from; a right-click keeps one as
-    /// your default.
+    /// Reference values `keys` (indices into [`REFERENCE_KEYS`]) under
+    /// the note `note`, each with where it came from; a right-click keeps
+    /// one as your default.
     fn reference_block(
         &self,
         ui: &mut Ui,
+        note: &str,
+        keys: &[usize],
         w: &mut DerivedWindow,
         secondary: egui::Color32,
         calls: &mut Vec<(&'static str, Value)>,
@@ -347,33 +454,35 @@ impl MurmelApp {
             return;
         };
         ui.add_space(4.0);
-        ui.label(
-            RichText::new(self.i18n.tr("derived-reference"))
-                .small()
-                .color(secondary),
-        );
-        egui::Grid::new("derived-reference")
+        ui.label(RichText::new(self.i18n.tr(note)).small().color(secondary));
+        egui::Grid::new(("derived-reference", note))
             .num_columns(3)
             .spacing([10.0, 4.0])
             .show(ui, |ui| {
-                for (k, key) in REFERENCE_KEYS.into_iter().enumerate() {
+                for &k in keys {
+                    let key = REFERENCE_KEYS[k];
                     let name = self.i18n.tr(&format!("derived-ref-{key}"));
                     let label = ui.label(&name);
-                    let (value, unit) = match k {
-                        0 => (&mut r.density, " kg/m³"),
-                        1 => (&mut r.pressure, " Pa"),
-                        _ => (&mut r.velocity, " m/s"),
+                    let value = r.get_mut(k);
+                    let lo = if k == 1 {
+                        -derive::MAX_REFERENCE
+                    } else {
+                        1e-12
                     };
-                    let lo = if k == 1 { -derive::MAX_REFERENCE } else { 1e-9 };
-                    let speed = (value.abs() * 0.01).max(1e-3);
-                    let resp = ui
-                        .add(
-                            egui::DragValue::new(value)
-                                .range(lo..=derive::MAX_REFERENCE)
-                                .speed(speed)
-                                .suffix(unit),
-                        )
-                        .labelled_by(label.id);
+                    let speed = (value.abs() * 0.01).max(if k == 3 { 1e-8 } else { 1e-3 });
+                    let mut drag = egui::DragValue::new(value)
+                        .range(lo..=derive::MAX_REFERENCE)
+                        .speed(speed)
+                        .suffix(REFERENCE_UNITS[k]);
+                    if k == 3 {
+                        // ν of air is 1.5e-5: shown with its exponent.
+                        drag = drag
+                            .custom_formatter(|v, _| format!("{v:.4e}"))
+                            .custom_parser(|t| {
+                                t.trim().trim_end_matches("m²/s").trim().parse().ok()
+                            });
+                    }
+                    let resp = ui.add(drag).labelled_by(label.id);
                     if resp.changed() {
                         from[k] = None;
                     }
@@ -391,6 +500,219 @@ impl MurmelApp {
                     ui.end_row();
                 }
             });
+    }
+
+    /// The turning zones of the turbomachinery quantities: for each its
+    /// cell zone, axis point, axis and speed, then the frame the cells
+    /// are seen in; a right-click on a speed or an axis keeps it as your
+    /// default.
+    fn rotation_block(
+        &self,
+        ui: &mut Ui,
+        w: &mut DerivedWindow,
+        secondary: egui::Color32,
+        calls: &mut Vec<(&'static str, Value)>,
+    ) {
+        let Some((rot, from)) = &mut w.rotation else {
+            return;
+        };
+        let tr = |k: &str| self.i18n.tr(k);
+        let mesh_zones: Vec<String> = self
+            .session
+            .mesh
+            .as_ref()
+            .map(|m| m.mesh.zones.clone())
+            .unwrap_or_default();
+        ui.add_space(4.0);
+        let src = match from {
+            Some(s) => format!("derived-from-{}", source_key(*s)),
+            None => "derived-from-edited".into(),
+        };
+        ui.label(
+            RichText::new(format!("{} ({})", tr("derived-rotation"), tr(&src)))
+                .small()
+                .color(secondary),
+        );
+        let mut changed = false;
+        let mut remove: Option<usize> = None;
+        let many = rot.zones.len() > 1;
+        for (i, t) in rot.zones.iter_mut().enumerate() {
+            let n = i + 1;
+            let named = |key: &str| self.i18n.tr_args(key, &[("zone", n.to_string().into())]);
+            ui.horizontal(|ui| {
+                let all = tr("derived-zone-all");
+                let shown = t.zone.clone().unwrap_or_else(|| all.clone());
+                let label = named("derived-zone-name");
+                egui::ComboBox::from_id_salt(("derived-zone", i))
+                    .selected_text(&shown)
+                    .width(110.0)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(t.zone.is_none(), &all).clicked() {
+                            t.zone = None;
+                            changed = true;
+                        }
+                        for z in &mesh_zones {
+                            if ui.selectable_label(t.zone.as_ref() == Some(z), z).clicked() {
+                                t.zone = Some(z.clone());
+                                changed = true;
+                            }
+                        }
+                    })
+                    .response
+                    .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, &label));
+                let rpm_label = named("derived-rpm-name");
+                let speed = (t.rpm.abs() * 0.01).max(1.0);
+                let r = ui.add(
+                    egui::DragValue::new(&mut t.rpm)
+                        .range(-turbo::MAX_RPM..=turbo::MAX_RPM)
+                        .speed(speed)
+                        .suffix(" rpm"),
+                );
+                r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, &rpm_label));
+                changed |= r.changed();
+                let rpm = t.rpm;
+                r.context_menu(|ui| {
+                    if let Some(a) = self.kind_default_entries(
+                        ui,
+                        Kind::Rotation,
+                        "rpm",
+                        json!({"kind": Kind::Rotation.key(), "values": {"rpm": rpm}}),
+                    ) {
+                        calls.push(a);
+                    }
+                });
+                if many {
+                    let label = named("derived-zone-remove-name");
+                    let r = ui.button(tr("derived-remove"));
+                    r.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
+                    if r.clicked() {
+                        remove = Some(i);
+                    }
+                }
+            });
+            for (what, v) in [("origin", &mut t.origin), ("axis", &mut t.axis)] {
+                ui.horizontal(|ui| {
+                    ui.add_space(12.0);
+                    ui.label(RichText::new(tr(&format!("derived-{what}"))).small());
+                    let now = *v;
+                    for (k, x) in v.iter_mut().enumerate() {
+                        let label = self.i18n.tr_args(
+                            &format!("derived-{what}-name"),
+                            &[
+                                ("zone", n.to_string().into()),
+                                ("axis", ["x", "y", "z"][k].into()),
+                            ],
+                        );
+                        let r = ui.add(
+                            egui::DragValue::new(x)
+                                .range(-turbo::MAX_ORIGIN..=turbo::MAX_ORIGIN)
+                                .speed(0.01)
+                                .max_decimals(6),
+                        );
+                        r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, &label));
+                        changed |= r.changed();
+                        if what == "axis" {
+                            r.context_menu(|ui| {
+                                if let Some(a) = self.kind_default_entries(
+                                    ui,
+                                    Kind::Rotation,
+                                    "axis",
+                                    json!({"kind": Kind::Rotation.key(), "values": {"axis": now}}),
+                                ) {
+                                    calls.push(a);
+                                }
+                            });
+                        }
+                    }
+                });
+            }
+        }
+        if let Some(i) = remove {
+            rot.zones.remove(i);
+            if rot
+                .frame
+                .as_ref()
+                .is_some_and(|f| !rot.zones.iter().any(|t| t.zone.as_ref() == Some(f)))
+            {
+                rot.frame = None;
+            }
+            changed = true;
+        }
+        ui.horizontal(|ui| {
+            if rot.zones.len() < turbo::MAX_ZONES && ui.button(tr("derived-zone-add")).clicked() {
+                rot.zones.push(Turning::default());
+                changed = true;
+            }
+            let named: Vec<String> = rot.zones.iter().filter_map(|t| t.zone.clone()).collect();
+            if !named.is_empty() {
+                let own = tr("derived-frame-own");
+                let shown = rot.frame.clone().unwrap_or_else(|| own.clone());
+                let label = tr("derived-frame");
+                egui::ComboBox::from_id_salt("derived-frame")
+                    .selected_text(format!("{label}: {shown}"))
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(rot.frame.is_none(), &own).clicked() {
+                            rot.frame = None;
+                            changed = true;
+                        }
+                        for z in &named {
+                            if ui
+                                .selectable_label(rot.frame.as_ref() == Some(z), z)
+                                .clicked()
+                            {
+                                rot.frame = Some(z.clone());
+                                changed = true;
+                            }
+                        }
+                    })
+                    .response
+                    .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, &label));
+            }
+        });
+        if let Err(why) = rot.check() {
+            ui.label(RichText::new(why).small().color(secondary));
+        }
+        if changed {
+            *from = None;
+        }
+    }
+
+    /// The wall patches of the wall distance, each to tick.
+    fn walls_block(&self, ui: &mut Ui, w: &mut DerivedWindow, secondary: egui::Color32) {
+        let Some(walls) = &mut w.walls else {
+            return;
+        };
+        let patches: Vec<String> = self
+            .session
+            .mesh
+            .as_ref()
+            .map(|m| m.mesh.patches.iter().map(|p| p.name.clone()).collect())
+            .unwrap_or_default();
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(self.i18n.tr("derived-walls"))
+                .small()
+                .color(secondary),
+        );
+        ui.horizontal_wrapped(|ui| {
+            for p in &patches {
+                let mut on = walls.contains(p);
+                if ui.checkbox(&mut on, p).changed() {
+                    if on {
+                        walls.push(p.clone());
+                    } else {
+                        walls.retain(|x| x != p);
+                    }
+                }
+            }
+        });
+        if walls.is_empty() {
+            ui.label(
+                RichText::new(self.i18n.tr("derived-walls-none"))
+                    .small()
+                    .color(secondary),
+            );
+        }
     }
 
     /// The menu entries that keep reference value `key` (now `value`) as

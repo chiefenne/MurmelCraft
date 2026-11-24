@@ -45,8 +45,16 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `pick.9` | nine picks over the iso view (the hover tooltip, a click, snapping) |
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
 | `render.next.faces` | a later frame without the edges (the window while the view moves, when frames with edges are slow) |
+| `field.make` | two cell fields made for the bench (a scalar `p` and a swirling vector `U`, functions of each cell's centroid), so every mesh has results |
+| `field.color` | colouring by `p` the first time (`display.color_by`): the field's node values, with their phases `field.topology` (which nodes and cells meet, made once per mesh), `field.gradients` (each cell's least-squares gradient), `field.nodes` (the node values), then the surface |
+| `field.switch` | colouring by `U` the first time (a vector: its three components and their magnitude) |
+| `field.color.again` | colouring by a field whose values are made already: the surface alone |
+| `field.style` | a change of the colour range (`field.style`), which draws again without building anything |
+| `slice.set`, `slice.step` | a slice through the middle, then one step of a slice drag (`slice.set` with a new origin), with the phases `extract.slice` (the section's faces), `extract.outline` (the outline of each cell's section) |
+| `iso.set`, `iso.step` | an iso-surface of `p`, then one step of its value (`extract.iso`) |
+| `arrows.set`, `slice.step.arrows` | arrows of `U` on the slice, the first time (`extract.vector`: the vector's node values), then one step of the slice with them |
 
-and reports the peak resident memory (Linux and macOS, from
+`--no-fields` leaves out the field stages. The bench reports the peak resident memory (Linux and macOS, from
 `getrusage`; the `read` stage also reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
 rasteriser and says nothing about a real GPU; run it on the Mac for those.
 
@@ -1224,6 +1232,107 @@ times and file id, as for the files checked).
   to its folders, does not.
 - On 100 M cells the saving is the whole sampling: the kept grid reads in
   the same half second.
+
+## Fields on a large mesh: where the time goes (2026-11-24)
+
+The field stages of `murmel bench` (above) time colouring by a field,
+slices, iso-surfaces and arrows as the tools draw them. Before any work
+on them, 1 M honeycomb (1,005,039 cells), polyMesh binary, 4 threads,
+`--no-render`:
+
+| Stage (ms) | total | where |
+|---|---:|---|
+| field.color (`p`) | 2,256 | topology 1,617 (one thread), gradients 227, node values 112 |
+| field.switch (`U`) | 1,892 | gradients 1,187 (each component and the magnitude on its own), node values 320 |
+| field.color.again | 155 | the mesh surface |
+| field.style | 0 | |
+| slice.set / slice.step | 1,008 / 1,059 | section 586 to 653 (one thread, every cell tested), outlines 218 to 226 (one thread), the mesh surface built again 200 |
+| iso.set / iso.step | 2,876 / 2,909 | iso-surface 1,645 to 1,802 (one thread), the slice built again with it |
+| arrows.set | 4,972 | the vector's node values 3,699 (each of x, y, z and the magnitude made all three components again) |
+| slice.step.arrows | 1,270 | section 929, outlines 314 |
+
+At 10 M cells each of these is about ten times longer: seconds for one
+step of a slice drag. What follows takes them down one at a time.
+
+## Slices and iso-surfaces on all threads, near the cells they cross (2026-11-24)
+
+A slice or an iso-surface tested every cell shown, on one thread, before
+cutting the few it crosses; a slice's outlines did it again with the
+distance of every node to the plane.
+
+- **The cells in bins** (`bins.rs`): each cell goes to the bin of a
+  regular grid holding the mean of its nodes, about 8 cells to a bin,
+  made once per mesh (46 ms at 1 M cells). A bin keeps the sphere about
+  its centre that holds every node of its cells. A plane farther from a
+  bin's centre than that crosses none of its cells, so a slice tests
+  only the cells of the bins it passes (a few per cent of the mesh). For
+  an iso-surface each bin keeps, per field, the smallest and largest
+  value the test of its cells can meet (made the first time an
+  iso-surface of that field is drawn), so a new iso value tests only the
+  bins whose span holds it.
+- **The crossed cells are cut on all threads**, in runs of cells; each
+  run names the points it makes by the segment of the tetrahedron they
+  lie on. The runs are joined in cell order: a point two runs made is
+  the first run's, and each triangle's side and normal are found from
+  the points kept, as one thread did. A point on a segment from a
+  cell's centroid lies in that cell alone and is not looked up.
+- The outlines of the cells' sections are found on all threads, only
+  for the cells near the plane, with each node's distance worked out
+  where it is needed.
+- What is drawn is the same, bit for bit, as before, for any number of
+  threads (a test compares one thread testing every cell with five
+  threads and the bins).
+
+1 M honeycomb, polyMesh binary, 4 threads, `--no-render`; in brackets
+before:
+
+| Stage (ms) | now (was) | inside |
+|---|---:|---|
+| slice.set | 340 (1,008) | bins made 46, section 135, outlines 52 |
+| slice.step | 416 (1,059) | cells tested 6 (650 with the section), section 145, outlines 51 |
+| iso.set | 1,330 (2,876) | iso-surface 912 (cut 289, join 444) |
+| iso.step | 972 (2,909) | iso-surface 530 (cut 231, join 231) |
+| slice.step.arrows | 505 (1,270) | section 220, outlines 47 |
+
+What is left in a slice step is the mesh's own surface, built again
+with it (about 220 ms), and joining the iso-surface's runs on one
+thread. Those come next, with the field's node values (`field.color`,
+`arrows.set`).
+
+## A field's node values: one pass, only what is needed (2026-11-24)
+
+Colouring by a field the first time makes its node values from the
+cells' least-squares gradients. That cost more than it needed:
+
+- **The topology** (each cell's nodes, the cells of each node, the
+  centroids) was made on one thread: now each cell's nodes and the
+  centroids are made on all threads (1,617 to 706 ms at 1 M cells).
+- **A vector made every component for each one asked**: colouring by
+  `U.x` made the gradients and node values of x, y and z, and kept x.
+  Now a component is made alone, and the magnitude makes the three
+  components' and its own gradient in one pass over the cells around
+  each cell (the stencil found once, each input fitted as before).
+- **The arrows** asked for x, y, z and the magnitude, each making all
+  three components again (twelve gradient passes); now three, and the
+  magnitude's largest value is read from the cells without its node
+  values (`FieldSet::range`).
+- The node values of a vector's magnitude are put together on all
+  threads, without a list per node.
+
+The values are the same, bit for bit (a test compares a component made
+alone with it made with all three).
+
+1 M honeycomb, polyMesh binary, 4 threads, `--no-render`; in brackets
+before this and the section above:
+
+| Stage (ms) | now (was) | inside |
+|---|---:|---|
+| field.color | 1,157 (2,256) | topology 706, gradients 180, node values 110 |
+| field.switch | 882 (1,892) | gradients 322, node values 356 |
+| arrows.set | 1,420 (4,972) | the vector's node values 900 |
+
+Left: the topology's centroids and its node to cell lists (about 470
+ms of the 706), made once per mesh.
 
 ## Probes on an overview (2026-11-24)
 

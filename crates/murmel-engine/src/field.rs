@@ -91,12 +91,18 @@ pub enum RangeMode {
     Symmetric,
     /// Set by the user.
     Fixed { min: f64, max: f64 },
+    /// Smallest to largest value of the whole field over every step of
+    /// the open time series ([`crate::steps_range`]; the maintainer's
+    /// card of 2026-11-24): a colour means the same value at every
+    /// step. Without a series it is [`RangeMode::Field`].
+    Steps,
 }
 
 impl RangeMode {
     pub fn key(self) -> &'static str {
         match self {
             RangeMode::Field => "field",
+            RangeMode::Steps => "steps",
             RangeMode::Shown => "shown",
             RangeMode::Symmetric => "symmetric",
             RangeMode::Fixed { .. } => "fixed",
@@ -248,21 +254,38 @@ fn invert(points: usize, start: &[usize], ids: &[u32]) -> (Vec<usize>, Vec<u32>)
 impl Topology {
     fn build(mesh: &Mesh) -> Topology {
         let np = mesh.points.len();
-        let mut cell_start = vec![0];
-        let mut cell_nodes = Vec::new();
-        let mut scratch: Vec<u32> = Vec::new();
-        for c in 0..mesh.cell_count() {
-            scratch.clear();
-            scratch.extend(mesh.cell_points(c).filter(|&i| (i as usize) < np));
-            scratch.sort_unstable();
-            scratch.dedup();
-            cell_nodes.extend_from_slice(&scratch);
-            cell_start.push(cell_nodes.len());
+        let nc = mesh.cell_count();
+        // Each cell's nodes, sorted and each once, run by run on all
+        // threads, joined in cell order.
+        let runs = murmel_mesh::par::map(nc, 1 << 13, |r| {
+            let (mut lens, mut nodes) = (Vec::with_capacity(r.len()), Vec::new());
+            let mut scratch: Vec<u32> = Vec::new();
+            for c in r {
+                scratch.clear();
+                scratch.extend(mesh.cell_points(c).filter(|&i| (i as usize) < np));
+                scratch.sort_unstable();
+                scratch.dedup();
+                nodes.extend_from_slice(&scratch);
+                lens.push(scratch.len());
+            }
+            (lens, nodes)
+        });
+        let mut cell_start = Vec::with_capacity(nc + 1);
+        cell_start.push(0);
+        let mut cell_nodes = Vec::with_capacity(runs.iter().map(|r| r.1.len()).sum());
+        for (lens, nodes) in runs {
+            for k in lens {
+                cell_start.push(cell_start[cell_start.len() - 1] + k);
+            }
+            cell_nodes.extend_from_slice(&nodes);
         }
         let (point_start, point_cells) = invert(np, &cell_start, &cell_nodes);
-        let centre = (0..mesh.cell_count())
-            .map(|c| crate::inspect::cell_centroid(mesh, c))
-            .collect();
+        let centre = murmel_mesh::par::collect(nc, 1 << 13, |r| {
+            let mut faces = Vec::new();
+            r.map(|c| crate::inspect::cell_centroid_in(mesh, c, &mut faces))
+                .collect()
+        });
+        let mut scratch: Vec<u32> = Vec::new();
         let mut face_start = vec![0];
         let mut face_nodes = Vec::new();
         let mut face_centre = Vec::with_capacity(mesh.boundary.len());
@@ -407,6 +430,36 @@ pub fn pick_component(v: &[f64], c: Component) -> f64 {
     pick(v, c)
 }
 
+/// The components scalar `c` of a field of `k` components reads: all of
+/// a scalar's or a vector's magnitude, else the one asked for.
+fn needed(k: usize, c: Component) -> Vec<usize> {
+    match (k, c) {
+        (1, _) | (_, Component::Magnitude) => (0..k).collect(),
+        (_, Component::X) => vec![0],
+        (_, Component::Y) => vec![1],
+        (_, Component::Z) => vec![2],
+    }
+}
+
+/// Scalar `c` at every node of the node values `by_comp` of the
+/// components [`needed`] gives: the one component as it is, else as
+/// [`pick`] of all of them, on all threads.
+fn picked(mut by_comp: Vec<Vec<f64>>, c: Component) -> Vec<f64> {
+    if by_comp.len() == 1 {
+        return by_comp.pop().unwrap_or_default();
+    }
+    let n = by_comp.iter().map(Vec::len).min().unwrap_or(0);
+    murmel_mesh::par::collect(n, 1 << 14, |r| {
+        let mut v = Vec::with_capacity(by_comp.len());
+        r.map(|p| {
+            v.clear();
+            v.extend(by_comp.iter().map(|x| x[p]));
+            pick(&v, c)
+        })
+        .collect()
+    })
+}
+
 /// Scalar `c` of one entity's components (one value for a scalar).
 fn pick(v: &[f64], c: Component) -> f64 {
     match (v, c) {
@@ -436,6 +489,8 @@ pub struct FieldSet {
     topology: OnceLock<Arc<Topology>>,
     /// The cells' centroids on a bucket grid (streamline seeds).
     grid: OnceLock<Arc<crate::stream::CellGrid>>,
+    /// The cells in bins, for slices and iso-surfaces ([`crate::bins`]).
+    bins: OnceLock<Arc<crate::bins::CellBins>>,
     /// Values made once per field and component (colour mode field and
     /// every iso-surface ask for them again on each redraw).
     cache: ValueCache,
@@ -460,6 +515,7 @@ impl FieldSet {
             results,
             topology: OnceLock::new(),
             grid: OnceLock::new(),
+            bins: OnceLock::new(),
             cache: ValueCache::default(),
             derived: Vec::new(),
             volume_ranges: HashMap::new(),
@@ -619,6 +675,9 @@ impl FieldSet {
         if let Some(t) = from.topology.get() {
             let _ = self.topology.set(t.clone());
         }
+        if let Some(b) = from.bins.get() {
+            let _ = self.bins.set(b.clone());
+        }
     }
 
     /// The velocity gradient Gᵢⱼ = ∂uᵢ/∂xⱼ in every cell of the vector
@@ -773,6 +832,43 @@ impl FieldSet {
         Some(v)
     }
 
+    /// The colour range `choice`'s values would have
+    /// ([`FieldValues::range`]), from its values when they are made, else
+    /// from the field's own values (no node values made for it).
+    pub(crate) fn range(&self, mesh: &Mesh, choice: &FieldChoice) -> Option<(f64, f64)> {
+        let f = self.get(&choice.name)?;
+        if !Self::fits(f, mesh) {
+            return None;
+        }
+        let component = if f.is_vector() {
+            choice.component
+        } else {
+            Component::Magnitude
+        };
+        let key = (choice.name.clone(), component);
+        if let Some(v) = self
+            .cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+        {
+            return v.range;
+        }
+        if f.location == Location::Point {
+            // A point field's range is its node values'.
+            return self.values_cached(mesh, choice)?.range;
+        }
+        let comps = components(f);
+        let n = comps.first().map_or(0, Vec::len);
+        let range = range_of((0..n).map(|i| combine(&comps, i, component)));
+        match (component, self.volume_range(&choice.name)) {
+            (Component::Magnitude, Some((a, b))) => {
+                Some(range.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))))
+            }
+            _ => range,
+        }
+    }
+
     /// The cells' centroids on a bucket grid, made once.
     pub(crate) fn cell_grid(&self, mesh: &Mesh) -> &crate::stream::CellGrid {
         self.grid
@@ -859,6 +955,20 @@ impl FieldSet {
             Location::Boundary => mesh.boundary.len(),
         };
         f.len() == n && f.values.len() == n * f.components.max(1)
+    }
+
+    /// The cells of `mesh` in bins ([`crate::bins`]), made once.
+    pub(crate) fn bins(&self, mesh: &Mesh) -> &crate::bins::CellBins {
+        self.bins.get_or_init(|| {
+            let _phase = murmel_mesh::profile::span("field.bins");
+            let t = self.topology(mesh);
+            Arc::new(crate::bins::CellBins::build(mesh, |c| t.nodes_of(c)))
+        })
+    }
+
+    /// The nodes of cell `c`, each once.
+    pub(crate) fn nodes_of_cell(&self, mesh: &Mesh, c: usize) -> &[u32] {
+        self.topology(mesh).nodes_of(c)
     }
 
     fn topology(&self, mesh: &Mesh) -> &Topology {
@@ -1171,33 +1281,45 @@ impl FieldSet {
         }
     }
 
-    /// The node values of each component of cell field `comps` (with the
-    /// boundary values `twin` when the file has them), every cell's
-    /// gradient made once per component; with the gradients of
-    /// component `keep`.
+    /// The node values of components `need` of cell field `comps` (with
+    /// the boundary values `twin` when the file has them), and the cell
+    /// gradients of each, then of `extra` (cell values and their boundary
+    /// values) when given: every gradient made in one pass over the cells
+    /// around each cell.
     fn cell_nodes(
         &self,
         mesh: &Mesh,
         comps: &[Vec<f64>],
         twin: Option<&[Vec<f64>]>,
-        keep: Option<usize>,
-    ) -> (Vec<Vec<f64>>, Vec<[f64; 3]>) {
-        let t = self.topology(mesh);
+        need: &[usize],
+        extra: Option<(&[f64], Option<&[f64]>)>,
+    ) -> (Vec<Vec<f64>>, Vec<Vec<[f64; 3]>>) {
+        let t = {
+            let _phase = murmel_mesh::profile::span("field.topology");
+            self.topology(mesh)
+        };
         let np = mesh.points.len();
-        let mut kept = Vec::new();
-        let nodes = comps
+        let boundary = |j: usize| twin.and_then(|b| b.get(j)).map(Vec::as_slice);
+        let faces = t.face_centre.as_slice();
+        let mut inputs: Vec<crate::gradient::Input<'_>> = need
             .iter()
-            .enumerate()
-            .map(|(j, v)| {
-                let b = twin.and_then(|b| b.get(j));
-                let g = crate::gradient::cell_gradients(
-                    mesh,
-                    &t.centre,
-                    v,
-                    b.map(|b| (b.as_slice(), t.face_centre.as_slice())),
-                    &|c, out| t.near(c, out),
-                );
-                let out: Vec<f64> = murmel_mesh::par::map(np, 8192, |r| {
+            .map(|&j| (comps[j].as_slice(), boundary(j).map(|b| (b, faces))))
+            .collect();
+        if let Some((v, b)) = extra {
+            inputs.push((v, b.map(|b| (b, faces))));
+        }
+        let phase = murmel_mesh::profile::span("field.gradients");
+        let grads = crate::gradient::cell_gradients_many(mesh, &t.centre, &inputs, &|c, out| {
+            t.near(c, out)
+        });
+        drop(phase);
+        let _phase = murmel_mesh::profile::span("field.nodes");
+        let nodes = need
+            .iter()
+            .zip(&grads)
+            .map(|(&j, g)| {
+                let (v, b) = (&comps[j], boundary(j));
+                murmel_mesh::par::map(np, 8192, |r| {
                     r.map(|p| {
                         let at = mesh.points[p];
                         if let Some(b) = b
@@ -1216,14 +1338,10 @@ impl FieldSet {
                 })
                 .into_iter()
                 .flatten()
-                .collect();
-                if keep == Some(j) {
-                    kept = g;
-                }
-                out
+                .collect()
             })
             .collect();
-        (nodes, kept)
+        (nodes, grads)
     }
 
     /// The boundary values of the cell field `f` (a boundary field of the
@@ -1248,15 +1366,9 @@ impl FieldSet {
         let comps = components(f);
         let twin = self.boundary_twin(mesh, f);
         if f.location == Location::Cell {
-            let (by_comp, _) = self.cell_nodes(mesh, &comps, twin.as_deref(), None);
-            return Some(
-                (0..mesh.points.len())
-                    .map(|p| {
-                        let v: Vec<f64> = by_comp.iter().map(|n| n[p]).collect();
-                        pick(&v, component)
-                    })
-                    .collect(),
-            );
+            let need = needed(comps.len(), component);
+            let (by_comp, _) = self.cell_nodes(mesh, &comps, twin.as_deref(), &need, None);
+            return Some(picked(by_comp, component));
         }
         Some(
             (0..mesh.points.len())
@@ -1318,6 +1430,30 @@ impl FieldSet {
         v.is_finite().then_some(v)
     }
 
+    /// The range [`FieldSet::values`] gives `choice`, without computing
+    /// the node values: the smallest and largest finite value over the
+    /// cells, the points or the boundary faces, and over the whole volume
+    /// when the file says. `None` for an unknown field, one that does not
+    /// fit the mesh, or one without a finite value.
+    pub fn range_of(&self, mesh: &Mesh, choice: &FieldChoice) -> Option<(f64, f64)> {
+        let f = self.get(&choice.name)?;
+        if !Self::fits(f, mesh) {
+            return None;
+        }
+        let component = if f.is_vector() {
+            choice.component
+        } else {
+            Component::Magnitude
+        };
+        let range = f.range(component);
+        match (component, self.volume_range(&choice.name)) {
+            (Component::Magnitude, Some((a, b))) => {
+                Some(range.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))))
+            }
+            _ => range,
+        }
+    }
+
     /// The values colouring by `choice` draws: per cell, per node and per
     /// boundary face. `None` for an unknown field or one that does not
     /// fit the mesh.
@@ -1335,24 +1471,27 @@ impl FieldSet {
         let twin = self.boundary_twin(mesh, f);
         let np = mesh.points.len();
         let nc = mesh.cell_count();
-        // The component whose gradient the values keep (a vector's
-        // magnitude gets its own below).
-        let keep = match (comps.len(), component) {
-            (1, _) => Some(0),
-            (_, Component::X) => Some(0),
-            (_, Component::Y) => Some(1),
-            (_, Component::Z) => Some(2),
-            (_, Component::Magnitude) => None,
-        };
-        let (node, mut grad) = if f.location == Location::Cell {
-            let (by_comp, kept) = self.cell_nodes(mesh, &comps, twin.as_deref(), keep);
-            let node: Vec<f64> = (0..np)
-                .map(|p| {
-                    let v: Vec<f64> = by_comp.iter().map(|n| n[p]).collect();
-                    pick(&v, component)
-                })
-                .collect();
-            (node, kept)
+        // The cell values shown, and for a vector's magnitude its values
+        // on the boundary (its gradient is its own, made with the
+        // components').
+        let cell_of = || -> Vec<f64> { (0..nc).map(|c| combine(&comps, c, component)).collect() };
+        let magnitude = comps.len() > 1 && component == Component::Magnitude;
+        let shown = (f.location == Location::Cell).then(cell_of);
+        let shown_boundary: Option<Vec<f64>> = twin.as_deref().filter(|_| magnitude).map(|b| {
+            (0..mesh.boundary.len())
+                .map(|i| combine(b, i, component))
+                .collect()
+        });
+        let (node, grad) = if f.location == Location::Cell {
+            let need = needed(comps.len(), component);
+            let extra = shown
+                .as_deref()
+                .filter(|_| magnitude)
+                .map(|v| (v, shown_boundary.as_deref()));
+            let (by_comp, mut grads) = self.cell_nodes(mesh, &comps, twin.as_deref(), &need, extra);
+            let node = picked(by_comp, component);
+            // a component's own gradient, or the magnitude's (last)
+            (node, grads.pop().unwrap_or_default())
         } else {
             let node = (0..np)
                 .map(|p| pick(&self.node_components(mesh, f, &comps, None, p), component))
@@ -1361,22 +1500,7 @@ impl FieldSet {
         };
         let (cell, boundary, range) = match f.location {
             Location::Cell => {
-                let cell: Vec<f64> = (0..nc).map(|c| combine(&comps, c, component)).collect();
-                if keep.is_none() {
-                    let t = self.topology(mesh);
-                    let b: Option<Vec<f64>> = twin.as_deref().map(|b| {
-                        (0..mesh.boundary.len())
-                            .map(|i| combine(b, i, component))
-                            .collect()
-                    });
-                    grad = crate::gradient::cell_gradients(
-                        mesh,
-                        &t.centre,
-                        &cell,
-                        b.as_deref().map(|b| (b, t.face_centre.as_slice())),
-                        &|c, out| t.near(c, out),
-                    );
-                }
+                let cell = shown.unwrap_or_else(cell_of);
                 let r = range_of(cell.iter().copied());
                 (cell, Vec::new(), r)
             }
@@ -1432,6 +1556,7 @@ impl FieldSet {
             grad: grad.into_iter().map(|g| g.map(|x| x as f32)).collect(),
             range,
             origin,
+            spans: Default::default(),
         })
     }
 }
@@ -1459,6 +1584,10 @@ pub struct FieldValues {
     pub range: Option<(f64, f64)>,
     /// Values reach the GPU relative to this.
     pub origin: f64,
+    /// The smallest and largest value the iso-surface test meets in each
+    /// bin of cells ([`crate::bins`]), made the first time an
+    /// iso-surface of these values is drawn.
+    pub(crate) spans: crate::bins::Kept<crate::bins::Spans>,
 }
 
 impl FieldValues {
@@ -1552,6 +1681,16 @@ impl Session {
         let style = self.field_style();
         let r = match style.range {
             RangeMode::Field => v.range?,
+            RangeMode::Steps => match (&self.series, self.mesh.as_ref()) {
+                (Some(series), Some(m)) => crate::steps_range::now(
+                    &self.steps_ranges,
+                    series,
+                    &m.fields,
+                    &v.choice,
+                    v.range,
+                )?,
+                _ => v.range?,
+            },
             RangeMode::Shown => self
                 .mesh
                 .as_ref()
@@ -1616,6 +1755,7 @@ pub(crate) fn ensure_field(display: &mut crate::display::Display, mesh: &Mesh, f
         v.choice.name == choice.name && (!v.vector || v.choice.component == choice.component)
     });
     if !fresh {
+        let _phase = murmel_mesh::profile::span("field.values");
         display.field_values = fields.values_cached(mesh, &choice);
     }
 }
@@ -1802,6 +1942,66 @@ mod tests {
         assert!(
             vals.iter()
                 .any(|f| f.name == "y_plus" && f.location == Location::Boundary)
+        );
+    }
+
+    /// Invariant (fields on large meshes): a vector's component made
+    /// alone (its gradient and node values only) is what it was made
+    /// with all three; the magnitude's node values are the length of the
+    /// components' and its gradient its own, made in the same pass as
+    /// theirs; `range` without node values is the values' range. Breaks
+    /// when the one pass over the cells mixes the inputs' gradients up,
+    /// or when a component alone is fitted differently. The test below
+    /// looks at the values, not at how they were made.
+    #[test]
+    fn a_component_alone_as_with_all_three() {
+        let (m, set) = channel();
+        let choice = |component| FieldChoice {
+            name: "velocity".into(),
+            component,
+        };
+        let f = set.get("velocity").unwrap();
+        let comps = components(f);
+        let twin = set.boundary_twin(&m, f);
+        let (all, grads) = set.cell_nodes(&m, &comps, twin.as_deref(), &[0, 1, 2], None);
+        let t = set.topology(&m);
+        for (j, c) in [Component::X, Component::Y, Component::Z]
+            .into_iter()
+            .enumerate()
+        {
+            let v = set.values(&m, &choice(c)).unwrap();
+            assert_eq!(v.node, all[j], "{c:?}");
+            let g: Vec<[f32; 3]> = grads[j].iter().map(|g| g.map(|x| x as f32)).collect();
+            assert_eq!(v.grad, g, "{c:?}");
+            // a component's gradient made alone
+            let alone = crate::gradient::cell_gradients(
+                &m,
+                &t.centre,
+                &comps[j],
+                twin.as_ref()
+                    .map(|b| (b[j].as_slice(), t.face_centre.as_slice())),
+                &|c, out| t.near(c, out),
+            );
+            assert_eq!(alone, grads[j]);
+            assert_eq!(set.range(&m, &choice(c)), v.range);
+        }
+        let mag = set.values(&m, &choice(Component::Magnitude)).unwrap();
+        for p in 0..m.points.len() {
+            let l = (all[0][p].powi(2) + all[1][p].powi(2) + all[2][p].powi(2)).sqrt();
+            assert_eq!(mag.node[p].to_bits(), l.to_bits());
+        }
+        let own = crate::gradient::cell_gradients(&m, &t.centre, &mag.cell, None, &|c, out| {
+            t.near(c, out)
+        });
+        let own: Vec<[f32; 3]> = own.iter().map(|g| g.map(|x| x as f32)).collect();
+        if twin.is_none() {
+            assert_eq!(mag.grad, own);
+        }
+        let fresh = FieldSet::new(set.results.clone());
+        assert_eq!(
+            fresh.range(&m, &choice(Component::Magnitude)),
+            mag.range,
+            "without the values made"
         );
     }
 

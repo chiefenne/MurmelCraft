@@ -511,7 +511,7 @@ pub fn commands() -> Vec<Command> {
             Some(json!({"field": v.choice.name, "reverse": !s.field_style().reverse}))
         }),
     ));
-    for r in ["field", "shown", "symmetric", "fixed"] {
+    for r in ["field", "shown", "symmetric", "fixed", "steps"] {
         v.push(cmd(
             format!("field.style:range-{r}"),
             format!("cmd-field-range-{r}"),
@@ -1693,6 +1693,10 @@ fn new_stream(s: &Session, kind: &str) -> Option<Value> {
 /// Tools no command calls, and why: they answer questions whose answers
 /// the window already shows, or need an input only a panel can give.
 pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
+    (
+        "series.range",
+        "the window reads it by itself while range mode steps colours a series",
+    ),
     ("charts.data", "the chart panel draws it"),
     ("stats.at", "the statistics beside the chart show it"),
     (

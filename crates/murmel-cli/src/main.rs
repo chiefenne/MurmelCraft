@@ -10,7 +10,7 @@
 //! murmel diag codes
 //! murmel info
 //! murmel bench make --cells N --out DIR [--formats vtu,polymesh-binary,…]
-//! murmel bench run MESH [--repeat N] [--no-render] [--size WxH] [--json]
+//! murmel bench run MESH [--repeat N] [--no-render] [--no-fields] [--size WxH] [--json]
 //! murmel blocks make MESH --out FILE [--block-cells N]
 //! ```
 
@@ -37,7 +37,7 @@ const USAGE: &str = "Usage: murmel COMMAND
                                         write a synthetic polyhedral mesh of N cells
                                         (formats vtu, vtu-binary, polymesh,
                                         polymesh-binary; default all)
-  murmel bench run MESH [--repeat N] [--no-render] [--size WxH] [--json]
+  murmel bench run MESH [--repeat N] [--no-render] [--no-fields] [--size WxH] [--json]
                                         time reading, the surface, picking and
                                         drawing of a mesh (docs/performance.md)
   murmel blocks make MESH --out FILE [--block-cells N]
@@ -228,6 +228,9 @@ fn bench(args: &[&str]) -> Result<ExitCode, String> {
             let mut opts = murmel_tools::bench::Options::default();
             if let Some(r) = value("--repeat") {
                 opts.repeat = r.parse().map_err(|_| "--repeat takes a whole number")?;
+            }
+            if flag("--no-fields").is_some() {
+                opts.fields = false;
             }
             if flag("--no-render").is_some() {
                 opts.render = false;

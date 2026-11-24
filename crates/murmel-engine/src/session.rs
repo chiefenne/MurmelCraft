@@ -634,6 +634,79 @@ pub struct Loaded {
     /// Each file read and the evidence beside them, as they were then.
     stamps: Vec<(PathBuf, Stamp)>,
     prepared: Option<Prepared>,
+    /// The derived and calculated fields already made again of these
+    /// fields, in order (read ahead as the next step of a series,
+    /// [`StepAhead`]); `None`: not made.
+    remade: Option<Vec<crate::derive::Made>>,
+}
+
+/// What reading the next step of a time series ahead needs: taken from
+/// the session on the window's thread ([`Session::step_ahead`]), run on
+/// a thread of its own ([`StepAhead::load`]). The step read is put in
+/// `Session::preloaded`, which [`Session::open_step`] takes when it is
+/// of that path and its files have not changed: the read, the derived
+/// fields and, when the display has not changed since, the surface are
+/// then ready.
+#[derive(Clone, Debug)]
+pub struct StepAhead {
+    path: PathBuf,
+    fit: Fit,
+    hash: bool,
+    made: Vec<crate::derive::Made>,
+    display: Display,
+    blocks: bool,
+    tokens: Tokens,
+}
+
+impl StepAhead {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Read the step, make its derived fields again and build its
+    /// surface for the display it was taken with.
+    pub fn load(self) -> Result<Loaded, MeshError> {
+        let mut l = load_checked(&self.path, self.hash, None, self.fit)?;
+        for m in &self.made {
+            if let Ok((set, _)) = l.fields.remake(&l.mesh, m.clone()) {
+                l.fields = set;
+            }
+        }
+        l.remade = Some(self.made);
+        let base = step_base(&self.display, self.blocks, &l.mesh, &l.fields);
+        let (display, surface) = prepare(
+            base.clone(),
+            &l.mesh,
+            &l.fields,
+            l.overview.as_ref(),
+            &self.tokens,
+        );
+        l.prepared = Some(Prepared {
+            base,
+            tokens: self.tokens,
+            display,
+            surface,
+        });
+        Ok(l)
+    }
+}
+
+/// The display another step of the same mesh opens with, before its
+/// quality or field values: the one shown, without what the old values
+/// made.
+fn step_base(display: &Display, blocks: bool, mesh: &Mesh, fields: &FieldSet) -> Display {
+    let mut base = display.clone();
+    base.field_values = None;
+    base.stream_traces = None;
+    base.quality = None;
+    base.region_cells = None;
+    // The values of the probes read in blocks were the step before's.
+    base.probe_findings = None;
+    if blocks {
+        forget_cells(&mut base, mesh, None);
+    }
+    keep_field(&mut base, fields);
+    base
 }
 
 /// The surface of a loaded mesh, built for a display and tokens.
@@ -818,6 +891,7 @@ pub fn load_checked(
         fit,
         stamps,
         prepared: None,
+        remade: None,
     })
 }
 
@@ -904,6 +978,10 @@ pub struct Session {
     /// of the session so the window's reading on a copy serves the
     /// export after it.
     pub probe_history: crate::history::Cache,
+    /// The colour ranges read over the steps of a series (range mode
+    /// steps, [`crate::steps_range`]), shared by copies of the session
+    /// so the window's reading on a copy colours the window.
+    pub steps_ranges: crate::steps_range::Cache,
     /// The tables of a run charted (`charts.open`) and the chart the
     /// window's panel shows; kept when another mesh opens.
     pub charts: Option<crate::chart::Charts>,
@@ -970,6 +1048,7 @@ impl Session {
             preview: None,
             series: None,
             probe_history: crate::history::Cache::default(),
+            steps_ranges: crate::steps_range::Cache::default(),
             charts: None,
             memory_budget: None,
             defer_blocks: false,
@@ -1096,7 +1175,11 @@ impl Session {
     /// otherwise it opens as a new mesh does, but the camera stays. The
     /// series stays open either way.
     pub fn open_step(&mut self, path: &Path) -> Result<(), MeshError> {
-        let mut l = load_checked(path, !self.hash_after_open, None, self.budget_fit())?;
+        let fit = self.budget_fit();
+        let mut l = match self.preloaded.take() {
+            Some(l) if l.path == path && l.fit == fit && l.is_fresh() => l,
+            _ => load_checked(path, !self.hash_after_open, None, fit)?,
+        };
         // An overview's step is like its overview, not the blocks shown.
         let same = self.mesh.as_ref().is_some_and(|m| {
             let shown = m.blocks.as_ref().map_or(&m.mesh, |b| &b.overview.0);
@@ -1115,10 +1198,12 @@ impl Session {
             return Ok(());
         };
         // The fields derived and calculated on the step before, made
-        // again of this one's, in order.
-        for m in old.fields.made() {
-            if let Ok((set, _)) = l.fields.remake(&l.mesh, m.clone()) {
-                l.fields = set;
+        // again of this one's, in order (unless read ahead with them).
+        if l.remade.as_deref() != Some(old.fields.made()) {
+            for m in old.fields.made() {
+                if let Ok((set, _)) = l.fields.remake(&l.mesh, m.clone()) {
+                    l.fields = set;
+                }
             }
         }
         if let Some(h) = self.hashing.take() {
@@ -1129,19 +1214,14 @@ impl Session {
             let dir = self.checked_dir().map(Path::to_path_buf);
             self.hashing = Some(Hashing::start(l.mesh.files.clone(), dir, l.hash));
         }
-        let mut base = self.display.clone();
-        base.field_values = None;
-        base.stream_traces = None;
-        base.quality = None;
-        base.region_cells = None;
-        // The values of the probes read in blocks were the step before's.
-        base.probe_findings = None;
-        if old.blocks.is_some() {
-            forget_cells(&mut base, &l.mesh, None);
-        }
-        keep_field(&mut base, &l.fields);
-        let (display, surface) =
-            prepare(base, &l.mesh, &l.fields, l.overview.as_ref(), &self.tokens);
+        let base = step_base(&self.display, old.blocks.is_some(), &l.mesh, &l.fields);
+        let fresh_fields = l.remade.as_deref() == Some(old.fields.made());
+        let (display, surface) = match l.prepared.take() {
+            Some(p) if fresh_fields && p.base == base && p.tokens == self.tokens => {
+                (p.display, p.surface)
+            }
+            _ => prepare(base, &l.mesh, &l.fields, l.overview.as_ref(), &self.tokens),
+        };
         self.display = display;
         self.surface_revision += 1;
         self.preview = None;
@@ -1165,6 +1245,33 @@ impl Session {
             self.redraw();
         }
         Ok(())
+    }
+
+    /// What reading the fields file `path` ahead as the next step of the
+    /// open series needs, or `None` when it should not be read ahead: no
+    /// mesh is open, or holding two steps at once would not fit the
+    /// memory budget (a step is taken as large as the open one's file
+    /// opens, [`murmel_mesh::vtkhdf::Size::open_bytes`], else four times
+    /// its size on disk).
+    pub fn step_ahead(&self, path: &Path) -> Option<StepAhead> {
+        let m = self.mesh.as_ref()?;
+        let bytes = if murmel_mesh::vtkhdf::is_vtkhdf(&m.path) {
+            murmel_mesh::vtkhdf::size_of(&m.path).ok()?.open_bytes()
+        } else {
+            std::fs::metadata(&m.path).ok()?.len().saturating_mul(4)
+        };
+        if bytes.saturating_mul(2) > self.budget_bytes() {
+            return None;
+        }
+        Some(StepAhead {
+            path: path.to_path_buf(),
+            fit: self.budget_fit(),
+            hash: !self.hash_after_open,
+            made: m.fields.made().to_vec(),
+            display: self.display.clone(),
+            blocks: m.blocks.is_some(),
+            tokens: self.tokens.clone(),
+        })
     }
 
     /// Put a loaded mesh in place of the open one and fit the view. The
@@ -2296,6 +2403,57 @@ mod tests {
         let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
         assert!(!preloaded(m));
         assert!(s.preloaded.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant: the next step of a series read ahead
+    /// ([`Session::step_ahead`]) is what `open_step` shows, its read and
+    /// its surface taken as they are while the display is unchanged; a
+    /// display changed since builds the surface again from the step read
+    /// ahead; another path reads the file; a memory budget too small for
+    /// two steps reads nothing ahead. Breaks if playing read every step
+    /// twice, or showed a surface built for a display no longer shown.
+    #[test]
+    fn step_read_ahead() {
+        let dir = std::env::temp_dir().join(format!("murmel-ahead-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let steps: Vec<PathBuf> = (1..=3)
+            .map(|k| {
+                let p = dir.join(format!("step{k}.vtu"));
+                std::fs::copy(fixture("channel/foehncraft.vtu"), &p).unwrap();
+                p
+            })
+            .collect();
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let cells = s.open(&steps[0]).unwrap().surface.cells;
+        let ahead = |s: &Session, p: &Path| {
+            let mut l = s.step_ahead(p).unwrap().load().unwrap();
+            if let Some(p) = &mut l.prepared {
+                p.surface.cells = 7;
+            }
+            l.mesh.metadata.insert("ahead".into(), "yes".into());
+            l
+        };
+        let marked = |s: &Session| s.mesh.as_ref().unwrap().mesh.metadata.contains_key("ahead");
+        s.preloaded = Some(ahead(&s, &steps[1]));
+        s.open_step(&steps[1]).unwrap();
+        assert!(marked(&s));
+        assert_eq!(s.mesh.as_ref().unwrap().surface.cells, 7, "built ahead");
+        assert!(s.preloaded.is_none());
+        // The display changed after the step was read ahead.
+        let l = ahead(&s, &steps[2]);
+        s.display.color_by = ColorBy::Quality;
+        s.preloaded = Some(l);
+        s.open_step(&steps[2]).unwrap();
+        assert!(marked(&s), "the read is used");
+        assert_eq!(s.mesh.as_ref().unwrap().surface.cells, cells, "built again");
+        // Another path: read from the file.
+        s.preloaded = Some(ahead(&s, &steps[1]));
+        s.open_step(&steps[0]).unwrap();
+        assert!(!marked(&s));
+        s.memory_budget = Some(1e-6);
+        assert!(s.step_ahead(&steps[1]).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
