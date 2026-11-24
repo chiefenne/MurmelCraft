@@ -838,6 +838,7 @@ pub fn export_movie(input: Value, s: &mut Session) -> Run {
     let i: ExportMovie = parse(input)?;
     need_mesh(s)?;
     only_for(&i)?;
+    crate::series::ensure_steps_range(s)?;
     let format = i.format.unwrap_or_else(|| Format::of(&i.path));
     let fps = within(i.fps, 1.0, 60.0, false, "fps")?;
     let (frames, motion, entries) = frames(&i, s, fps)?;

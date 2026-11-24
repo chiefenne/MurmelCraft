@@ -55,6 +55,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `parcels.clear` | 1 | read | Remove the parcels and their settings. |
 | `series.open` | 1 | read | Open a time series of one run and show its first step (or step): FoehnCraft's series.json (format foehncraft.series 1: entries of step, time and files fields and parcels, relative to its folder; other keys ignored) or an output folder (its series.json, else its fields_<step>.vtkhdf and spray/parcels_<step>.vtkhdf, matched by step). Each step opens its fields file as the next time step of the open mesh (same cells: the display, derived fields, camera and journal stay, only the values change) and its parcel file with the parcel settings kept; a step without a fields file keeps the mesh shown, one without parcels draws none. The result's series gives the count, the index, step and time shown, its files, the first and last step and time, and the playback. Opening another mesh ends the series. |
 | `series.go` | 1 | read | Show another step of the open series: index (from 0), step, time (the nearest entry with a time), by (entries on, negative back; wraps round while the player loops, else holds at the ends) or to first or last; exactly one. A step the series lacks is refused with the steps it has. |
+| `series.range` | 1 | read | Read the colour range of a field (field and component; left out: the field shown) over every step of the open series, as range mode steps of field.style colours with: each step's fields file is read (the step shown is not read again), the derived and calculated fields are made again of its values, and the smallest and largest value over the cells (points, boundary faces) is taken. Steps without a fields file or with another mesh add nothing. The range is kept until the series or the derived fields change, so playing and movies read nothing again. The result gives field, component, range [lo, hi], read and total steps. Changes nothing. |
 | `series.play` | 1 | read | Play or pause the open series in the window (playing), at rate steps a second (0.1 to 60, default 4), looping or stopping at the last step (loop, default on). The window's player bar and the status bar show it; on the command line and for scripts the setting is kept and steps are made with series.go, and export.movie with motion series writes a movie of the steps. |
 | `charts.open` | 1 | read | Open the tables of a FoehnCraft run for charts and statistics (D268): an output folder, or a table or series.json in it. Reads datums.csv (foehncraft-datums 1), spray.csv (foehncraft-spray 1), every spray_hist_<datum>.csv (foehncraft-spray-histogram 1) and the end-of-run statistics of result.json; no solver needed. The result lists the tables, the datums (surface or volume, with or without liquid), the injectors, the first and last step and time, and the charts: mass_flow, cumulative, penetration, diameters, histogram, columns. The charts stay open when another mesh opens; series.open opens the charts of its folder too. |
 | `charts.show` | 1 | read | Choose the chart of the window's chart panel and show or hide it (visible). chart: mass_flow (net liquid rate through the surface datums, per report interval), cumulative (net liquid through them so far), penetration (per injector), diameters (D32 of the liquid through each datum and in the flow), histogram (the droplet sizes of one datum: weight mass or droplets, cumulative up to the step or the step's interval alone, as a share in percent over log diameter) or columns (datums:<column> or spray:<column>, all of one unit: one chart has one axis). datums and injectors pick the series (left out: the first six; a seventh is refused, the six hues are never cycled). Fields left out keep the panel's; a new chart starts from its defaults. The time series' step is the cursor. |
@@ -984,11 +985,13 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       ]
     },
     "range": {
+      "description": "field: the whole field at the step shown; shown: what is drawn; symmetric: about zero; fixed: min to max; steps: the whole field over every step of the open time series (series.range reads it; the window reads it by itself)",
       "enum": [
         "field",
         "shown",
         "symmetric",
-        "fixed"
+        "fixed",
+        "steps"
       ]
     },
     "reset": {
@@ -1791,6 +1794,31 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "first",
         "last"
       ]
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `series.range`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "component": {
+      "description": "A vector's scalar (default: the one shown, else magnitude)",
+      "enum": [
+        "magnitude",
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "field": {
+      "description": "The field (default: the field shown)",
+      "type": "string"
     }
   },
   "required": [],
@@ -3505,6 +3533,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `SERIES001` | error | The time series cannot be read: the path does not exist, the manifest is not foehncraft.series 1 or names a step twice or a step without files, or the folder holds no numbered files. | Give FoehnCraft's series.json or its output folder (fields_<step>.vtkhdf, spray/parcels_<step>.vtkhdf). |
 | `SERIES002` | error | No time series is open. | Open a series.json or an output folder with series.open. |
 | `SERIES003` | error | The series has no such step, index or time, or the rate is outside 0.1 to 60 steps a second. | series.open's result gives the count, the first and last step and the times. |
+| `SERIES004` | error | The colour range over the steps was not read: the field is not one of the open mesh's, or the reading was cancelled. | Colour by a field of the open mesh (field.list) and read the range again. |
 | `CHART001` | error | The tables of a run cannot be read: the path does not exist, the folder has neither datums.csv nor spray.csv, or a table is not of its format version 1 (foehncraft-datums, foehncraft-spray), has no header or a short row before its last. | Give the output folder of a transient FoehnCraft run with [[datum]] or [spray] (or a file in it); the message names the table and what is wrong. |
 | `CHART002` | error | No run is charted. | Open an output folder with charts.open; series.open opens the charts of its folder too. |
 | `CHART003` | error | The chart cannot be drawn as asked: an unknown datum, injector or column, more series than the six hues, columns of different units on one axis, a histogram of several datums or none, a size or scale out of range, or a file that is not .png or .svg. | The message lists what the run has; charts.open's result lists datums, injectors and tables. Chart quantities of other units apart. |

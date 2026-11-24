@@ -36,6 +36,7 @@ pub mod series;
 pub mod session;
 pub mod session_file;
 pub mod settings;
+pub mod steps_range;
 pub mod stream;
 pub mod surface;
 mod tets;

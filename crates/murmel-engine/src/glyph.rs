@@ -269,7 +269,9 @@ pub fn color_range(
             .or(drawn)
     };
     let r = match style.range {
-        RangeMode::Field => whole?,
+        // Over the steps of a series the arrows keep the step's range
+        // for now: the steps' ranges are kept for the mesh colouring.
+        RangeMode::Field | RangeMode::Steps => whole?,
         RangeMode::Shown => drawn?,
         RangeMode::Symmetric => {
             let (lo, hi) = whole?;

@@ -1387,6 +1387,76 @@ fn player_bar_steps_and_plays() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Invariant (the maintainer's card of 2026-11-24, "Range over all
+/// steps"): with a series open, a field shown is coloured over every
+/// step, read by the window on a thread of its own; the range then
+/// spans the steps and stays while the player steps on. Breaks if the
+/// window never started the reading, or the colours rescaled per step.
+#[test]
+fn range_over_the_steps_reads_in_the_background() {
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-steps-range-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let vtu = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/box/foehncraft.vtu"),
+    )
+    .unwrap();
+    for (step, factor) in [(10, 1.0f64), (20, 3.0)] {
+        let values: Vec<String> = (0..20)
+            .map(|k| {
+                if k < 4 {
+                    (factor * (k + 1) as f64).to_string()
+                } else {
+                    "nan".into()
+                }
+            })
+            .collect();
+        let array = format!(
+            "<DataArray type=\"Float64\" Name=\"t\" format=\"ascii\">\n{}\n</DataArray>\n</CellData>",
+            values.join("\n")
+        );
+        std::fs::write(
+            dir.join(format!("s_{step}.vtu")),
+            vtu.replacen("      </CellData>", &array, 1),
+        )
+        .unwrap();
+    }
+    let m = serde_json::json!({"format": "foehncraft.series", "format_version": 1, "entries": [
+        {"step": 10, "files": {"fields": "s_10.vtu"}},
+        {"step": 20, "files": {"fields": "s_20.vtu"}}]});
+    std::fs::write(dir.join("series.json"), m.to_string()).unwrap();
+    let app = h.state_mut();
+    assert!(
+        app.call(
+            "series.open",
+            serde_json::json!({"path": dir.join("series.json")})
+        )
+        .is_some()
+    );
+    assert!(
+        app.call(
+            "display.color_by",
+            serde_json::json!({"by": "field", "field": "t"})
+        )
+        .is_some()
+    );
+    for _ in 0..200 {
+        h.run_steps(1);
+        if h.state().session.field_range() == Some((1.0, 12.0)) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(h.state().session.field_range(), Some((1.0, 12.0)));
+    h.get_by_label("Next step").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.field_range(), Some((1.0, 12.0)));
+    assert_eq!(problems(&h), Vec::<String>::new(), "player bar");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Invariant (the maintainer's cards of 2026-11-24, "Shown field on
 /// label and tree" and "Follow steps, plus history plot"): with a field
 /// colouring the mesh, a probe's tree row gives that field's value at

@@ -506,6 +506,7 @@ fn view_screenshot(input: Value, s: &mut Session) -> Run {
         s.open(m).map_err(mesh_err)?;
     }
     need_mesh(s)?;
+    crate::series::ensure_steps_range(s)?;
     s.viewport = [i.width as f64, i.height as f64];
     if let Some(v) = i.view {
         s.camera.set_standard(v);
@@ -2004,6 +2005,7 @@ fn field_shown_json(s: &Session) -> Value {
         "location": v.location,
         "range": s.field_range().map(|(a, b)| [a, b]),
         "field_range": v.range.map(|(a, b)| [a, b]),
+        "steps_range": crate::series::steps_range_json(s),
         "map": s.field_map().map(|(m, _)| m.id.clone()),
         "style": s.field_style(),
     })
@@ -2059,6 +2061,7 @@ pub(crate) enum RangeKey {
     Shown,
     Symmetric,
     Fixed,
+    Steps,
 }
 
 #[derive(Deserialize)]
@@ -2180,6 +2183,7 @@ fn field_style(input: Value, s: &mut Session) -> Run {
         Some(RangeKey::Field) => st.range = RangeMode::Field,
         Some(RangeKey::Shown) => st.range = RangeMode::Shown,
         Some(RangeKey::Symmetric) => st.range = RangeMode::Symmetric,
+        Some(RangeKey::Steps) => st.range = RangeMode::Steps,
         Some(RangeKey::Fixed) => {
             // A bound left out keeps the range shown now (or the field's).
             let now = if s.display.field.as_ref().is_some_and(|c| c.name == name) {
@@ -2341,6 +2345,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
         "shows another time step of the run; the view stays as it is",
     ),
     ("series.play", "how the window plays the series, not a view"),
+    ("series.range", READS_ONLY),
     (
         "charts.open",
         "opens the tables of a run; the view stays as it is",
@@ -2829,7 +2834,7 @@ pub static TOOLS: &[Tool] = &[
                     "line_count": {"type": "integer", "minimum": 1, "maximum": 64},
                     "map": {"type": "string", "description": "auto, or a colour map id (field.list)"},
                     "reverse": {"type": "boolean"},
-                    "range": {"enum": ["field", "shown", "symmetric", "fixed"]},
+                    "range": {"enum": ["field", "shown", "symmetric", "fixed", "steps"], "description": "field: the whole field at the step shown; shown: what is drawn; symmetric: about zero; fixed: min to max; steps: the whole field over every step of the open time series (series.range reads it; the window reads it by itself)"},
                     "min": {"type": "number"},
                     "max": {"type": "number"}
                 }),
@@ -3114,6 +3119,17 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::series::series_go_schema,
         run: crate::series::series_go,
+    },
+    Tool {
+        id: "series.range",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-series-range",
+        summary: "Read the colour range of a field (field and component; left out: the field shown) over every step of the open series, as range mode steps of field.style colours with: each step's fields file is read (the step shown is not read again), the derived and calculated fields are made again of its values, and the smallest and largest value over the cells (points, boundary faces) is taken. Steps without a fields file or with another mesh add nothing. The range is kept until the series or the derived fields change, so playing and movies read nothing again. The result gives field, component, range [lo, hi], read and total steps. Changes nothing.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::series::series_range_schema,
+        run: crate::series::series_range,
     },
     Tool {
         id: "series.play",

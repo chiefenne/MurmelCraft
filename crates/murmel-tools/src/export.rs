@@ -152,6 +152,7 @@ pub fn i18n() -> Result<I18n, Diagnostic> {
 pub fn export_image(input: Value, s: &mut Session) -> Run {
     let i: ExportImage = parse(input)?;
     need_mesh(s)?;
+    crate::series::ensure_steps_range(s)?;
     let (width, height, scale) = picture_size(s.viewport, i.width, i.height, i.scale)?;
     let line_width = line_width(i.line_width, scale)?;
     if let Some(d) = i.dpi

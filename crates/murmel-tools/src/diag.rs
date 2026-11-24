@@ -195,6 +195,12 @@ const OWN: &[Code] = &[
         fix: Some("series.open's result gives the count, the first and last step and the times."),
     },
     Code {
+        code: "SERIES004",
+        severity: Severity::Error,
+        meaning: "The colour range over the steps was not read: the field is not one of the open mesh's, or the reading was cancelled.",
+        fix: Some("Colour by a field of the open mesh (field.list) and read the range again."),
+    },
+    Code {
         code: "CHART001",
         severity: Severity::Error,
         meaning: "The tables of a run cannot be read: the path does not exist, the folder has neither datums.csv nor spray.csv, or a table is not of its format version 1 (foehncraft-datums, foehncraft-spray), has no header or a short row before its last.",

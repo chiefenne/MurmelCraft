@@ -335,7 +335,14 @@ impl MurmelApp {
         egui::ComboBox::from_id_salt("field-range")
             .selected_text(&current)
             .show_ui(ui, |ui| {
-                for k in ["field", "shown", "symmetric", "fixed"] {
+                // Over all steps while a time series is open (or chosen).
+                let steps = self.session.series.is_some() || st.range == RangeMode::Steps;
+                let keys: &[&str] = if steps {
+                    &["field", "shown", "symmetric", "fixed", "steps"]
+                } else {
+                    &["field", "shown", "symmetric", "fixed"]
+                };
+                for &k in keys {
                     let on = st.range.key() == k;
                     if ui
                         .selectable_label(on, self.i18n.tr(&format!("field-range-{k}")))
