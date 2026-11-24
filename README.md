@@ -9,7 +9,7 @@ eframe on wgpu; one engine with thin front ends, every action a registered
 tool that the window, the command line and the MCP server share.
 
 <p align="center">
-  <a href="assets/readme/tour"><img src="assets/readme/tour.webp" width="880" alt="A slideshow of the MurmelCraft window, five slides that change every four seconds, on a FoehnCraft result for KoflCraft's Manifold mesh: the mesh shaded with edges; cell types under a flat clip plane with its drag handles; a sphere region of interest cut flat and coloured cell by cell by speed; wall shear stress with two measurements and a probe; banded pressure with contour lines in the light theme"></a>
+  <a href="assets/readme/tour"><img src="assets/readme/tour.webp" width="880" alt="A slideshow of the MurmelCraft window, seven slides that change every four seconds, on a FoehnCraft result for KoflCraft's Manifold mesh: the mesh shaded with edges; cell types under a flat clip plane with its drag handles; streamline tubes from the inlet coloured by speed; three speed slices through the box with a smooth vorticity iso-surface; a sphere region of interest cut flat and coloured cell by cell by speed; wall shear stress with two measurements and a probe; banded pressure with contour lines in the light theme"></a>
 </p>
 
 <sub>Screenshots of the window: a laminar FoehnCraft run (Re = 167) on
