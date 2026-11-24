@@ -2971,7 +2971,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-session-save",
-        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the mesh colours and the view cube placement.",
+        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement.",
         outputs: &["path"],
         reads: &[],
         input_schema: || {

@@ -7,6 +7,7 @@
 //! hidden, isolated and selected items and the colours set on items, all
 //! by their tree ids), the clip planes (since 1.2), the saved views (named
 //! cameras, since format 1.1), the measurements and probes (since 1.3),
+//! the field shown and each field's style (since 1.4),
 //! the user's mesh colours and the view cube placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
 //! `settings.toml` (decided 2026-11-24).
@@ -24,13 +25,14 @@ use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Item, PickTarget, RenderMode, SavedView};
+use crate::field::{FieldChoice, FieldStyle, RangeMode};
 use crate::measure::{Measurement, Probe};
 use crate::quality::Metric;
 use crate::session::Session;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.3";
+pub const SESSION_VERSION: &str = "1.4";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -73,6 +75,12 @@ pub struct DisplayState {
     /// Probes, in order (1.3).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub probes: Vec<Probe>,
+    /// The field colour mode field shows (1.4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<FieldChoice>,
+    /// How each field is drawn, by field name (1.4).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub field_styles: BTreeMap<String, FieldStyle>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -195,6 +203,8 @@ impl SessionFile {
                 } else {
                     Vec::new()
                 },
+                field: d.field.clone(),
+                field_styles: d.field_styles.clone(),
             },
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
@@ -284,6 +294,21 @@ impl SessionFile {
                 )));
             }
             numbers.push(p.n);
+        }
+        for (name, st) in &f.display.field_styles {
+            let fixed_ok = match st.range {
+                RangeMode::Fixed { min, max } => min.is_finite() && max.is_finite() && min < max,
+                _ => true,
+            };
+            let ok = (crate::field::MIN_BANDS..=crate::field::MAX_BANDS).contains(&st.bands)
+                && (1..=crate::field::MAX_LINES).contains(&st.line_count)
+                && st.map.as_deref().is_none_or(|m| crate::colormap::get(m).is_some())
+                && fixed_ok;
+            if !ok {
+                return Err(Refused(format!(
+                    "the style of field {name}: bands 2 to 64, lines 1 to 64, a known colour map and a fixed range with finite min < max"
+                )));
+            }
         }
         if let Some(t) = f.display.threshold
             && !t.is_finite()
@@ -408,6 +433,19 @@ impl Session {
                 Item::Probe(n) => d.probes.iter().any(|x| x.n == n),
                 _ => true,
             });
+            // The field shown, if this result has it; the styles of all.
+            d.field_styles = s.field_styles;
+            d.field_values = None;
+            d.field = s.field.filter(|c| {
+                let known = m.fields.get(&c.name).is_some();
+                if !known {
+                    missing.push(format!("field:{}", c.name));
+                }
+                known
+            });
+        }
+        if self.display.color_by == ColorBy::Field && self.display.field.is_none() {
+            self.display.color_by = ColorBy::Solid;
         }
         self.journal.clear();
         self.redraw();
@@ -460,6 +498,23 @@ mod tests {
         assert!(with(&|v| v["format"] = "murmelcraft.settings".into()).is_err());
         assert!(with(&|v| v["format_version"] = "2.0".into()).is_err());
         assert!(with(&|v| v["format_version"] = "1.3".into()).is_ok());
+        for bad in [
+            serde_json::json!({"bands": 1}),
+            serde_json::json!({"line_count": 99}),
+            serde_json::json!({"map": "lava"}),
+            serde_json::json!({"range": {"fixed": {"min": 1.0, "max": 1.0}}}),
+        ] {
+            assert!(
+                with(&|v| v["display"]["field_styles"] = serde_json::json!({ "pressure": bad.clone() }))
+                    .is_err(),
+                "{bad}"
+            );
+        }
+        assert!(
+            with(&|v| v["display"]["field_styles"] =
+                serde_json::json!({"pressure": {"mode": "banded", "range": {"fixed": {"min": 0.0, "max": 2.0}}}}))
+            .is_ok()
+        );
         assert!(with(&|v| v["camera"]["distance"] = 0.0.into()).is_err());
         assert!(with(&|v| v["surprise"] = 1.into()).is_err());
         assert!(

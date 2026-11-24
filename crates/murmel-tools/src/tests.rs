@@ -1600,3 +1600,45 @@ fn field_tools() {
     assert_eq!(e.result["style"]["mode"], "smooth");
     assert_eq!(e.result["range"], whole);
 }
+
+/// Invariant (session format 1.4): the field shown, its component and
+/// every field's style come back from a session file, and loading draws
+/// the same field paint (range, map, bands, lines) as before; a file
+/// naming a field the result does not have falls back to solid colour
+/// and reports it as skipped. Without the field in the file a saved
+/// result view would come back in the mesh colour.
+#[test]
+fn field_sessions_round_trip() {
+    let dir = std::env::temp_dir().join(format!("murmel-field-session-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("fields.murmel");
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let mut s = session();
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    let by = json!({"by": "field", "field": "velocity", "component": "z"});
+    assert!(call("display.color_by", by, &mut s).ok());
+    let style = json!({"mode": "banded", "bands": 6, "lines": true, "map": "magma", "range": "symmetric"});
+    assert!(call("field.style", style, &mut s).ok());
+    let k = json!({"field": "k", "range": "fixed", "min": 0.0, "max": 0.5});
+    assert!(call("field.style", k, &mut s).ok());
+    let e = call("session.save", json!({"path": file}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let mut t = session();
+    let e = call("session.load", json!({"path": file}), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(t.display.field, s.display.field);
+    assert_eq!(t.display.field_styles, s.display.field_styles);
+    assert_eq!(t.field_paint(), s.field_paint());
+    assert!(t.field_paint().is_some());
+
+    let text = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace("\"velocity\"", "\"vorticity\"");
+    std::fs::write(&file, text).unwrap();
+    let mut u = session();
+    let e = call("session.load", json!({"path": file}), &mut u);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["skipped"], json!(["field:vorticity"]));
+    assert_eq!(u.display.color_by, murmel_engine::ColorBy::Solid);
+    let _ = std::fs::remove_dir_all(&dir);
+}
