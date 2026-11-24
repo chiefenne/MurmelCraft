@@ -786,3 +786,68 @@ SHA instructions, unlike the iMac): SHA-256 1.4 s, BLAKE3 on one thread
 runs at about 280 MB/s (17 s for the iMac's 5 GB); BLAKE3 on its eight
 cores should take the disk's time, about 1 to 3 s, to be measured there
 with `murmel bench run` (stage `digest`).
+
+## Blocked VTKHDF: read where it lies, on all threads (2026-11-24)
+
+A blocked VTKHDF file (`murmel blocks make`,
+[blocked-vtkhdf.md](blocked-vtkhdf.md)) of the 1 M cell mesh opened in
+5.3 to 6.2 s with a peak of 3.4 GB, where the ascii `.vtu` of the same
+mesh opens in 1.6 s with 1.0 GB; the 4 M cell file (6 GB) ran out of
+memory in the 15 GB container here. Three things took the time: every
+dataset was copied into a list of 64-bit integers (2.2 s), the points of
+the blocks were joined by their global ids in a hash map (1.2 s), and
+the cells were built on one thread (1.1 s).
+
+Now:
+
+- **The datasets are read where they lie.** `H5::values` gives a view of
+  a dataset in the file's bytes (`hdf5::Values`) that converts each value
+  as it is used, as `read_i64` and `read_f64` convert them; a chunked
+  dataset is decoded once.
+- **The points are joined in a list by id** when the ids are small
+  numbers, as the blocked writers number them, on all threads: each id's
+  first row is found by an atomic minimum, and the new points are
+  numbered in row order. Other ids still go in a map.
+- **The cells are built on all threads** (`vtkhdf/cells.rs`), in the two
+  passes of the `.vtu` cells: each range counts, then writes at its
+  place. Each partition is checked when the walk comes to it, and the
+  first bad cell or partition in file order gives the error.
+- **The fields are gathered on all threads**, and the file is freed
+  before the faces are linked.
+
+The meshes and fields are the same bit for bit: every array and field
+was hashed for 15 VTKHDF files (the fixtures, KoflCraft's hand-offs,
+the `.vtu` and polyMesh fixtures converted, 100 k cells in two blocks
+with three fields, and the 1 M blocked file) at 1, 3 and 4 threads,
+against main. `threads_give_the_cells_of_one_walk` and
+`threads_report_the_first_bad_cell_or_partition` (in `vtkhdf/cells.rs`)
+compare 1 to 7 threads, `points_join_alike_by_list_or_map` the two ways
+of joining points, and `values_convert_as_the_copies_do` every integer
+and float storage.
+
+Same machine, 4 threads, `--no-render`, two runs each alternating, main
+at d5cc7c3 against this branch:
+
+| 1 M cells, blocked (1.47 GB) | main | now |
+|---|---:|---:|
+| open, ms | 6,162, 6,223 | 1,601, 1,860 |
+| reading the file, ms | 644, 629 | 585, 716 |
+| the datasets, points and cells, ms | 5,278, 5,383 (linking included) | 465, 494 (cells 330, 340) |
+| linking the faces, ms | | 330, 400 |
+| peak memory while reading, MiB | 3,423 | 2,035 |
+| peak memory of the run, MiB | 3,930 | 2,560 |
+
+The 4 M cell file (6.04 GB) now opens: in 7.0 s (reading the file
+2.9 s, the datasets, points and cells 1.9 s of which the cells 1.3 s,
+linking 1.4 s, the surface 0.56 s), with a peak of 8.3 GB while reading
+and 10.2 GB over the run.
+
+What it shows:
+
+- The blocked file opens 3.5 times as fast, about as fast as the `.vtu`,
+  and needs 40 % less memory.
+- It still needs twice the memory of the `.vtu`, because the reader holds
+  the whole file (`H5::open` reads it into memory; 6 GB of the 8.3 GB at
+  4 M cells). A 10 M cell file would need about 20 GB, more than the
+  iMac should spend. The next step reads the datasets from the file in
+  pieces, block by block, which the 100 M cell overview needs too.
