@@ -138,7 +138,7 @@ impl MurmelApp {
                 // another one now) is not kept.
                 self.session.preloaded = None;
             }
-            Ok(Err(e)) => self.error = Some(Diagnostic::new(e.code, e.message)),
+            Ok(Err(e)) => self.set_error(Some(Diagnostic::new(e.code, e.message))),
             // The reader stopped unexpectedly: open the usual way, which
             // reports what went wrong.
             Err(_) => self.open_now(o.then),
