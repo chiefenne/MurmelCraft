@@ -5,6 +5,9 @@
 //! point ids, so a face matches whatever node it starts at and whichever
 //! way it turns.
 
+use std::ops::Range;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+
 use crate::{Mesh, Patch, PatchRole, Polygons, par};
 
 /// No cell (or no face) is known.
@@ -23,6 +26,10 @@ struct Buckets {
 }
 
 impl Buckets {
+    /// A counting sort by smallest point, on all threads: each run of
+    /// faces deals its faces out to parts (consecutive ranges of points)
+    /// in face order, and each part then sorts its own faces into its
+    /// groups, so every group still lists its faces in face order.
     fn new(faces: &Polygons, points: usize) -> Buckets {
         let n = faces.len();
         let smallest: Vec<u32> = par::collect(n, 1 << 15, |r| {
@@ -32,20 +39,74 @@ impl Buckets {
             })
             .collect()
         });
-        let mut head = vec![0u32; points + 2];
-        for &m in &smallest {
-            head[m as usize + 1] += 1;
+        // Groups 0..=points (the last for empty faces).
+        let groups = points + 1;
+        let parts = par::ranges(groups, 1 << 14);
+        // Every part but the last is `step` groups long.
+        let step = parts[0].len().max(1);
+        let part = |m: u32| m as usize / step;
+        // How many faces of each run go to each part.
+        let runs = par::ranges(n, 1 << 15);
+        let counts: Vec<Vec<usize>> = par::map(n, 1 << 15, |r| {
+            let mut c = vec![0; parts.len()];
+            for &m in &smallest[r] {
+                c[part(m)] += 1;
+            }
+            c
+        });
+        // The faces dealt out by part, and by run within each part.
+        let mut cuts = vec![0];
+        let mut part_at = Vec::with_capacity(parts.len() + 1);
+        for k in 0..parts.len() {
+            part_at.push(*cuts.last().unwrap_or(&0));
+            for c in &counts {
+                cuts.push(cuts.last().unwrap_or(&0) + c[k]);
+            }
         }
-        for p in 0..=points {
-            head[p + 1] += head[p];
+        part_at.push(n);
+        let mut dealt = vec![0u32; n];
+        let mut pieces: Vec<Vec<&mut [u32]>> = runs.iter().map(|_| Vec::new()).collect();
+        for (i, piece) in par::split_mut(&mut dealt, &cuts).into_iter().enumerate() {
+            pieces[i % runs.len()].push(piece);
         }
-        let mut next = head.clone();
+        let small = &smallest;
+        scoped(runs.iter().cloned().zip(pieces), |(r, mut to)| {
+            let mut at = vec![0; to.len()];
+            for f in r {
+                let k = part(small[f]);
+                to[k][at[k]] = f as u32;
+                at[k] += 1;
+            }
+        });
+        // Each part sorts its faces into its groups.
+        let mut head = vec![0u32; groups + 1];
         let mut slot_face = vec![0u32; n];
-        for (f, &m) in smallest.iter().enumerate() {
-            let s = &mut next[m as usize];
-            slot_face[*s as usize] = f as u32;
-            *s += 1;
-        }
+        let group_cuts: Vec<usize> = parts.iter().map(|r| r.start).chain([groups]).collect();
+        let heads = par::split_mut(&mut head[..groups], &group_cuts);
+        let slots = par::split_mut(&mut slot_face, &part_at);
+        let (dealt, part_at) = (&dealt, &part_at);
+        scoped(
+            parts.iter().cloned().zip(heads).zip(slots).enumerate(),
+            |(k, ((r, head), slots))| {
+                let mine = &dealt[part_at[k]..part_at[k + 1]];
+                let mut next = vec![0u32; r.len()];
+                for &f in mine {
+                    next[small[f as usize] as usize - r.start] += 1;
+                }
+                let mut at = part_at[k] as u32;
+                for (h, c) in head.iter_mut().zip(next.iter_mut()) {
+                    *h = at;
+                    at += *c;
+                    *c = *h - part_at[k] as u32;
+                }
+                for &f in mine {
+                    let g = small[f as usize] as usize - r.start;
+                    slots[next[g] as usize] = f;
+                    next[g] += 1;
+                }
+            },
+        );
+        head[groups] = n as u32;
         Buckets { head, slot_face }
     }
 
@@ -73,30 +134,130 @@ fn same_points(a: &[u32], b: &[u32], sa: &mut Vec<u32>, sb: &mut Vec<u32>) -> bo
 }
 
 /// For every cell face, the first cell face (in face order) with the
-/// same points: itself when it is the first.
+/// same points: itself when it is the first. The groups are matched on
+/// all threads, each writing the twins of its own faces.
 fn first_twins(faces: &Polygons, buckets: &Buckets, points: usize) -> Vec<u32> {
-    let per_slot: Vec<u32> = par::collect(points + 1, 1 << 12, |r| {
-        let (s0, s1) = (buckets.head[r.start] as usize, buckets.head[r.end] as usize);
-        let mut out: Vec<u32> = Vec::with_capacity(s1 - s0);
+    let mut first = vec![0u32; faces.len()];
+    let firsts: &[AtomicU32] = AtomicU32::from_mut_slice(&mut first);
+    par::map(points + 1, 1 << 12, |r| {
         let (mut sa, mut sb) = (Vec::new(), Vec::new());
+        let mut twins: Vec<u32> = Vec::new();
         for p in r {
             let group = buckets.group(p);
-            let base = out.len();
+            twins.clear();
             for (i, &f) in group.iter().enumerate() {
                 let face = faces.get(f as usize);
                 let twin = (0..i)
                     .find(|&j| same_points(face, faces.get(group[j] as usize), &mut sa, &mut sb))
-                    .map_or(f, |j| out[base + j]);
-                out.push(twin);
+                    .map_or(f, |j| twins[j]);
+                twins.push(twin);
+                firsts[f as usize].store(twin, Relaxed);
             }
         }
-        out
     });
-    let mut first = vec![0u32; per_slot.len()];
-    for (s, &t) in per_slot.iter().enumerate() {
-        first[buckets.slot_face[s] as usize] = t;
-    }
     first
+}
+
+/// `f` over `items`, each on a scoped thread of its own (one alone runs
+/// here).
+fn scoped<T: Send>(items: impl Iterator<Item = T>, f: impl Fn(T) + Sync) {
+    let items: Vec<T> = items.collect();
+    if items.len() <= 1 {
+        items.into_iter().for_each(&f);
+        return;
+    }
+    let f = &f;
+    std::thread::scope(|s| {
+        let handles: Vec<_> = items.into_iter().map(|x| s.spawn(move || f(x))).collect();
+        for h in handles {
+            if let Err(p) = h.join() {
+                std::panic::resume_unwind(p);
+            }
+        }
+    });
+}
+
+/// The distinct faces numbered in the order their first cell face comes,
+/// on all threads: each run of cells numbers its own first faces after
+/// those of the runs before it, then every cell face takes the number of
+/// its first twin. The owner is the cell of the first face; the
+/// neighbour the first other cell to use it (the smallest, as cells come
+/// in order); `shared` whether any other cell face uses it.
+struct Numbered {
+    cell_face_id: Vec<u32>,
+    owner: Vec<u32>,
+    neighbour: Vec<u32>,
+    first: Vec<u32>,
+    shared: Vec<bool>,
+}
+
+fn number(cell_faces: &[u32], twin: &[u32]) -> Numbered {
+    let cells = cell_faces.len().saturating_sub(1);
+    let runs: Vec<Range<usize>> = par::ranges(cells, 1 << 14);
+    let faces_of = |r: &Range<usize>| cell_faces[r.start] as usize..cell_faces[r.end] as usize;
+    let counts: Vec<usize> = par::map(cells, 1 << 14, |r| {
+        faces_of(&r).filter(|&f| twin[f] as usize == f).count()
+    });
+    let mut at = vec![0];
+    for c in &counts {
+        at.push(at.last().unwrap_or(&0) + c);
+    }
+    let unique = at.last().copied().unwrap_or(0);
+    let mut cell_face_id = vec![0u32; twin.len()];
+    // Faces of no cell (none in a mesh read whole) have no number.
+    let listed = cell_faces.last().map_or(0, |&e| e as usize);
+    cell_face_id[listed.min(twin.len())..].fill(NO_CELL);
+    let (mut owner, mut first) = (vec![0u32; unique], vec![0u32; unique]);
+    let ids: &[AtomicU32] = AtomicU32::from_mut_slice(&mut cell_face_id);
+    let parts = par::split_mut(&mut owner, &at)
+        .into_iter()
+        .zip(par::split_mut(&mut first, &at));
+    scoped(
+        runs.iter().zip(&at).zip(parts),
+        |((r, &base), (owner, first))| {
+            let mut u = 0;
+            for c in r.clone() {
+                for f in cell_faces[c] as usize..cell_faces[c + 1] as usize {
+                    if twin[f] as usize == f {
+                        ids[f].store((base + u) as u32, Relaxed);
+                        owner[u] = c as u32;
+                        first[u] = f as u32;
+                        u += 1;
+                    }
+                }
+            }
+        },
+    );
+    let mut neighbour = vec![0u32; unique];
+    par::chunks_mut(&mut neighbour, 1 << 16, |_, p| p.fill(NO_CELL));
+    let mut shared = vec![false; unique];
+    let (nb, sh) = (
+        AtomicU32::from_mut_slice(&mut neighbour),
+        AtomicBool::from_mut_slice(&mut shared),
+    );
+    let owners = &owner;
+    par::map(cells, 1 << 14, |r| {
+        for c in r {
+            for f in cell_faces[c] as usize..cell_faces[c + 1] as usize {
+                let t = twin[f] as usize;
+                if t != f {
+                    let u = ids[t].load(Relaxed);
+                    ids[f].store(u, Relaxed);
+                    sh[u as usize].store(true, Relaxed);
+                    if owners[u as usize] != c as u32 {
+                        nb[u as usize].fetch_min(c as u32, Relaxed);
+                    }
+                }
+            }
+        }
+    });
+    Numbered {
+        cell_face_id,
+        owner,
+        neighbour,
+        first,
+        shared,
+    }
 }
 
 /// Whether `b` lists the points of `a` the other way round (`a` and `b`
@@ -137,35 +298,14 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
     let points = mesh.points.len();
     let buckets = Buckets::new(&polys, points);
     let twin = first_twins(&polys, &buckets, points);
-    // Distinct faces numbered in the order their first cell face comes;
-    // the owner is the first cell that uses a face, and its listing is
-    // the one stored.
-    let mut cell_face_id = vec![NO_CELL; polys.len()];
+    let Numbered {
+        cell_face_id,
+        owner,
+        neighbour,
+        first,
+        shared,
+    } = number(&mesh.cell_faces, &twin);
     let mut cell_face_flip = vec![false; polys.len()];
-    let (mut owner, mut neighbour, mut first) = (Vec::new(), Vec::new(), Vec::new());
-    let mut uses: Vec<u8> = Vec::new();
-    for c in 0..cells {
-        for f in mesh.cell_faces[c]..mesh.cell_faces[c + 1] {
-            let t = twin[f as usize];
-            let u = if t == f {
-                let u = owner.len() as u32;
-                owner.push(c as u32);
-                neighbour.push(NO_CELL);
-                first.push(f);
-                uses.push(1);
-                u
-            } else {
-                let u = cell_face_id[t as usize];
-                let i = u as usize;
-                uses[i] = uses[i].saturating_add(1);
-                if neighbour[i] == NO_CELL && owner[i] != c as u32 {
-                    neighbour[i] = c as u32;
-                }
-                u
-            };
-            cell_face_id[f as usize] = u;
-        }
-    }
     drop(twin);
     mesh.unique_faces = owner.len();
     let n_unique = owner.len();
@@ -213,7 +353,7 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
         let mut bid = Vec::new();
         let mut bowner = Vec::new();
         for u in 0..n_unique {
-            if uses[u] == 1 {
+            if !shared[u] {
                 b.push(distinct.get(u).iter().copied());
                 bid.push(u as u32);
                 bowner.push(owner[u]);
@@ -323,9 +463,10 @@ mod tests {
     /// Invariant: matching faces in groups of their smallest point gives
     /// exactly the topology of the hash map it replaced, on KoflCraft
     /// meshes and on the honeycomb with every face starting at another
-    /// corner, at one and at several threads; each distinct face is
-    /// stored once as its owner lists it, and every cell reads back its
-    /// faces in its own turn. A face compared by its first point only, a
+    /// corner, at one and at several threads (the faces sorted, matched
+    /// and numbered in parts); each distinct face is stored once as its
+    /// owner lists it, a boundary found from the cells is the faces used
+    /// once, and every cell reads back its faces in its own turn. A face compared by its first point only, a
     /// group cut between threads or a wrong flip would number faces
     /// differently, miss twins, or turn a neighbour's face inside out (its
     /// volume and sections would change; the inspect and surface tests
@@ -360,6 +501,17 @@ mod tests {
                     assert_eq!(m.distinct.get(u), polys.get(f as usize));
                 }
                 assert_eq!(r.4, m.boundary_face_id);
+                if m.boundary_extracted {
+                    // The boundary is the faces one cell face uses.
+                    let mut uses = vec![0; m.unique_faces];
+                    for &u in &r.0 {
+                        uses[u as usize] += 1;
+                    }
+                    let once: Vec<u32> = (0..m.unique_faces as u32)
+                        .filter(|&u| uses[u as usize] == 1)
+                        .collect();
+                    assert_eq!(m.boundary_face_id, once);
+                }
                 let mut f = 0;
                 for c in 0..m.cell_count() {
                     for face in m.cell(c) {

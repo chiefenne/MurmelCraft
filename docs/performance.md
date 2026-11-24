@@ -515,3 +515,43 @@ What it shows:
   16 threads gain more from it than this machine's 4.
 - The hash beside the reading finishes sooner too: the parse leaves it
   more of the CPU.
+
+## Face topology: the one-thread steps on all threads (2026-11-24)
+
+Linking the faces of the cells (`boundary::link`: which cell faces are the
+same face, and its owner and neighbour) took 2.2 s of a 7.5 s open at 4 M
+cells. Matching the faces already ran on all threads; timing its steps at
+1 M cells showed three that did not, together 200 of 470 ms on 4 threads
+and the same on 1, so on the iMac's 16 threads they would be most of it:
+
+- **Sorting the faces by their smallest point** (a counting sort). Each
+  run of faces now deals its faces out to parts, consecutive ranges of
+  points, in face order; each part then sorts its own faces into its
+  groups. Every group lists its faces in face order as before.
+- **Writing each face's twin** back in face order, one face at a time:
+  the threads that match a group now write its twins themselves (each
+  face is written once, through an atomic view of the array).
+- **Numbering the distinct faces** in the order their first cell face
+  comes. Each run of cells counts its first faces, numbers them after
+  those of the runs before it, and then every cell face takes the number
+  of its first twin. The neighbour is the smallest other cell that uses
+  a face (the first, as cells come in order), kept with an atomic
+  minimum, so the result does not depend on the threads
+  (`buckets_match_the_hash_map` compares 1 and 3 threads with a hash map).
+
+Same machine (4 threads), `--no-render`, two runs each alternating, main
+at e878652 against this branch:
+
+| | 1 M: vtu (1.18 GB) | 4 M: vtu (4.99 GB) |
+|---|---:|---:|
+| topology while opening, ms (was) | 363 (509) | 1,442 (2,155) |
+| open, ms (was) | 1,794 (1,885) | 6,869 (7,545) |
+| peak memory while reading, MiB (was) | 1,046 (1,062) | 4,009 (3,945) |
+
+What it shows:
+
+- The topology takes a third less at 4 M cells on 4 threads, and the
+  same on one thread (860 ms at 1 M, as before), so it is no slower on
+  a small machine. On the iMac's 16 threads all of it now divides.
+- The sort deals the faces out into a second array of one number per
+  cell face: 64 MiB more at the peak at 4 M cells (1.6 %).
