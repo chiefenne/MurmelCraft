@@ -147,8 +147,8 @@ pub fn read_polymesh(path: &Path) -> Result<Mesh, MeshError> {
     read_polymesh_with(path, true)
 }
 
-/// As [`read_polymesh`]; without `hash` no SHA-256 is taken
-/// (`Mesh::file_sha256` stays empty).
+/// As [`read_polymesh`]; without `hash` no BLAKE3 hash is taken
+/// (`Mesh::file_blake3` stays empty).
 pub(crate) fn read_polymesh_with(path: &Path, hash: bool) -> Result<Mesh, MeshError> {
     let dir = polymesh_dir(path)?;
     let io = crate::profile::span("read.file");
@@ -171,7 +171,7 @@ pub(crate) fn read_polymesh_with(path: &Path, hash: bool) -> Result<Mesh, MeshEr
         let hashes: Vec<_> = all
             .iter()
             .filter(|_| hash)
-            .map(|f| s.spawn(|| crate::sha256_hex(&f.raw)))
+            .map(|f| s.spawn(|| crate::FileHash::Blake3.of_bytes(&f.raw)))
             .collect();
         let [points, faces, owner, neighbour, boundary] = [0, 1, 2, 3, 4].map(|i| read[i].text());
         let mesh = read_polymesh_bytes(PolyMeshFiles {
@@ -190,7 +190,7 @@ pub(crate) fn read_polymesh_with(path: &Path, hash: bool) -> Result<Mesh, MeshEr
     });
     let mut mesh = mesh?;
     mesh.files = all.iter().map(|f| f.path.clone()).collect();
-    mesh.file_sha256 = digests;
+    mesh.file_blake3 = digests;
     Ok(mesh)
 }
 
@@ -1308,7 +1308,7 @@ mod tests {
             }
         }
         let mut linked = m.clone();
-        crate::boundary::link(&mut linked, m.cell_polygons());
+        crate::boundary::link(&mut linked, m.cell_polygons(), None);
         assert_eq!(linked.unique_faces, m.unique_faces);
         assert_eq!(linked.boundary_owner, m.boundary_owner);
         for f in 0..m.cell_face_id.len() {

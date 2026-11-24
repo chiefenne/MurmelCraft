@@ -1321,6 +1321,22 @@ impl eframe::App for MurmelApp {
                     self.player_bar(ui)
                 });
         }
+        if self.session.charts.as_ref().is_some_and(|c| c.visible) {
+            egui::Panel::bottom("charts")
+                .default_size(300.0)
+                .size_range(180.0..=640.0)
+                .resizable(true)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(color(p.bg_panel))
+                        .inner_margin(egui::Margin::symmetric(12, 4))
+                        .stroke(egui::Stroke::new(1.0, color(p.line))),
+                )
+                .show(ui, |ui| {
+                    self.region(ui, Region::Charts);
+                    self.chart_panel(ui)
+                });
+        }
         if self.show_tree {
             egui::Panel::left("tree")
                 .default_size(264.0)

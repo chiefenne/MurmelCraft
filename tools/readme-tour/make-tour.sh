@@ -26,7 +26,7 @@ shoot() { # theme, then pairs of "NN-file shot"
   while [ $# -gt 0 ]; do
     python3 -I "$here/shots.py" "$repo/target/release/murmel" "$2"
     xdotool mousemove 3150 1950   # the pointer off the window: no hover tooltip
-    sleep 12                      # slices, arrows and cuts finish on worker threads
+    sleep 20                      # slices, iso-surfaces, streamlines and cuts finish on worker threads
     import -window "$win" "$work/shots/$1.png"
     shift 2
   done
@@ -34,7 +34,8 @@ shoot() { # theme, then pairs of "NN-file shot"
 }
 
 shoot dark 01-mesh mesh 02-cell-types-clip cell_types_clip 03-vorticity-slice vorticity_slice \
-  04-speed-arrows speed_arrows 05-slices-iso-surface slices_iso 06-region-of-interest region \
+  04-speed-arrows speed_arrows 04-streamlines streamlines 05-vorticity-iso-slices vorticity_iso_slices \
+  05-vorticity-iso vorticity_iso_alone 06-region-of-interest region \
   07-measure-probe measure_probe
 shoot light 08-light-theme-pressure light_pressure
 python3 -I "$here/make_webp.py" "$work/shots" "$out"

@@ -108,7 +108,8 @@ fn mesh_summary(s: &Session) -> Value {
             "vtu"
         },
         "fields": m.fields.names(),
-        "files": m.files.iter().map(|(n, d)| json!({"name": n, "sha256": d})).collect::<Vec<_>>(),
+        "hash": m.hash.key(),
+        "files": m.files.iter().map(|(n, d)| json!({"name": n, m.hash.key(): d})).collect::<Vec<_>>(),
         "summary": m.mesh.summary(),
         "metadata": m.mesh.metadata,
         "evidence": m.evidence,
@@ -1416,19 +1417,20 @@ fn session_load(input: Value, s: &mut Session) -> Run {
     let mut warnings = Vec::new();
     match (f.mesh_path(&i.path), &f.mesh) {
         (Some(p), Some(saved)) => {
-            // The open mesh is recognised by its digest.
-            s.wait_digest();
-            let open = s
-                .mesh
-                .as_ref()
-                .is_some_and(|m| m.digest == saved.sha256 && same_path(&m.path, &p));
+            // The open mesh is recognised by its digest, taken with the
+            // hash the session saved it with (SHA-256 before 1.15).
+            let saved = saved.digest();
+            let same = |s: &mut Session| match saved {
+                Some((hash, d)) => s.digest_as(hash).eq_ignore_ascii_case(d),
+                None => true,
+            };
+            let open = s.mesh.as_ref().is_some_and(|m| same_path(&m.path, &p)) && same(s);
             if !open {
                 s.open(&p).map_err(|e| {
                     Diagnostic::new(e.code, format!("the session's mesh: {}", e.message))
                 })?;
-                s.wait_digest();
             }
-            if s.mesh.as_ref().is_some_and(|m| m.digest != saved.sha256) {
+            if s.mesh.is_some() && !same(s) {
                 warnings.push(json!(Diagnostic::new(
                     "SESS003",
                     format!(
@@ -2272,6 +2274,17 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
         "shows another time step of the run; the view stays as it is",
     ),
     ("series.play", "how the window plays the series, not a view"),
+    (
+        "charts.open",
+        "opens the tables of a run; the view stays as it is",
+    ),
+    (
+        "charts.show",
+        "how the window's chart panel shows, not a view",
+    ),
+    ("charts.data", READS_ONLY),
+    ("charts.export", "writes a file; the view stays as it is"),
+    ("stats.at", READS_ONLY),
 ];
 
 /// The reason in `NOT_JOURNALED` of a tool that changes nothing: no file,
@@ -2374,7 +2387,7 @@ pub static TOOLS: &[Tool] = &[
         version: 4,
         action: Action::Read,
         label_key: "tool-mesh-open",
-        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). In the window the SHA-256 of the files is taken after the mesh opens: until it is, `validity` is `checking` and `digest` and the files' `sha256` are empty.",
+        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty.",
         outputs: &[],
         reads: &["path"],
         input_schema: || {
@@ -3044,6 +3057,61 @@ pub static TOOLS: &[Tool] = &[
         run: crate::series::series_play,
     },
     Tool {
+        id: "charts.open",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-charts-open",
+        summary: "Open the tables of a FoehnCraft run for charts and statistics (D268): an output folder, or a table or series.json in it. Reads datums.csv (foehncraft-datums 1), spray.csv (foehncraft-spray 1), every spray_hist_<datum>.csv (foehncraft-spray-histogram 1) and the end-of-run statistics of result.json; no solver needed. The result lists the tables, the datums (surface or volume, with or without liquid), the injectors, the first and last step and time, and the charts: mass_flow, cumulative, penetration, diameters, histogram, columns. The charts stay open when another mesh opens; series.open opens the charts of its folder too.",
+        outputs: &[],
+        reads: &["path"],
+        input_schema: crate::charts::charts_open_schema,
+        run: crate::charts::charts_open,
+    },
+    Tool {
+        id: "charts.show",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-charts-show",
+        summary: "Choose the chart of the window's chart panel and show or hide it (visible). chart: mass_flow (net liquid rate through the surface datums, per report interval), cumulative (net liquid through them so far), penetration (per injector), diameters (D32 of the liquid through each datum and in the flow), histogram (the droplet sizes of one datum: weight mass or droplets, cumulative up to the step or the step's interval alone, as a share in percent over log diameter) or columns (datums:<column> or spray:<column>, all of one unit: one chart has one axis). datums and injectors pick the series (left out: the first six; a seventh is refused, the six hues are never cycled). Fields left out keep the panel's; a new chart starts from its defaults. The time series' step is the cursor.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::charts::charts_show_schema,
+        run: crate::charts::charts_show,
+    },
+    Tool {
+        id: "charts.data",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-charts-data",
+        summary: "The data of a chart, as charts.show describes it (fields left out: the panel's chart): its title, axes (title, unit shown, factor from SI, range, ticks, log), lines (name, time and value in SI), bars (diameter range, share in percent), the cursor's time and notes on what is left out. step (left out: the player's step) places the cursor and picks the histogram's interval.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::charts::charts_data_schema,
+        run: crate::charts::charts_data,
+    },
+    Tool {
+        id: "charts.export",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-charts-export",
+        summary: "Write a chart (fields as charts.show; left out: the panel's chart) to path as PNG (scale pixels per point, default 2) or SVG, width x height points (default 720 x 405), in the session's theme or theme dark or light, with the cursor at step (left out: the player's step). The same layout as the window's panel: title, legend for two or more series, the y axis' title and unit on top, the series hues of the tokens in order.",
+        outputs: &["path"],
+        reads: &[],
+        input_schema: crate::charts::charts_export_schema,
+        run: crate::charts::charts_export,
+    },
+    Tool {
+        id: "stats.at",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-stats-at",
+        summary: "The statistics of the charted run at step (left out: the player's step, else the last): from spray.csv the mass book (parcels, injected, in the flow, deposited, escaped, lost), D32 in the flow, centre of mass and per injector parcels, liquid, penetration and farthest parcel; per datum from datums.csv the gas mass flow, the liquid through it each way and net, its rate, crossings, D10, D32 and Dv50 (volumes: liquid, parcels, D32); from its histogram the droplets and mass so far and Dv10, Dv50, Dv90 from the bins; at the last step the end-of-run statistics of result.json (D10 to D43, Dv10/50/90, span, Rosin-Rammler fit, mean rate and its error). Each table names the row it took (the last at or before the step).",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::charts::stats_at_schema,
+        run: crate::charts::stats_at,
+    },
+    Tool {
         id: "region.set",
         version: 1,
         action: Action::Read,
@@ -3422,7 +3490,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-session-save",
-        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement.",
+        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, its digest as `blake3`, or `sha256` when its evidence recorded SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement.",
         outputs: &["path"],
         reads: &[],
         input_schema: || {

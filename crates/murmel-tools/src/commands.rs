@@ -1079,6 +1079,73 @@ pub fn commands() -> Vec<Command> {
     for (id, key, keys, input) in steps {
         v.push(cmd(id, key, "series", keys, Dynamic("series.go", input)));
     }
+    // Charts and statistics of a run (D268, second milestone): open the
+    // tables of an output folder, show or hide the panel, pick a chart,
+    // save it as a picture.
+    v.push(cmd(
+        "window.charts_open",
+        "cmd-charts-open",
+        "series",
+        &[],
+        Window(Some("charts.open")),
+    ));
+    v.push(cmd(
+        "charts.show:toggle",
+        "cmd-charts-toggle",
+        "series",
+        &[],
+        Dynamic("charts.show", |s| {
+            s.charts.as_ref().map(|c| json!({"visible": !c.visible}))
+        }),
+    ));
+    for kind in murmel_engine::chart::ChartKind::ALL {
+        if kind == murmel_engine::chart::ChartKind::Columns {
+            continue;
+        }
+        v.push(cmd(
+            format!("charts.show:{}", kind.key()),
+            format!("cmd-charts-{}", kind.key().replace('_', "-")),
+            "series",
+            &[],
+            Dynamic(
+                "charts.show",
+                match kind {
+                    murmel_engine::chart::ChartKind::MassFlow => |s: &Session| {
+                        s.charts
+                            .as_ref()
+                            .map(|_| json!({"chart": "mass_flow", "visible": true}))
+                    },
+                    murmel_engine::chart::ChartKind::Cumulative => |s: &Session| {
+                        s.charts
+                            .as_ref()
+                            .map(|_| json!({"chart": "cumulative", "visible": true}))
+                    },
+                    murmel_engine::chart::ChartKind::Penetration => |s: &Session| {
+                        s.charts
+                            .as_ref()
+                            .map(|_| json!({"chart": "penetration", "visible": true}))
+                    },
+                    murmel_engine::chart::ChartKind::Diameters => |s: &Session| {
+                        s.charts
+                            .as_ref()
+                            .map(|_| json!({"chart": "diameters", "visible": true}))
+                    },
+                    _ => |s: &Session| {
+                        s.charts
+                            .as_ref()
+                            .map(|_| json!({"chart": "histogram", "visible": true}))
+                    },
+                },
+            ),
+        ));
+    }
+    v.push(cmd(
+        "window.charts_export",
+        "cmd-charts-export",
+        "series",
+        &[],
+        Window(Some("charts.export")),
+    ));
     // Streamlines: Alt + L adds a seed line across the mesh near the low
     // end of its longest side (where a duct's inlet usually is), or turns
     // the current set on and off.
@@ -1626,6 +1693,8 @@ fn new_stream(s: &Session, kind: &str) -> Option<Value> {
 /// Tools no command calls, and why: they answer questions whose answers
 /// the window already shows, or need an input only a panel can give.
 pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
+    ("charts.data", "the chart panel draws it"),
+    ("stats.at", "the statistics beside the chart show it"),
     (
         "slice.rotate",
         "the slice handle's tilt arcs call it, as for clip planes",
@@ -1919,6 +1988,10 @@ mod tests {
             let e = crate::call("series.open", json!({"path": dir}), s);
             assert!(e.ok(), "{:?}", e.diagnostics);
             assert!(s.display.parcels.is_some());
+            // A run's tables, for the chart commands.
+            let run = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test-fixtures/spray-run");
+            assert!(crate::call("charts.open", json!({"path": run}), s).ok());
             // A slice selected, so its settings can become the defaults.
             assert!(crate::call("select.item", json!({"item": "slice:1", "add": true}), s).ok());
             assert!(crate::call("select.item", json!({"item": "measure:1", "add": true}), s).ok());

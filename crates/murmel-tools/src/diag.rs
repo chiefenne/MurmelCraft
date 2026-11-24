@@ -187,6 +187,30 @@ const OWN: &[Code] = &[
         fix: Some("series.open's result gives the count, the first and last step and the times."),
     },
     Code {
+        code: "CHART001",
+        severity: Severity::Error,
+        meaning: "The tables of a run cannot be read: the path does not exist, the folder has neither datums.csv nor spray.csv, or a table is not of its format version 1 (foehncraft-datums, foehncraft-spray), has no header or a short row before its last.",
+        fix: Some(
+            "Give the output folder of a transient FoehnCraft run with [[datum]] or [spray] (or a file in it); the message names the table and what is wrong.",
+        ),
+    },
+    Code {
+        code: "CHART002",
+        severity: Severity::Error,
+        meaning: "No run is charted.",
+        fix: Some(
+            "Open an output folder with charts.open; series.open opens the charts of its folder too.",
+        ),
+    },
+    Code {
+        code: "CHART003",
+        severity: Severity::Error,
+        meaning: "The chart cannot be drawn as asked: an unknown datum, injector or column, more series than the six hues, columns of different units on one axis, a histogram of several datums or none, a size or scale out of range, or a file that is not .png or .svg.",
+        fix: Some(
+            "The message lists what the run has; charts.open's result lists datums, injectors and tables. Chart quantities of other units apart.",
+        ),
+    },
+    Code {
         code: "STREAM001",
         severity: Severity::Error,
         meaning: "No streamline set has this number, or the display has the most it holds (8).",
@@ -365,7 +389,7 @@ const OWN: &[Code] = &[
     Code {
         code: "SESS003",
         severity: Severity::Warning,
-        meaning: "The session's mesh changed since the session was saved (its SHA-256 differs).",
+        meaning: "The session's mesh changed since the session was saved (its digest differs).",
         fix: Some("Check the view; save the session again to accept the new mesh."),
     },
     Code {

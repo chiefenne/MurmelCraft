@@ -29,9 +29,9 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | Stage | What it measures |
 |---|---|
 | `read` | the reader: file to mesh model, face topology included; its phases name the reader's steps (`read.stream`, `read.cells`, `read.topology`, ...), and `topology.*` splits linking the cell faces of a `.vtu` or VTKHDF file: `buckets` (faces sorted by their smallest point), `twins` (each face finds its twin), `number` (distinct faces, owner and neighbour), `flip` (which cell faces run backwards), `distinct` (the distinct faces copied out), `boundary` (the boundary faces found), `rest` |
-| `digest` | SHA-256 of the mesh files (the validity badge needs it) |
+| `digest` | BLAKE3 hash of the mesh files (the validity badge needs it) |
 | `open` | `mesh.open` as the window does it: read, evidence, first surface (the files are hashed afterwards) |
-| `open.digest` | the wait, after `open`, until the SHA-256 of the files is in place (the validity badge) |
+| `open.digest` | the wait, after `open`, until the digests of the files are in place (the validity badge) |
 | `surface` | the surface of the default display (boundary faces), with its phases: `surface.polygons` (which faces to draw), `surface.points` (corners and normals), `surface.buffers` (vertices, triangles, edges), `surface.extras` (slices, iso-surfaces, arrows) |
 | `surface.crinkle`, `surface.flat` | the surface with one clip plane through the centre |
 | `surface.hidden_zone` | one zone hidden, so the faces between zones lie open |
@@ -603,7 +603,7 @@ cannot be split over threads. The user's choice for it: remember the
 files already checked now, and hash with BLAKE3 in all three projects
 later.
 
-The window and the command line remember the SHA-256 of every mesh file
+The window and the command line remember the digest of every mesh file
 they hash in `checked-files.json` in the settings folder
 (`murmel_engine::checked`). A file opened again with the same size and
 modification time, and on Unix the same change time and file id
@@ -726,3 +726,63 @@ Sorting the faces into buckets and copying the distinct faces out take
 more than half of it. Both write large fresh arrays, which is where the
 iMac (2.0 s for this step at 16 threads) is limited by memory rather
 than by its cores; its own split will show whether that holds there.
+
+## Sorting and copying the faces faster (2026-11-24)
+
+The split above showed two steps doing more than they had to:
+
+- **Sorting the faces into buckets** first found each face's smallest
+  point (reading all 1.4 GB of the polyhedra's faces again) and joined
+  the threads' pieces on one thread, then counted where the faces go in
+  another pass. The `.vtu` reader now notes each face's smallest point
+  while it reads the face (`Cells::least`), and linking takes it from
+  there: one pass counts, in place. Readers that do not note it (VTKHDF,
+  the synthetic meshes) have it found in that same pass.
+- **Copying the distinct faces out** added up their sizes on one thread
+  first. Each range of faces now adds up its own, and copies after the
+  ranges before it.
+
+The mesh is the same bit for bit (every array hashed, old against new,
+for the fixtures, the 1 M bench mesh and a synthetic honeycomb, at 1, 3
+and 4 threads).
+
+The 4 M cell `.vtu` here, two runs of `read` and `open` each (ms; main in
+brackets):
+
+| 4 threads | read | open |
+|---|---:|---:|
+| buckets | 238, 245 (536, 546) | 223, 248 (536, 571) |
+| distinct | 212, 209 (351, 345) | 244, 234 (357, 359) |
+| all of `read.topology` | 1,211, 1,219 (1,638, 1,688) | 1,259, 1,232 (1,652, 1,696) |
+| `read.cells` | 379, 379 (288, 280) | 396, 387 (286, 309) |
+
+Linking takes 0.44 s less, and the cells 0.1 s more: writing the
+smallest points (227 MB at 4 M cells) touches fresh memory. Together
+0.35 s less at 4 threads; the peak memory is unchanged (3,999 MiB). On
+one thread, linking went from 4.9 s to 3.4 s.
+
+## BLAKE3 file checks (2026-11-24)
+
+The second half of that choice: MurmelCraft, KoflCraft and FoehnCraft
+hash files with BLAKE3. The user's card, "BLAKE3 only, still check old":
+new files record only BLAKE3, named as such, and what was recorded with
+SHA-256 before is still checked with SHA-256 (`murmel_mesh::hash`).
+
+- The readers take the BLAKE3 hash beside the parsing; the window takes
+  it after the mesh opens, the file read in pieces of 16 MiB on one
+  thread and each piece hashed on every core (`update_rayon`).
+- KoflCraft's `mesh-evidence.json` 1.1 names its hash in `file_hash`
+  (`blake3`); 1.0 has none and holds SHA-256. A mesh is checked with the
+  hash its evidence names, BLAKE3 without evidence (`OpenMesh::hash`).
+- `checked-files.json` 1.1 keeps `blake3` and, once needed, `sha256` of a
+  file side by side; a 1.0 list is still read.
+- Session files 1.15 save `mesh.blake3` (`mesh.sha256` for a mesh with
+  evidence 1.0); an older session's SHA-256 is compared as SHA-256,
+  taken once and remembered.
+
+A 2 GB file in the page cache, on the 4-core cloud machine (which has
+SHA instructions, unlike the iMac): SHA-256 1.4 s, BLAKE3 on one thread
+0.7 s, BLAKE3 on four threads 0.14 s. Without SHA instructions SHA-256
+runs at about 280 MB/s (17 s for the iMac's 5 GB); BLAKE3 on its eight
+cores should take the disk's time, about 1 to 3 s, to be measured there
+with `murmel bench run` (stage `digest`).

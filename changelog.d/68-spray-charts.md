@@ -1,0 +1,3 @@
+### Added
+
+- Charts and statistics of a FoehnCraft run (`charts.open`, `charts.show`, `charts.data`, `charts.export`, `stats.at`; D268, third part): `datums.csv`, `spray.csv` and the size histograms `spray_hist_<datum>.csv` read without the solver. Charts of the liquid mass flow through the datums, the liquid through them so far, the penetration per injector, D32 through each datum and in the flow, any columns of one unit, and the droplet size histogram of a datum (by mass or number, cumulative or per interval). A panel below the view draws the chart with a cursor at the player's step and the statistics at that step beside it; `series.open` opens the charts of its folder; charts export as PNG or SVG; six chart hues of our own in the tokens.

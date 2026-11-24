@@ -1,0 +1,8 @@
+[
+ {"tool": "charts.open", "input": {"path": "."}},
+ {"tool": "charts.export", "input": {"path": "mass_flow.png", "chart": "mass_flow", "step": 150}},
+ {"tool": "charts.export", "input": {"path": "penetration.png", "chart": "penetration", "step": 150}},
+ {"tool": "charts.export", "input": {"path": "diameters.png", "chart": "diameters"}},
+ {"tool": "charts.export", "input": {"path": "histogram_outlet.png", "chart": "histogram", "datums": ["outlet"]}},
+ {"tool": "stats.at", "input": {"step": 150}}
+]

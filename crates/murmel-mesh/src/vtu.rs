@@ -20,7 +20,6 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
-use sha2::{Digest, Sha256};
 
 use crate::field::{Field, Location, Results, group_vectors};
 use crate::{CellKind, Mesh, MeshError, Patch, PatchRole, Polygons, boundary, numbers};
@@ -88,7 +87,7 @@ pub fn read_vtu_results(path: &Path) -> Result<(Mesh, Results), MeshError> {
 }
 
 /// As [`read_vtu_results`]; without `hash` no SHA-256 is taken
-/// (`Mesh::file_sha256` stays empty).
+/// (`Mesh::file_blake3` stays empty).
 pub(crate) fn read_vtu_file(path: &Path, hash: bool) -> Result<(Mesh, Results), MeshError> {
     if !path.is_file() {
         return Err(err(
@@ -108,7 +107,7 @@ pub(crate) fn read_vtu_file(path: &Path, hash: bool) -> Result<(Mesh, Results), 
         } else {
             (None, None)
         };
-        let digest = hashed.map(|rx| s.spawn(move || sha256_of(rx)));
+        let digest = hashed.map(|rx| s.spawn(move || blake3_of(rx)));
         s.spawn(move || read_ahead(file, to_parse, to_hash));
         // The parser drops its end of the chunks when it returns, which
         // stops the reader early after a failure or a cancel.
@@ -119,7 +118,7 @@ pub(crate) fn read_vtu_file(path: &Path, hash: bool) -> Result<(Mesh, Results), 
     crate::profile::check()?;
     let _t = crate::profile::span("read.topology");
     polys.link(&mut mesh);
-    mesh.file_sha256 = digest.into_iter().collect();
+    mesh.file_blake3 = digest.into_iter().collect();
     Ok((mesh, results))
 }
 
@@ -150,14 +149,14 @@ fn read_ahead(
     }
 }
 
-/// The SHA-256 (hex) of the chunks of a file, in their order.
-fn sha256_of(chunks: Receiver<Arc<Vec<u8>>>) -> String {
-    let _t = crate::profile::span("read.sha256");
-    let mut h = Sha256::new();
+/// The BLAKE3 hash (hex) of the chunks of a file, in their order.
+fn blake3_of(chunks: Receiver<Arc<Vec<u8>>>) -> String {
+    let _t = crate::profile::span("read.blake3");
+    let mut h = crate::FileHash::Blake3.hasher();
     for c in chunks {
         h.update(c.as_slice());
     }
-    crate::hex(&h.finalize())
+    h.finish()
 }
 
 /// The file as the parser reads it: the chunks [`read_ahead`] sends, and
@@ -1013,18 +1012,19 @@ fn points_in_range(ids: &[u32], points: usize) -> Result<(), MeshError> {
     }
 }
 
-/// The faces of the cells as the reader leaves them for linking.
+/// The faces of the cells as the reader leaves them for linking, with
+/// each face's smallest point when the reader found it.
 enum CellFaces {
-    Packed(Polygons),
-    InStream(cells::InStream),
+    Packed(Polygons, Vec<u32>),
+    InStream(cells::InStream, Vec<u32>),
 }
 
 impl CellFaces {
     /// Link the faces into `mesh`'s face topology.
     fn link(self, mesh: &mut Mesh) {
         match self {
-            CellFaces::Packed(p) => boundary::link(mesh, p),
-            CellFaces::InStream(s) => boundary::link(mesh, s),
+            CellFaces::Packed(p, least) => boundary::link(mesh, p, Some(least)),
+            CellFaces::InStream(s, least) => boundary::link(mesh, s, Some(least)),
         }
     }
 }
@@ -1112,9 +1112,11 @@ fn assemble(h: &Header, arrays: &mut [Array]) -> Result<(Mesh, CellFaces, Vec<Sl
     let polys = match read.faces {
         cells::Faces::Packed(p) => {
             drop(stream);
-            CellFaces::Packed(p)
+            CellFaces::Packed(p, read.least)
         }
-        cells::Faces::InStream(at) => CellFaces::InStream(cells::InStream { stream, at }),
+        cells::Faces::InStream(at) => {
+            CellFaces::InStream(cells::InStream { stream, at }, read.least)
+        }
     };
     mesh.cell_faces = read.cell_faces;
     mesh.cell_zone = read.cell_zone;

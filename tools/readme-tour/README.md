@@ -13,7 +13,7 @@ to make the same for another project:
    ```
 
    FoehnCraft (`cargo build --release -p foehncraft-cli`) on
-   `manifold-mesh/foehncraft.vtu` with [manifold.toml](manifold.toml):
+   `manifold-mesh/foehncraft.vtkhdf` (KoflCraft's default hand-off) with [manifold.toml](manifold.toml):
    `foehn flow manifold.toml --out run` (about 3 minutes on 4 cores) writes
    `run/fields.vtkhdf`.
 
@@ -61,7 +61,12 @@ What bit us:
 - The "Agent connected" badge shows while the bridge is connected, and the
   hover tooltip shows where the pointer rests: capture after the
   disconnect, with the pointer outside the window.
-- Slices, arrows and region cuts finish on worker threads: wait (12 s on
-  lavapipe) before capturing.
+- Slices, arrows, iso-surfaces, streamlines and region cuts finish on
+  worker threads: wait (20 s on lavapipe) before capturing.
+- FoehnCraft's own vorticity gives a ragged iso-surface on the Manifold
+  mesh; the vorticity slides use MurmelCraft's least-squares
+  `mag(curl(velocity))` (field.calculate), which is much smoother.
+- Arrows whose length follows the speed shrink to specks in the slow box;
+  the arrow slide uses equal-length arrows on a speed slice.
 - GIF would cut the colour maps to 256 colours; GitHub plays animated
   WebP in an `<img>`, as FoehnCraft's README does.

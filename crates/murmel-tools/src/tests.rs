@@ -1014,6 +1014,9 @@ fn reads_only_tools_change_nothing() {
         )
         .ok()
     );
+    // A run's tables, for the chart tools that read them.
+    let run = root().join("test-fixtures/spray-run");
+    assert!(call("charts.open", json!({"path": run}), &mut s).ok());
     let mut ran = 0;
     for t in tools().iter().filter(|t| crate::reads_only(t.id)) {
         assert_eq!(t.action, crate::Action::Read, "{}", t.id);
@@ -1284,6 +1287,68 @@ fn stale_and_broken_sessions() {
         &mut t,
     );
     assert_eq!(e.diagnostics[0].code, "SESS002");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant: a session names the mesh digest by its hash: `blake3` for a
+/// mesh without evidence (or with KoflCraft's evidence 1.1), `sha256` for
+/// one whose evidence 1.0 recorded SHA-256; a session saved before 1.15
+/// (`sha256` of a mesh now checked with BLAKE3) still recognises its mesh,
+/// and warns SESS003 only when that SHA-256 differs. Breaks when loading
+/// compares digests of two hashes (every older session would warn its
+/// mesh changed) or skips the check for older sessions.
+#[test]
+fn sessions_name_the_hash_of_their_mesh() {
+    use murmel_mesh::FileHash;
+    let dir = scratch("session-hash");
+    let mesh = dir.join("box.vtu");
+    std::fs::copy(root().join("test-fixtures/box/foehncraft.vtu"), &mesh).unwrap();
+    let file = dir.join("s.murmel");
+    let mut s = session();
+    let open = call("mesh.open", json!({"path": mesh}), &mut s);
+    assert_eq!(open.result["hash"], "blake3");
+    assert_eq!(
+        open.result["files"][0]["blake3"],
+        FileHash::Blake3
+            .of_bytes(&std::fs::read(&mesh).unwrap())
+            .as_str()
+    );
+    assert!(call("session.save", json!({"path": file}), &mut s).ok());
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(v["mesh"]["blake3"], open.result["digest"]);
+    assert!(v["mesh"].get("sha256").is_none());
+
+    // As saved before 1.15.
+    let sha = FileHash::Sha256.of_bytes(&std::fs::read(&mesh).unwrap());
+    v["format_version"] = "1.14".into();
+    v["mesh"].as_object_mut().unwrap().remove("blake3");
+    v["mesh"]["sha256"] = sha.into();
+    std::fs::write(&file, v.to_string()).unwrap();
+    for fresh in [true, false] {
+        let mut t = if fresh { session() } else { s.clone() };
+        let e = call("session.load", json!({"path": file}), &mut t);
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        assert_eq!(e.result["warnings"], json!([]), "fresh: {fresh}");
+    }
+    v["mesh"]["sha256"] = FileHash::Sha256.of_bytes(b"other").into();
+    std::fs::write(&file, v.to_string()).unwrap();
+    let e = call("session.load", json!({"path": file}), &mut session());
+    assert_eq!(e.result["warnings"][0]["code"], "SESS003");
+
+    // A mesh whose evidence (1.0) recorded SHA-256 is saved with it.
+    let channel = channel_case(&dir.join("channel"));
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    assert!(call("session.save", json!({"path": file}), &mut s).ok());
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(
+        v["mesh"]["sha256"],
+        FileHash::Sha256
+            .of_bytes(&std::fs::read(&channel).unwrap())
+            .as_str()
+    );
+    assert!(v["mesh"].get("blake3").is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3129,4 +3194,93 @@ fn probe_history_tools() {
     );
     assert_eq!(e.diagnostics[0].code, "PROBE003");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant (charts, D268 second milestone): charts.open reads a
+/// FoehnCraft run's tables, charts.show changes the panel's chart and
+/// refuses what the run lacks (CHART003) without changing it, charts.data
+/// and stats.at follow the series' step, charts.export writes a PNG of
+/// the size asked and an SVG, and every chart tool without a run is
+/// CHART002. Breaks when a tool stops reaching the engine, the step of
+/// the player is not used or an export writes another size; the engine's
+/// tests check the numbers.
+#[test]
+fn chart_tools() {
+    let mut s = session();
+    for (id, input) in [
+        ("charts.show", json!({})),
+        ("charts.data", json!({})),
+        ("stats.at", json!({})),
+    ] {
+        let e = call(id, input, &mut s);
+        assert_eq!(e.diagnostics[0].code, "CHART002", "{id}");
+    }
+    let e = call("charts.open", json!({"path": "/nonexistent/run"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "CHART001");
+    let run = root().join("test-fixtures/spray-run");
+    let e = call("charts.open", json!({"path": run}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["charts"]["run"]["injectors"], json!(["nozzle"]));
+    assert_eq!(e.result["charts"]["spec"]["chart"], "mass_flow");
+    let e = call(
+        "charts.show",
+        json!({"chart": "histogram", "datums": ["nope"]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "CHART003");
+    assert!(e.diagnostics[0].message.contains("outlet"));
+    assert_eq!(s.charts.as_ref().unwrap().spec.chart.key(), "mass_flow");
+    let e = call(
+        "charts.show",
+        json!({"chart": "histogram", "datums": ["outlet"], "weight": "droplets"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["chart"]["bars"].as_array().unwrap().len(), 40);
+    // The panel's chart is the default of charts.data; a step picks the
+    // histogram's interval.
+    let e = call(
+        "charts.data",
+        json!({"step": 100, "cumulative": false}),
+        &mut s,
+    );
+    assert!(
+        e.result["chart"]["title"]
+            .as_str()
+            .unwrap()
+            .contains("step 100")
+    );
+    let e = call("stats.at", json!({"step": 100}), &mut s);
+    assert_eq!(e.result["statistics"]["step"], 100);
+    let dir = root().join("target/render-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("chart.png");
+    let e = call(
+        "charts.export",
+        json!({"path": png, "chart": "penetration", "width": 400, "height": 240, "scale": 1.5}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let (w, h, _) = murmel_render::read_png(&png).unwrap();
+    assert_eq!((w, h), (600, 360));
+    let svg = dir.join("chart.svg");
+    let e = call(
+        "charts.export",
+        json!({"path": svg, "theme": "light"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(std::fs::read_to_string(&svg).unwrap().starts_with("<svg"));
+    let e = call(
+        "charts.export",
+        json!({"path": dir.join("chart.jpg")}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "CHART003");
+    let e = call(
+        "charts.export",
+        json!({"path": png, "chart": "columns", "columns": ["spray:in_flow_kg", "spray:d32_m"]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "CHART003");
 }

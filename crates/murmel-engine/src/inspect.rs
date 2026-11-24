@@ -1048,6 +1048,7 @@ mod tests {
             mesh: std::sync::Arc::new(m.clone()),
             evidence: None,
             evidence_problem: None,
+            hash: Default::default(),
             digest: String::new(),
             files: Vec::new(),
             validity: Validity::NoEvidence,

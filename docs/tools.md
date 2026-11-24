@@ -9,7 +9,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `system.info` | 1 | read | Version and platform of this build. |
 | `system.commands` | 1 | read | The catalogue of every tool with its input schema. |
 | `diag.codes` | 1 | read | The diagnostic codes with their severity, meaning and fix. |
-| `mesh.open` | 4 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). In the window the SHA-256 of the files is taken after the mesh opens: until it is, `validity` is `checking` and `digest` and the files' `sha256` are empty. |
+| `mesh.open` | 4 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty. |
 | `mesh.close` | 1 | read | Drop the open mesh from the session. |
 | `mesh.info` | 1 | read | Counts, zones, patches, metadata and evidence of the open mesh. |
 | `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport. |
@@ -56,6 +56,11 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `series.open` | 1 | read | Open a time series of one run and show its first step (or step): FoehnCraft's series.json (format foehncraft.series 1: entries of step, time and files fields and parcels, relative to its folder; other keys ignored) or an output folder (its series.json, else its fields_<step>.vtkhdf and spray/parcels_<step>.vtkhdf, matched by step). Each step opens its fields file as the next time step of the open mesh (same cells: the display, derived fields, camera and journal stay, only the values change) and its parcel file with the parcel settings kept; a step without a fields file keeps the mesh shown, one without parcels draws none. The result's series gives the count, the index, step and time shown, its files, the first and last step and time, and the playback. Opening another mesh ends the series. |
 | `series.go` | 1 | read | Show another step of the open series: index (from 0), step, time (the nearest entry with a time), by (entries on, negative back; wraps round while the player loops, else holds at the ends) or to first or last; exactly one. A step the series lacks is refused with the steps it has. |
 | `series.play` | 1 | read | Play or pause the open series in the window (playing), at rate steps a second (0.1 to 60, default 4), looping or stopping at the last step (loop, default on). The window's player bar and the status bar show it; on the command line and for scripts the setting is kept and steps are made with series.go, and export.movie with motion series writes a movie of the steps. |
+| `charts.open` | 1 | read | Open the tables of a FoehnCraft run for charts and statistics (D268): an output folder, or a table or series.json in it. Reads datums.csv (foehncraft-datums 1), spray.csv (foehncraft-spray 1), every spray_hist_<datum>.csv (foehncraft-spray-histogram 1) and the end-of-run statistics of result.json; no solver needed. The result lists the tables, the datums (surface or volume, with or without liquid), the injectors, the first and last step and time, and the charts: mass_flow, cumulative, penetration, diameters, histogram, columns. The charts stay open when another mesh opens; series.open opens the charts of its folder too. |
+| `charts.show` | 1 | read | Choose the chart of the window's chart panel and show or hide it (visible). chart: mass_flow (net liquid rate through the surface datums, per report interval), cumulative (net liquid through them so far), penetration (per injector), diameters (D32 of the liquid through each datum and in the flow), histogram (the droplet sizes of one datum: weight mass or droplets, cumulative up to the step or the step's interval alone, as a share in percent over log diameter) or columns (datums:<column> or spray:<column>, all of one unit: one chart has one axis). datums and injectors pick the series (left out: the first six; a seventh is refused, the six hues are never cycled). Fields left out keep the panel's; a new chart starts from its defaults. The time series' step is the cursor. |
+| `charts.data` | 1 | read | The data of a chart, as charts.show describes it (fields left out: the panel's chart): its title, axes (title, unit shown, factor from SI, range, ticks, log), lines (name, time and value in SI), bars (diameter range, share in percent), the cursor's time and notes on what is left out. step (left out: the player's step) places the cursor and picks the histogram's interval. |
+| `charts.export` | 1 | write-files | Write a chart (fields as charts.show; left out: the panel's chart) to path as PNG (scale pixels per point, default 2) or SVG, width x height points (default 720 x 405), in the session's theme or theme dark or light, with the cursor at step (left out: the player's step). The same layout as the window's panel: title, legend for two or more series, the y axis' title and unit on top, the series hues of the tokens in order. |
+| `stats.at` | 1 | read | The statistics of the charted run at step (left out: the player's step, else the last): from spray.csv the mass book (parcels, injected, in the flow, deposited, escaped, lost), D32 in the flow, centre of mass and per injector parcels, liquid, penetration and farthest parcel; per datum from datums.csv the gas mass flow, the liquid through it each way and net, its rate, crossings, D10, D32 and Dv50 (volumes: liquid, parcels, D32); from its histogram the droplets and mass so far and Dv10, Dv50, Dv90 from the bins; at the last step the end-of-run statistics of result.json (D10 to D43, Dv10/50/90, span, Rosin-Rammler fit, mean rate and its error). Each table names the row it took (the last at or before the step). |
 | `region.set` | 1 | read | Add or change a region of interest (region: its number, region:1 is the first; left out: the current region, the one selected last or else added last; new: add one, up to 16). While a region is enabled, only the cells of the enabled regions show and slices, iso-surfaces, arrows and quality are computed only there; several enabled regions show their union. shape: box (center, size: full lengths along x, y, z; a new one is half the mesh's box), sphere (center, radius), slab (the cells between two planes thickness apart, the middle one through origin with normal), zone (zone: a cell zone's name), patch (patch: its name, layers: the cells along it and layers - 1 rings further in, 1 to 64), cells (cells: ids, left out: the cells picked now; rings: rings of face neighbours added, 0 to 64). A cell belongs to a box, sphere or slab when its bounding box touches the shape, so the shape is fully covered (also when it is thinner than a cell) and the border shows whole cells. cut: crinkle (the default, whole cells) or flat (box, sphere and slab only: the border cells are clipped to the shape and closed by their sections, as a flat clip plane cuts; a box's and a slab's cut is exact, a sphere's follows it to within a cell, and a sphere with no mesh node inside shows whole cells, with a note; a cell a whole-cell region takes stays whole, and where flat regions overlap a cell is cut by the one its centre lies deepest in). Changing shape replaces the region's shape; fields of another shape are refused. enabled false keeps the region but shows the whole mesh. The result lists each region with the cells it takes, its halo (the cells around it a mesh read in pieces also loads) and the size of that part of the mesh model. |
 | `region.clear` | 1 | read | Remove a region (region: its number; left out: the current region), or all of them (all); the regions after it move up one. With no region enabled the whole mesh shows. |
 | `region.list` | 1 | read | The regions of interest: each with its shape, whether it is enabled, and what it takes (cells, halo cells, points and the size of that part of the mesh model in MiB); shown is what the enabled regions take together (null while none is enabled and the whole mesh shows). |
@@ -82,7 +87,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `settings.keep_formula` | 1 | write-files | Keep a formula among your formulas (name, formula, unit; as field.calculate takes them), offered for every result: the Derived fields window lists them and field.calculate computes one by its name alone. A formula of the same name is replaced. The formula is checked for its grammar, not for the fields it names (a result without them refuses it when computed). Writes settings.toml in the config folder. |
 | `settings.forget_formula` | 1 | write-files | Forget one of your formulas, by name. A field already computed from it stays. Writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
-| `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement. |
+| `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, its digest as `blake3`, or `sha256` when its evidence recorded SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement. |
 | `session.load` | 1 | read | Load a .murmel session file: open its mesh unless that mesh is already open (tried relative to the file first, then at its absolute path), then restore the camera, the display, the selection and the clip plane; the mesh colours and the view cube placement apply to this session and are not written to settings.toml. A mesh changed since the save (SESS003) or items it no longer has (SESS004) give warnings. A new journal starts. |
 | `measure.snap` | 1 | read | The point a click at a screen point would measure from: the face under it gives its nodes, edge midpoints, centre (and its cell's centre), projected to the screen; the first kind in the order node, edge_midpoint, face_centre, cell_centre, edge, surface with a candidate within radius_px (default 12) wins; snap lists the kinds allowed (default all but cell_centre). Null over empty space. Changes nothing. |
 | `measure.add` | 1 | read | Measure in the open mesh and keep the result as a tree item measure:<n>: a distance between two points (with dx, dy, dz) or the angle at the second of three points (degrees). Each point is a screen point snapped as measure.snap does, typed coordinates, a node, the midpoint of two nodes, a face centre or a cell centre. Kept in session files; undo removes it. |
@@ -1809,6 +1814,246 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `charts.open`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "A FoehnCraft output folder, or a table or series.json in it",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+### `charts.show`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "chart": {
+      "enum": [
+        "mass_flow",
+        "cumulative",
+        "penetration",
+        "diameters",
+        "histogram",
+        "columns"
+      ]
+    },
+    "columns": {
+      "description": "datums:<column> or spray:<column>, all of one unit",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "cumulative": {
+      "type": "boolean"
+    },
+    "datums": {
+      "description": "Datum names; a histogram takes one",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "injectors": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "visible": {
+      "type": "boolean"
+    },
+    "weight": {
+      "enum": [
+        "mass",
+        "droplets"
+      ]
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `charts.data`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "chart": {
+      "enum": [
+        "mass_flow",
+        "cumulative",
+        "penetration",
+        "diameters",
+        "histogram",
+        "columns"
+      ]
+    },
+    "columns": {
+      "description": "datums:<column> or spray:<column>, all of one unit",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "cumulative": {
+      "type": "boolean"
+    },
+    "datums": {
+      "description": "Datum names; a histogram takes one",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "injectors": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "step": {
+      "description": "The step of the cursor and the histogram; left out: the player's step, else none (a histogram then takes the last interval)",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "weight": {
+      "enum": [
+        "mass",
+        "droplets"
+      ]
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `charts.export`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "chart": {
+      "enum": [
+        "mass_flow",
+        "cumulative",
+        "penetration",
+        "diameters",
+        "histogram",
+        "columns"
+      ]
+    },
+    "columns": {
+      "description": "datums:<column> or spray:<column>, all of one unit",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "cumulative": {
+      "type": "boolean"
+    },
+    "datums": {
+      "description": "Datum names; a histogram takes one",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "height": {
+      "description": "Points, default 405",
+      "maximum": 4096,
+      "minimum": 120,
+      "type": "number"
+    },
+    "injectors": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 6,
+      "type": "array"
+    },
+    "path": {
+      "description": "A .png or .svg file",
+      "type": "string"
+    },
+    "scale": {
+      "description": "PNG pixels per point, default 2",
+      "exclusiveMinimum": 0,
+      "maximum": 8,
+      "type": "number"
+    },
+    "step": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "theme": {
+      "description": "Default: the session's theme",
+      "enum": [
+        "dark",
+        "light"
+      ]
+    },
+    "weight": {
+      "enum": [
+        "mass",
+        "droplets"
+      ]
+    },
+    "width": {
+      "description": "Points, default 720",
+      "maximum": 4096,
+      "minimum": 160,
+      "type": "number"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+### `stats.at`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "step": {
+      "description": "Left out: the player's step, else the run's last",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `region.set`
 
 ```json
@@ -3229,6 +3474,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `SERIES001` | error | The time series cannot be read: the path does not exist, the manifest is not foehncraft.series 1 or names a step twice or a step without files, or the folder holds no numbered files. | Give FoehnCraft's series.json or its output folder (fields_<step>.vtkhdf, spray/parcels_<step>.vtkhdf). |
 | `SERIES002` | error | No time series is open. | Open a series.json or an output folder with series.open. |
 | `SERIES003` | error | The series has no such step, index or time, or the rate is outside 0.1 to 60 steps a second. | series.open's result gives the count, the first and last step and the times. |
+| `CHART001` | error | The tables of a run cannot be read: the path does not exist, the folder has neither datums.csv nor spray.csv, or a table is not of its format version 1 (foehncraft-datums, foehncraft-spray), has no header or a short row before its last. | Give the output folder of a transient FoehnCraft run with [[datum]] or [spray] (or a file in it); the message names the table and what is wrong. |
+| `CHART002` | error | No run is charted. | Open an output folder with charts.open; series.open opens the charts of its folder too. |
+| `CHART003` | error | The chart cannot be drawn as asked: an unknown datum, injector or column, more series than the six hues, columns of different units on one axis, a histogram of several datums or none, a size or scale out of range, or a file that is not .png or .svg. | The message lists what the run has; charts.open's result lists datums, injectors and tables. Chart quantities of other units apart. |
 | `STREAM001` | error | No streamline set has this number, or the display has the most it holds (8). | Sets count from 1 (stream:1); the streams list of the result names them. Remove one with stream.clear to add another. |
 | `STREAM002` | error | A streamline setting is out of range (count outside 1 to 1000, a length or radius not above 0, a line of one point, a zero normal), names a patch the mesh does not have, or belongs to another seed shape than the set's. | Give count 1 to 1000 and positive lengths; mesh.info lists the patches; name the shape with seed to change it (line: from, to; sphere: centre, radius; patch: patch; plane: origin, normal). |
 | `STREAM003` | error | Streamlines follow a vector field (one with x, y and z components), and the field named or the open mesh has none. | Name a vector field (field.list shows each field's components), or open a result with velocity. |
@@ -3255,7 +3503,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `PROBE003` | error | The probe history's CSV file cannot be written. | Give a path in a folder that exists and can be written. |
 | `SESS001` | error | A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values. | Check the path; save the session again with session.save. |
 | `SESS002` | error | A session file could not be written. | Choose a writable folder. |
-| `SESS003` | warning | The session's mesh changed since the session was saved (its SHA-256 differs). | Check the view; save the session again to accept the new mesh. |
+| `SESS003` | warning | The session's mesh changed since the session was saved (its digest differs). | Check the view; save the session again to accept the new mesh. |
 | `SESS004` | warning | Items the session names are not in the mesh; they were skipped. | Save the session again to drop them. |
 | `FIELD001` | error | The open mesh has no fields: it was read without results. | Open a result: FoehnCraft's fields.vtkhdf, or a .vtu with cell or point data. |
 | `FIELD002` | error | The open mesh has no field of this name, or no field is chosen. | field.list names the fields; pass `field`. |

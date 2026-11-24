@@ -404,7 +404,7 @@ pub fn summary(display: &Display, surface: &Surface) -> Option<serde_json::Value
     Some(serde_json::json!({
         "id": "parcels",
         "path": v.path,
-        "sha256": p.sha256,
+        "blake3": p.blake3,
         "format": p.attrs.get("format"),
         "case": p.attrs.get("case"),
         "liquid": p.attrs.get("liquid"),

@@ -15,17 +15,21 @@ pub enum Region {
     /// The time series' player bar, below the viewport while a series is
     /// open.
     Player,
+    /// The chart and statistics panel, above the player bar while a
+    /// run's tables are open.
+    Charts,
     Properties,
     Status,
 }
 
 impl Region {
-    pub const ORDER: [Region; 7] = [
+    pub const ORDER: [Region; 8] = [
         Region::Title,
         Region::Toolbar,
         Region::Tree,
         Region::Viewport,
         Region::Player,
+        Region::Charts,
         Region::Properties,
         Region::Status,
     ];
@@ -38,6 +42,7 @@ impl Region {
             Region::Tree => "region-tree",
             Region::Viewport => "region-viewport",
             Region::Player => "region-player",
+            Region::Charts => "region-charts",
             Region::Properties => "region-properties",
             Region::Status => "region-status",
         }
@@ -68,8 +73,8 @@ pub struct Focus {
     /// The viewport canvas, which keeps the arrow keys for orbiting.
     pub viewport: Option<Id>,
     /// The regions as drawn last frame, and as drawn this frame.
-    shown: [Seen; 7],
-    drawing: [Seen; 7],
+    shown: [Seen; 8],
+    drawing: [Seen; 8],
 }
 
 impl Focus {
@@ -237,6 +242,7 @@ mod tests {
                 seen(r, 2),
                 Seen::default(),
                 seen(r, 4),
+                Seen::default(),
                 Seen::default(),
                 seen(r, 5),
                 seen(r, 6),

@@ -30,30 +30,43 @@ impl Buckets {
     /// faces deals its faces out to parts (consecutive ranges of points)
     /// in face order, and each part then sorts its own faces into its
     /// groups, so every group still lists its faces in face order.
-    fn new(faces: &impl FaceList, points: usize) -> Buckets {
+    /// `least` is each face's smallest point when the reader found it
+    /// (`u32::MAX` for a face of none); otherwise it is found here.
+    fn new(faces: &impl FaceList, points: usize, least: Option<Vec<u32>>) -> Buckets {
         let n = faces.count();
-        let smallest: Vec<u32> = par::collect(n, 1 << 15, |r| {
-            r.map(|f| {
-                let m = faces.face(f).iter().copied().min().unwrap_or(u32::MAX);
-                m.min(points as u32)
-            })
-            .collect()
-        });
         // Groups 0..=points (the last for empty faces).
         let groups = points + 1;
         let parts = par::ranges(groups, 1 << 14);
         // Every part but the last is `step` groups long.
         let step = parts[0].len().max(1);
         let part = |m: u32| m as usize / step;
-        // How many faces of each run go to each part.
+        // Each run of faces finds their smallest points, in place, and
+        // counts how many of its faces go to each part.
         let runs = par::ranges(n, 1 << 15);
-        let counts: Vec<Vec<usize>> = par::map(n, 1 << 15, |r| {
-            let mut c = vec![0; parts.len()];
-            for &m in &smallest[r] {
-                c[part(m)] += 1;
-            }
-            c
-        });
+        let run_cuts: Vec<usize> = runs.iter().map(|r| r.start).chain([n]).collect();
+        let given = least.as_ref().is_some_and(|l| l.len() == n);
+        let mut smallest = match least {
+            Some(l) if given => l,
+            _ => vec![0u32; n],
+        };
+        let mut counts = vec![vec![0usize; parts.len()]; runs.len()];
+        scoped(
+            runs.iter()
+                .cloned()
+                .zip(par::split_mut(&mut smallest, &run_cuts))
+                .zip(counts.iter_mut()),
+            |((r, out), count)| {
+                for (f, m) in r.zip(out.iter_mut()) {
+                    let least = if given {
+                        *m
+                    } else {
+                        faces.face(f).iter().copied().min().unwrap_or(u32::MAX)
+                    };
+                    *m = least.min(points as u32);
+                    count[part(*m)] += 1;
+                }
+            },
+        );
         // The faces dealt out by part, and by run within each part.
         let mut cuts = vec![0];
         let mut part_at = Vec::with_capacity(parts.len() + 1);
@@ -279,8 +292,9 @@ fn turned(a: &[u32], b: &[u32]) -> bool {
 /// it (`distinct`), `cell_face_id`, `cell_face_flip`, `face_owner`,
 /// `face_neighbour`, `boundary_owner`, `boundary_face_id`,
 /// `face_boundary` and `unique_faces`; and extract the boundary when the
-/// file had none.
-pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
+/// file had none. `least` is each face's smallest point, when the reader
+/// found it (it is found here otherwise).
+pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList, least: Option<Vec<u32>>) {
     let cells = mesh.cell_count();
     if cells == 0 {
         let n = mesh.boundary.len();
@@ -297,7 +311,7 @@ pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
     }
     let points = mesh.points.len();
     let t = crate::profile::span("topology.buckets");
-    let buckets = Buckets::new(&polys, points);
+    let buckets = Buckets::new(&polys, points, least);
     drop(t);
     let t = crate::profile::span("topology.twins");
     let twin = first_twins(&polys, &buckets, points);
@@ -327,35 +341,57 @@ pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
     });
     drop(t);
     let t = crate::profile::span("topology.distinct");
-    // The distinct faces as their owners list them, copied in parallel.
-    let mut start = Vec::with_capacity(n_unique + 1);
-    start.push(0u32);
-    let mut at = 0u32;
-    for &f in &first {
-        at += polys.face(f as usize).len() as u32;
-        start.push(at);
-    }
-    let mut nodes = vec![0u32; at as usize];
+    // The distinct faces as their owners list them, on all threads: each
+    // range of faces adds up its own sizes, then copies its faces after
+    // those of the ranges before it.
     let ranges = par::ranges(n_unique, 1 << 15);
-    let cuts: Vec<usize> = ranges
+    let cuts: Vec<usize> = ranges.iter().map(|r| r.start).chain([n_unique]).collect();
+    let mut start = vec![0u32; n_unique + 1];
+    let mut sums = vec![0u32; ranges.len()];
+    scoped(
+        ranges
+            .iter()
+            .cloned()
+            .zip(par::split_mut(&mut start[1..], &cuts))
+            .zip(sums.iter_mut()),
+        |((r, ends), sum)| {
+            let mut at = 0u32;
+            for (u, end) in r.zip(ends.iter_mut()) {
+                at += cell_polys.face(firsts[u] as usize).len() as u32;
+                *end = at;
+            }
+            *sum = at;
+        },
+    );
+    let mut bases = Vec::with_capacity(sums.len());
+    let mut total = 0u32;
+    for s in &sums {
+        bases.push(total);
+        total += s;
+    }
+    let mut nodes = vec![0u32; total as usize];
+    let node_cuts: Vec<usize> = bases
         .iter()
-        .map(|r| start[r.start] as usize)
-        .chain([at as usize])
+        .map(|&b| b as usize)
+        .chain([total as usize])
         .collect();
-    let parts = par::split_mut(&mut nodes, &cuts);
-    let starts = &start;
-    std::thread::scope(|sc| {
-        for (r, part) in ranges.iter().zip(parts) {
-            let base = starts[r.start] as usize;
-            sc.spawn(move || {
-                for u in r.clone() {
-                    let src = cell_polys.face(firsts[u] as usize);
-                    let a = starts[u] as usize - base;
-                    part[a..a + src.len()].copy_from_slice(src);
-                }
-            });
-        }
-    });
+    scoped(
+        ranges
+            .iter()
+            .cloned()
+            .zip(par::split_mut(&mut start[1..], &cuts))
+            .zip(par::split_mut(&mut nodes, &node_cuts))
+            .zip(&bases),
+        |(((r, ends), part), &base)| {
+            let mut a = 0;
+            for (u, end) in r.zip(ends.iter_mut()) {
+                let src = cell_polys.face(firsts[u] as usize);
+                part[a..a + src.len()].copy_from_slice(src);
+                a += src.len();
+                *end += base;
+            }
+        },
+    );
     let distinct = Polygons { start, nodes };
     drop(t);
     let t = crate::profile::span("topology.boundary");
@@ -478,7 +514,8 @@ mod tests {
     /// exactly the topology of the hash map it replaced, on KoflCraft
     /// meshes and on the honeycomb with every face starting at another
     /// corner, at one and at several threads (the faces sorted, matched
-    /// and numbered in parts); each distinct face is stored once as its
+    /// and numbered in parts), with the faces' smallest points found here
+    /// or handed on as a reader finds them; each distinct face is stored once as its
     /// owner lists it, a boundary found from the cells is the faces used
     /// once, and every cell reads back its faces in its own turn. A face compared by its first point only, a
     /// group cut between threads or a wrong flip would number faces
@@ -502,10 +539,17 @@ mod tests {
                     polys.nodes[a..b].rotate_left(f % (b - a));
                 }
             }
-            for threads in [1, 3] {
-                // The threads only steer how work is split; both must agree.
+            // Each face's smallest point, as a reader that finds them hands
+            // them on.
+            let least: Vec<u32> = (0..polys.len())
+                .map(|f| polys.get(f).iter().copied().min().unwrap_or(u32::MAX))
+                .collect();
+            for (threads, given) in [(1, false), (3, false), (1, true), (3, true)] {
+                // The threads only steer how work is split, and the smallest
+                // points only save finding them; all must agree.
+                let least = given.then(|| least.clone());
                 let r = crate::par::with_threads(threads, || {
-                    link(m, polys.clone());
+                    link(m, polys.clone(), least);
                     reference(m, &polys)
                 });
                 assert_eq!(r.0, m.cell_face_id);

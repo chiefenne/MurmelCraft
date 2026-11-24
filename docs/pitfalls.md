@@ -201,7 +201,7 @@ problem took more than a few minutes to understand.
   keeps it in a form whose result does not depend on which thread came
   first, such as a minimum, or the meshes differ from run to run.
 - **The window hashes a mesh after it opens** (`Session::hash_after_open`):
-  until the SHA-256 is taken on its own thread, `OpenMesh::digest` and the
+  until the digests are taken on their own thread, `OpenMesh::digest` and the
   files' digests are empty and the badge is `Validity::Checking`. A tool
   that needs the digest (`session.save` writes it, `session.load` compares
   it) calls `Session::wait_digest` first. The command line and agents on a
@@ -258,6 +258,12 @@ problem took more than a few minutes to understand.
   (`opening.rs`, `phase_message`), so a new span inside a reader needs
   its name mapped there, or the window says "reading the file" while it
   runs. The `topology.*` steps map to "matching the faces".
+- **Linking trusts the smallest points a reader hands it.**
+  `boundary::link` sorts the faces by the smallest point that the `.vtu`
+  reader noted for each (`Cells::least`). A reader that changes a face's
+  points after noting them hands `None` instead, or the face lands in the
+  wrong group and loses its twin. Turning a face round keeps its points
+  and its smallest one.
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,

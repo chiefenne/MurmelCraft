@@ -1,13 +1,15 @@
-//! `mesh-evidence.json` (`koflcraft.mesh-evidence` 1.0) beside a mesh:
-//! the KoflCraft version, generator and the summary the validity badge and
-//! the mesh properties show.
+//! `mesh-evidence.json` (`koflcraft.mesh-evidence` 1.0 or 1.1) beside a
+//! mesh: the KoflCraft version, generator and the summary the validity
+//! badge and the mesh properties show. 1.1 names the hash of its `files`
+//! in `file_hash` (`blake3`); 1.0 has none and holds SHA-256 digests,
+//! still checked as such.
 
 use std::path::Path;
 
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::MeshError;
+use crate::{FileHash, MeshError};
 
 pub const FORMAT: &str = "koflcraft.mesh-evidence";
 
@@ -23,7 +25,10 @@ pub struct Evidence {
     pub interior_faces: Option<u64>,
     pub max_relative_closure: Option<f64>,
     pub patches: Vec<EvidencePatch>,
-    /// File name and SHA-256 (hex) of each file KoflCraft wrote.
+    /// The hash of `files`: `file_hash`, SHA-256 when it is missing (1.0).
+    pub file_hash: FileHash,
+    /// File name and digest (hex, of `file_hash`) of each file KoflCraft
+    /// wrote.
     pub files: Vec<(String, String)>,
     pub limitations: Vec<String>,
     #[serde(skip)]
@@ -46,7 +51,7 @@ impl Evidence {
         self.patches.iter().find(|p| p.name == name)
     }
 
-    /// The SHA-256 the evidence records for the file called `name`.
+    /// The digest the evidence records for the file called `name`.
     pub fn digest(&self, name: &str) -> Option<&str> {
         self.files
             .iter()
@@ -66,6 +71,15 @@ impl Evidence {
                 ),
             ));
         }
+        let file_hash = match &raw["file_hash"] {
+            Value::Null => FileHash::Sha256,
+            v => v.as_str().and_then(FileHash::from_key).ok_or_else(|| {
+                MeshError::new(
+                    "MESH011",
+                    format!("mesh-evidence.json names an unknown file_hash {v}"),
+                )
+            })?,
+        };
         let s = &raw["summary"];
         Ok(Self {
             koflcraft_version: raw["koflcraft_version"].as_str().map(str::to_string),
@@ -90,6 +104,7 @@ impl Evidence {
                     })
                 })
                 .collect(),
+            file_hash,
             files: raw["files"]
                 .as_array()
                 .into_iter()
@@ -137,6 +152,28 @@ mod tests {
         assert_eq!(walls.faces, Some(256));
         assert_eq!(walls.foehncraft_type.as_deref(), Some("wall"));
         assert_eq!(e.digest("foehncraft.vtu").map(str::len), Some(64));
+        assert_eq!(e.file_hash, FileHash::Sha256);
+    }
+
+    /// Invariant: evidence 1.1 names its hash in `file_hash`, 1.0 (none)
+    /// means SHA-256, and a hash MurmelCraft does not know is MESH011.
+    /// Breaks if the key is ignored: KoflCraft's BLAKE3 digests would be
+    /// compared with SHA-256 ones and every new bundle would fail its
+    /// check. The fixtures hold only one version each.
+    #[test]
+    fn file_hash_names_the_digests() {
+        let with = |h: Value| {
+            let mut v = serde_json::json!({"format": FORMAT, "files": [["a.vtu", "00"]]});
+            if !h.is_null() {
+                v["file_hash"] = h;
+            }
+            Evidence::parse(&v.to_string())
+        };
+        assert_eq!(with(Value::Null).unwrap().file_hash, FileHash::Sha256);
+        assert_eq!(with("blake3".into()).unwrap().file_hash, FileHash::Blake3);
+        assert_eq!(with("sha256".into()).unwrap().file_hash, FileHash::Sha256);
+        assert_eq!(with("md5".into()).unwrap_err().code, "MESH011");
+        assert_eq!(with(3.into()).unwrap_err().code, "MESH011");
     }
 
     #[test]

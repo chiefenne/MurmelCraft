@@ -2,7 +2,7 @@
 //! save or load the session (meshes, camera, display, clip) as JSON").
 //!
 //! A session file (`*.murmel`, format `murmelcraft.session`) names the
-//! mesh by its path and SHA-256 and holds the camera, the display (colour
+//! mesh by its path and digest (BLAKE3 since 1.15, SHA-256 before) and holds the camera, the display (colour
 //! mode, render mode, quality metric and threshold, pick target, the
 //! hidden, isolated and selected items and the colours set on items, all
 //! by their tree ids), the clip planes (since 1.2), the saved views (named
@@ -14,7 +14,8 @@
 //! as recipes, computed again on loading (since 1.11), the spray
 //! parcels shown, their file read again on loading (since 1.12), the time
 //! series walked and the step shown (since 1.13), the fields of your
-//! formulas beside the derived ones (since 1.14), the user's mesh
+//! formulas beside the derived ones (since 1.14), the mesh's BLAKE3
+//! hash in place of its SHA-256 (since 1.15), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -46,7 +47,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.14";
+pub const SESSION_VERSION: &str = "1.15";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -72,8 +73,25 @@ pub struct MeshRef {
     pub path: PathBuf,
     /// The absolute path when the session was saved.
     pub absolute: PathBuf,
-    /// `OpenMesh::digest` when the session was saved.
-    pub sha256: String,
+    /// `OpenMesh::digest` when the session was saved, under the name of
+    /// its hash: `blake3` since 1.15; `sha256` before, and since then
+    /// for a mesh whose evidence recorded SHA-256.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blake3: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+impl MeshRef {
+    /// The digest saved and its hash; BLAKE3 when both are there.
+    pub fn digest(&self) -> Option<(murmel_mesh::FileHash, &str)> {
+        use murmel_mesh::FileHash;
+        match (&self.blake3, &self.sha256) {
+            (Some(d), _) => Some((FileHash::Blake3, d)),
+            (None, Some(d)) => Some((FileHash::Sha256, d)),
+            (None, None) => None,
+        }
+    }
 }
 
 /// What the viewport shows, by item ids.
@@ -218,10 +236,15 @@ impl SessionFile {
             .unwrap_or_default();
         let mesh = s.mesh.as_ref().map(|m| {
             let abs = absolute(&m.path);
+            let (blake3, sha256) = match m.hash {
+                murmel_mesh::FileHash::Blake3 => (Some(m.digest.clone()), None),
+                murmel_mesh::FileHash::Sha256 => (None, Some(m.digest.clone())),
+            };
             MeshRef {
                 path: relative(&dir, &abs).unwrap_or_else(|| abs.clone()),
                 absolute: abs,
-                sha256: m.digest.clone(),
+                blake3,
+                sha256,
             }
         });
         let d = &s.display;

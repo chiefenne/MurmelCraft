@@ -9,7 +9,7 @@ eframe on wgpu; one engine with thin front ends, every action a registered
 tool that the window, the command line and the MCP server share.
 
 <p align="center">
-  <a href="assets/readme/tour"><img src="assets/readme/tour.webp" width="880" alt="A slideshow of the MurmelCraft window, five slides that change every four seconds, on a FoehnCraft result for KoflCraft's Manifold mesh: the mesh shaded with edges; cell types under a flat clip plane with its drag handles; a sphere region of interest cut flat and coloured cell by cell by speed; wall shear stress with two measurements and a probe; banded pressure with contour lines in the light theme"></a>
+  <a href="assets/readme/tour"><img src="assets/readme/tour.webp" width="880" alt="A slideshow of the MurmelCraft window, seven slides that change every four seconds, on a FoehnCraft result for KoflCraft's Manifold mesh: the mesh shaded with edges; cell types under a flat clip plane with its drag handles; streamline tubes from the inlet coloured by speed; three speed slices through the box with a smooth vorticity iso-surface; a sphere region of interest cut flat and coloured cell by cell by speed; wall shear stress with two measurements and a probe; banded pressure with contour lines in the light theme"></a>
 </p>
 
 <sub>Screenshots of the window: a laminar FoehnCraft run (Re = 167) on
@@ -87,6 +87,23 @@ every change.
 
   <img src="assets/readme/spray-series.gif" width="700" alt="A movie of the FoehnCraft spray in a duct, seen from the top: the stream of droplets grows from the injector at the upper left across the duct towards the lower wall, step by step, over a slice of the gas coloured by speed">
 
+- Charts and statistics of a run (`charts.open`, `charts.show`,
+  `charts.data`, `charts.export`, `stats.at`): FoehnCraft's `datums.csv`,
+  `spray.csv` and size histograms `spray_hist_<datum>.csv`, read without
+  the solver. Time-series charts of the liquid mass flow through the
+  datums, the liquid through them so far, the spray penetration per
+  injector, the Sauter diameter D32 through each datum and in the flow,
+  or any columns of one unit; the droplet size histogram of a datum by
+  mass or by number, up to the step or of its interval. A panel below
+  the view draws the chart with a cursor at the player's step and the
+  statistics at that step beside it: the spray's mass book, penetration,
+  and per datum the liquid through it, its rate, D10, D32, Dv50 and
+  Dv10/Dv90 from the bins. `series.open` opens the charts of its folder;
+  `charts.export` writes any chart as PNG or SVG; six series hues of our
+  own, checked for colour-vision deficiencies.
+
+  <img src="assets/readme/spray-charts.png" width="700" alt="The MurmelCraft window with a FoehnCraft spray in a duct seen from the top. Below the view, a chart of the liquid mass flow through six datums over time, each line rising as the spray reaches its datum and settling between 2 and 10 g/s, with a pink cursor at step 150; beside it the statistics at step 150: 7.50 g injected, 4.36 g in the flow, 2.25 g left the domain, 890 mg on walls, 1744 parcels, D32 in the flow 79.9 µm, penetration 760 mm">
+
 - Derived fields (`field.derive`, the Derived fields window): vorticity,
   Q criterion, λ₂, total pressure and pressure coefficient computed from
   the result's velocity and pressure (the velocity gradient by least
@@ -141,7 +158,7 @@ every change.
 - Session files (`.murmel`, Ctrl + S): mesh, camera, display, clip planes,
   saved views, regions, measurements ([docs/sessions.md](docs/sessions.md)).
 - Large meshes: files read, surfaces built and edges found on all threads,
-  the SHA-256 taken after the mesh shows, edges hidden while orbiting only
+  files checked with BLAKE3 after the mesh shows, edges hidden while orbiting only
   when frames get slow ([docs/performance.md](docs/performance.md),
   `murmel bench`).
 - Mouse presets (three-button, Apple, Fusion, ParaView), every binding

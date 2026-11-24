@@ -19,7 +19,7 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   "mesh": {
     "path": "foehncraft.vtu",
     "absolute": "/cases/channel/foehncraft.vtu",
-    "sha256": "…"
+    "blake3": "…"
   },
   "camera": {"target": [2, 1, 0.5], "distance": 6.1, "yaw_deg": -12, "pitch_deg": 22.8,
              "projection": "perspective_ortho_faces", "fov_deg": 30, "snapped": false, "roll_deg": 0},
@@ -136,6 +136,13 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   `views.delete`), in the order they were saved. A 1.0 file has none and
   still loads; a file without views leaves the key out. Names are 1 to 64
   characters, unique, without control characters.
+- **The mesh's digest** (format 1.15) is `mesh.blake3`, the BLAKE3 hash
+  of the mesh file (of a polyMesh, of its files listed as `b3sum` prints
+  them). A mesh whose KoflCraft evidence is format 1.0 is checked with
+  SHA-256 and saved as `mesh.sha256`, as every session before 1.15 was.
+  Loading compares the digest with the hash it names, so an older
+  session still finds its mesh unchanged (its SHA-256 is taken once and
+  remembered in `checked-files.json`).
 - **Colours and the view cube** (`colors`, `view_cube`) are the user's
   settings when the session was saved. Loading applies them to this
   session only; `settings.toml` is not written (decided 2026-11-24). A
@@ -151,10 +158,10 @@ finite numbers, a positive camera distance, a non-zero clip normal,
 colours the tokens take, saved views with valid unique names and valid
 cameras) and fails with `SESS001` without changing
 anything. Then it opens the mesh, unless the same mesh with the same
-SHA-256 is already open, and restores the rest. It still finishes, with a
+digest is already open, and restores the rest. It still finishes, with a
 warning in `warnings`, when:
 
-- `SESS003`: the mesh's SHA-256 differs from the saved one (the mesh was
+- `SESS003`: the mesh's digest differs from the saved one (the mesh was
   written again);
 - `SESS004`: some ids are not in the mesh; they are skipped and listed in
   `skipped`.
