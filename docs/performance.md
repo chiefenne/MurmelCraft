@@ -635,3 +635,66 @@ iMac the hash sets the pace instead: its benchmark read the same mesh in
 from the command line should take about 5 s instead of 20 s, and in the
 window the badge should be final when the mesh shows instead of 17 s
 later (estimates from the iMac's benchmark of 2026-11-24).
+
+## Building the cells on all threads (2026-11-24)
+
+The first numbers from the iMac (4 M cells, the ascii `.vtu` still in
+the file cache, main at d91bb3a): the mesh showed after 5.3 s, of which
+2.2 s went to parsing the text, 2.0 s to linking the faces and 0.74 s to
+building the cells. Building the cells took as long there as on 4
+threads here, because it still ran on one thread. It turns each VTK
+cell into its faces (a polyhedron's from the `faces` stream, a standard
+cell's from its face table) or into a boundary polygon.
+
+It now runs on all threads (`vtu/cells.rs`), in two passes over one
+range of cells per thread. Both passes walk the cells with the same
+code:
+
+1. Each range checks its cells and counts its faces, their points, its
+   cells and its polygons. The counts give each range its place in the
+   arrays. A range starts reading the `faces` stream where the last
+   polyhedron before it ends.
+2. Each range writes its cells at that place.
+
+The first bad cell gives the error, as before, even when a later range
+holds another.
+
+The faces' points no longer move. One thread used to move them down
+over the stream they came from, dropping each face's point count; a
+first version of this change copied them into a new array on all
+threads instead, but writing 1.2 GB of fresh memory at 4 M cells left
+it at 0.55 s. A file of polyhedra and polygons only, as KoflCraft
+writes, now leaves its faces in the stream: the reader notes where each
+face's count is (`InStream`), and linking the faces reads them there
+(it takes any `FaceList`). The stream is freed after the linking. Files
+with standard cells (tetrahedra, hexahedra, prisms, pyramids) still
+copy their faces out, as their faces are not in the stream.
+
+The meshes are the same bit for bit: every array the reader gives was
+hashed on the fixtures and on 1 M cells, at 1 and 4 threads, against
+main. `threads_give_the_cells_of_one_walk` compares 1 to 7 threads on
+all cell types mixed and on polyhedra and polygons only,
+`threads_report_the_first_bad_cell` compares the errors, and
+`polyhedra_leave_their_faces_in_the_stream` checks the faces left in
+the stream.
+
+Same machine, 4 M cells ascii `.vtu` (4.99 GB), `--no-render`, two runs
+each alternating on 4 threads and one on 1 thread, main at d91bb3a
+against this branch:
+
+| | 4 threads | 1 thread |
+|---|---:|---:|
+| building the cells while opening, ms (was) | 306 (674) | 848 (689) |
+| open, ms (was) | 6,553 (6,854) | 14,283 (14,647) |
+| peak memory while reading, MiB (was) | 3,999 (4,011) | 3,904 (3,917) |
+
+What it shows:
+
+- Building the cells takes less than half as long on 4 threads, and
+  should take about a fifth of the 0.74 s on the iMac's 16 (estimate).
+- On one thread it takes a quarter longer: it walks the cells twice.
+- Linking the faces reads them from the stream as fast as from their
+  own array (1.5 to 1.7 s in both, within the noise of these runs), and
+  the peak memory falls slightly: the stream holds each face's count
+  besides its points, but the connectivity and the face offsets are now
+  freed before the linking.
