@@ -242,6 +242,17 @@ problem took more than a few minutes to understand.
   `checked::SETTLED` (3 s) ago is not remembered, so a test that writes
   a mesh file and expects it remembered sets its modification time back
   first.
+- **The `.vtu` cells are read in ranges, in two passes** (`vtu/cells.rs`).
+  Both passes walk the cells with the same `walk`, so a new check goes
+  there and holds in both. A range starts in the polyhedra's `faces`
+  stream where the last polyhedron before it ends (the face offsets of
+  other cells are -1), and its first error counts only when no range
+  before it has one.
+- **A `.vtu` of polyhedra and polygons leaves its cell faces in the
+  stream** (`InStream`: where each face's point count is), so the faces
+  that `boundary::link` reads are a `FaceList`, not always `Polygons`.
+  Code that needs the cell faces after reading takes them from the
+  mesh's distinct faces, which are copied out as before.
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,
