@@ -5,16 +5,19 @@
 //! nearest hit names the cell and the face that triangle shows, so a
 //! pick always agrees with the picture, clip and hidden items included.
 //!
-//! The test walks every triangle once (no acceleration structure yet),
-//! which is fine for a click; the hover tooltip asks only when the pointer
-//! rests.
+//! The surface keeps a box around each run of triangles
+//! ([`Surface::tri_boxes`]); the ray is tested against the boxes first
+//! (the slab test: Kay and Kajiya, "Ray tracing complex scenes",
+//! SIGGRAPH 1986) and against the triangles of the boxes it passes
+//! through, nearer than the best hit so far. The hit is the one a walk
+//! over every triangle finds, the first of equally near ones included.
 
 use glam::DVec3;
 use murmel_mesh::NO_CELL;
 use serde::Serialize;
 
 use crate::camera::Camera;
-use crate::surface::Surface;
+use crate::surface::{PICK_RUN, Surface};
 
 /// What lies under a screen point.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -44,30 +47,35 @@ pub fn pick(surface: &Surface, camera: &Camera, ndc: [f64; 2], aspect: f64) -> O
         } else {
             DVec3::ZERO
         };
+    let tris = surface.indices.as_chunks::<3>().0;
     let mut best: Option<(f64, usize)> = None;
     let p = |i: u32| DVec3::from(surface.positions[i as usize].map(f64::from));
-    for (t, tri) in surface.indices.as_chunks::<3>().0.iter().enumerate() {
-        let (a, b, c) = (p(tri[0]), p(tri[1]), p(tri[2]));
-        let (e1, e2) = (b - a, c - a);
-        let h = dir.cross(e2);
-        let det = e1.dot(h);
-        if det.abs() < 1e-30 {
-            continue;
+    let test = |best: &mut Option<(f64, usize)>, t: usize, tri: &[u32; 3]| {
+        if let Some(d) = hit_triangle(start, dir, p(tri[0]), p(tri[1]), p(tri[2]))
+            && best.is_none_or(|(bd, _)| d < bd)
+        {
+            *best = Some((d, t));
         }
-        let inv = 1.0 / det;
-        let s = start - a;
-        let u = s.dot(h) * inv;
-        if !(0.0..=1.0).contains(&u) {
-            continue;
+    };
+    if surface.tri_boxes.len() == tris.len().div_ceil(PICK_RUN) {
+        // A box is widened by a hair, so rounding in the slab test never
+        // drops a triangle on its border.
+        let pad = 1e-6 * surface.radius.max(f64::MIN_POSITIVE);
+        for (k, b) in surface.tri_boxes.iter().enumerate() {
+            let Some(near) = hit_box(start, dir, b, pad) else {
+                continue;
+            };
+            if best.is_some_and(|(bd, _)| near > bd) {
+                continue;
+            }
+            let end = ((k + 1) * PICK_RUN).min(tris.len());
+            for (t, tri) in tris.iter().enumerate().take(end).skip(k * PICK_RUN) {
+                test(&mut best, t, tri);
+            }
         }
-        let q = s.cross(e1);
-        let v = dir.dot(q) * inv;
-        if v < 0.0 || u + v > 1.0 {
-            continue;
-        }
-        let d = e2.dot(q) * inv;
-        if d > 0.0 && best.is_none_or(|(bd, _)| d < bd) {
-            best = Some((d, t));
+    } else {
+        for (t, tri) in tris.iter().enumerate() {
+            test(&mut best, t, tri);
         }
     }
     let (d, t) = best?;
@@ -78,6 +86,50 @@ pub fn pick(surface: &Surface, camera: &Camera, ndc: [f64; 2], aspect: f64) -> O
         point: point.to_array(),
         distance: d,
     })
+}
+
+/// The distance along the ray (`dir` of unit length) at which it
+/// crosses triangle `a b c` in front of `start` (Möller and Trumbore).
+fn hit_triangle(start: DVec3, dir: DVec3, a: DVec3, b: DVec3, c: DVec3) -> Option<f64> {
+    let (e1, e2) = (b - a, c - a);
+    let h = dir.cross(e2);
+    let det = e1.dot(h);
+    if det.abs() < 1e-30 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let s = start - a;
+    let u = s.dot(h) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let v = dir.dot(q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let d = e2.dot(q) * inv;
+    (d > 0.0).then_some(d)
+}
+
+/// Where the ray enters box `b` widened by `pad` (0 when it starts
+/// inside), or `None` when it misses it or the box lies behind.
+fn hit_box(start: DVec3, dir: DVec3, b: &[[f32; 3]; 2], pad: f64) -> Option<f64> {
+    let (mut near, mut far) = (f64::NEG_INFINITY, f64::INFINITY);
+    for k in 0..3 {
+        let lo = f64::from(b[0][k]) - pad;
+        let hi = f64::from(b[1][k]) + pad;
+        if dir[k] == 0.0 {
+            if start[k] < lo || start[k] > hi {
+                return None;
+            }
+            continue;
+        }
+        let (t1, t2) = ((lo - start[k]) / dir[k], (hi - start[k]) / dir[k]);
+        near = near.max(t1.min(t2));
+        far = far.min(t1.max(t2));
+    }
+    (near <= far && far >= 0.0).then_some(near.max(0.0))
 }
 
 #[cfg(test)]
@@ -114,6 +166,58 @@ mod tests {
             let u = hit.face as usize;
             assert_eq!(mesh.face_neighbour[u], NO_CELL, "a boundary face");
             assert!(pick(&s, &cam, [0.99, 0.99], 1.5).is_none());
+        }
+    }
+
+    /// Invariant: the boxes change nothing but the speed. Over a grid of
+    /// screen points, several views and clip modes, the pick with the
+    /// boxes equals the walk over every triangle (the same triangle, the
+    /// first of equally near ones). Breaks when a box misses part of its
+    /// run, the slab test drops a ray grazing a box, or a box is skipped
+    /// while it still holds a nearer triangle.
+    #[test]
+    fn boxes_pick_what_the_full_walk_picks() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/channel/foehncraft.vtu");
+        let t = Tokens::builtin().unwrap();
+        for mesh in [murmel_mesh::read(&p).unwrap(), murmel_mesh::synth::honeycomb(5)] {
+            let b = mesh.bounds();
+            let clip = |mode| Display {
+                clips: vec![crate::Clip {
+                    origin: b.center(),
+                    normal: [0.6, 0.0, 0.8],
+                    mode,
+                    enabled: true,
+                }],
+                ..Display::default()
+            };
+            for d in [
+                Display::default(),
+                clip(crate::ClipMode::Crinkle),
+                clip(crate::ClipMode::Flat),
+            ] {
+                let s = Surface::build(&mesh, &t, &d);
+                assert_eq!(s.tri_boxes.len(), s.triangles().div_ceil(PICK_RUN));
+                let walk = Surface {
+                    tri_boxes: Vec::new(),
+                    ..s.clone()
+                };
+                for view in [StandardView::ISO, StandardView::TOP] {
+                    let mut cam = Camera::default();
+                    cam.set_standard(view);
+                    cam.fit(&b, 1.3);
+                    let mut hits = 0;
+                    for i in 0..=24 {
+                        for j in 0..=24 {
+                            let ndc = [f64::from(i) / 12.0 - 1.0, f64::from(j) / 12.0 - 1.0];
+                            let a = pick(&s, &cam, ndc, 1.3);
+                            assert_eq!(a, pick(&walk, &cam, ndc, 1.3), "{view:?} {ndc:?}");
+                            hits += usize::from(a.is_some());
+                        }
+                    }
+                    assert!(hits > 50, "{view:?}: {hits} hits");
+                }
+            }
         }
     }
 

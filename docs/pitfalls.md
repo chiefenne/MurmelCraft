@@ -183,6 +183,19 @@ problem took more than a few minutes to understand.
   headless session hash while reading, as before, so `mesh.open` returns
   the digest. A window test that tells meshes apart compares paths, not
   digests.
+- **Nothing per frame walks the mesh.** The model tree and the legend ask
+  for `Mesh::summary` and `all_items` on every frame; the counts and the
+  bounds are taken the first time and kept in the mesh (a `OnceLock`), as
+  a mesh is not changed once read. A method that changes a read mesh
+  resets them (`apply_evidence_roles` does); changing the public fields of
+  a mesh after asking for its summary leaves stale counts. A frame that
+  needs a count over the cells takes it from the summary or the surface
+  (`Surface::cells`), never from a loop of its own.
+- **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
+  of `PICK_RUN` triangles and is filled at the end of `build_with`; code
+  that adds triangles to a surface adds them before that (as the slices,
+  iso-surfaces and arrows do), or picking falls back to walking every
+  triangle (the box count no longer matches).
 
 ## Serde
 
