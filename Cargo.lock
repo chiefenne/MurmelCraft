@@ -1831,7 +1831,6 @@ dependencies = [
  "murmel-mesh",
  "serde",
  "serde_json",
- "sha2",
  "toml",
  "unic-langid",
 ]
@@ -1856,6 +1855,7 @@ dependencies = [
  "quick-xml 0.42.0",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -165,6 +165,14 @@ impl MurmelApp {
             )
         });
         let typing = ctx.text_edit_focused();
+        // Esc stops a mesh being read before anything else.
+        if self.opening.is_some()
+            && !typing
+            && self.palette.is_none()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            self.cancel_opening();
+        }
         // Esc stops measuring before it clears the selection.
         if self.measuring.is_some()
             && !typing

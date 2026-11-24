@@ -466,7 +466,8 @@ impl MurmelApp {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                self.i18n.tr("viewport-empty"),
+                self.opening_text()
+                    .unwrap_or_else(|| self.i18n.tr("viewport-empty")),
                 body.clone(),
                 color(p.text_secondary),
             );

@@ -84,6 +84,14 @@ pub struct MurmelApp {
     pub(crate) movie: crate::movie_dialog::MovieDialog,
     /// The movie being made on its own thread, if one is.
     pub(crate) movie_job: Option<crate::movie_dialog::MovieJob>,
+    /// The large mesh being read on its own thread, if one is.
+    pub(crate) opening: Option<crate::opening::Opening>,
+    /// Meshes of at least this many bytes are read on their own thread.
+    pub(crate) background_bytes: u64,
+    /// The next background read waits for a message here (window tests
+    /// hold it to click Cancel in time).
+    #[cfg(test)]
+    pub(crate) opening_gate: Option<std::sync::mpsc::Receiver<()>>,
     /// Keyboard focus: F6 regions, the focus ring, the arrow keys.
     pub(crate) focus: crate::focus::Focus,
     /// The width of the panel toggles at the right of the toolbar, as
@@ -177,6 +185,10 @@ impl MurmelApp {
             export: Default::default(),
             movie: Default::default(),
             movie_job: None,
+            opening: None,
+            background_bytes: crate::opening::BACKGROUND_BYTES,
+            #[cfg(test)]
+            opening_gate: None,
             focus: crate::focus::Focus::default(),
             toggles_w: 90.0,
             title_buttons_w: 110.0,
@@ -286,18 +298,26 @@ impl MurmelApp {
         }
     }
 
-    /// Open a mesh, or load a session file (`*.murmel`).
+    /// Open a mesh, or load a session file (`*.murmel`). A large mesh (a
+    /// session's too) is read on a thread of its own first.
     pub(crate) fn open_path(&mut self, path: PathBuf) {
+        use crate::opening::Then;
         let session = path
             .extension()
             .is_some_and(|e| e == murmel_engine::session_file::EXTENSION);
         if session {
-            if self.call("session.load", json!({ "path": path })).is_some() {
-                self.session_path = Some(path);
+            let mesh = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| murmel_engine::SessionFile::parse(&t).ok())
+                .and_then(|f| f.mesh_path(&path))
+                .filter(|m| self.session.mesh.as_ref().is_none_or(|o| &o.path != m));
+            let background =
+                mesh.is_some_and(|m| self.open_in_background(m, Then::Session(path.clone())));
+            if !background {
+                self.open_now(Then::Session(path));
             }
-        } else if self.call("mesh.open", json!({ "path": path })).is_some() {
-            // Ctrl + S no longer writes the last session over this mesh.
-            self.session_path = None;
+        } else if !self.open_in_background(path.clone(), Then::Mesh(path.clone())) {
+            self.open_now(Then::Mesh(path));
         }
     }
 
@@ -933,7 +953,8 @@ impl MurmelApp {
                     .monospace()
                     .color(secondary),
                 );
-                if let Some(e) = &self.error {
+                if self.opening_status(ui, &mut said) {
+                } else if let Some(e) = &self.error {
                     let text = self.i18n.tr_args(
                         "status-error",
                         &[
@@ -1225,6 +1246,7 @@ impl eframe::App for MurmelApp {
         self.color_window(&ctx);
         self.export_window(&ctx);
         self.poll_movie(&ctx);
+        self.poll_opening(&ctx);
         self.movie_window(&ctx);
         crate::focus::ring(&ctx, &self.focus, color(p.accent));
         self.focus.end(&ctx);
