@@ -19,7 +19,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use crate::fasthash::{FastMap, FastSet, set_with_capacity};
+use murmel_mesh::fasthash::{FastMap, FastSet, set_with_capacity};
 
 use murmel_mesh::{Bounds, Mesh, NO_CELL};
 

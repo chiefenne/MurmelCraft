@@ -14,6 +14,7 @@
 pub mod blocks;
 mod boundary;
 pub mod evidence;
+pub mod fasthash;
 pub mod field;
 pub mod h5write;
 pub mod hash;

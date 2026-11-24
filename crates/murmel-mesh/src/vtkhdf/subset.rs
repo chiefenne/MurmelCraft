@@ -10,10 +10,16 @@
 //! block's owned cells first, then the ghosts it holds that are neither
 //! owned by a block read nor a ghost taken before. Read with every block
 //! and no halo, the mesh is the whole read's, bit for bit.
+//!
+//! Each step runs on all threads: the blocks' points are read at once,
+//! joined by their ids shard by shard ([`join_blocks`]), and each block's
+//! cells are read on a thread of its own (its windows share the threads
+//! left over); the blocks are then put together in order.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 use super::cells::{self, PointMap, Set};
 use super::overview::{CELL_RESERVED, POINT_RESERVED, field_sets, index_of, not_blocked, rows_at};
@@ -21,9 +27,10 @@ use super::{
     Builder, GridSets, Parts, as_fields, bad, blocks_of, count, dataset_of, ints, names_of,
     read_patches, text_attrs,
 };
+use crate::fasthash::FastMap;
 use crate::field::{Location, Results};
 use crate::hdf5::{H5, Object, Values};
-use crate::{Mesh, MeshError};
+use crate::{Mesh, MeshError, par};
 
 /// What [`read_blocks`] read besides the mesh.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -267,10 +274,143 @@ impl cells::Sets for Planned<'_, '_> {
     }
 }
 
+/// A block's (global id, position) pairs, by shard.
+type ByShard = Vec<Vec<(u32, u32)>>;
+
+/// The points of the blocks read, joined by their global ids.
+struct Joined {
+    /// By block, the point of each of its point rows.
+    maps: Vec<Vec<u32>>,
+    /// Each new point, in order: its block (among those read) and its
+    /// row among the block's point rows.
+    firsts: Vec<(u32, u32)>,
+    /// The point of each id, by [`super::shard_of`] the id.
+    shards: Vec<FastMap<u32, u32>>,
+}
+
+/// Join the point rows `rows` of the blocks read by their global `ids`
+/// (one `Values` each), as a whole read joins the blocks one after the
+/// other: the first row of each id, in block order and then row order, is
+/// a new point, numbered from `base` in that order, and every row of the
+/// id is that point. The ids are sharded by a hash, so each thread fills
+/// the maps of its own shards over all blocks: one map of the millions of
+/// points of a region takes most of a read to fill on one thread. The ids
+/// are kept as 32-bit numbers, as mesh points are numbered; `None` when
+/// one is not (negative, or beyond 2^32), for the reader joining one
+/// block after the other.
+fn join_blocks(ids: &[&Values], rows: &[Range<usize>], base: usize) -> Option<Joined> {
+    let at: Vec<usize> = rows
+        .iter()
+        .scan(0, |n, r| {
+            let a = *n;
+            *n += r.len();
+            Some(a)
+        })
+        .collect();
+    let n: usize = rows.iter().map(|r| r.len()).sum();
+    let shards = if par::threads() > 1 {
+        4 * par::threads()
+    } else {
+        1
+    };
+    // Each block's (id, position) pairs by shard, in row order.
+    let lists: Vec<Option<ByShard>> = cells::in_runs((0..rows.len()).collect(), |k| {
+        let mut by: Vec<Vec<(u32, u32)>> = (0..shards)
+            .map(|_| Vec::with_capacity(rows[k].len() / shards + 16))
+            .collect();
+        for (i, r) in rows[k].clone().enumerate() {
+            let id = u32::try_from(ids[k].int(r)).ok()?;
+            by[super::shard_of(i64::from(id), shards)].push((id, (at[k] + i) as u32));
+        }
+        Some(by)
+    });
+    let lists: Vec<ByShard> = lists.into_iter().collect::<Option<_>>()?;
+    // The first position of each id, shard by shard.
+    let mut first = vec![0u32; n];
+    let mut maps = {
+        let first = AtomicU32::from_mut_slice(&mut first);
+        cells::in_runs((0..shards).collect(), |s| {
+            let len = lists.iter().map(|b| b[s].len()).sum();
+            let mut map: FastMap<u32, u32> = crate::fasthash::map_with_capacity(len);
+            for b in &lists {
+                for &(id, pos) in &b[s] {
+                    let f = *map.entry(id).or_insert(pos);
+                    first[pos as usize].store(f, Relaxed);
+                }
+            }
+            map
+        })
+    };
+    drop(lists);
+    // The new points numbered in order of their first position.
+    let is_first = |p: usize| first[p] as usize == p;
+    let ranges = par::ranges(n, 1 << 15);
+    let counts = par::each(ranges.clone(), |r| r.filter(|&p| is_first(p)).count());
+    let mut point = vec![0u32; n];
+    {
+        let pieces = par::split_mut(
+            &mut point,
+            &std::iter::once(0)
+                .chain(ranges.iter().map(|r| r.end))
+                .collect::<Vec<_>>(),
+        );
+        let mut before = base;
+        let jobs: Vec<_> = ranges
+            .iter()
+            .zip(pieces)
+            .zip(&counts)
+            .map(|((r, piece), &c)| {
+                let start = before;
+                before += c;
+                (r.clone(), piece, start)
+            })
+            .collect();
+        par::each(jobs, |(r, piece, start)| {
+            let mut next = start as u32;
+            for (p, q) in r.zip(piece.iter_mut()) {
+                if is_first(p) {
+                    *q = next;
+                    next += 1;
+                }
+            }
+        });
+    }
+    let firsts: Vec<(u32, u32)> = par::collect(n, 1 << 15, |r| {
+        r.filter(|&p| is_first(p))
+            .map(|p| {
+                let k = at.partition_point(|&a| a <= p) - 1;
+                (k as u32, (p - at[k]) as u32)
+            })
+            .collect()
+    });
+    // Every row is the point of its id's first row.
+    let maps_by_block: Vec<Vec<u32>> = (0..rows.len())
+        .map(|k| {
+            let r = at[k]..at[k] + rows[k].len();
+            par::collect(r.len(), 1 << 15, |q| {
+                q.map(|i| point[first[r.start + i] as usize]).collect()
+            })
+        })
+        .collect();
+    let point = &point;
+    let pieces: Vec<&mut FastMap<u32, u32>> = maps.iter_mut().collect();
+    par::each(pieces, |m| {
+        for v in m.values_mut() {
+            *v = point[*v as usize];
+        }
+    });
+    Some(Joined {
+        maps: maps_by_block,
+        firsts,
+        shards: maps,
+    })
+}
+
 impl Builder {
     /// Read the cells of partitions `blocks` of grid `g` as each block's
-    /// plan says, partition after partition; gives the rows of the cell
-    /// datasets and of `Points` the mesh took.
+    /// plan says, on all threads, put together partition after
+    /// partition; gives the rows of the cell datasets and of `Points` the
+    /// mesh took.
     fn grid_blocks(
         &mut self,
         h: &H5,
@@ -349,35 +489,92 @@ impl Builder {
             self.least = Vec::new();
             self.mesh.boundary = crate::Polygons::new();
         }
-        let (mut cell_rows, mut point_rows) = (Vec::new(), Vec::new());
-        for (&blk, plan) in blocks.iter().zip(plans) {
-            // a read in the background stops between blocks
-            crate::profile::check()?;
-            let part = part_list[blk];
-            // its points, joined to those of the blocks before
+        let parts: Vec<cells::Part> = blocks.iter().map(|&b| part_list[b]).collect();
+        // Each block's points and their global ids, on all threads.
+        let t = crate::profile::span("read.blocks.points");
+        let read: Vec<(Values, Values)> = cells::in_runs(parts.clone(), |part| {
             let rows = part.point_at..part.point_at + part.points;
             let xyz = h.values_in(&points, 3 * rows.start..3 * rows.end)?;
             let ids = h.int_values_in(&gids, rows.clone())?;
             if xyz.held().end < 3 * rows.end || ids.held().end < rows.end {
                 return Err(bad("Points or GlobalPointIds is shorter than the points"));
             }
-            let (map, new) = self.join_points(&xyz, &ids, rows.clone());
-            drop(xyz);
-            point_rows.extend(new);
-            let map = PointMap::From(rows.start, map);
-            let skip = Values::of_bytes_in(plan.skip.clone(), part.cell_at, total_cells);
-            let planned = Planned { sets: &sets, skip };
-            let t = crate::profile::span("read.cells");
-            let grid = cells::Grid {
-                parts: std::slice::from_ref(&part),
-                poly,
-                zone: None,
-                points: &map,
-                xyz: &self.mesh.points,
-            };
-            let read = cells::read_rows(&grid, &planned, part.cell_at..part.cell_at + part.cells)?;
-            drop(t);
-            drop(crate::profile::span("read.blocks"));
+            Ok((xyz, ids))
+        })
+        .into_iter()
+        .collect::<Result<_, MeshError>>()?;
+        drop(t);
+        // a read in the background stops between the steps
+        crate::profile::check()?;
+        // Joined by their ids, as a whole read joins the blocks one after
+        // the other.
+        let t = crate::profile::span("read.blocks.join");
+        let rows: Vec<Range<usize>> = parts
+            .iter()
+            .map(|p| p.point_at..p.point_at + p.points)
+            .collect();
+        let ids: Vec<&Values> = read.iter().map(|(_, ids)| ids).collect();
+        let (maps, point_rows) = match join_blocks(&ids, &rows, self.mesh.points.len()) {
+            Some(joined) => {
+                let mut fresh = vec![[0.0; 3]; joined.firsts.len()];
+                par::chunks_mut(&mut fresh, 1 << 15, |at, part| {
+                    for (q, &(k, i)) in part.iter_mut().zip(&joined.firsts[at..]) {
+                        let row = rows[k as usize].start + i as usize;
+                        *q = super::xyz_at(&read[k as usize].0, row);
+                    }
+                });
+                self.mesh.points.extend(fresh);
+                let point_rows: Vec<u32> = joined
+                    .firsts
+                    .iter()
+                    .map(|&(k, i)| (rows[k as usize].start + i as usize) as u32)
+                    .collect();
+                self.gids = Some(super::Gids::Shards(joined.shards));
+                (joined.maps, point_rows)
+            }
+            // ids that are no point numbers: block after block
+            None => {
+                let (mut maps, mut point_rows) = (Vec::new(), Vec::new());
+                for ((xyz, ids), r) in read.iter().zip(&rows) {
+                    let (map, new) = self.join_points(xyz, ids, r.clone());
+                    maps.push(map);
+                    point_rows.extend(new);
+                }
+                (maps, point_rows)
+            }
+        };
+        drop(read);
+        drop(t);
+        crate::profile::check()?;
+        // Each block's cells on threads of their own, the threads left
+        // over for its windows.
+        let t = crate::profile::span("read.cells");
+        let outer = par::threads().min(parts.len()).max(1);
+        let inner = (par::threads() / outer).max(1);
+        let xyz = &self.mesh.points;
+        let jobs: Vec<_> = parts.iter().zip(maps).zip(plans).collect();
+        let reads: Vec<cells::Cells> = cells::in_runs(jobs, |((part, map), plan)| {
+            par::with_threads(inner, || {
+                let skip = Values::of_bytes_in(plan.skip.clone(), part.cell_at, total_cells);
+                let planned = Planned { sets: &sets, skip };
+                let map = PointMap::From(part.point_at, map);
+                let grid = cells::Grid {
+                    parts: std::slice::from_ref(part),
+                    poly,
+                    zone: None,
+                    points: &map,
+                    xyz,
+                };
+                cells::read_rows(&grid, &planned, part.cell_at..part.cell_at + part.cells)
+            })
+        })
+        .into_iter()
+        .collect::<Result<_, MeshError>>()?;
+        drop(t);
+        crate::profile::check()?;
+        // Put together in block order.
+        let mut cell_rows = Vec::new();
+        for read in reads {
             self.add(read.polys, read.least, read.cell_end);
             self.mesh.cell_zone.extend_from_slice(&read.zone);
             self.mesh.cell_kind.extend_from_slice(&read.kind);
@@ -550,6 +747,75 @@ mod tests {
             );
             assert_eq!((&m.zones, &m.patches), (&whole.zones, &whole.patches));
             assert_eq!(r.fields, rw.fields, "{name}");
+        }
+    }
+
+    /// Invariant: the join numbers each global id's first row, in block
+    /// order and then row order, from `base`, maps every row to its id's
+    /// point and the shards to the same points, on one thread as on
+    /// four; an id that is no 32-bit point number leaves the join to the
+    /// reader that goes block after block. Breaks when the shards number
+    /// the points in the order they meet them, or a negative id wraps to
+    /// a point. The file tests have few repeated ids per shard.
+    #[test]
+    fn ids_join_in_block_and_row_order() {
+        let all = [5, 7, 9, 9, 2, 5, 11, 2, 13];
+        let rows = [0..3, 3..7, 7..9];
+        let values: Vec<Values> = rows
+            .iter()
+            .map(|r| Values::of_ints_in(&all, r.clone()))
+            .collect();
+        let ids: Vec<&Values> = values.iter().collect();
+        for n in [1, 4] {
+            let j = crate::par::with_threads(n, || join_blocks(&ids, &rows, 10)).unwrap();
+            assert_eq!(j.maps, vec![vec![10, 11, 12], vec![12, 13, 10, 14], vec![13, 15]]);
+            assert_eq!(j.firsts, vec![(0, 0), (0, 1), (0, 2), (1, 1), (1, 3), (2, 1)]);
+            for (id, point) in [(5, 10), (7, 11), (9, 12), (2, 13), (11, 14), (13, 15)] {
+                let shard = &j.shards[super::super::shard_of(id, j.shards.len())];
+                assert_eq!(shard.get(&(id as u32)), Some(&point), "id {id} on {n}");
+            }
+        }
+        for bad in [-1, 1 << 33] {
+            let v = Values::of_ints_in(&[1, bad, 2], 0..3);
+            assert!(join_blocks(&[&v], &[0..3], 0).is_none(), "{bad}");
+        }
+    }
+
+    /// Invariant: blocks read on one thread, on three or on four give the
+    /// same mesh, fields and subset, bit for bit: the points joined in
+    /// the same order however the ids are sharded, the blocks put
+    /// together in order however they are read. Breaks when the join
+    /// numbers a point by the shard that met it first, or the cells of
+    /// the blocks are put together in the order they finished; the other
+    /// tests run on the machine's threads only.
+    #[test]
+    fn blocks_read_alike_on_any_threads() {
+        for (name, path) in files("threads") {
+            let nb = (0..)
+                .find(|&k| read_blocks(&path, &[k], false).is_err())
+                .unwrap();
+            let some: Vec<usize> = (0..nb).filter(|k| k % 3 != 1).collect();
+            let read = |n: usize| crate::par::with_threads(n, || read_blocks(&path, &some, true));
+            let (m1, r1, s1) = read(1).unwrap();
+            for n in [3, 4] {
+                let (m, r, s) = read(n).unwrap();
+                assert_eq!(m.points, m1.points, "{name} on {n}");
+                assert_eq!(m.cell_faces, m1.cell_faces, "{name} on {n}");
+                for c in 0..m.cell_count() {
+                    let a: Vec<&[u32]> = m.cell(c).map(|f| f.nodes).collect();
+                    let b: Vec<&[u32]> = m1.cell(c).map(|f| f.nodes).collect();
+                    assert_eq!(a, b, "{name} on {n}, cell {c}");
+                }
+                assert_eq!(
+                    (&m.boundary.start, &m.boundary.nodes, &m.boundary_patch),
+                    (&m1.boundary.start, &m1.boundary.nodes, &m1.boundary_patch),
+                    "{name} on {n}"
+                );
+                assert_eq!(m.boundary_owner, m1.boundary_owner, "{name} on {n}");
+                assert_eq!((&m.cell_zone, &m.cell_kind), (&m1.cell_zone, &m1.cell_kind));
+                assert_eq!(r, r1, "{name} on {n}");
+                assert_eq!(s, s1, "{name} on {n}");
+            }
         }
     }
 

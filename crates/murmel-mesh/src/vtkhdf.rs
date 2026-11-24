@@ -28,6 +28,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
+use crate::fasthash::FastMap;
 use crate::field::{Field, Location, Results, group_vectors, parse_units};
 use crate::hdf5::{Dataset, H5, Object, Target, Value, Values};
 use crate::{Mesh, MeshError, Patch, Polygons, boundary, par};
@@ -594,7 +595,17 @@ fn join_boundary(patches: Vec<(usize, Vec<Field>)>, total: usize) -> Vec<Field> 
 /// map.
 enum Gids {
     Dense(Vec<u32>),
-    Hash(HashMap<i64, u32>),
+    Hash(FastMap<i64, u32>),
+    /// By [`shard_of`] the id: the blocks of a region, joined on all
+    /// threads (`subset::join_blocks`).
+    Shards(Vec<FastMap<u32, u32>>),
+}
+
+/// The shard of global id `id` among `n`: a multiplicative hash (the
+/// golden ratio's), its high bits, so the shards' own maps, which hash by
+/// the low bits, stay spread.
+pub(super) fn shard_of(id: i64, n: usize) -> usize {
+    ((id as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32) as usize % n.max(1)
 }
 
 impl Gids {
@@ -605,12 +616,21 @@ impl Gids {
                 .and_then(|i| points.get(i).copied())
                 .filter(|&p| p != NO_POINT),
             Gids::Hash(map) => map.get(&id).copied(),
+            Gids::Shards(maps) => {
+                let key = u32::try_from(id).ok()?;
+                maps.get(shard_of(id, maps.len()))?.get(&key).copied()
+            }
         }
     }
 
-    fn into_map(self) -> HashMap<i64, u32> {
+    fn into_map(self) -> FastMap<i64, u32> {
         match self {
             Gids::Hash(map) => map,
+            Gids::Shards(maps) => maps
+                .into_iter()
+                .flatten()
+                .map(|(id, p)| (i64::from(id), p))
+                .collect(),
             Gids::Dense(points) => points
                 .into_iter()
                 .enumerate()
@@ -1055,8 +1075,9 @@ impl Builder {
         xyz: &Values,
         ids: &Values,
         rows: std::ops::Range<usize>,
-        map: &mut HashMap<i64, u32>,
+        map: &mut FastMap<i64, u32>,
     ) -> (Vec<u32>, Vec<u32>) {
+        map.reserve(rows.len());
         let points = &mut self.mesh.points;
         let mut new = Vec::new();
         let mut pmap = Vec::with_capacity(rows.len());

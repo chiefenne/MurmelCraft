@@ -741,7 +741,7 @@ fn pieces<T>(data: &mut [T], at: impl Iterator<Item = usize>) -> Vec<&mut [T]> {
 
 /// `f` for each of `items` on all threads, each thread taking a run of
 /// consecutive items one after the other; results in order.
-fn in_runs<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+pub(super) fn in_runs<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
     let mut items = items.into_iter();
     let runs: Vec<Vec<T>> = par::ranges(items.len(), 1)
         .into_iter()
