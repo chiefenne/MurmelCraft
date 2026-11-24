@@ -483,11 +483,9 @@ impl Surface {
         order.sort_unstable();
         s.faces = polys.iter().filter(|p| p.boundary != NO_CELL).count();
         s.open_faces = polys.len() - s.faces;
-        let mut vb = Bounds::empty();
         // Each corner starts one edge, and most edges are shared by two
         // polygons.
         let corners: usize = polys.iter().map(|p| p.verts.len()).sum();
-        let mut seen: FastSet<(V, V)> = set_with_capacity(corners / 2 + 16);
         let pts: Vec<Vec<[f64; 3]>> = polys
             .iter()
             .map(|p| p.verts.iter().map(|&v| pos(v)).collect())
@@ -533,166 +531,204 @@ impl Surface {
         };
         drop(phase);
         let phase = murmel_mesh::profile::span("surface.buffers");
-        if mesh_triangles {
-            // A triangle is drawn as is; a larger polygon as a fan about
-            // its centre.
-            let (mut vertices, mut indices) = (0, 0);
-            for p in &polys {
-                let k = p.verts.len();
-                vertices += if k == 3 { 3 } else { k + 1 };
-                indices += if k == 3 { 3 } else { 3 * k };
-            }
-            s.positions.reserve(vertices);
-            s.normals.reserve(vertices);
-            s.colors.reserve(vertices);
-            s.values.reserve(vertices);
-            s.indices.reserve(indices);
-            s.tri_cell.reserve(indices / 3);
-            s.tri_face.reserve(indices / 3);
-        }
-        if features.is_none() {
-            // Feature edges are a few of the edges; the others are all
-            // drawn, each once.
-            s.edge_positions.reserve(corners);
-            s.edge_colors.reserve(corners);
-        }
-        let mut drawn = Bounds1::default();
         // Lines alone are drawn in the face colour; over faces, darker.
         let lines_only = !display.render_mode.faces();
-        for (unselected, _, i) in order {
-            let poly = &polys[i];
-            let rgb = poly.color;
-            // The polygon's flat value and its corners' values, when it
-            // has them all.
-            let valued = field.and_then(|f| {
-                let corners = &corner_values[i];
-                if !corners.iter().all(|x| x.is_finite()) {
-                    return None;
-                }
-                let mut flat = f.flat(poly.cell, poly.boundary);
-                if !flat.is_finite() {
-                    // A face of no cell (a surface mesh) with a point
-                    // field: the mean of its corners.
-                    flat = corners.iter().sum::<f64>() / corners.len().max(1) as f64;
-                }
-                flat.is_finite().then_some((flat, corners))
-            });
-            if let Some((flat, corners)) = valued
-                && mesh_triangles
-            {
-                drawn.add(flat);
-                corners.iter().for_each(|&x| drawn.add(x));
-            }
-            let sel_mix = if unselected { 0.0 } else { mix };
-            let (color, ec) = if faint {
-                let ec = if unselected {
-                    tokens.mesh.field.outline
-                } else {
-                    sel
-                };
-                (rgb.linear(), ec.linear())
-            } else if field.is_some() {
-                let face = if valued.is_some() {
-                    rgb
-                } else {
-                    tokens.mesh.field.none
-                };
-                let face = if unselected {
-                    face
-                } else {
-                    Rgb(std::array::from_fn(|k| {
-                        (face.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
-                    }))
-                };
-                let edge = if !unselected {
-                    sel
-                } else if lines_only {
-                    tokens.mesh.field.none
-                } else {
-                    tokens.mesh.field.edge
-                };
-                (face.linear(), edge.linear())
-            } else if unselected {
-                (
-                    rgb.linear(),
-                    if lines_only {
-                        rgb.linear()
+        // The colours of each polygon in draw order, and its flat value
+        // when it has a value at every corner.
+        let looks: Vec<Look> = murmel_mesh::par::collect(order.len(), 1 << 12, |r| {
+            r.map(|o| {
+                let (unselected, _, i) = order[o];
+                let poly = &polys[i];
+                let rgb = poly.color;
+                let flat = field.and_then(|f| {
+                    let corners = &corner_values[i];
+                    if !corners.iter().all(|x| x.is_finite()) {
+                        return None;
+                    }
+                    let mut flat = f.flat(poly.cell, poly.boundary);
+                    if !flat.is_finite() {
+                        // A face of no cell (a surface mesh) with a point
+                        // field: the mean of its corners.
+                        flat = corners.iter().sum::<f64>() / corners.len().max(1) as f64;
+                    }
+                    flat.is_finite().then_some(flat)
+                });
+                let sel_mix = if unselected { 0.0 } else { mix };
+                let (color, edge) = if faint {
+                    let ec = if unselected {
+                        tokens.mesh.field.outline
                     } else {
-                        Rgb(rgb.0.map(|v| (v as f32 * darken).round() as u8)).linear()
+                        sel
+                    };
+                    (rgb.linear(), ec.linear())
+                } else if field.is_some() {
+                    let face = if flat.is_some() {
+                        rgb
+                    } else {
+                        tokens.mesh.field.none
+                    };
+                    let face = if unselected {
+                        face
+                    } else {
+                        Rgb(std::array::from_fn(|k| {
+                            (face.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
+                        }))
+                    };
+                    let edge = if !unselected {
+                        sel
+                    } else if lines_only {
+                        tokens.mesh.field.none
+                    } else {
+                        tokens.mesh.field.edge
+                    };
+                    (face.linear(), edge.linear())
+                } else if unselected {
+                    (
+                        rgb.linear(),
+                        if lines_only {
+                            rgb.linear()
+                        } else {
+                            Rgb(rgb.0.map(|v| (v as f32 * darken).round() as u8)).linear()
+                        },
+                    )
+                } else {
+                    let m = Rgb(std::array::from_fn(|k| {
+                        (rgb.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
+                    }));
+                    (m.linear(), sel.linear())
+                };
+                Look {
+                    color,
+                    edge,
+                    sel_mix,
+                    flat,
+                }
+            })
+            .collect()
+        });
+        // Where each polygon's vertices and indices start: a triangle is
+        // drawn as is, a larger polygon as a fan about its centre.
+        let (mut vstart, mut istart) = (vec![0usize], vec![0usize]);
+        vstart.reserve(order.len());
+        istart.reserve(order.len());
+        let (mut nv, mut ni) = (0, 0);
+        for &(_, _, i) in &order {
+            let k = polys[i].verts.len();
+            if mesh_triangles {
+                nv += if k == 3 { 3 } else { k + 1 };
+                ni += if k == 3 { 3 } else { 3 * k };
+            }
+            vstart.push(nv);
+            istart.push(ni);
+        }
+        s.positions = vec![[0.0; 3]; nv];
+        s.normals = vec![[0.0; 3]; nv];
+        s.colors = vec![[0.0; 3]; nv];
+        s.values = vec![[0.0; 4]; nv];
+        s.indices = vec![0; ni];
+        s.tri_cell = vec![0; ni / 3];
+        s.tri_face = vec![0; ni / 3];
+        let ranges = murmel_mesh::par::ranges(order.len(), 1 << 12);
+        let cuts = |at: &[usize], per: usize| -> Vec<usize> {
+            ranges
+                .iter()
+                .map(|r| at[r.start] / per)
+                .chain([at[order.len()] / per])
+                .collect()
+        };
+        let (vcuts, icuts, tcuts) = (cuts(&vstart, 1), cuts(&istart, 1), cuts(&istart, 3));
+        let mut outs = Vec::with_capacity(ranges.len());
+        let mut positions = murmel_mesh::par::split_mut(&mut s.positions, &vcuts).into_iter();
+        let mut normals_out = murmel_mesh::par::split_mut(&mut s.normals, &vcuts).into_iter();
+        let mut colors = murmel_mesh::par::split_mut(&mut s.colors, &vcuts).into_iter();
+        let mut values = murmel_mesh::par::split_mut(&mut s.values, &vcuts).into_iter();
+        let mut indices = murmel_mesh::par::split_mut(&mut s.indices, &icuts).into_iter();
+        let mut tri_cell = murmel_mesh::par::split_mut(&mut s.tri_cell, &tcuts).into_iter();
+        let mut tri_face = murmel_mesh::par::split_mut(&mut s.tri_face, &tcuts).into_iter();
+        for r in &ranges {
+            if let (Some(p), Some(n), Some(c), Some(v), Some(x), Some(tc), Some(tf)) = (
+                positions.next(),
+                normals_out.next(),
+                colors.next(),
+                values.next(),
+                indices.next(),
+                tri_cell.next(),
+                tri_face.next(),
+            ) {
+                outs.push((
+                    r.clone(),
+                    Out {
+                        positions: p,
+                        normals: n,
+                        colors: c,
+                        values: v,
+                        indices: x,
+                        tri_cell: tc,
+                        tri_face: tf,
                     },
-                )
-            } else {
-                let m = Rgb(std::array::from_fn(|k| {
-                    (rgb.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
-                }));
-                (m.linear(), sel.linear())
-            };
-            let pts = &pts[i];
-            for p in pts {
-                vb.add([p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]]);
+                ));
             }
-            let n = normals[i];
-            let base = s.positions.len() as u32;
-            let origin_v = s.value_origin;
-            let value = |node: f64| -> [f32; 4] {
-                match valued {
-                    Some((flat, _)) => [
-                        (flat - origin_v) as f32,
-                        (node - origin_v) as f32,
-                        sel_mix,
-                        1.0,
-                    ],
-                    None => [0.0, 0.0, 0.0, 0.0],
-                }
-            };
-            let corner =
-                |j: usize| -> f64 { valued.map_or(0.0, |(_, c)| c.get(j).copied().unwrap_or(0.0)) };
-            let push = |s: &mut Surface, p: [f64; 3], v: [f32; 4]| {
-                s.positions.push(p.map(|v| v as f32));
-                s.normals.push(n);
-                s.colors.push(color);
-                s.values.push(v);
-            };
-            let tris_before = s.indices.len() / 3;
-            if !mesh_triangles {
-                // Edges only.
-            } else if pts.len() == 3 {
-                for (j, &p) in pts.iter().enumerate() {
-                    push(&mut s, p, value(corner(j)));
-                }
-                s.indices.extend([base, base + 1, base + 2]);
-            } else {
-                let k = pts.len() as f64;
-                let c = [0, 1, 2].map(|d| pts.iter().map(|p| p[d]).sum::<f64>() / k);
-                let mean = (0..pts.len()).map(corner).sum::<f64>() / k;
-                push(&mut s, c, value(mean));
-                for (j, &p) in pts.iter().enumerate() {
-                    push(&mut s, p, value(corner(j)));
-                }
-                let m = pts.len() as u32;
-                for i in 0..m {
-                    s.indices
-                        .extend([base, base + 1 + i, base + 1 + (i + 1) % m]);
-                }
+        }
+        let fill = Fill {
+            order: &order,
+            polys: &polys,
+            pts: &pts,
+            normals: &normals,
+            corner_values: &corner_values,
+            looks: &looks,
+            vstart: &vstart,
+            istart: &istart,
+            origin,
+            value_origin: s.value_origin,
+            mesh_triangles,
+        };
+        // The edges, each once, on a thread of their own beside the
+        // triangles: an edge two polygons share takes the colour of the
+        // first in draw order.
+        let lines = Lines {
+            order: &order,
+            polys: &polys,
+            pts: &pts,
+            looks: &looks,
+            features: features.as_ref(),
+            corners,
+        };
+        let (edges, parts) = std::thread::scope(|sc| {
+            let edges = sc.spawn(|| lines.draw());
+            let mut outs = outs.into_iter();
+            let here = outs.next();
+            let others: Vec<_> = outs
+                .map(|(r, mut out)| {
+                    let fill = &fill;
+                    sc.spawn(move || fill.chunk(r, &mut out))
+                })
+                .collect();
+            let mut parts = Vec::with_capacity(others.len() + 1);
+            if let Some((r, mut out)) = here {
+                parts.push(fill.chunk(r, &mut out));
             }
-            let tris = s.indices.len() / 3 - tris_before;
-            s.tri_cell.extend(std::iter::repeat_n(poly.cell, tris));
-            s.tri_face.extend(std::iter::repeat_n(poly.face, tris));
-            let vs = &poly.verts;
-            for j in 0..vs.len() {
-                let (a, b) = (vs[j], vs[(j + 1) % vs.len()]);
-                let key = (a.min(b), a.max(b));
-                if a == b || features.as_ref().is_some_and(|fe| !fe.contains(&key)) {
-                    continue;
-                }
-                if seen.insert(key) {
-                    s.edge_positions.push(pts[j].map(|v| v as f32));
-                    s.edge_positions
-                        .push(pts[(j + 1) % vs.len()].map(|v| v as f32));
-                    s.edge_colors.push(ec);
-                    s.edge_colors.push(ec);
-                }
+            let join = |h: std::thread::ScopedJoinHandle<'_, _>| match h.join() {
+                Ok(r) => r,
+                Err(p) => std::panic::resume_unwind(p),
+            };
+            for h in others {
+                parts.push(join(h));
             }
+            let edges: (Vec<[f32; 3]>, Vec<[f32; 3]>) = match edges.join() {
+                Ok(r) => r,
+                Err(p) => std::panic::resume_unwind(p),
+            };
+            (edges, parts)
+        });
+        (s.edge_positions, s.edge_colors) = edges;
+        let mut vb = Bounds::empty();
+        let mut drawn = Bounds1::default();
+        for (b, d) in parts {
+            if !b.is_empty() {
+                vb.add(b.min);
+                vb.add(b.max);
+            }
+            drawn.merge(&d);
         }
         drop(phase);
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
@@ -757,6 +793,174 @@ impl Bounds1 {
 
     fn range(&self) -> Option<(f64, f64)> {
         self.0
+    }
+
+    fn merge(&mut self, other: &Bounds1) {
+        if let Some((a, b)) = other.0 {
+            self.add(a);
+            self.add(b);
+        }
+    }
+}
+
+/// The colours of a polygon (its faces and its edges), the share of the
+/// selection colour mixed into its values, and its flat value when it
+/// has a value at every corner.
+struct Look {
+    color: [f32; 3],
+    edge: [f32; 3],
+    sel_mix: f32,
+    flat: Option<f64>,
+}
+
+/// The part of the triangle buffers one run of polygons fills.
+struct Out<'a> {
+    positions: &'a mut [[f32; 3]],
+    normals: &'a mut [[f32; 3]],
+    colors: &'a mut [[f32; 3]],
+    values: &'a mut [[f32; 4]],
+    indices: &'a mut [u32],
+    tri_cell: &'a mut [u32],
+    tri_face: &'a mut [u32],
+}
+
+/// What filling the triangle buffers reads: the polygons in draw order
+/// (`order`), their corners relative to the origin, normals, corner
+/// values and looks, and where each one's vertices and indices start.
+struct Fill<'a> {
+    order: &'a [(bool, u32, usize)],
+    polys: &'a [Poly],
+    pts: &'a [Vec<[f64; 3]>],
+    normals: &'a [[f32; 3]],
+    corner_values: &'a [Vec<f64>],
+    looks: &'a [Look],
+    vstart: &'a [usize],
+    istart: &'a [usize],
+    origin: [f64; 3],
+    value_origin: f64,
+    mesh_triangles: bool,
+}
+
+impl Fill<'_> {
+    /// Fill `out` with the polygons `run` (positions in draw order) and
+    /// give the bounds of their corners and of the field values drawn.
+    fn chunk(&self, run: std::ops::Range<usize>, out: &mut Out<'_>) -> (Bounds, Bounds1) {
+        let (v0, i0) = (self.vstart[run.start], self.istart[run.start]);
+        let mut vb = Bounds::empty();
+        let mut drawn = Bounds1::default();
+        let o3 = self.origin;
+        for o in run {
+            let (_, _, i) = self.order[o];
+            let (poly, pts, look) = (&self.polys[i], &self.pts[i], &self.looks[o]);
+            for p in pts {
+                vb.add([p[0] + o3[0], p[1] + o3[1], p[2] + o3[2]]);
+            }
+            if !self.mesh_triangles {
+                // Edges only.
+                continue;
+            }
+            let corners = look.flat.map(|_| self.corner_values[i].as_slice());
+            if let (Some(flat), Some(c)) = (look.flat, corners) {
+                drawn.add(flat);
+                c.iter().for_each(|&x| drawn.add(x));
+            }
+            let origin_v = self.value_origin;
+            let value = |node: f64| -> [f32; 4] {
+                match look.flat {
+                    Some(flat) => [
+                        (flat - origin_v) as f32,
+                        (node - origin_v) as f32,
+                        look.sel_mix,
+                        1.0,
+                    ],
+                    None => [0.0, 0.0, 0.0, 0.0],
+                }
+            };
+            let corner =
+                |j: usize| -> f64 { corners.map_or(0.0, |c| c.get(j).copied().unwrap_or(0.0)) };
+            let n = self.normals[i];
+            let (lv, li) = (self.vstart[o] - v0, self.istart[o] - i0);
+            let mut put = |slot: usize, p: [f64; 3], v: [f32; 4]| {
+                out.positions[lv + slot] = p.map(|x| x as f32);
+                out.normals[lv + slot] = n;
+                out.colors[lv + slot] = look.color;
+                out.values[lv + slot] = v;
+            };
+            let base = self.vstart[o] as u32;
+            let tris = if pts.len() == 3 {
+                for (j, &p) in pts.iter().enumerate() {
+                    put(j, p, value(corner(j)));
+                }
+                out.indices[li..li + 3].copy_from_slice(&[base, base + 1, base + 2]);
+                1
+            } else {
+                let k = pts.len() as f64;
+                let c = [0, 1, 2].map(|d| pts.iter().map(|p| p[d]).sum::<f64>() / k);
+                let mean = (0..pts.len()).map(corner).sum::<f64>() / k;
+                put(0, c, value(mean));
+                for (j, &p) in pts.iter().enumerate() {
+                    put(1 + j, p, value(corner(j)));
+                }
+                let m = pts.len() as u32;
+                for t in 0..m {
+                    let at = li + 3 * t as usize;
+                    out.indices[at..at + 3].copy_from_slice(&[
+                        base,
+                        base + 1 + t,
+                        base + 1 + (t + 1) % m,
+                    ]);
+                }
+                pts.len()
+            };
+            let lt = li / 3;
+            out.tri_cell[lt..lt + tris].fill(poly.cell);
+            out.tri_face[lt..lt + tris].fill(poly.face);
+        }
+        (vb, drawn)
+    }
+}
+
+/// What drawing the edges reads: the polygons in draw order, their
+/// corners and looks, the feature edges when only those are drawn, and
+/// the number of corners (most edges are shared by two polygons).
+struct Lines<'a> {
+    order: &'a [(bool, u32, usize)],
+    polys: &'a [Poly],
+    pts: &'a [Vec<[f64; 3]>],
+    looks: &'a [Look],
+    features: Option<&'a FastSet<(V, V)>>,
+    corners: usize,
+}
+
+impl Lines<'_> {
+    /// The edge lines, two vertices per edge, each edge once, in the
+    /// colour of the first polygon in draw order that has it.
+    fn draw(&self) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        let mut seen: FastSet<(V, V)> = set_with_capacity(self.corners / 2 + 16);
+        // Feature edges are a few of the edges; the others are all drawn.
+        let room = if self.features.is_none() {
+            self.corners
+        } else {
+            0
+        };
+        let (mut positions, mut colors) = (Vec::with_capacity(room), Vec::with_capacity(room));
+        for (o, &(_, _, i)) in self.order.iter().enumerate() {
+            let (vs, pts, ec) = (&self.polys[i].verts, &self.pts[i], self.looks[o].edge);
+            for j in 0..vs.len() {
+                let (a, b) = (vs[j], vs[(j + 1) % vs.len()]);
+                let key = (a.min(b), a.max(b));
+                if a == b || self.features.is_some_and(|fe| !fe.contains(&key)) {
+                    continue;
+                }
+                if seen.insert(key) {
+                    positions.push(pts[j].map(|v| v as f32));
+                    positions.push(pts[(j + 1) % vs.len()].map(|v| v as f32));
+                    colors.push(ec);
+                    colors.push(ec);
+                }
+            }
+        }
+        (positions, colors)
     }
 }
 
