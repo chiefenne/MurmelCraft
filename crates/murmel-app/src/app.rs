@@ -130,8 +130,11 @@ impl MurmelApp {
         let tokens = Tokens::builtin()?;
         style::install(&cc.egui_ctx, &tokens);
         let mut session = Session::new(tokens);
-        // The window opens a mesh first and hashes its files afterwards.
+        // The window opens a mesh first and hashes its files afterwards,
+        // and a clip plane being dragged is cut on the GPU while the exact
+        // cut is built on a thread of its own.
         session.hash_after_open = true;
+        session.defer_clips = true;
         let mut error = None;
         if let Some(dir) = settings::config_dir() {
             let (st, nav, problems) = settings::load(&dir, cfg!(target_os = "macos"));
@@ -1250,6 +1253,7 @@ impl eframe::App for MurmelApp {
         self.poll_movie(&ctx);
         self.poll_opening(&ctx);
         self.poll_digest(&ctx);
+        self.poll_surface(&ctx);
         self.movie_window(&ctx);
         crate::focus::ring(&ctx, &self.focus, color(p.accent));
         self.focus.end(&ctx);

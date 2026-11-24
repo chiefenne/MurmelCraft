@@ -191,6 +191,13 @@ problem took more than a few minutes to understand.
   a mesh after asking for its summary leaves stale counts. A frame that
   needs a count over the cells takes it from the summary or the surface
   (`Surface::cells`), never from a loop of its own.
+- **The window defers clip cuts** (`Session::defer_clips`): after a tool
+  moves a clip plane, `OpenMesh::surface` is still the old cut until the
+  preview ends (`Session::poll_surface`), and the renderer draws
+  `Session::drawn`, not `surface`. Code that reads the surface outside a
+  tool calls `Session::settle` first (tools do it for you, except
+  `clip.set` and `clip.rotate`, which keep a drag going). A window test
+  that moves a plane and then looks at the surface settles too.
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,

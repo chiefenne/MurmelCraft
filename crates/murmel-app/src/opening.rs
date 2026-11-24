@@ -155,6 +155,18 @@ impl MurmelApp {
         }
     }
 
+    /// Follow the clip preview: start the builds it needs and draw the
+    /// exact cut once it is in place.
+    pub(crate) fn poll_surface(&mut self, ctx: &egui::Context) {
+        let before = self.session.surface_revision;
+        if self.session.poll_surface() {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
+        if self.session.surface_revision != before {
+            ctx.request_repaint();
+        }
+    }
+
     /// Open the mesh, or load the session file, on this thread.
     pub(crate) fn open_now(&mut self, then: Then) {
         match then {

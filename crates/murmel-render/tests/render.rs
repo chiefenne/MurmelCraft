@@ -626,3 +626,40 @@ fn wide_lines_are_wider() {
     assert!(thin > 300, "the edges are missing: {thin}");
     assert!(wide as f64 > 1.5 * thin as f64, "thin {thin}, wide {wide}");
 }
+
+/// The clip preview (the window's clip drag) cuts on the GPU: a flat
+/// plane moved from near the far end to the middle, before its exact cut
+/// is built, looks from the front (the plane seen edge-on) like the exact
+/// cut at the middle, and unlike the cut it left. Breaks when the shader
+/// ignores the preview planes, puts them in the wrong place or cuts the
+/// wrong side away.
+#[test]
+fn clip_preview_cuts_on_the_gpu() {
+    let at = |s: &Session, f: f64| {
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        let c = b.center();
+        Clip {
+            origin: [b.min[0] + f * (b.max[0] - b.min[0]), c[1], c[2]],
+            normal: [1.0, 0.0, 0.0],
+            mode: ClipMode::Flat,
+            enabled: true,
+        }
+    };
+    let mut exact = session(StandardView::FRONT);
+    exact.display.clips = vec![at(&exact, 0.5)];
+    exact.redraw();
+    let mut moving = session(StandardView::FRONT);
+    moving.display.clips = vec![at(&moving, 0.9)];
+    moving.redraw();
+    moving.defer_clips = true;
+    moving.display.clips = vec![at(&moving, 0.5)];
+    moving.redraw();
+    assert!(moving.preview.is_some());
+    let want = render_session(&exact, 480, 320).unwrap();
+    let preview = render_session(&moving, 480, 320).unwrap();
+    let share = diff_share(&preview.rgba, &want.rgba, 24);
+    assert!(share < 0.01, "{:.2} % of pixels differ", 100.0 * share);
+    moving.preview = None;
+    let left = render_session(&moving, 480, 320).unwrap();
+    assert!(diff_share(&left.rgba, &want.rgba, 24) > 0.05);
+}
