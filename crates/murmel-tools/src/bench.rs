@@ -660,7 +660,10 @@ mod tests {
             // the field stages ran through their tools
             for name in ["field.color", "slice.step", "iso.step", "slice.step.arrows"] {
                 let st = stages.iter().find(|s| s["stage"] == name);
-                assert!(st.is_some_and(|s| s["triangles"].as_u64() > Some(0)), "{name}");
+                assert!(
+                    st.is_some_and(|s| s["triangles"].as_u64() > Some(0)),
+                    "{name}"
+                );
             }
             assert!(!table(&report).is_empty());
         }
