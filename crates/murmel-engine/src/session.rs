@@ -261,11 +261,13 @@ fn same_display(a: &Display, b: &Display) -> bool {
         quality: None,
         field_values: None,
         region_cells: None,
+        stream_traces: None,
         ..d.clone()
     };
     same(&a.quality, &b.quality)
         && same(&a.field_values, &b.field_values)
         && same(&a.region_cells, &b.region_cells)
+        && same(&a.stream_traces, &b.stream_traces)
         && bare(a) == bare(b)
 }
 
@@ -404,6 +406,8 @@ fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
     d.slices.clear();
     d.isos.clear();
     d.arrows = None;
+    d.streams.clear();
+    d.stream_traces = None;
     d.field_values = None;
     d.regions.clear();
     d.region_cells = None;
@@ -744,6 +748,8 @@ impl Session {
         self.display.slices.clear();
         self.display.isos.clear();
         self.display.arrows = None;
+        self.display.streams.clear();
+        self.display.stream_traces = None;
         self.display.field_values = None;
         self.display.regions.clear();
         self.display.region_cells = None;
@@ -772,6 +778,7 @@ impl Session {
         crate::region::ensure(&mut self.display, &m.mesh);
         ensure_quality(&mut self.display, &m.mesh);
         crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
+        crate::stream::ensure(&mut self.display, &m.mesh, &m.fields);
         if self.defer_clips
             && let Some(moving) = clip_moves(&m.built_for, &self.display)
         {

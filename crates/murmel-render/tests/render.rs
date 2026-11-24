@@ -394,6 +394,7 @@ fn field_export_with_legend() {
         320,
         &Overlays {
             legend: Some(&legend),
+            streams: &[],
             triad: None,
             i18n: &i18n,
             tokens: &s.tokens,
@@ -492,6 +493,74 @@ fn field_arrows_on_the_surface() {
     check_session("field-arrows-surface", &s);
 }
 
+/// Stage 4 streamlines (decided 2026-11-24: thin lines by default,
+/// traced both ways, coloured by their own field with their own colour
+/// bar): 24 seeds on the default line across the duct near its inlet,
+/// coloured by |velocity| over the mesh drawn as its faint outline, with
+/// the exported picture's legend and the streamlines' bar beside it. A
+/// trace that stops early, leaves the duct, loses its colours or its
+/// depth test, or a bar laid over the legend moves pixels here.
+#[test]
+fn field_streamlines_lines() {
+    let mut s = field_session("pressure", murmel_mesh::Component::Magnitude);
+    s.display.color_by = ColorBy::Solid;
+    let mesh = s.mesh.as_ref().unwrap().mesh.clone();
+    let mut st = murmel_engine::Stream::new(
+        "velocity",
+        murmel_engine::Seed::default_for("line", &mesh).unwrap(),
+    );
+    st.count = 24;
+    s.display.streams = vec![st];
+    s.redraw();
+    let mut shot = render_session(&s, 480, 320).unwrap();
+    let legend = murmel_engine::Legend::of(&s);
+    let streams: Vec<_> = murmel_engine::Legend::streams(&s)
+        .into_iter()
+        .map(|(_, l)| l)
+        .collect();
+    assert_eq!(streams.len(), 1, "one bar of its own");
+    let i18n = murmel_engine::i18n::I18n::english().unwrap();
+    overlay::draw(
+        &mut shot.rgba,
+        480,
+        320,
+        &Overlays {
+            legend: legend.as_ref(),
+            streams: &streams,
+            triad: None,
+            i18n: &i18n,
+            tokens: &s.tokens,
+            dark: true,
+            scale: 1.0,
+        },
+    )
+    .unwrap();
+    check_shot("field-streamlines-lines", &shot);
+}
+
+/// Stage 4 streamlines as shaded tubes with arrowheads (on request), in
+/// their solid colour token, from a ball of 12 seeds in the middle of the
+/// duct, inside the mesh's faint outline: tubes that twist (frames by
+/// double reflection), turn inside out, lose their heads or take the
+/// field's colours instead of the token move pixels here.
+#[test]
+fn field_streamlines_tubes() {
+    let mut s = field_session("pressure", murmel_mesh::Component::Magnitude);
+    let mesh = s.mesh.as_ref().unwrap().mesh.clone();
+    let mut st = murmel_engine::Stream::new(
+        "velocity",
+        murmel_engine::Seed::default_for("sphere", &mesh).unwrap(),
+    );
+    st.count = 12;
+    st.look = murmel_engine::Look::Tubes;
+    st.radius = Some(0.015 * mesh.bounds().radius());
+    st.arrowheads = true;
+    st.color = None;
+    s.display.streams = vec![st];
+    s.redraw();
+    check_session("field-streamlines-tubes", &s);
+}
+
 /// Export (the maintainer's cards of 2026-11-24, "same look as on
 /// screen"): the channel coloured by patch at 1.5 times a 320 x 213
 /// viewport, edges 1.5 pixels wide, with the patch legend top left and
@@ -522,6 +591,7 @@ fn export_scaled_with_legend_and_triad() {
         320,
         &Overlays {
             legend: Some(&legend),
+            streams: &[],
             triad: Some(&s.camera),
             i18n: &i18n,
             tokens: &s.tokens,

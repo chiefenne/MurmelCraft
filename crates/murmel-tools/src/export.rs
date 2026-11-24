@@ -128,8 +128,14 @@ pub fn draw_overlays(
     rgba: &mut [u8],
 ) -> Result<(), Diagnostic> {
     let legend = look.legend.then(|| Legend::of(s)).flatten();
+    let streams: Vec<Legend> = if look.legend {
+        Legend::streams(s).into_iter().map(|(_, l)| l).collect()
+    } else {
+        Vec::new()
+    };
     let o = Overlays {
         legend: legend.as_ref(),
+        streams: &streams,
         triad: look.axes.then_some(&s.camera),
         i18n,
         tokens: &s.tokens,

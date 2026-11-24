@@ -82,6 +82,10 @@ pub struct MurmelApp {
     /// dragged), for the window tests.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) rotation_plane: Option<crate::clip_handle::Handle>,
+    /// A drag of a streamline seed handle under way.
+    pub(crate) stream_drag: Option<crate::stream_handle::StreamDrag>,
+    /// Where the seed handles were drawn last frame.
+    pub(crate) stream_spots: Vec<crate::stream_handle::SeedSpot>,
     /// The colour window of a tree item, while open.
     pub(crate) color_edit: Option<crate::color_edit::ColorEdit>,
     /// The export window and its settings (File, "Export image…").
@@ -196,6 +200,8 @@ impl MurmelApp {
             clip_drag: None,
             clip_spots: Vec::new(),
             rotation_plane: None,
+            stream_drag: None,
+            stream_spots: Vec::new(),
             color_edit: None,
             export: Default::default(),
             movie: Default::default(),

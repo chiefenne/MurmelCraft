@@ -552,6 +552,7 @@ pub(crate) fn display_json(s: &Session) -> Value {
         "mesh_look": d.mesh_look,
         "arrows": crate::extract::arrows_json(s),
         "regions": crate::region::regions_json(s),
+        "streams": (0..d.streams.len()).map(|k| crate::stream::stream_json(s, k)).collect::<Vec<_>>(),
     })
 }
 
@@ -2132,6 +2133,8 @@ pub const JOURNALED: &[&str] = &[
     "iso.clear",
     "arrows.set",
     "arrows.clear",
+    "stream.set",
+    "stream.clear",
     "region.set",
     "region.clear",
     "display.mesh_look",
@@ -2676,7 +2679,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-display-set-color",
-        summary: "Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>, iso:<n>, arrows), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type, an iso-surface's and the arrows' colours when they are solid.",
+        summary: "Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>, iso:<n>, arrows, stream:<n>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type, an iso-surface's, the arrows' and a streamline set's colours when they are solid.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -2851,6 +2854,28 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::extract::arrows_clear_schema,
         run: crate::extract::arrows_clear,
+    },
+    Tool {
+        id: "stream.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-stream-set",
+        summary: "Add or change a set of streamlines (stream: its number, stream:1 is the first; left out: the current set, the one selected last or else added last; new: add one, up to 8). The lines follow a vector field (field: left out, the set's own, else the field shown if it is a vector, else the file's first vector) through the cells' tetrahedra (the field slices show) by fourth-order Runge-Kutta in arc length, a quarter of a cell per step, forward, backward or both ways from each seed (direction, both by default), and stop where they leave the mesh (or the regions shown), where the speed falls below 0.1 % of the field's largest, at max_length (a length, or null for three mesh diagonals) or after 10 000 steps. seed: line (from, to: count seeds evenly, ends included; a new line lies across the mesh near the low end of its longest side), sphere (centre, radius: its centre and Halton points through the ball), patch (patch: a boundary patch's name, its faces thinned evenly to about count; a new one takes the first inlet), plane (origin, normal: an even grid of about count points inside the mesh). Values of another shape than the set's are refused unless seed names that shape. count: seeds wanted, 1 to 1000 (50 by default); seeds outside the mesh are left out. look: lines (thin lines, the default) or tubes (shaded, tube_radius a length or null for 1/400 of the mesh diagonal); arrowheads: cones pointing downstream along the lines. color: field (the default: color_field and component, left out the traced field's magnitude, with a colour bar of its own in that field's style, field.style) or solid (display.set_color on stream:<n>). enabled false keeps the settings and draws none. While streamlines show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's stream says how many seeds were placed and how the lines ended.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::stream::stream_set_schema,
+        run: crate::stream::stream_set,
+    },
+    Tool {
+        id: "stream.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-stream-clear",
+        summary: "Remove a set of streamlines (stream: its number; left out: the current set), or all of them (all); those after it move up one.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::stream::stream_clear_schema,
+        run: crate::stream::stream_clear,
     },
     Tool {
         id: "region.set",

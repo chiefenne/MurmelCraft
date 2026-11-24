@@ -27,7 +27,8 @@
 //! `slice.set` and `slice.rotate` (decided 2026-11-24: "placed and moved
 //! like clip planes"). One plane carries them at a time: the clip plane
 //! or slice selected last, else the slice added last, else the current
-//! clip plane.
+//! clip plane; none while streamline seeds selected after them carry
+//! their own handles (`stream_handle.rs`).
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{Color32, CursorIcon, FontId, Pos2, Rect, Role, Sense, Ui, WidgetInfo};
@@ -528,9 +529,12 @@ impl MurmelApp {
                 .filter(|c| c.enabled)
                 .map(|c| (Target::Slice(k), c.plane()))
         };
+        // Streamline seeds selected after any plane take the handles.
+        let seeds = self.stream_handle_target().is_some();
         let picked = d.selection.iter().rev().find_map(|&i| match i {
             murmel_engine::Item::Clip(k) => Some(clip(k as usize)),
             murmel_engine::Item::Slice(k) => Some(slice(k as usize)),
+            murmel_engine::Item::Stream(_) if seeds => Some(None),
             _ => None,
         });
         match picked {

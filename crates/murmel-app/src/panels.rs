@@ -86,6 +86,7 @@ impl MurmelApp {
                 | Item::Slice(_)
                 | Item::Iso(_)
                 | Item::Arrows
+                | Item::Stream(_)
                 | Item::Region(_) => {}
             }
         }
@@ -684,7 +685,7 @@ impl MurmelApp {
             Some((area, name)) => {
                 let name = if area == "kind" {
                     self.i18n.tr(&format!("kind-{name}"))
-                } else if area == "clip" || area == "slice" || area == "iso" || area == "region" {
+                } else if matches!(area, "clip" | "slice" | "iso" | "region" | "stream") {
                     self.i18n
                         .tr_args("props-clip-name", &[("n", name.to_string().into())])
                 } else if area == "measure" || area == "probe" {
@@ -862,6 +863,9 @@ impl MurmelApp {
                 "type" => self.i18n.tr(&format!("kind-{s}")),
                 "kind" => self.i18n.tr(&format!("measure-kind-{s}")),
                 "color" => self.i18n.tr(&format!("iso-color-{s}")),
+                "seed" => self.i18n.tr(&format!("stream-seed-kind-{s}")),
+                "direction" => self.i18n.tr(&format!("stream-direction-{s}")),
+                "look" => self.i18n.tr(&format!("stream-look-{s}")),
                 "snap" | "snap_a" | "snap_b" | "snap_vertex" => self.i18n.tr(&format!("snap-{s}")),
                 "name"
                     if self

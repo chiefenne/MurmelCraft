@@ -92,6 +92,11 @@ pub struct Surface {
     /// The magnitude an arrow 0.9 of a spacing long stands for (times
     /// the scale); 0 without arrows.
     pub arrow_longest: f64,
+    /// Streamlines drawn as lines (line pairs, relative to `origin`) with
+    /// their linear colours: drawn in every render mode, hidden behind
+    /// faces.
+    pub stream_positions: Vec<[f32; 3]>,
+    pub stream_colors: Vec<[f32; 3]>,
 }
 
 /// A corner of a drawn polygon: a mesh node, or a point where a clip
@@ -758,6 +763,7 @@ impl Surface {
         let _phase = murmel_mesh::profile::span("surface.extras");
         if extras {
             crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
+            crate::stream::append(&mut s, mesh, fields, tokens, display);
         }
         s.outline_color = sel.linear();
         for (a, b) in outline(mesh, display) {
@@ -1316,7 +1322,8 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         | Item::Slice(_)
         | Item::Iso(_)
         | Item::Arrows
-        | Item::Region(_) => false,
+        | Item::Region(_)
+        | Item::Stream(_) => false,
     })
 }
 

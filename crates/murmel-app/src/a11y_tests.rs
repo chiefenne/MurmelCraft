@@ -756,6 +756,119 @@ fn vector_arrows_in_the_window() {
     assert_eq!(problems(&h), Vec::<String>::new(), "arrows on a slice");
 }
 
+/// Invariant (stage 4 of field results, the maintainer's cards of
+/// 2026-11-24): the tree's "Add streamlines" menu adds a set from a seed
+/// line, named after its field and seeds, with its own named colour bar
+/// while the mesh is not coloured by the same field; the seed line's end
+/// dot drags through `stream.set` (one undo step, no orbit) and the
+/// whole line moves by its middle; the seeds box is a named spin button
+/// that changes them through the tool; every control keeps a clean name.
+/// Breaks if the menu calls nothing, the handles stop taking the pointer
+/// from the navigation or change the seeds behind the tools' back, or a
+/// row, box or bar loses its name; the tool tests do not click.
+#[test]
+fn streamlines_in_the_window() {
+    use crate::stream_handle::SeedHandle;
+    let mut h = harness();
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.run_steps(3);
+    h.get_by_label("Add streamlines (Alt + L)").click();
+    h.run_steps(3);
+    h.get_by_label("From a line of seeds").click();
+    h.run_steps(3);
+    let st = h.state().session.display.streams.clone();
+    assert_eq!(st.len(), 1, "one set");
+    let murmel_engine::Seed::Line { from, to } = st[0].seed else {
+        panic!("a seed line: {:?}", st[0].seed)
+    };
+    assert!(
+        named(&h, "Streamlines 1: velocity from a line"),
+        "the tree row"
+    );
+    assert!(
+        named(&h, "Colours of the streamlines: |velocity|"),
+        "the own colour bar"
+    );
+    assert_eq!(problems(&h), Vec::<String>::new(), "streamlines");
+
+    // The end dot drags the start of the line, one undo step.
+    let spot = |h: &Harness<'_, MurmelApp>, k: SeedHandle| {
+        h.state()
+            .stream_spots
+            .iter()
+            .find(|s| s.handle == k)
+            .map(|s| s.at)
+            .unwrap()
+    };
+    assert_eq!(h.state().stream_spots.len(), 3, "two ends and the middle");
+    let cam = h.state().session.camera.clone();
+    let before = h.state().session.journal.undo.len();
+    let start = spot(&h, SeedHandle::From);
+    drag(&mut h, start, egui::vec2(-40.0, 25.0), 6);
+    let murmel_engine::Seed::Line {
+        from: moved,
+        to: same,
+    } = h.state().session.display.streams[0].seed
+    else {
+        panic!("still a line")
+    };
+    assert_ne!(moved, from, "the start moved");
+    assert_eq!(same, to, "the end stayed");
+    assert_eq!(h.state().session.camera, cam, "the view did not orbit");
+    assert_eq!(h.state().session.journal.undo.len(), before + 1, "one step");
+    h.state_mut().call("journal.undo", serde_json::json!({}));
+    h.run_steps(2);
+    assert_eq!(
+        h.state().session.display.streams[0].seed,
+        murmel_engine::Seed::Line { from, to }
+    );
+
+    // The middle moves both ends by the same step.
+    let a = spot(&h, SeedHandle::From);
+    let b = spot(&h, SeedHandle::To);
+    drag(&mut h, a + (b - a) * 0.3, egui::vec2(0.0, 30.0), 6);
+    let murmel_engine::Seed::Line { from: f2, to: t2 } = h.state().session.display.streams[0].seed
+    else {
+        panic!("still a line")
+    };
+    let d = |p: [f64; 3], q: [f64; 3]| [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+    let (da, db) = (d(f2, from), d(t2, to));
+    assert!(da.iter().any(|x| x.abs() > 1e-9), "the line moved");
+    for k in 0..3 {
+        assert!(
+            (da[k] - db[k]).abs() < 1e-9,
+            "both ends alike: {da:?} {db:?}"
+        );
+    }
+    assert_eq!(h.state().session.camera, cam, "the view did not orbit");
+
+    // The seeds box changes them through stream.set.
+    h.get_by_role_and_label(Role::SpinButton, "Seeds").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::SpinButton, "Seeds")
+        .type_text("12");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().session.display.streams[0].count, 12);
+
+    // Coloured like the mesh, the bar is the field legend's: no second.
+    h.state_mut().call(
+        "display.color_by",
+        serde_json::json!({"by": "field", "field": "velocity"}),
+    );
+    h.run_steps(3);
+    assert!(
+        !named(&h, "Colours of the streamlines: |velocity|"),
+        "no second bar"
+    );
+    assert_eq!(problems(&h), Vec::<String>::new(), "streamlines");
+}
+
 /// Wait until the mesh read on its own thread has opened (or failed).
 fn opened(h: &mut Harness<'_, MurmelApp>) {
     let start = std::time::Instant::now();

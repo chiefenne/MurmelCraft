@@ -10,7 +10,8 @@
 //! the field shown and each field's style (since 1.4), the slices,
 //! iso-surfaces and the mesh's look beside them (since 1.5), the
 //! vector arrows (since 1.6), the regions of interest (since 1.7; their
-//! flat cut since 1.8), the user's mesh colours and the view cube
+//! flat cut since 1.8), the streamlines (since 1.9), the user's mesh
+//! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
 //! `settings.toml` (decided 2026-11-24).
@@ -35,10 +36,11 @@ use crate::measure::{Measurement, Probe};
 use crate::quality::Metric;
 use crate::region::Region;
 use crate::session::Session;
+use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.8";
+pub const SESSION_VERSION: &str = "1.9";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -102,6 +104,9 @@ pub struct DisplayState {
     /// Regions of interest, in order (1.7).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<Region>,
+    /// Sets of streamlines, in order (1.9).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub streams: Vec<Stream>,
 }
 
 fn is_outline(l: &MeshLook) -> bool {
@@ -248,6 +253,11 @@ impl SessionFile {
                 },
                 regions: if s.mesh.is_some() {
                     d.regions.clone()
+                } else {
+                    Vec::new()
+                },
+                streams: if s.mesh.is_some() {
+                    d.streams.clone()
                 } else {
                     Vec::new()
                 },
@@ -405,6 +415,17 @@ impl SessionFile {
                 crate::glyph::MAX_SCALE
             )));
         }
+        if f.display.streams.len() > crate::stream::MAX_STREAMS {
+            return Err(Refused(format!(
+                "at most {} streamline sets",
+                crate::stream::MAX_STREAMS
+            )));
+        }
+        for (k, st) in f.display.streams.iter().enumerate() {
+            if let Some(why) = st.problem_alone() {
+                return Err(Refused(format!("stream:{}: {why}", k + 1)));
+            }
+        }
         if f.display.regions.len() > crate::region::MAX_REGIONS {
             return Err(Refused(format!(
                 "at most {} regions",
@@ -505,6 +526,8 @@ impl Session {
         d.isos.clear();
         d.arrows = None;
         d.regions.clear();
+        d.streams.clear();
+        d.stream_traces = None;
         d.mesh_look = s.mesh_look;
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
@@ -604,6 +627,42 @@ impl Session {
                 _ => true,
             });
             d.colors.retain(|&i, _| !matches!(i, Item::Region(_)));
+            // Streamlines of a field this result does not have (or not a
+            // vector), or seeded on a patch this mesh does not have, go
+            // with their ids.
+            let nst = s.streams.len();
+            d.streams = s.streams;
+            d.selection.retain(|&i| match i {
+                Item::Stream(k) => (k as usize) < nst,
+                _ => true,
+            });
+            d.colors.retain(|&i, _| match i {
+                Item::Stream(k) => (k as usize) < nst,
+                _ => true,
+            });
+            for k in (0..d.streams.len()).rev() {
+                let st = &d.streams[k];
+                let vector = m.fields.get(&st.field).is_some_and(|f| f.is_vector());
+                let colour = st
+                    .color
+                    .as_ref()
+                    .is_none_or(|c| m.fields.get(&c.name).is_some());
+                let id = if !vector {
+                    Some(format!("field:{}", st.field))
+                } else if !colour {
+                    st.color.as_ref().map(|c| format!("field:{}", c.name))
+                } else {
+                    st.seed
+                        .problem(&m.mesh)
+                        .map(|_| format!("stream:{}", k + 1))
+                };
+                if let Some(id) = id {
+                    d.remove_stream(k);
+                    if !missing.contains(&id) {
+                        missing.push(id);
+                    }
+                }
+            }
             let (ns, ni) = (d.slices.len(), d.isos.len());
             d.selection.retain(|&i| match i {
                 Item::Slice(k) => (k as usize) < ns,

@@ -23,6 +23,7 @@ pub mod live;
 mod markdown;
 pub mod movie;
 mod region;
+mod stream;
 mod tools;
 
 use std::time::Instant;

@@ -68,6 +68,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Alt + S` | Add a slice | `slice.set` (input from the session) |
 | `Alt + I` | Add an iso-surface | `iso.set` (input from the session) |
 | `Alt + V` | Vector arrows: show or hide | `arrows.set` (input from the session) |
+| `Alt + L` | Streamlines: show or hide (adds a seed line if there is none) | `stream.set` (input from the session) |
 | `Alt + R` | Region: show or hide (adds a box if there is none) | `region.set` (input from the session) |
 | `Alt + Shift + R` | Region: cut flat along its border, or whole cells | `region.set` (input from the session) |
 | `H` | Hide the selection | `display.visibility` (input from the session) |
@@ -170,6 +171,21 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Vector arrows: solid colour | `arrows.set` (input from the session) |
 | palette | Vector arrows: coloured by the field shown | `arrows.set` (input from the session) |
 | palette | Remove the vector arrows | `arrows.clear` (input from the session) |
+| palette | Add streamlines from a line of seeds | `stream.set` (input from the session) |
+| palette | Add streamlines from a ball of seeds | `stream.set` (input from the session) |
+| palette | Add streamlines from a patch | `stream.set` (input from the session) |
+| palette | Add streamlines from a plane of seeds | `stream.set` (input from the session) |
+| palette | Streamlines: downstream only | `stream.set` (input from the session) |
+| palette | Streamlines: upstream only | `stream.set` (input from the session) |
+| palette | Streamlines: both ways | `stream.set` (input from the session) |
+| palette | Streamlines: shaded tubes or thin lines | `stream.set` (input from the session) |
+| palette | Streamlines: arrowheads on or off | `stream.set` (input from the session) |
+| palette | Streamlines: more seeds | `stream.set` (input from the session) |
+| palette | Streamlines: fewer seeds | `stream.set` (input from the session) |
+| palette | Streamlines: solid colour | `stream.set` (input from the session) |
+| palette | Streamlines: coloured by their field | `stream.set` (input from the session) |
+| palette | Remove the streamlines | `stream.clear` (input from the session) |
+| palette | Remove all streamlines | `stream.clear` (input from the session) |
 | palette | Mesh beside slices: faint outline | `display.mesh_look` `{"look":"outline"}` |
 | palette | Mesh beside slices: faces | `display.mesh_look` `{"look":"faces"}` |
 | palette | Region: add a box | `region.set` (input from the session) |

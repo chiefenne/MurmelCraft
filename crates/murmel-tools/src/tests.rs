@@ -2052,7 +2052,11 @@ fn extract_sessions_round_trip() {
     let e = call("session.save", json!({"path": file}), &mut s);
     assert!(e.ok(), "{:?}", e.diagnostics);
     let text = std::fs::read_to_string(&file).unwrap();
-    assert!(text.contains("\"format_version\": \"1.8\""), "{text}");
+    let version = murmel_engine::session_file::SESSION_VERSION;
+    assert!(
+        text.contains(&format!("\"format_version\": \"{version}\"")),
+        "{text}"
+    );
 
     let mut t = session();
     let e = call("session.load", json!({"path": file}), &mut t);

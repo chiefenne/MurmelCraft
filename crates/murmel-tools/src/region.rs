@@ -622,7 +622,11 @@ mod tests {
         let e = call("session.save", json!({"path": file}), &mut s);
         assert!(e.ok(), "{:?}", e.diagnostics);
         let text = std::fs::read_to_string(&file).unwrap();
-        assert!(text.contains("\"format_version\": \"1.8\""));
+        let version = murmel_engine::session_file::SESSION_VERSION;
+        assert!(
+            text.contains(&format!("\"format_version\": \"{version}\"")),
+            "{text}"
+        );
         assert!(text.contains("\"kind\": \"sphere\""), "{text}");
         assert_eq!(text.matches("\"cut\": \"flat\"").count(), 1, "{text}");
 

@@ -23,6 +23,7 @@ use crate::glyph::Arrows;
 use crate::measure::{Measurement, Probe};
 use crate::quality::{Metric, Quality};
 use crate::region::{Region, RegionCells};
+use crate::stream::{Stream, Traces};
 use crate::theme::{Rgb, Tokens};
 
 /// What gives a boundary face its colour.
@@ -137,6 +138,9 @@ pub enum Item {
     /// A region of interest, by index into `Display::regions`; its id
     /// counts from one (`region:1`).
     Region(u32),
+    /// A set of streamlines, by index into `Display::streams`
+    /// (`stream:1`).
+    Stream(u32),
 }
 
 impl Item {
@@ -164,6 +168,7 @@ impl Item {
             Item::Iso(i) => format!("iso:{}", i + 1),
             Item::Arrows => "arrows".into(),
             Item::Region(i) => format!("region:{}", i + 1),
+            Item::Stream(i) => format!("stream:{}", i + 1),
         }
     }
 
@@ -240,6 +245,11 @@ impl Item {
                 .ok()
                 .filter(|&n| n >= 1)
                 .map(|n| Item::Region(n - 1)),
+            "stream" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&n| n >= 1)
+                .map(|n| Item::Stream(n - 1)),
             _ => None,
         }
     }
@@ -347,6 +357,11 @@ pub struct Display {
     pub region_cells: Option<Arc<RegionCells>>,
     /// The vector arrows on slices and the surface (`arrows.set`).
     pub arrows: Option<Arrows>,
+    /// Sets of streamlines (`stream.set`), in the order they were added.
+    pub streams: Vec<Stream>,
+    /// Their traces, made when their seeds, field or limits change
+    /// (`Session::redraw`); `None` while there are none.
+    pub stream_traces: Option<Arc<Traces>>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -454,6 +469,11 @@ impl Display {
                         r.enabled = on;
                     }
                 }
+                (Item::Stream(k), Some(on)) => {
+                    if let Some(r) = self.streams.get_mut(k as usize) {
+                        r.enabled = on;
+                    }
+                }
                 (Item::Measure(n), Some(on)) => {
                     for m in self.measurements.iter_mut().filter(|m| m.n == n) {
                         m.visible = on;
@@ -488,6 +508,7 @@ impl Display {
                         | Item::Iso(_)
                         | Item::Arrows
                         | Item::Region(_)
+                        | Item::Stream(_)
                 )
             })
             .collect();
@@ -729,6 +750,7 @@ impl Display {
             Item::Iso(k) => (k as usize) < self.isos.len(),
             Item::Arrows => self.arrows.is_some(),
             Item::Region(k) => (k as usize) < self.regions.len(),
+            Item::Stream(k) => (k as usize) < self.streams.len(),
             Item::Measure(n) => self.measurement(n).is_some(),
             Item::Probe(n) => self.probe(n).is_some(),
             _ => true,
@@ -818,6 +840,67 @@ impl Display {
         Some(r)
     }
 
+    /// Remove streamline set `k`; its own colour goes with it, and its
+    /// trace.
+    pub fn remove_stream(&mut self, k: usize) -> Option<Stream> {
+        if k >= self.streams.len() {
+            return None;
+        }
+        let st = self.streams.remove(k);
+        if let Some(t) = &self.stream_traces {
+            let mut v = t.0.clone();
+            if k < v.len() {
+                v.remove(k);
+            }
+            self.stream_traces = Some(Arc::new(Traces(v)));
+        }
+        let colors: Vec<(u32, Rgb)> = self
+            .colors
+            .iter()
+            .filter_map(|(i, &rgb)| match *i {
+                Item::Stream(j) if j as usize != k => Some((j, rgb)),
+                _ => None,
+            })
+            .collect();
+        self.colors.retain(|i, _| !matches!(i, Item::Stream(_)));
+        for (j, rgb) in colors {
+            let j = if j as usize > k { j - 1 } else { j };
+            self.colors.insert(Item::Stream(j), rgb);
+        }
+        self.forget(
+            k as u32,
+            |i| match i {
+                Item::Stream(j) => Some(j),
+                _ => None,
+            },
+            Item::Stream,
+        );
+        Some(st)
+    }
+
+    /// The streamline set tools and the handles act on: the one selected
+    /// last, else the one added last.
+    pub fn current_stream(&self) -> Option<usize> {
+        self.selection
+            .iter()
+            .rev()
+            .find_map(|&i| match i {
+                Item::Stream(k) if (k as usize) < self.streams.len() => Some(k as usize),
+                _ => None,
+            })
+            .or_else(|| self.streams.len().checked_sub(1))
+    }
+
+    /// Whether streamlines are drawn.
+    pub fn streams_shown(&self) -> bool {
+        self.streams.iter().any(|s| s.enabled)
+    }
+
+    /// The style field `name` is drawn in (its own, or the default).
+    pub fn style_of(&self, name: &str) -> FieldStyle {
+        self.field_styles.get(name).cloned().unwrap_or_default()
+    }
+
     /// The region tools act on: the one selected last, else the one added
     /// last.
     pub fn current_region(&self) -> Option<usize> {
@@ -889,13 +972,15 @@ impl Display {
             .or_else(|| self.isos.len().checked_sub(1))
     }
 
-    /// Whether a slice or an iso-surface is drawn.
+    /// Whether a slice, an iso-surface or streamlines are drawn.
     pub fn extracts_shown(&self) -> bool {
-        self.slices.iter().any(|s| s.enabled) || self.isos.iter().any(|i| i.enabled)
+        self.slices.iter().any(|s| s.enabled)
+            || self.isos.iter().any(|i| i.enabled)
+            || self.streams_shown()
     }
 
-    /// Whether the mesh draws as its faint outline (slices or
-    /// iso-surfaces show, and the user did not ask for its faces).
+    /// Whether the mesh draws as its faint outline (slices, iso-surfaces
+    /// or streamlines show, and the user did not ask for its faces).
     pub fn outline_mesh(&self) -> bool {
         self.mesh_look == MeshLook::Outline && self.extracts_shown()
     }
@@ -968,6 +1053,11 @@ impl Display {
                 .arrows
                 .as_ref()
                 .map(|_| set.unwrap_or(tokens.mesh.field.arrow)),
+            // A streamline set's solid colour, in every mode.
+            (_, Item::Stream(k)) => self
+                .streams
+                .get(k as usize)
+                .map(|_| set.unwrap_or(tokens.mesh.field.stream)),
             _ => None,
         }
     }
@@ -1040,7 +1130,8 @@ impl Display {
             | Item::Slice(_)
             | Item::Iso(_)
             | Item::Arrows
-            | Item::Region(_) => false,
+            | Item::Region(_)
+            | Item::Stream(_) => false,
         }
     }
 
@@ -1111,6 +1202,48 @@ impl Display {
                     b.add(a.point);
                 }
                 return Some(padded(b, mesh));
+            }
+            // The traced lines, else the seeds' shape.
+            Some(Item::Stream(i)) => {
+                let st = self.streams.get(i as usize)?;
+                let traced = self
+                    .stream_traces
+                    .as_ref()
+                    .and_then(|t| t.0.get(i as usize).cloned().flatten())
+                    .filter(|t| t.fits(st));
+                for l in traced.iter().flat_map(|t| t.lines.iter()) {
+                    for &p in &l.points {
+                        b.add(p);
+                    }
+                }
+                if b.is_empty() {
+                    match &st.seed {
+                        crate::stream::Seed::Line { from, to } => {
+                            b.add(*from);
+                            b.add(*to);
+                        }
+                        crate::stream::Seed::Sphere { centre, radius } => {
+                            b.add(centre.map(|x| x - radius));
+                            b.add(centre.map(|x| x + radius));
+                        }
+                        crate::stream::Seed::Plane { origin, normal } => {
+                            let plane = Clip {
+                                origin: *origin,
+                                normal: *normal,
+                                mode: crate::clip::ClipMode::Crinkle,
+                                enabled: true,
+                            };
+                            for p in plane.box_section(&mesh.bounds()) {
+                                b.add(p);
+                            }
+                        }
+                        crate::stream::Seed::Patch { patch } => {
+                            let k = mesh.patches.iter().position(|p| p.name == *patch)?;
+                            return self.bounds(mesh, Some(Item::Patch(k as u32)));
+                        }
+                    }
+                }
+                return (!b.is_empty()).then(|| padded(b, mesh));
             }
             Some(Item::Probe(n)) => {
                 let p = self.probe(n)?;

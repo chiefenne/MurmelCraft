@@ -143,6 +143,30 @@ const OWN: &[Code] = &[
         ),
     },
     Code {
+        code: "STREAM001",
+        severity: Severity::Error,
+        meaning: "No streamline set has this number, or the display has the most it holds (8).",
+        fix: Some(
+            "Sets count from 1 (stream:1); the streams list of the result names them. Remove one with stream.clear to add another.",
+        ),
+    },
+    Code {
+        code: "STREAM002",
+        severity: Severity::Error,
+        meaning: "A streamline setting is out of range (count outside 1 to 1000, a length or radius not above 0, a line of one point, a zero normal), names a patch the mesh does not have, or belongs to another seed shape than the set's.",
+        fix: Some(
+            "Give count 1 to 1000 and positive lengths; mesh.info lists the patches; name the shape with seed to change it (line: from, to; sphere: centre, radius; patch: patch; plane: origin, normal).",
+        ),
+    },
+    Code {
+        code: "STREAM003",
+        severity: Severity::Error,
+        meaning: "Streamlines follow a vector field (one with x, y and z components), and the field named or the open mesh has none.",
+        fix: Some(
+            "Name a vector field (field.list shows each field's components), or open a result with velocity.",
+        ),
+    },
+    Code {
         code: "MCP001",
         severity: Severity::Error,
         meaning: "The MCP server refused a path outside its read or write roots.",

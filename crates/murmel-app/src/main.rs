@@ -25,6 +25,8 @@ mod opening;
 mod panels;
 mod quality;
 mod regions;
+mod stream_handle;
+mod streams;
 mod style;
 mod viewport;
 

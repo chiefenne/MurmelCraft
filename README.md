@@ -40,6 +40,14 @@ every change.
   density setting, and on the mesh surface on request; as long as the
   magnitude (with a length factor), the full vector or only its part in
   the slice, solid or coloured by the field shown.
+- Streamlines (`stream.set`, Alt + L): up to 8 sets traced through the
+  cells (fourth-order Runge-Kutta) from seeds on a line, in a ball, on a
+  patch or on a plane, placed by drag handles that snap to the mesh or
+  by typed points; downstream, upstream or both ways, stopping where the
+  flow leaves the mesh, slows below 0.1 % of its top speed or reaches a
+  length limit; thin lines, or shaded tubes with a radius setting and
+  arrowheads on request; a solid colour, or any field with its own
+  colour bar beside the mesh's, in exported pictures too.
 - Shaded with edges, shaded, wireframe or feature edges (keys 1 to 4);
   one solid colour (green by default) or colours by patch, patch role,
   cell type, cell zone or cell quality (non-orthogonality, skewness,
@@ -48,7 +56,8 @@ every change.
   themes switch live.
 - Model tree (T): the mesh with its evidence badge, cell zones, cell
   types, patches, saved views (Ctrl + B), clip planes, slices,
-  iso-surfaces, arrows, regions, measurements and probes, each with an
+  iso-surfaces, arrows, streamlines, regions, measurements and probes,
+  each with an
   eye, a context menu and double click to fit; H hides, I isolates.
 - Picking of cells and faces and a Properties panel (P) for the mesh,
   any item, a cell, a face or a probe, with the field values of results.
