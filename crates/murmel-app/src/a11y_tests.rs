@@ -406,6 +406,57 @@ fn export_window_writes_a_picture() {
     let _ = std::fs::remove_file(&out);
 }
 
+/// Invariant: Ctrl + Shift + M opens the movie window with every control
+/// named; "Export…" makes the movie on its own thread while the window
+/// stays live, shows the result when it is done, and leaves the view as
+/// it was. Breaks when the window blocks, loses the result or moves the
+/// camera; the tool tests check the frames.
+#[test]
+fn movie_window_makes_frames() {
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-movie-window-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    h.state_mut().movie.path = Some(dir.clone());
+    h.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::M,
+    );
+    h.run_steps(3);
+    assert!(h.state().movie.open, "the window is open");
+    assert!(named(&h, "Export movie"), "the window has a title");
+    let issues = problems(&h);
+    assert!(issues.is_empty(), "{issues:#?}");
+    {
+        let m = &mut h.state_mut().movie;
+        m.format = murmel_tools::movie::Format::Png;
+        m.size = crate::export_dialog::SizeChoice::Custom;
+        m.custom = [64, 40];
+        m.seconds = 0.5;
+        m.fps = 24;
+    }
+    h.run_steps(2);
+    let camera = h.state().session.camera.clone();
+    h.get_by_label("Export…").click();
+    h.run_steps(2);
+    let start = std::time::Instant::now();
+    while h.state().movie_job.is_some() {
+        assert!(start.elapsed().as_secs() < 60, "the movie never ended");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        h.run_steps(1);
+    }
+    let last = h.state().movie.last.clone().unwrap_or_default();
+    assert_eq!(
+        last,
+        format!(
+            "Saved {}, 12 frames",
+            dir.file_name().unwrap().to_string_lossy()
+        )
+    );
+    assert!(dir.join("frame-00012.png").exists());
+    assert_eq!(h.state().session.camera, camera);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A click at `at` with `mods` held (no movement, so not a drag).
 fn click(h: &mut Harness<'_, MurmelApp>, at: egui::Pos2, mods: egui::Modifiers) {
     let button = |pressed| egui::Event::PointerButton {

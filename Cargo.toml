@@ -32,6 +32,8 @@ wgpu = "30"
 # the same versions egui already uses, Apache-2.0 OR MIT.
 vello_cpu = { version = "0.2", default-features = false, features = ["std", "text", "u8_pipeline"] }
 skrifa = "0.44"
+# GIF movies (export.movie): MIT OR Apache-2.0, with color_quant (MIT).
+gif = "0.14"
 base64 = "0.23"
 flate2 = "1.1"
 

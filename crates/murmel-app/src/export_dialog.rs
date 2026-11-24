@@ -23,6 +23,40 @@ pub enum SizeChoice {
 }
 
 impl SizeChoice {
+    /// Put the size into the input of `export.image` or `export.movie`:
+    /// a scale for the viewport sizes, pixels for the others.
+    pub fn put(self, v: &mut Value, custom: [u32; 2]) {
+        match self {
+            SizeChoice::Scale(k) => v["scale"] = json!(k),
+            SizeChoice::FullHd => {
+                v["width"] = json!(1920);
+                v["height"] = json!(1080);
+            }
+            SizeChoice::Uhd => {
+                v["width"] = json!(3840);
+                v["height"] = json!(2160);
+            }
+            SizeChoice::Custom => {
+                v["width"] = json!(custom[0]);
+                v["height"] = json!(custom[1]);
+            }
+        }
+    }
+
+    /// The pixels and scale `export.image` makes of `v` (the input this
+    /// size was put into) on `viewport`.
+    pub fn pixels(
+        v: &Value,
+        viewport: [f64; 2],
+    ) -> Result<(u32, u32, f64), murmel_tools::Diagnostic> {
+        murmel_tools::export::picture_size(
+            viewport,
+            v["width"].as_u64().map(|w| w as u32),
+            v["height"].as_u64().map(|h| h as u32),
+            v["scale"].as_f64(),
+        )
+    }
+
     pub const ALL: [SizeChoice; 6] = [
         SizeChoice::Scale(1),
         SizeChoice::Scale(2),
@@ -74,21 +108,7 @@ impl ExportDialog {
             "axes": self.axes,
             "transparent": self.transparent,
         });
-        match self.size {
-            SizeChoice::Scale(k) => v["scale"] = json!(k),
-            SizeChoice::FullHd => {
-                v["width"] = json!(1920);
-                v["height"] = json!(1080);
-            }
-            SizeChoice::Uhd => {
-                v["width"] = json!(3840);
-                v["height"] = json!(2160);
-            }
-            SizeChoice::Custom => {
-                v["width"] = json!(self.custom[0]);
-                v["height"] = json!(self.custom[1]);
-            }
-        }
+        self.size.put(&mut v, self.custom);
         if let Some(d) = self.dpi {
             v["dpi"] = json!(d);
         }
@@ -97,7 +117,7 @@ impl ExportDialog {
 }
 
 impl MurmelApp {
-    fn size_name(&self, c: SizeChoice) -> String {
+    pub(crate) fn size_name(&self, c: SizeChoice) -> String {
         match c {
             SizeChoice::Scale(k) => self
                 .i18n
@@ -125,12 +145,7 @@ impl MurmelApp {
         let mut ed = self.export.clone();
         let mut open = true;
         let mut go = false;
-        let pixels = murmel_tools::export::picture_size(
-            self.session.viewport,
-            ed.input()["width"].as_u64().map(|w| w as u32),
-            ed.input()["height"].as_u64().map(|h| h as u32),
-            ed.input()["scale"].as_f64(),
-        );
+        let pixels = SizeChoice::pixels(&ed.input(), self.session.viewport);
         egui::Window::new(self.i18n.tr("export-title"))
             .id(egui::Id::unique("export-image"))
             .open(&mut open)

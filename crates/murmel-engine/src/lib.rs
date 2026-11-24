@@ -4,6 +4,7 @@
 //! settings files and session files, and the translations. Front ends (the egui window, the CLI, the MCP server)
 //! change this state only through the tools of `murmel-tools`.
 
+pub mod animation;
 pub mod camera;
 pub mod clip;
 pub mod colormap;

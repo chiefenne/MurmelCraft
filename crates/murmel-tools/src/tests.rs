@@ -1413,7 +1413,10 @@ fn sessions_keep_every_clip_plane() {
 
     let mut v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    assert_eq!(v["format_version"], murmel_engine::session_file::SESSION_VERSION);
+    assert_eq!(
+        v["format_version"],
+        murmel_engine::session_file::SESSION_VERSION
+    );
     let first = v["display"]["clips"][0].clone();
     let d = v["display"].as_object_mut().unwrap();
     d.remove("clips");
@@ -1792,5 +1795,196 @@ fn field_sessions_round_trip() {
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert_eq!(e.result["skipped"], json!(["field:vorticity"]));
     assert_eq!(u.display.color_by, murmel_engine::ColorBy::Solid);
+}
+
+/// Invariant: export.movie writes the frames its motion makes (a part
+/// turn, a clip sweep, a flight with holds) at the size asked, as PNG
+/// frames or an animated GIF, counts them in the progress, takes a
+/// Cancel, and leaves the camera and the clip planes as they were; the
+/// fields of another motion, missing planes or views, and bad rates are
+/// refused with their codes. Breaks when a motion makes the wrong number
+/// of frames, the movie stands still, or the view is left moved; the
+/// engine tests check the motions without rendering.
+#[test]
+fn export_movie_formats_and_motions() {
+    use std::sync::Arc;
+
+    use crate::movie::{Progress, with_progress};
+    let mut s = session();
+    let dir = scratch("movie");
+    let e = call(
+        "export.movie",
+        json!({"path": dir.join("none.gif"), "motion": "orbit"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    s.viewport = [320.0, 200.0];
+    let camera = s.camera.clone();
+    let small = |mut v: serde_json::Value| {
+        v["width"] = json!(64);
+        v["height"] = json!(40);
+        v["fps"] = json!(10);
+        v
+    };
+
+    // A part turn as PNG frames, counted in the progress.
+    let p = Arc::new(Progress::default());
+    let e = with_progress(p.clone(), || {
+        call(
+            "export.movie",
+            small(
+                json!({"path": dir.join("orbit"), "motion": "orbit", "degrees": 90, "seconds": 0.3}),
+            ),
+            &mut s,
+        )
+    });
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["frames"], 3);
+    assert_eq!(e.result["format"], "png");
+    assert_eq!((p.done(), p.total()), (3, 3));
+    let (w, h, first) = murmel_render::read_png(&dir.join("orbit/frame-00001.png")).unwrap();
+    let (_, _, last) = murmel_render::read_png(&dir.join("orbit/frame-00003.png")).unwrap();
+    assert_eq!((w, h), (64, 40));
+    assert_ne!(first, last, "the camera did not turn");
+    assert!(!dir.join("orbit/frame-00004.png").exists());
+    assert_eq!(s.camera, camera, "the camera stays");
+
+    // A clip sweep as a GIF that loops; the plane goes back.
+    assert!(call("clip.set", json!({"axis": "x"}), &mut s).ok());
+    let clips = s.display.clips.clone();
+    let gif_path = dir.join("sweep.gif");
+    let e = call(
+        "export.movie",
+        small(json!({"path": gif_path, "motion": "clip", "seconds": 0.4, "legend": false})),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(
+        (e.result["frames"].clone(), e.result["fps"].clone()),
+        (json!(4), json!(10.0))
+    );
+    let mut opts = gif::DecodeOptions::new();
+    opts.set_color_output(gif::ColorOutput::RGBA);
+    let mut dec = opts
+        .read_info(std::fs::File::open(&gif_path).unwrap())
+        .unwrap();
+    assert_eq!((dec.width(), dec.height()), (64, 40));
+    let mut frames = Vec::new();
+    while let Some(f) = dec.read_next_frame().unwrap() {
+        assert_eq!(f.delay, 10);
+        frames.push(f.buffer.to_vec());
+    }
+    assert_eq!(frames.len(), 4);
+    assert_ne!(frames[0], frames[3], "the plane did not move");
+    assert_eq!(s.display.clips, clips, "the plane stays");
+
+    // A flight through two saved views: two frames at each, two between.
+    assert!(call("views.save", json!({"name": "a"}), &mut s).ok());
+    assert!(call("view.standard", json!({"view": "top"}), &mut s).ok());
+    assert!(call("views.save", json!({"name": "b"}), &mut s).ok());
+    let e = call(
+        "export.movie",
+        small(json!({"path": dir.join("flight"), "motion": "views", "hold": 0.2, "travel": 0.3})),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["frames"], 2 * 2 + 2);
+    assert_eq!(e.result["motion"]["views"], json!(["a", "b"]));
+
+    // A cancelled GIF leaves no file behind.
+    let p = Arc::new(Progress::default());
+    p.cancel();
+    let cancelled = dir.join("cancelled.gif");
+    let e = with_progress(p, || {
+        call(
+            "export.movie",
+            small(json!({"path": cancelled, "motion": "orbit"})),
+            &mut s,
+        )
+    });
+    assert_eq!(e.diagnostics[0].code, "EXPORT006");
+    assert!(!cancelled.exists());
+
+    let refused = |v: serde_json::Value, s: &mut Session| {
+        let mut v = v;
+        v["path"] = json!(dir.join("refused.gif"));
+        call("export.movie", v, s).diagnostics[0].code
+    };
+    assert_eq!(
+        refused(json!({"motion": "clip", "degrees": 90}), &mut s),
+        "TOOL002"
+    );
+    assert_eq!(
+        refused(json!({"motion": "views", "views": ["a", "nope"]}), &mut s),
+        "EXPORT005"
+    );
+    assert_eq!(
+        refused(json!({"motion": "views", "views": ["a"]}), &mut s),
+        "EXPORT005"
+    );
+    assert_eq!(
+        refused(json!({"motion": "orbit", "fps": 0}), &mut s),
+        "EXPORT001"
+    );
+    assert_eq!(
+        refused(
+            json!({"motion": "orbit", "seconds": 1200, "fps": 60}),
+            &mut s
+        ),
+        "EXPORT001"
+    );
+    assert_eq!(
+        refused(
+            json!({"motion": "orbit", "format": "mp4", "transparent": true}),
+            &mut s
+        ),
+        "EXPORT001"
+    );
+    assert!(call("clip.clear", json!({}), &mut s).ok());
+    assert_eq!(refused(json!({"motion": "clip"}), &mut s), "EXPORT005");
+    assert!(!dir.join("refused.gif").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant: with ffmpeg installed an MP4 is written (an ISO media file,
+/// odd sides made even); without one the call fails with EXPORT002 and
+/// writes nothing. Each machine runs the half its ffmpeg allows and
+/// prints which; the fake ffmpeg test in `movie.rs` checks the pipe
+/// everywhere.
+#[test]
+fn export_movie_mp4() {
+    let mut s = session();
+    let dir = scratch("movie-mp4");
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    let out = dir.join("turn.mp4");
+    let e = call(
+        "export.movie",
+        json!({"path": out, "motion": "orbit", "seconds": 0.3, "fps": 10, "width": 65, "height": 41}),
+        &mut s,
+    );
+    match crate::movie::find_ffmpeg(std::env::var_os("MURMEL_FFMPEG"), std::env::var_os("PATH")) {
+        Ok(ffmpeg) => {
+            assert!(e.ok(), "{:?}", e.diagnostics);
+            assert_eq!(
+                (e.result["width"].clone(), e.result["height"].clone()),
+                (json!(64), json!(40))
+            );
+            let bytes = std::fs::read(&out).unwrap();
+            assert_eq!(&bytes[4..8], b"ftyp", "not an MP4");
+            eprintln!(
+                "MP4 made with {} ({})",
+                ffmpeg.display(),
+                e.result["encoder"]
+            );
+        }
+        Err(_) => {
+            assert_eq!(e.diagnostics[0].code, "EXPORT002");
+            assert!(!out.exists());
+            eprintln!("no ffmpeg here: checked EXPORT002 only");
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

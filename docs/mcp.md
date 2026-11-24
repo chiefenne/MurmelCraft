@@ -171,5 +171,7 @@ action, path fields and whether its calls are undo steps.
 - One call at a time, in order; there is no cancellation.
 - With `--live` a call waits at most two minutes for the window
   (`LIVE002`); a minimised window may not draw, and so not answer, until
-  it is shown again.
+  it is shown again. A movie (`export.movie`) is made in the window's
+  background, with its progress shown, so the window stays live; a longer
+  one belongs to the headless server.
 - Screenshots are at most 8192 × 8192 pixels (`RENDER003`).

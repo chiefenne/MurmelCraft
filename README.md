@@ -29,6 +29,11 @@ tool that the window, the command line and the MCP server share.
   viewport, lines and legend scaled to match, colour legend and axis triad
   each optional, transparent background, dpi for print
   ([docs/export.md](docs/export.md)).
+- Movies (`export.movie`, "Export movie…", Ctrl + Shift + M): the camera
+  turning around, a clip plane sweeping through the mesh, or a flight
+  through saved views, as an MP4 (with the ffmpeg installed on the
+  machine), a GIF or PNG frames, made in the background with a progress
+  bar and Cancel.
 - An MCP server for agents (`murmel mcp`, [docs/mcp.md](docs/mcp.md)): every
   tool of the registry on one headless session, paths confined to read and
   write roots, screenshots returned as images.

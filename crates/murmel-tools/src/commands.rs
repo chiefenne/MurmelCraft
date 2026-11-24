@@ -237,6 +237,13 @@ pub fn commands() -> Vec<Command> {
             Window(Some("export.image")),
         ),
         cmd(
+            "window.export_movie",
+            "cmd-export-movie",
+            "file",
+            &["Ctrl+Shift+M"],
+            Window(Some("export.movie")),
+        ),
+        cmd(
             "window.palette",
             "cmd-palette",
             "window",

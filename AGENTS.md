@@ -136,9 +136,9 @@ the same code path in the fast run.
 | Path | What |
 |---|---|
 | `crates/murmel-mesh` | `.vtu` reader (VTK polyhedra 42, `region`, zone and boundary names and roles), OpenFOAM `polyMesh` reader (ascii, binary, gzip, `cellZones`), `mesh-evidence.json`, mesh model and summary |
-| `crates/murmel-engine` | session, tool journal (undo and redo), camera (turntable with roll, three projection modes, 26 cube views, rotation about screen axes), view cube geometry, navigation bindings and presets, tokens and user colours, settings files, session files (`.murmel`, save and load), triangulated surface and feature edges |
+| `crates/murmel-engine` | session, tool journal (undo and redo), camera (turntable with roll, three projection modes, 26 cube views, rotation about screen axes), view cube geometry, navigation bindings and presets, tokens and user colours, settings files, session files (`.murmel`, save and load), triangulated surface and feature edges, legend model, the motions of movies (`animation.rs`) |
 | `crates/murmel-render` | wgpu renderer for the window and offscreen PNGs (transparent background, wide lines), overlays of exported pictures (legend, axis triad; vello_cpu), render tests |
-| `crates/murmel-tools` | tool registry, result envelope, diagnostic codes, `docs/tools.md`; command table (keys and palette), `docs/keys.md`; picture export (`export.rs`, [docs/export.md](docs/export.md)) |
+| `crates/murmel-tools` | tool registry, result envelope, diagnostic codes, `docs/tools.md`; command table (keys and palette), `docs/keys.md`; picture and movie export (`export.rs`, `movie.rs`: PNG frames, GIF, MP4 through the system ffmpeg; [docs/export.md](docs/export.md)) |
 | `crates/murmel-cli` | `murmel`, the command line of the registry; `murmel mcp` starts the MCP server |
 | `crates/murmel-mcp` | the MCP server (stdio, MCP 2025-11-25): the registry for agents on one headless session, paths confined to read and write roots, screenshots returned as images ([docs/mcp.md](docs/mcp.md)) |
 | `crates/murmel-app` | `murmelcraft`, the egui + eframe window: panels, viewport, view cube, command palette, shortcut sheet, keyboard focus (F6 regions, focus ring), window tests with egui_kittest |

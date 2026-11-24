@@ -18,6 +18,7 @@ mod diag;
 pub mod export;
 pub mod live;
 mod markdown;
+pub mod movie;
 mod tools;
 
 use std::time::Instant;
