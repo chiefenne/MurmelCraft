@@ -555,3 +555,42 @@ What it shows:
   a small machine. On the iMac's 16 threads all of it now divides.
 - The sort deals the faces out into a second array of one number per
   cell face: 64 MiB more at the peak at 4 M cells (1.6 %).
+
+## Flat clip cut on all threads (2026-11-24)
+
+The flat cut was the last part of the exact cut on one thread: the cut
+points are numbered as they are found, and those numbers decide where
+each section's loop starts, so finding them in another order would draw
+the same cut with other triangles. The numbering stays on one thread,
+in the same order; the rest moves to all threads:
+
+- **The faces.** The threads walk the faces as for every other surface
+  and sort each polygon by what the flat planes do to it (`Sides::fate`):
+  whole, dropped, or crossed. Only the crossed ones, a thin layer, go
+  through the cutter afterwards, in face order, so their cut points are
+  numbered as before.
+- **The sections.** One thread names, cell by cell, where the plane
+  crosses the edges of each cell one plane slices, in the order its
+  section asks for them (`Cutter::cut_edges`); a cell more planes slice
+  is cut there whole, as before. Then the sections of the other cells
+  are built on all threads, reading the numbered points (`View` over a
+  read-only `Store`).
+
+The surfaces are the same bit for bit as before (all buffers hashed for
+one, two and three flat planes, a crinkle and flat mix, and 1 and 3
+threads), and `threads_give_the_same_surface` now also covers two and
+three flat planes and a region cutting flat.
+
+Same machine (4 threads), binary polyMesh, `--repeat 3` (1 M:
+`--repeat 5`), main at 9b18ec9 against this branch:
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| surface.flat | 156 (181) | 512 (612) |
+| — polygons | 110 (134) | 380 (454) |
+
+What is left of a flat cut at 4 M: numbering the cut points (about 50
+ms, one thread), finding the cells shown and crossed (two walks over
+every cell's points, about 190 ms on all threads, which one walk could
+do), and the clip's distances, worked out twice (once for the cells
+shown and once for the cutter).
