@@ -57,6 +57,8 @@ pub enum Owner {
     Streams(Vec<usize>),
     /// The vector arrows, coloured by their own magnitude.
     Arrows,
+    /// The spray parcels, coloured by a parcel field.
+    Parcels,
 }
 
 /// One swatch of a legend of categories.
@@ -178,6 +180,35 @@ impl Legend {
                     out.push((Owner::Arrows, titled(legend, "legend-arrows")));
                 }
             }
+        }
+        // The parcels: their field's values are not the gas's, so their
+        // bar is always their own.
+        if let (Some(v), Some(p)) = (d.parcels.as_ref(), d.parcel_data.as_deref())
+            && m.surface.parcels > 0
+            && let Some(choice) = v.color.as_ref()
+            && let Some((lo, hi)) = crate::parcel::color_range(d, m.surface.parcel_range)
+            && let Some(map) = crate::field::map_for(&v.style(), (lo, hi))
+        {
+            let f = p.field(&choice.name);
+            out.push((
+                Owner::Parcels,
+                Legend {
+                    title: Label::Of {
+                        key: "legend-parcels".into(),
+                        field: choice.title(f.is_some_and(|f| f.is_vector())),
+                    },
+                    body: Body::Ramp(Ramp {
+                        stops: map.legend_stops(v.reverse),
+                        lo,
+                        hi,
+                        ticks: ticks(lo, hi, MAX_TICKS),
+                        unit: f.and_then(|f| f.unit.clone()),
+                        bands: None,
+                        contours: Vec::new(),
+                        threshold: None,
+                    }),
+                },
+            ));
         }
         out
     }

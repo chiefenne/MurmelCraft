@@ -23,6 +23,7 @@ pub mod journal;
 pub mod legend;
 pub mod measure;
 pub mod navigation;
+pub mod parcel;
 pub mod pick;
 pub mod quality;
 pub mod region;

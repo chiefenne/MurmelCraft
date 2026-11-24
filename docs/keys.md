@@ -183,6 +183,10 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Vector arrows: as long as the magnitude, at least a quarter of the longest | `arrows.set` (input from the session) |
 | palette | Vector arrows: all the same length | `arrows.set` (input from the session) |
 | palette | Remove the vector arrows | `arrows.clear` (input from the session) |
+| palette | Open spray parcels… | window, then `parcels.open` |
+| palette | Spray parcels: show or hide | `parcels.set` (input from the session) |
+| palette | Spray parcels: size by diameter, or all the same | `parcels.set` (input from the session) |
+| palette | Remove the spray parcels | `parcels.clear` (input from the session) |
 | palette | Add streamlines from a line of seeds | `stream.set` (input from the session) |
 | palette | Add streamlines from a ball of seeds | `stream.set` (input from the session) |
 | palette | Add streamlines from a patch | `stream.set` (input from the session) |

@@ -62,6 +62,7 @@ impl MurmelApp {
                     };
                     (a.field.clone(), ARROW_KEYS)
                 }
+                Owner::Parcels => (String::new(), PARCEL_KEYS),
             };
             let labels: Vec<(f64, String)> = ramp
                 .ticks
@@ -90,8 +91,15 @@ impl MurmelApp {
             let at = Pos2::new(right - size.x, rect.top() + 16.0 + top);
             let area = Rect::from_min_size(at, size);
             right = area.left() - 8.0;
-            let style = self.session.display.style_of(&name);
-            let range_key = style.range.key();
+            let range_key = match owner {
+                Owner::Parcels => self
+                    .session
+                    .display
+                    .parcels
+                    .as_ref()
+                    .map_or("field", |v| v.range.key()),
+                _ => self.session.display.style_of(&name).range.key(),
+            };
             ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
                 egui::Frame::NONE
                     .fill(color(p.bg_panel).gamma_multiply(0.92))
@@ -120,6 +128,7 @@ impl MurmelApp {
                                         }
                                     }
                                     Owner::Arrows => self.arrow_bar_menu(ui, &mut calls),
+                                    Owner::Parcels => self.parcel_menu(ui, &mut calls),
                                 });
                             });
                         r.on_hover_text(self.i18n.tr(keys.tip)).widget_info(|| {
@@ -167,9 +176,12 @@ impl MurmelApp {
                         );
                         resp.widget_info(|| WidgetInfo::labeled(Role::Image, true, desc.clone()));
                         ui.label(
-                            RichText::new(self.i18n.tr(&format!("field-range-{range_key}")))
-                                .small()
-                                .color(color(p.text_secondary)),
+                            RichText::new(match (owner, range_key) {
+                                (Owner::Parcels, "field") => self.i18n.tr("parcels-range-file"),
+                                _ => self.i18n.tr(&format!("field-range-{range_key}")),
+                            })
+                            .small()
+                            .color(color(p.text_secondary)),
                         );
                     });
             });
@@ -225,6 +237,12 @@ const STREAM_KEYS: Keys = Keys {
     settings: "stream-settings-name",
     tip: "stream-settings-tip",
     legend: "stream-legend-name",
+};
+
+const PARCEL_KEYS: Keys = Keys {
+    settings: "parcel-settings-name",
+    tip: "parcel-settings-tip",
+    legend: "parcel-legend-name",
 };
 
 const ARROW_KEYS: Keys = Keys {

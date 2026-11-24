@@ -986,6 +986,51 @@ pub fn commands() -> Vec<Command> {
             s.display.arrows.as_ref().map(|_| json!({}))
         }),
     ));
+    // Spray parcels (D268): open a parcel file, show or hide them, size
+    // them by diameter, remove them.
+    v.push(cmd(
+        "window.parcels_open",
+        "cmd-parcels-open",
+        "file",
+        &[],
+        Window(Some("parcels.open")),
+    ));
+    v.push(cmd(
+        "parcels.set:toggle",
+        "cmd-parcels-toggle",
+        "slice",
+        &[],
+        Dynamic("parcels.set", |s| {
+            s.display
+                .parcels
+                .as_ref()
+                .map(|p| json!({"enabled": !p.enabled}))
+        }),
+    ));
+    v.push(cmd(
+        "parcels.set:size",
+        "cmd-parcels-size",
+        "slice",
+        &[],
+        Dynamic("parcels.set", |s| {
+            let p = s.display.parcels.as_ref()?;
+            let data = s.display.parcel_data.as_ref()?;
+            data.field(murmel_engine::parcel::DIAMETER)?;
+            Some(json!({"size": match p.size {
+                murmel_engine::parcel::Size::Fixed => "diameter",
+                murmel_engine::parcel::Size::Diameter => "fixed",
+            }}))
+        }),
+    ));
+    v.push(cmd(
+        "parcels.clear",
+        "cmd-parcels-clear",
+        "slice",
+        &[],
+        Dynamic("parcels.clear", |s| {
+            s.display.parcels.as_ref().map(|_| json!({}))
+        }),
+    ));
     // Streamlines: Alt + L adds a seed line across the mesh near the low
     // end of its longest side (where a duct's inlet usually is), or turns
     // the current set on and off.
@@ -1776,6 +1821,22 @@ mod tests {
             let d = json!({"kind": "distance", "points": [at(0), at(1)]});
             assert!(crate::call("measure.add", d, s).ok());
             assert!(crate::call("probe.add", json!({"at": {"cell": 0}}), s).ok());
+            // Spray parcels, for their commands.
+            let parcels = std::env::temp_dir().join(format!(
+                "murmel-commands-{}/parcels_000001.vtkhdf",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(parcels.parent().unwrap()).unwrap();
+            let d = murmel_mesh::Field {
+                name: "diameter".into(),
+                unit: None,
+                location: murmel_mesh::Location::Point,
+                components: 1,
+                values: vec![1e-4],
+            };
+            let at = s.mesh.as_ref().unwrap().mesh.bounds().center();
+            murmel_mesh::parcels::write_parcels(&parcels, &[at], &[d], 0.1, 1, "c").unwrap();
+            assert!(crate::call("parcels.open", json!({"path": parcels}), s).ok());
             // A slice selected, so its settings can become the defaults.
             assert!(crate::call("select.item", json!({"item": "slice:1", "add": true}), s).ok());
             assert!(crate::call("select.item", json!({"item": "measure:1", "add": true}), s).ok());

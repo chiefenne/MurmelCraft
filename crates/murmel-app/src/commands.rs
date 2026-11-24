@@ -101,6 +101,7 @@ impl MurmelApp {
             match c.id.as_str() {
                 "window.open" => self.open_dialog(),
                 "window.open_folder" => self.open_folder_dialog(),
+                "window.parcels_open" => self.parcels_open_dialog(),
                 "window.screenshot" => self.screenshot_dialog(),
                 "window.export_image" => self.export.open = true,
                 "window.export_movie" => self.movie.open = true,

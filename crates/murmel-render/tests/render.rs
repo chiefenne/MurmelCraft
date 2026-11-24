@@ -582,6 +582,77 @@ fn field_streamlines_tubes() {
     check_session("field-streamlines-tubes", &s);
 }
 
+/// Spray parcels (D268): 300 parcels of a jet that enters the duct from
+/// its upper wall and bends downstream, as shaded spheres sized by their
+/// diameter and coloured by it on inferno with a colour bar of their
+/// own, inside the mesh's faint outline. A sphere turned inside out, a
+/// wrong size or colour, a parcel outside the duct or a lost bar moves
+/// pixels here.
+#[test]
+fn spray_parcels_by_diameter() {
+    let mut s = field_session("pressure", murmel_mesh::Component::Magnitude);
+    s.display.color_by = ColorBy::Solid;
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    let at = |t: [f64; 3]| [0, 1, 2].map(|k| b.min[k] + t[k] * (b.max[k] - b.min[k]));
+    // A jet from (0.1, 0.95) bending along x, spread by a fixed pattern
+    // (the golden ratio's fractions), diameters 20 to 200 µm.
+    let n = 300;
+    let mut points = Vec::with_capacity(n);
+    let mut diameter = Vec::with_capacity(n);
+    for i in 0..n {
+        let u = i as f64 / n as f64;
+        let f = |k: f64| (k * 0.618_033_988_749_895 * (i + 1) as f64).fract();
+        let x = 0.08 + 0.85 * u;
+        let y = 0.95 - 0.75 * (1.0 - (-4.0 * u).exp()) + 0.12 * (f(1.0) - 0.5);
+        let z = 0.5 + 0.6 * (f(2.0) - 0.5);
+        points.push(at([x, y, z]));
+        diameter.push(20e-6 + 180e-6 * f(3.0));
+    }
+    let p = murmel_mesh::Parcels {
+        points,
+        fields: vec![murmel_mesh::Field {
+            name: "diameter".into(),
+            unit: Some("m".into()),
+            location: murmel_mesh::Location::Point,
+            components: 1,
+            values: diameter,
+        }],
+        ..Default::default()
+    };
+    let mut v = murmel_engine::parcel::ParcelView::new("parcels.vtkhdf".into());
+    v.color = murmel_engine::parcel::ParcelView::default_color(&p);
+    v.size = murmel_engine::parcel::Size::Diameter;
+    v.scale = 3.0;
+    v.map = Some("inferno".into());
+    s.display.parcels = Some(v);
+    s.display.parcel_data = Some(std::sync::Arc::new(p));
+    s.redraw();
+    assert_eq!(s.mesh.as_ref().unwrap().surface.parcels, n);
+    let mut shot = render_session(&s, 480, 320).unwrap();
+    let bars: Vec<_> = murmel_engine::Legend::own_bars(&s)
+        .into_iter()
+        .map(|(_, l)| l)
+        .collect();
+    assert_eq!(bars.len(), 1, "one bar of their own");
+    let i18n = murmel_engine::i18n::I18n::english().unwrap();
+    overlay::draw(
+        &mut shot.rgba,
+        480,
+        320,
+        &Overlays {
+            legend: None,
+            own_bars: &bars,
+            triad: None,
+            i18n: &i18n,
+            tokens: &s.tokens,
+            dark: true,
+            scale: 1.0,
+        },
+    )
+    .unwrap();
+    check_shot("spray-parcels-by-diameter", &shot);
+}
+
 /// Export (the maintainer's cards of 2026-11-24, "same look as on
 /// screen"): the channel coloured by patch at 1.5 times a 320 x 213
 /// viewport, edges 1.5 pixels wide, with the patch legend top left and

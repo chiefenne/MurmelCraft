@@ -99,6 +99,18 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   traced through a field the result does not have or a scalar, coloured
   by a missing field, or seeded on a missing patch is skipped as
   `stream:<n>`. The lines are traced again on loading, never stored.
+- **Spray parcels** (format 1.12) are `display.parcels`: `{"path":
+  "spray/parcels_000300.vtkhdf", "enabled": true, "color": {"name":
+  "diameter", "component": "magnitude"}, "size": "diameter", "scale": 1.0,
+  "map": null, "reverse": false, "range": "field"}`, with the filters
+  `diameter` (`[min, max]` in metres) and `injector` when set. `path` is
+  relative to the session file's folder, as the mesh's, and
+  `display.parcels_absolute` holds the absolute one; loading tries the
+  relative path first. `color` left out (or null) is the solid colour; an
+  own colour is in `colors` as `parcels`. `size` is `fixed` or
+  `diameter`, `scale` above 0 up to 100. The parcels are read from their
+  file again on loading, never stored; a file that cannot be read is
+  skipped as `parcels:<path>`.
 - **Regions of interest** (format 1.7) are `display.regions`, in the
   order they were added (`region:1` is the first): `{"shape": {"kind":
   "box", "center": [2, 1, 0.5], "size": [1, 1, 1]}, "enabled": true}`.

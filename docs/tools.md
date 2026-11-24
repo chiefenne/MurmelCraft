@@ -49,6 +49,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `arrows.clear` | 1 | read | Remove the vector arrows and their settings. |
 | `stream.set` | 1 | read | Add or change a set of streamlines (stream: its number, stream:1 is the first; left out: the current set, the one selected last or else added last; new: add one, up to 8). The lines follow a vector field (field: left out, the set's own, else the field shown if it is a vector, else the file's first vector) through the cells' tetrahedra (the field slices show) by fourth-order Runge-Kutta in arc length, a quarter of a cell per step, forward, backward or both ways from each seed (direction, both by default), and stop where they leave the mesh (or the regions shown), where the speed falls below 0.1 % of the field's largest, at max_length (a length, or null for three mesh diagonals) or after 10 000 steps. seed: line (from, to: count seeds evenly, ends included; a new line lies across the mesh near the low end of its longest side), sphere (centre, radius: its centre and Halton points through the ball), patch (patch: a boundary patch's name, its faces thinned evenly to about count; a new one takes the first inlet), plane (origin, normal: an even grid of about count points inside the mesh). Values of another shape than the set's are refused unless seed names that shape. count: seeds wanted, 1 to 1000 (50 by default); seeds outside the mesh are left out. look: lines (thin lines, the default) or tubes (shaded, tube_radius a length or null for 1/400 of the mesh diagonal); arrowheads: cones pointing downstream along the lines. color: field (the default: color_field and component, left out the traced field's magnitude, with a colour bar of its own in that field's style, field.style) or solid (display.set_color on stream:<n>). enabled false keeps the settings and draws none. While streamlines show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's stream says how many seeds were placed and how the lines ended. |
 | `stream.clear` | 1 | read | Remove a set of streamlines (stream: its number; left out: the current set), or all of them (all); those after it move up one. |
+| `parcels.open` | 1 | read | Show the spray parcels of a parcel file with the open mesh: FoehnCraft's spray/parcels_<step>.vtkhdf (VTKHDF PolyData: points with velocity, diameter, droplets, age, parcel_id and later temperature and injector as point data; time and step as attributes) or any VTKHDF PolyData of points. Each parcel is a small shaded sphere. A file opened while parcels show keeps their settings (the next file of a run looks the same); the first one is coloured by diameter (else its first field) with a colour bar of its own. While parcels show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's parcels lists the file's time, step, count, the parcels drawn and each field's range. |
+| `parcels.set` | 1 | read | Change how the parcels show. color: a parcel field (component: magnitude, x, y or z of a vector) or solid (display.set_color on parcels); its colour bar keeps its own map (map: a colour map id or auto), reverse and range (field: all parcels of the file, the default; shown: the parcels drawn; symmetric; fixed with min and max), apart from the gas field of the same name. size: fixed (every parcel 1/400 of the mesh diagonal times scale) or diameter (the largest droplet diameter that size, the others in proportion); scale above 0 up to 100. Filters: diameter [min, max] in metres and injector (a number, needs the file's injector field), null for all. Parcels on the cut-away side of a clip plane are left out. At most 200 000 are drawn, thinned evenly beyond (capped in the result). enabled false keeps the settings and draws none. A field the file lacks is refused with the list of its fields. |
+| `parcels.clear` | 1 | read | Remove the parcels and their settings. |
 | `region.set` | 1 | read | Add or change a region of interest (region: its number, region:1 is the first; left out: the current region, the one selected last or else added last; new: add one, up to 16). While a region is enabled, only the cells of the enabled regions show and slices, iso-surfaces, arrows and quality are computed only there; several enabled regions show their union. shape: box (center, size: full lengths along x, y, z; a new one is half the mesh's box), sphere (center, radius), slab (the cells between two planes thickness apart, the middle one through origin with normal), zone (zone: a cell zone's name), patch (patch: its name, layers: the cells along it and layers - 1 rings further in, 1 to 64), cells (cells: ids, left out: the cells picked now; rings: rings of face neighbours added, 0 to 64). A cell belongs to a box, sphere or slab when its bounding box touches the shape, so the shape is fully covered (also when it is thinner than a cell) and the border shows whole cells. cut: crinkle (the default, whole cells) or flat (box, sphere and slab only: the border cells are clipped to the shape and closed by their sections, as a flat clip plane cuts; a box's and a slab's cut is exact, a sphere's follows it to within a cell, and a sphere with no mesh node inside shows whole cells, with a note; a cell a whole-cell region takes stays whole, and where flat regions overlap a cell is cut by the one its centre lies deepest in). Changing shape replaces the region's shape; fields of another shape are refused. enabled false keeps the region but shows the whole mesh. The result lists each region with the cells it takes, its halo (the cells around it a mesh read in pieces also loads) and the size of that part of the mesh model. |
 | `region.clear` | 1 | read | Remove a region (region: its number; left out: the current region), or all of them (all); the regions after it move up one. With no region enabled the whole mesh shows. |
 | `region.list` | 1 | read | The regions of interest: each with its shape, whether it is enabled, and what it takes (cells, halo cells, points and the size of that part of the mesh model in MiB); shown is what the enabled regions take together (null while none is enabled and the whole mesh shows). |
@@ -1567,6 +1570,120 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `parcels.open`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "A parcel file: FoehnCraft's spray/parcels_<step>.vtkhdf (VTKHDF PolyData)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+### `parcels.set`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "color": {
+      "description": "A parcel field, or solid",
+      "type": "string"
+    },
+    "component": {
+      "enum": [
+        "magnitude",
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "diameter": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "items": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "injector": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "minimum": 0,
+          "type": "integer"
+        }
+      ]
+    },
+    "map": {
+      "type": "string"
+    },
+    "max": {
+      "type": "number"
+    },
+    "min": {
+      "type": "number"
+    },
+    "range": {
+      "enum": [
+        "field",
+        "shown",
+        "symmetric",
+        "fixed"
+      ]
+    },
+    "reverse": {
+      "type": "boolean"
+    },
+    "scale": {
+      "exclusiveMinimum": 0,
+      "maximum": 100.0,
+      "type": "number"
+    },
+    "size": {
+      "enum": [
+        "fixed",
+        "diameter"
+      ]
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `parcels.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `region.set`
 
 ```json
@@ -2197,7 +2314,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "region",
         "field_style",
         "view",
-        "reference"
+        "reference",
+        "parcels"
       ]
     },
     "values": {
@@ -2228,7 +2346,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "region",
         "field_style",
         "view",
-        "reference"
+        "reference",
+        "parcels"
       ]
     }
   },
@@ -2877,6 +2996,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `REGION002` | error | The region's shape is broken (a size, radius or thickness that is not positive, a zero normal, too many rings) or names a zone, patch or cell the mesh does not have. | mesh.info lists the zones and patches; cells count from 0 to the cell count minus one; sizes must be positive. |
 | `REGION003` | error | The display has the most regions it holds (16). | Remove a region with region.clear, or change one with region.set. |
 | `ARROW002` | error | The arrows' density is outside 4 to 200, or their scale is not above 0 and up to 100. | Give density 4 to 200 (arrows across the mesh's largest extent) and a scale above 0, up to 100. |
+| `PARCEL001` | error | No parcels are open. | Open a parcel file (FoehnCraft's spray/parcels_<step>.vtkhdf) with parcels.open. |
+| `PARCEL002` | error | The parcel file has no field of this name (to colour by, to size by diameter or to filter by diameter or injector). | The message lists the fields of the file; parcels.open's result lists them too. |
+| `PARCEL003` | error | A parcel setting is out of range: a scale not above 0 or above 100, a diameter range not 0 <= min <= max, an unknown colour map or a fixed range not min < max. | Give a scale above 0 up to 100, diameters in metres with min <= max, a map of field.style's list or auto, and min < max. |
 | `STREAM001` | error | No streamline set has this number, or the display has the most it holds (8). | Sets count from 1 (stream:1); the streams list of the result names them. Remove one with stream.clear to add another. |
 | `STREAM002` | error | A streamline setting is out of range (count outside 1 to 1000, a length or radius not above 0, a line of one point, a zero normal), names a patch the mesh does not have, or belongs to another seed shape than the set's. | Give count 1 to 1000 and positive lengths; mesh.info lists the patches; name the shape with seed to change it (line: from, to; sphere: centre, radius; patch: patch; plane: origin, normal). |
 | `STREAM003` | error | Streamlines follow a vector field (one with x, y and z components), and the field named or the open mesh has none. | Name a vector field (field.list shows each field's components), or open a result with velocity. |
