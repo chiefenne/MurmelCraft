@@ -29,9 +29,20 @@ line (MCP revision 2025-11-25; it also answers clients that ask for
 
 ### Claude Code
 
+Options go before the name, the server's command after `--`, and the
+path must be absolute. Run this in the MurmelCraft folder after
+`cargo build --release` (`$PWD` is that folder); `--scope user` makes
+the server available in every folder, without it only in the folder it
+was added in:
+
 ```sh
-claude mcp add murmelcraft -- /path/to/murmel mcp --read-root /path/to/meshes --write-root /path/to/out
+claude mcp add --scope user murmelcraft -- \
+  "$PWD/target/release/murmel" mcp --read-root ~/meshes --write-root ~/murmel-out
+claude mcp list
 ```
+
+The README has a copy-paste setup for macOS and what to do when it
+fails.
 
 ### Claude Desktop and other clients
 
@@ -50,7 +61,7 @@ claude mcp add murmelcraft -- /path/to/murmel mcp --read-root /path/to/meshes --
 
 ```sh
 target/release/murmel mcp --live --root ~/project
-claude mcp add murmelcraft-live -- /path/to/murmel mcp --live --root /path/to/project
+claude mcp add --scope user murmelcraft-live -- "$PWD/target/release/murmel" mcp --live --root ~/project
 ```
 
 With `--live` the server has no session of its own: each call, once its

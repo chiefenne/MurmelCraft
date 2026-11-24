@@ -47,6 +47,54 @@ cargo run -p murmel-cli -- commands --markdown   # docs/tools.md
 cargo run --release -p murmel-cli -- mcp --root .  # the MCP server on stdio
 ```
 
+## Let Claude drive MurmelCraft (macOS, copy and paste)
+
+`cargo build --release` builds three programs into `target/release/`:
+`murmelcraft` (the window), `murmel` (the command line; `murmel mcp` is
+the MCP server) and `murmel-mcp` (the same server on its own). Claude
+Code needs the server's full path, so run these lines **in the
+MurmelCraft folder** (`$PWD` fills the path in for you):
+
+```sh
+cargo build --release
+mkdir -p ~/murmel-work                       # the folder the agent may read and write
+claude mcp add --scope user murmelcraft-live -- \
+  "$PWD/target/release/murmel" mcp --live --root ~/murmel-work
+claude mcp list                              # murmelcraft-live: ... ✓ Connected
+```
+
+Then start the window (`target/release/murmelcraft`, or with a mesh:
+`target/release/murmelcraft test-fixtures/channel/foehncraft.vtu`),
+start `claude` in any folder and ask, for example, *"Use murmelcraft-live:
+clip the mesh along x and show me a screenshot"*. Meshes the agent opens
+must lie in `~/murmel-work` (or give it more folders with
+`--read-root DIR`). For a session of its own without a window, add the
+server without `--live` under another name:
+
+```sh
+claude mcp add --scope user murmelcraft -- \
+  "$PWD/target/release/murmel" mcp --root ~/murmel-work
+```
+
+If it does not work:
+
+- *`claude: command not found`*: Claude Code is not installed in this
+  shell; install it, or open a new terminal after installing.
+- *`MCP server murmelcraft-live already exists`*: remove the old entry
+  first, `claude mcp remove murmelcraft-live --scope user` (or
+  `--scope local` if it was added without `--scope`), and add it again.
+- *Not listed in another folder*: without `--scope user` the server is
+  added for the current folder only.
+- *`✗ Failed to connect`*: the path is wrong or the program is not
+  built; `ls "$PWD/target/release/murmel"` must show the file, and
+  `target/release/murmel mcp --live --root ~/murmel-work` must print
+  nothing and wait (Ctrl + C ends it). A root that does not exist stops
+  it with a message.
+- *`LIVE001`* in a call: no MurmelCraft window is open; *`LIVE003`* in
+  Settings: a second window is open. Settings > Agents must be on.
+
+More in [docs/mcp.md](docs/mcp.md).
+
 Rules for contributors and agents: [AGENTS.md](AGENTS.md). Tools:
 [docs/tools.md](docs/tools.md). MCP server: [docs/mcp.md](docs/mcp.md). Lessons: [docs/pitfalls.md](docs/pitfalls.md).
 

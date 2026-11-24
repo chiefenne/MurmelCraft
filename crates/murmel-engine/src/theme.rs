@@ -125,6 +125,24 @@ pub struct GizmoTokens {
     pub shade_mix: f32,
     pub shine: Rgb,
     pub shine_mix: f32,
+    pub dark: GizmoColors,
+    pub light: GizmoColors,
+}
+
+impl GizmoTokens {
+    pub fn colors(&self, dark: bool) -> &GizmoColors {
+        if dark { &self.dark } else { &self.light }
+    }
+}
+
+/// The handles' colours in one theme.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct GizmoColors {
+    /// The slide arrow.
+    pub slide: Rgb,
+    /// The tilt arcs and the rotation plane shown while one is hovered
+    /// or dragged.
+    pub tilt: Rgb,
 }
 
 impl Tokens {
@@ -213,6 +231,27 @@ pub struct MeshColors {
     /// The quality ramp, good to bad (two colours or more).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quality: Vec<Rgb>,
+    /// The clip handles' colours per theme (`dark`, `light`), each a map
+    /// of `slide` and `tilt` to a colour.
+    #[serde(default, skip_serializing_if = "UserGizmo::is_empty")]
+    pub gizmo: UserGizmo,
+}
+
+/// The user's clip handle colours (`[colors.gizmo.dark]` and
+/// `[colors.gizmo.light]` in settings.toml).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserGizmo {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dark: BTreeMap<String, Rgb>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub light: BTreeMap<String, Rgb>,
+}
+
+impl UserGizmo {
+    pub fn is_empty(&self) -> bool {
+        self.dark.is_empty() && self.light.is_empty()
+    }
 }
 
 impl MeshColors {
@@ -232,6 +271,8 @@ impl MeshColors {
         if !other.quality.is_empty() {
             self.quality = other.quality;
         }
+        self.gizmo.dark.extend(other.gizmo.dark);
+        self.gizmo.light.extend(other.gizmo.light);
     }
 }
 
@@ -281,6 +322,18 @@ impl Tokens {
             0 => {}
             1 => return Err("the quality ramp needs two colours or more".into()),
             _ => m.quality = c.quality.clone(),
+        }
+        for (theme, user, g) in [
+            ("dark", &c.gizmo.dark, &mut t.gizmo.dark),
+            ("light", &c.gizmo.light, &mut t.gizmo.light),
+        ] {
+            for (name, &rgb) in user {
+                *match name.as_str() {
+                    "slide" => &mut g.slide,
+                    "tilt" => &mut g.tilt,
+                    _ => return Err(format!("unknown handle {name} (gizmo.{theme})")),
+                } = rgb;
+            }
         }
         Ok(t)
     }
@@ -350,6 +403,44 @@ mod tests {
         assert!(t.with_colors(&bad).is_err());
         let text = toml::to_string(&c).unwrap();
         assert_eq!(toml::from_str::<MeshColors>(&text).unwrap(), c);
+    }
+
+    /// Invariant: the tilt arcs differ from the slide arrow in both
+    /// themes (the maintainer's Mac test asked for it), the arrow keeps
+    /// the accent, and the user's handle colours replace exactly the one
+    /// they name in the one theme they name; an unknown handle is
+    /// refused. Breaks if the tokens or `with_colors` lose the gizmo
+    /// colours; the window draws them but no window test reads colours.
+    #[test]
+    fn gizmo_colours() {
+        let t = Tokens::builtin().unwrap();
+        for dark in [true, false] {
+            let g = t.gizmo.colors(dark);
+            assert_eq!(g.slide, t.palette(dark).accent);
+            assert_ne!(g.tilt, g.slide);
+        }
+        let red = Rgb([255, 0, 0]);
+        let c = MeshColors {
+            gizmo: UserGizmo {
+                light: [("tilt".to_string(), red)].into(),
+                ..UserGizmo::default()
+            },
+            ..MeshColors::default()
+        };
+        let u = t.with_colors(&c).unwrap();
+        assert_eq!(u.gizmo.light.tilt, red);
+        assert_eq!(u.gizmo.light.slide, t.gizmo.light.slide);
+        assert_eq!(u.gizmo.dark, t.gizmo.dark);
+        let text = toml::to_string(&c).unwrap();
+        assert_eq!(toml::from_str::<MeshColors>(&text).unwrap(), c);
+        let bad = MeshColors {
+            gizmo: UserGizmo {
+                dark: [("ring".to_string(), red)].into(),
+                ..UserGizmo::default()
+            },
+            ..MeshColors::default()
+        };
+        assert!(t.with_colors(&bad).is_err());
     }
 
     /// Invariant (WCAG 2.2 AA, 1.4.3 and 1.4.11): in both themes, primary

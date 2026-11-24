@@ -187,8 +187,15 @@ impl MurmelApp {
                     action = Some(a);
                 }
             });
-        if let Some((id, input)) = action {
-            self.call(id, input);
+        match action {
+            Some(("window.color", input)) => {
+                let field = |k: &str| input[k].as_str().unwrap_or_default().to_string();
+                self.open_color_edit(&field("item"), &field("label"));
+            }
+            Some((id, input)) => {
+                self.call(id, input);
+            }
+            None => {}
         }
     }
 
@@ -294,8 +301,19 @@ impl MurmelApp {
                     ui.close();
                 }
                 ui.separator();
-                if let Some(c) = self.color_action(ui, &id) {
-                    action = Some(c);
+                // The colour opens a window of its own: a picker inside
+                // the menu closed with it (docs/pitfalls.md).
+                if ui.button(self.i18n.tr("tree-color-edit")).clicked() {
+                    action = Some(("window.color", json!({"item": id, "label": r.label})));
+                    ui.close();
+                }
+                let own = self.session.mesh.as_ref().is_some_and(|m| {
+                    Item::parse(&id, &m.mesh)
+                        .is_some_and(|i| self.session.display.colors.contains_key(&i))
+                });
+                if own && ui.button(self.i18n.tr("tree-reset-color")).clicked() {
+                    action = Some(("display.set_color", json!({"item": id, "color": null})));
+                    ui.close();
                 }
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -757,35 +775,6 @@ impl MurmelApp {
             Value::Null => "–".into(),
             Value::Object(_) => v.to_string(),
         }
-    }
-
-    /// The colour entry of an item's context menu: a picker that calls
-    /// display.set_color, and a reset when the item has its own colour.
-    pub(crate) fn color_action(&self, ui: &mut Ui, id: &str) -> Option<(&'static str, Value)> {
-        let m = self.session.mesh.as_ref()?;
-        let item = Item::parse(id, &m.mesh)?;
-        let d = &self.session.display;
-        let current = d
-            .item_color(&m.mesh, &self.session.tokens, item)
-            .or_else(|| d.colors.get(&item).copied())
-            .unwrap_or(self.session.tokens.mesh.solid);
-        let mut rgb = current.0;
-        let mut action = None;
-        ui.horizontal(|ui| {
-            let r = egui::color_picker::color_edit_button_srgb(ui, &mut rgb);
-            let name = self.i18n.tr("tree-color");
-            r.widget_info(|| WidgetInfo::labeled(Role::ColorWell, true, name.clone()));
-            ui.label(self.i18n.tr("tree-color"));
-            if rgb != current.0 {
-                let hex = murmel_engine::Rgb(rgb).hex();
-                action = Some(("display.set_color", json!({"item": id, "color": hex})));
-            }
-        });
-        if d.colors.contains_key(&item) && ui.button(self.i18n.tr("tree-reset-color")).clicked() {
-            action = Some(("display.set_color", json!({"item": id, "color": null})));
-            ui.close();
-        }
-        action
     }
 
     /// Legend of the colouring, top left under the view note.

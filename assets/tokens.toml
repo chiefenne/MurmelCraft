@@ -93,10 +93,24 @@ tetrahedron = "#9E5D62"
 pyramid = "#C9DB72"
 
 # The clip plane's handles (the slide arrow and the tilt arcs) are drawn
-# as shaded tubes in the accent: the sides turned from the light mix in
-# up to shade_mix of shade, the highlight up to shine_mix of shine.
+# as shaded tubes: the sides turned from the light mix in up to
+# shade_mix of shade, the highlight up to shine_mix of shine.
 [gizmo]
 shade = "#140A12"
 shade_mix = 0.6
 shine = "#FFFFFF"
 shine_mix = 0.55
+
+# The handles' colours per theme (users change them with
+# settings.set_colors, "gizmo"). The arrow takes the accent; the tilt
+# arcs and their rotation plane the accent turned 40 degrees towards
+# violet in OKLCH at the same lightness and chroma (dark L 0.70 C 0.15,
+# light L 0.53 C 0.18), so they differ a little from the arrow and stay
+# in its family (maintainer's Mac test, 2026-11-24).
+[gizmo.dark]
+slide = "#DE74B6"
+tilt = "#B384EB"
+
+[gizmo.light]
+slide = "#AD3285"
+tilt = "#8348BE"

@@ -72,6 +72,12 @@ pub struct MurmelApp {
     pub(crate) clip_drag: Option<crate::clip_handle::ClipDrag>,
     /// Where the clip plane's handles were drawn last frame.
     pub(crate) clip_spots: Vec<crate::clip_handle::Spot>,
+    /// The tilt arc whose rotation plane is drawn this frame (hovered or
+    /// dragged), for the window tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) rotation_plane: Option<crate::clip_handle::Handle>,
+    /// The colour window of a tree item, while open.
+    pub(crate) color_edit: Option<crate::color_edit::ColorEdit>,
     /// Keyboard focus: F6 regions, the focus ring, the arrow keys.
     pub(crate) focus: crate::focus::Focus,
     /// The width of the panel toggles at the right of the toolbar, as
@@ -146,6 +152,8 @@ impl MurmelApp {
             wheel_until: 0.0,
             clip_drag: None,
             clip_spots: Vec::new(),
+            rotation_plane: None,
+            color_edit: None,
             focus: crate::focus::Focus::default(),
             toggles_w: 90.0,
             title_buttons_w: 110.0,
@@ -1142,6 +1150,7 @@ impl eframe::App for MurmelApp {
         self.settings_window(&ctx);
         self.shortcuts_window(&ctx);
         self.palette_window(&ctx);
+        self.color_window(&ctx);
         crate::focus::ring(&ctx, &self.focus, color(p.accent));
         self.focus.end(&ctx);
     }

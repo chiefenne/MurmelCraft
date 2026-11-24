@@ -15,8 +15,13 @@
 //! front (painter's algorithm) over a darker halo, so they read on any
 //! mesh colour. The tube frames follow the path by parallel transport
 //! (Bishop, "There is more than one way to frame a curve", 1975), so the
-//! arcs do not twist. Like the view cube they are painted by egui, so
-//! screenshots (`view.screenshot`) leave them out.
+//! arcs do not twist. The arcs take their own colour (the `tilt` gizmo
+//! token, a little more violet than the arrow), and while one is hovered
+//! or dragged its rotation plane shows as a faint disc through the pivot,
+//! square to the tilt axis, with ticks every 15 degrees, the axis as a
+//! dashed line and, during the drag, a wedge of the angle turned so far.
+//! Like the view cube they are painted by egui, so screenshots
+//! (`view.screenshot`) leave them out.
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{Color32, CursorIcon, FontId, Pos2, Rect, Role, Sense, Ui, WidgetInfo};
@@ -98,6 +103,8 @@ const ARC_HEAD_R: f64 = 7.0;
 const ARC_HEAD_LEN: f64 = 15.0;
 /// The halo around the handles, in points.
 const HALO: f64 = 1.2;
+/// The ticks of the rotation plane, in degrees (a longer one every 45).
+const TICK_DEG: usize = 15;
 /// How near the pointer must come to a handle's centre line.
 const HIT: f32 = 10.0;
 /// The share of the pointer's movement a drag takes while Shift is held.
@@ -237,6 +244,9 @@ struct Shape {
     /// For a tilt: the axis, the point the drag follows and the direction
     /// it moves in per radian.
     tilt: Option<(V3, V3, V3)>,
+    /// For a tilt: the arc's middle as a unit vector from the pivot (in
+    /// the clip plane, square to the axis).
+    toward: V3,
 }
 
 /// The arc of a tilt handle about axis `a`: in the plane of `b` (in the
@@ -248,6 +258,133 @@ fn arc(pivot: V3, b: V3, t: V3, radius: f64, half_deg: f64, steps: usize) -> Vec
             add(pivot, mul(add(mul(b, th.cos()), mul(t, th.sin())), radius))
         })
         .collect()
+}
+
+/// The plane a tilt arc turns the clip plane in: through the pivot,
+/// square to the tilt axis, drawn while the arc is hovered or dragged.
+struct RotationPlane {
+    pivot: V3,
+    /// The tilt axis (unit).
+    axis: V3,
+    /// The arc's middle now (unit, square to the axis).
+    toward: V3,
+    /// The arc's middle when the drag began, during a drag.
+    start: Option<V3>,
+    /// The arc's radius in world units.
+    radius: f64,
+}
+
+impl RotationPlane {
+    /// The point at `deg` degrees from `from` about the axis, at `r`
+    /// times the radius.
+    fn at(&self, from: V3, deg: f64, r: f64) -> V3 {
+        let t = cross(self.axis, from);
+        let a = deg.to_radians();
+        add(
+            self.pivot,
+            mul(add(mul(from, a.cos()), mul(t, a.sin())), r * self.radius),
+        )
+    }
+
+    /// The signed angle (degrees) from the drag's start to now, about the
+    /// axis; 0 without a drag.
+    fn turned(&self) -> f64 {
+        self.start.map_or(0.0, |s| {
+            dot(cross(s, self.toward), self.axis)
+                .atan2(dot(s, self.toward))
+                .to_degrees()
+        })
+    }
+
+    /// Paint the plane in `c` over a thin `shade` outline, so it reads
+    /// on light and dark meshes alike.
+    fn paint(
+        &self,
+        painter: &egui::Painter,
+        to_screen: &dyn Fn(V3) -> Option<Pos2>,
+        c: Color32,
+        shade: Color32,
+    ) {
+        let from = self.start.unwrap_or(self.toward);
+        let ring: Option<Vec<Pos2>> = (0..72)
+            .map(|k| to_screen(self.at(from, k as f64 * 5.0, 1.0)))
+            .collect();
+        let (Some(ring), Some(centre)) = (ring, to_screen(self.pivot)) else {
+            return;
+        };
+        // The disc (a fan, so it stays right seen nearly edge on).
+        painter.add(egui::Shape::mesh(fan(
+            centre,
+            &ring,
+            true,
+            c.gamma_multiply(0.24),
+        )));
+        let mut closed = ring.clone();
+        closed.push(ring[0]);
+        let outline = shade.gamma_multiply(0.45);
+        painter.add(egui::Shape::line(
+            closed.clone(),
+            egui::Stroke::new(3.2, outline),
+        ));
+        painter.add(egui::Shape::line(closed, egui::Stroke::new(1.6, c)));
+        for k in (0..360).step_by(TICK_DEG) {
+            let major = k % 45 == 0;
+            let inner = if major { 0.8 } else { 0.89 };
+            let (Some(a), Some(b)) = (
+                to_screen(self.at(from, k as f64, inner)),
+                to_screen(self.at(from, k as f64, 1.0)),
+            ) else {
+                continue;
+            };
+            let w = if major { 1.8 } else { 1.2 };
+            painter.line_segment([a, b], egui::Stroke::new(w + 1.6, outline));
+            painter.line_segment([a, b], egui::Stroke::new(w, c));
+        }
+        // The axis the plane turns about.
+        if let (Some(a), Some(b)) = (
+            to_screen(add(self.pivot, mul(self.axis, -1.2 * self.radius))),
+            to_screen(add(self.pivot, mul(self.axis, 1.2 * self.radius))),
+        ) {
+            painter.add(egui::Shape::dashed_line(
+                &[a, b],
+                egui::Stroke::new(1.2, c.gamma_multiply(0.8)),
+                5.0,
+                4.0,
+            ));
+        }
+        // The wedge of the turn so far.
+        let deg = self.turned();
+        if deg.abs() > 0.05 {
+            let steps = ((deg.abs() / 3.0).ceil() as usize).max(1);
+            let arc: Option<Vec<Pos2>> = (0..=steps)
+                .map(|i| to_screen(self.at(from, deg * i as f64 / steps as f64, 0.9)))
+                .collect();
+            if let Some(arc) = arc {
+                painter.add(egui::Shape::mesh(fan(
+                    centre,
+                    &arc,
+                    false,
+                    c.gamma_multiply(0.45),
+                )));
+            }
+        }
+    }
+}
+
+/// A triangle fan from `centre` over `rim` (closed back to the first
+/// point when `closed`) in one colour.
+fn fan(centre: Pos2, rim: &[Pos2], closed: bool, c: Color32) -> Mesh {
+    let mut mesh = Mesh::default();
+    mesh.colored_vertex(centre, c);
+    for &p in rim {
+        mesh.colored_vertex(p, c);
+    }
+    let n = rim.len() as u32;
+    let segments = if closed { n } else { n.saturating_sub(1) };
+    for k in 0..segments {
+        mesh.add_triangle(0, 1 + k, 1 + (k + 1) % n);
+    }
+    mesh
 }
 
 /// The shaded handles as one egui mesh: per-vertex colour from the
@@ -352,6 +489,7 @@ impl MurmelApp {
     /// The clip plane's outline inside the mesh's box and its handles.
     pub(crate) fn clip_handles(&mut self, ui: &Ui, rect: Rect, cam: &Camera, dark: bool) {
         self.clip_spots.clear();
+        self.rotation_plane = None;
         let Some(c) = self.session.display.active_clip().copied() else {
             self.clip_drag = None;
             return;
@@ -375,6 +513,8 @@ impl MurmelApp {
         let palette = self.session.tokens.palette(dark).clone();
         let gizmo = self.session.tokens.gizmo.clone();
         let accent = color(palette.accent);
+        let colors = *gizmo.colors(dark);
+        let (slide_c, tilt_c) = (color(colors.slide), color(colors.tilt));
         let (origin, sradius) = (m.surface.origin, m.surface.radius);
         let aspect = (rect.width() / rect.height().max(1.0)) as f64;
         let to_screen = move |p: V3| {
@@ -469,6 +609,7 @@ impl MurmelApp {
                 handle: Handle::Slide,
                 line: vec![pivot, add(pivot, mul(n, ARROW_LEN * s))],
                 tilt: None,
+                toward: n,
             },
             // About u: the arc sits on ±v and moves along u × (±v) = ±n.
             Shape {
@@ -479,6 +620,7 @@ impl MurmelApp {
                     add(pivot, mul(bv, ARC_R * s)),
                     mul(cross(u, bv), ARC_R * s),
                 )),
+                toward: bv,
             },
             // About v: the arc sits on ±u and moves along v × (±u) = ∓n.
             Shape {
@@ -489,6 +631,7 @@ impl MurmelApp {
                     add(pivot, mul(bu, ARC_R * s)),
                     mul(cross(v, bu), ARC_R * s),
                 )),
+                toward: bu,
             },
         ];
 
@@ -613,9 +756,42 @@ impl MurmelApp {
             }
         }
 
+        // The rotation plane of the arc under the pointer or dragged,
+        // under the handles.
+        let turning = self
+            .clip_drag
+            .map(|d| d.handle)
+            .or(hot)
+            .filter(|h| *h != Handle::Slide);
+        if let Some(sh) = turning.and_then(|h| shapes.iter().find(|sh| sh.handle == h))
+            && let Some((axis, _, _)) = sh.tilt
+        {
+            let start = self.clip_drag.map(|d| {
+                // Where the arc's middle was when the drag began: the
+                // same frame built from the normal at the press.
+                let w = match d.handle {
+                    Handle::TiltU => mul(cross(d.start_normal, axis), d.sides[0]),
+                    _ => mul(cross(axis, d.start_normal), d.sides[1]),
+                };
+                unit(w).unwrap_or(sh.toward)
+            });
+            let plane = RotationPlane {
+                pivot,
+                axis,
+                toward: sh.toward,
+                start,
+                radius: ARC_R * s,
+            };
+            plane.paint(&painter, &to_screen, tilt_c, color(gizmo.shade));
+            self.rotation_plane = Some(sh.handle);
+        }
+
         // Draw: halo first, then the shaded handles.
         let lift = |c: Color32| lerp(c, color(gizmo.shine), 0.22);
-        let base = |h: Handle| if hot == Some(h) { lift(accent) } else { accent };
+        let own = |h: Handle| if h == Handle::Slide { slide_c } else { tilt_c };
+        let base = |h: Handle| {
+            if hot == Some(h) { lift(own(h)) } else { own(h) }
+        };
         let grow = |h: Handle| if hot == Some(h) { 1.3 } else { 1.0 };
         let build = |extra: f64| {
             let mut out = Vec::new();
@@ -672,7 +848,7 @@ impl MurmelApp {
         painter.add(egui::Shape::mesh(halo_mesh));
         painter.add(egui::Shape::mesh(p.mesh(&build(0.0), &gizmo)));
         painter.circle_filled(p0, 4.0, color(gizmo.shade));
-        painter.circle_filled(p0, 2.8, accent);
+        painter.circle_filled(p0, 2.8, slide_c);
 
         // While dragging: the value beside the pointer.
         if let (Some(d), Some(at)) = (self.clip_drag, pointer) {

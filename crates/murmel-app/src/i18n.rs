@@ -36,7 +36,12 @@ impl I18n {
         let Some(pattern) = msg.value() else {
             return key.to_string();
         };
+        // The modifier names of this platform, so a string that names a
+        // key says Cmd and Option on macOS (`{ $ctrl } + O`).
         let mut fa = FluentArgs::new();
+        let (ctrl, alt) = modifier_names();
+        fa.set("ctrl", ctrl);
+        fa.set("alt", alt);
         for (k, v) in args {
             fa.set(*k, v.clone());
         }
@@ -49,6 +54,16 @@ impl I18n {
     #[cfg(test)]
     pub fn has(&self, key: &str) -> bool {
         self.bundle.has_message(key)
+    }
+}
+
+/// The names of the Ctrl and Alt keys of the key table on this platform:
+/// Cmd and Option on macOS (the table's Ctrl is the Command key there).
+pub fn modifier_names() -> (&'static str, &'static str) {
+    if cfg!(target_os = "macos") {
+        ("Cmd", "Option")
+    } else {
+        ("Ctrl", "Alt")
     }
 }
 
