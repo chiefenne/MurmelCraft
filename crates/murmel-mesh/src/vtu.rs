@@ -18,19 +18,20 @@ use base64::Engine as _;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
+use crate::field::{Field, Location, Results, group_vectors};
 use crate::{CellKind, Mesh, MeshError, Patch, PatchRole, Polygons, boundary};
 
-const POLYHEDRON: i64 = 42;
-const TETRA: i64 = 10;
-const HEXAHEDRON: i64 = 12;
-const WEDGE: i64 = 13;
-const PYRAMID: i64 = 14;
-const TRIANGLE: i64 = 5;
-const POLYGON: i64 = 7;
-const QUAD: i64 = 9;
+pub(crate) const POLYHEDRON: i64 = 42;
+pub(crate) const TETRA: i64 = 10;
+pub(crate) const HEXAHEDRON: i64 = 12;
+pub(crate) const WEDGE: i64 = 13;
+pub(crate) const PYRAMID: i64 = 14;
+pub(crate) const TRIANGLE: i64 = 5;
+pub(crate) const POLYGON: i64 = 7;
+pub(crate) const QUAD: i64 = 9;
 
-const TETRA_FACES: &[&[usize]] = &[&[0, 1, 3], &[1, 2, 3], &[2, 0, 3], &[0, 2, 1]];
-const HEX_FACES: &[&[usize]] = &[
+pub(crate) const TETRA_FACES: &[&[usize]] = &[&[0, 1, 3], &[1, 2, 3], &[2, 0, 3], &[0, 2, 1]];
+pub(crate) const HEX_FACES: &[&[usize]] = &[
     &[0, 4, 7, 3],
     &[1, 2, 6, 5],
     &[0, 1, 5, 4],
@@ -38,14 +39,14 @@ const HEX_FACES: &[&[usize]] = &[
     &[0, 3, 2, 1],
     &[4, 5, 6, 7],
 ];
-const WEDGE_FACES: &[&[usize]] = &[
+pub(crate) const WEDGE_FACES: &[&[usize]] = &[
     &[0, 1, 2],
     &[3, 5, 4],
     &[0, 3, 4, 1],
     &[1, 4, 5, 2],
     &[2, 5, 3, 0],
 ];
-const PYRAMID_FACES: &[&[usize]] = &[
+pub(crate) const PYRAMID_FACES: &[&[usize]] = &[
     &[0, 3, 2, 1],
     &[0, 1, 4],
     &[1, 2, 4],
@@ -59,6 +60,11 @@ fn err(code: &'static str, message: impl Into<String>) -> MeshError {
 
 /// Read a `.vtu` file.
 pub fn read_vtu(path: &Path) -> Result<Mesh, MeshError> {
+    read_vtu_results(path).map(|(m, _)| m)
+}
+
+/// Read a `.vtu` file with its data arrays as fields.
+pub fn read_vtu_results(path: &Path) -> Result<(Mesh, Results), MeshError> {
     if !path.is_file() {
         return Err(err(
             "MESH001",
@@ -68,7 +74,7 @@ pub fn read_vtu(path: &Path) -> Result<Mesh, MeshError> {
     let bytes = std::fs::read(path)
         .map_err(|e| err("MESH001", format!("cannot read {}: {e}", path.display())))?;
     match std::str::from_utf8(&bytes) {
-        Ok(s) => read_vtu_str(s),
+        Ok(s) => read_vtu_str_results(s),
         Err(_) => {
             if contains(&bytes, b"<AppendedData") {
                 Err(err(
@@ -93,6 +99,7 @@ enum Section {
     Points,
     Cells,
     CellData,
+    PointData,
 }
 
 #[derive(Debug)]
@@ -131,6 +138,11 @@ fn count_attr(e: &BytesStart<'_>, key: &str) -> Result<usize, MeshError> {
 
 /// Read a `.vtu` from its text.
 pub fn read_vtu_str(text: &str) -> Result<Mesh, MeshError> {
+    read_vtu_str_results(text).map(|(m, _)| m)
+}
+
+/// Read a `.vtu` from its text, with its data arrays as fields.
+pub fn read_vtu_str_results(text: &str) -> Result<(Mesh, Results), MeshError> {
     let len = text.len();
     let mut reader = Reader::from_str(text);
     let mut section = Section::Other;
@@ -169,7 +181,7 @@ pub fn read_vtu_str(text: &str) -> Result<Mesh, MeshError> {
                     "Points" => section = Section::Points,
                     "Cells" => section = Section::Cells,
                     "CellData" => section = Section::CellData,
-                    "PointData" => section = Section::Other,
+                    "PointData" => section = Section::PointData,
                     "AppendedData" => {
                         return Err(err("MESH007", "appended data is not supported"));
                     }
@@ -209,7 +221,93 @@ pub fn read_vtu_str(text: &str) -> Result<Mesh, MeshError> {
         return Err(err("MESH002", "no VTKFile element"));
     }
     let header = header.ok_or_else(|| err("MESH003", "no Piece element"))?;
-    assemble(&header, &arrays)
+    let (mesh, slots) = assemble(&header, &arrays)?;
+    let fields = data_fields(&header, &arrays, &slots, &mesh)?;
+    Ok((
+        mesh,
+        Results {
+            fields,
+            ..Results::default()
+        },
+    ))
+}
+
+/// What a VTU cell became: a volume cell or a boundary polygon.
+#[derive(Clone, Copy)]
+enum Slot {
+    Volume,
+    Boundary,
+}
+
+/// The numeric cell and point arrays (except `region`) as fields: the
+/// values of the volume cells, or of the boundary polygons when the file
+/// has no volume cells; point arrays on the points.
+fn data_fields(
+    h: &Header,
+    arrays: &[RawArray<'_>],
+    slots: &[Slot],
+    mesh: &Mesh,
+) -> Result<Vec<Field>, MeshError> {
+    let mut out = Vec::new();
+    for a in arrays {
+        let location = match a.section {
+            Section::CellData if a.name != "region" => {
+                if mesh.cell_count() > 0 {
+                    Location::Cell
+                } else {
+                    Location::Boundary
+                }
+            }
+            Section::PointData => Location::Point,
+            _ => continue,
+        };
+        if a.name.is_empty() || element_size(&a.ty).is_none() || a.ty == "String" {
+            continue;
+        }
+        let k = a.components.max(1);
+        let v = floats(a, h.header64)?;
+        let n = if location == Location::Point { h.points } else { h.cells };
+        if v.len() != n * k {
+            return Err(err(
+                "MESH005",
+                format!("{} has {} values for {n} entities of {k}", a.name, v.len()),
+            ));
+        }
+        let values: Vec<f64> = if location == Location::Point {
+            v
+        } else {
+            let want = |s: Slot| match location {
+                Location::Cell => matches!(s, Slot::Volume),
+                _ => matches!(s, Slot::Boundary),
+            };
+            slots
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| want(**s))
+                .flat_map(|(c, _)| v[c * k..c * k + k].iter().copied())
+                .collect()
+        };
+        if k == 1 || k == 3 {
+            out.push(Field {
+                name: a.name.clone(),
+                unit: None,
+                location,
+                components: k,
+                values,
+            });
+        } else {
+            for j in 0..k {
+                out.push(Field {
+                    name: format!("{}_{j}", a.name),
+                    unit: None,
+                    location,
+                    components: 1,
+                    values: values.iter().skip(j).step_by(k).copied().collect(),
+                });
+            }
+        }
+    }
+    Ok(group_vectors(out))
 }
 
 fn piece(
@@ -419,9 +517,10 @@ fn index(v: i64, bound: usize, what: &str) -> Result<u32, MeshError> {
     Ok(v as u32)
 }
 
-fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<Mesh, MeshError> {
+fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), MeshError> {
     let hb = h.header64;
     let mut mesh = Mesh::default();
+    let mut slots = Vec::with_capacity(h.cells);
 
     let pts = arrays
         .iter()
@@ -550,6 +649,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<Mesh, MeshError> {
                 ));
             }
             push_cell(&mut mesh, reg, CellKind::classify(sizes), &mut zone_max);
+            slots.push(Slot::Volume);
         } else if let Some(table) = table {
             let need = table
                 .iter()
@@ -572,6 +672,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<Mesh, MeshError> {
                 sizes.push(f.len());
             }
             push_cell(&mut mesh, reg, CellKind::classify(sizes), &mut zone_max);
+            slots.push(Slot::Volume);
         } else if matches!(t, TRIANGLE | POLYGON | QUAD) {
             if nodes.len() < 3 {
                 return Err(err(
@@ -585,6 +686,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<Mesh, MeshError> {
                 .collect::<Result<_, _>>()?;
             mesh.boundary.push(ids);
             mesh.boundary_patch.push(reg);
+            slots.push(Slot::Boundary);
             patch_max = Some(patch_max.map_or(reg, |m: u32| m.max(reg)));
         } else {
             return Err(err("MESH008", format!("cell {c} has VTK type {t}")));
@@ -647,10 +749,10 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<Mesh, MeshError> {
     if mesh.cell_count() == 0 && mesh.boundary.is_empty() {
         return Err(err("MESH010", "no volume cells and no boundary faces"));
     }
-    Ok(mesh)
+    Ok((mesh, slots))
 }
 
-fn push_cell(mesh: &mut Mesh, zone: u32, kind: CellKind, zone_max: &mut Option<u32>) {
+pub(crate) fn push_cell(mesh: &mut Mesh, zone: u32, kind: CellKind, zone_max: &mut Option<u32>) {
     mesh.cell_faces.push(mesh.faces.len() as u32);
     mesh.cell_zone.push(zone);
     mesh.cell_kind.push(kind);
