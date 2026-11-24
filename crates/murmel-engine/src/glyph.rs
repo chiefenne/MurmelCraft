@@ -263,10 +263,7 @@ pub fn color_range(
     let whole = if a.in_plane {
         drawn
     } else {
-        fields
-            .and_then(|f| f.values_cached(mesh, &a.magnitude()))
-            .and_then(|v| v.range)
-            .or(drawn)
+        fields.and_then(|f| f.range(mesh, &a.magnitude())).or(drawn)
     };
     let r = match style.range {
         // Over the steps of a series the arrows keep the step's range

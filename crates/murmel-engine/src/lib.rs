@@ -5,6 +5,7 @@
 //! change this state only through the tools of `murmel-tools`.
 
 pub mod animation;
+mod bins;
 pub mod block_boxes;
 pub mod blocks;
 pub mod calc;

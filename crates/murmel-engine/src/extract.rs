@@ -467,11 +467,14 @@ impl Out<'_> {
     }
 }
 
+/// The closed loops of a cell's section, each by the edges it crosses.
+type Rings = Vec<Vec<(u32, u32)>>;
+
 /// The section of cell `c` by a plane with node distances `dist`:
 /// closed loops of cut points, each named by its edge (lower node
 /// first). A node on the plane counts as behind it, as for clip planes.
-fn section(mesh: &Mesh, c: usize, dist: &[f64]) -> Vec<Vec<(u32, u32)>> {
-    let behind = |i: u32| dist.get(i as usize).is_none_or(|&d| d <= 0.0);
+fn section(mesh: &Mesh, c: usize, dist: &dyn Fn(u32) -> Option<f64>) -> Rings {
+    let behind = |i: u32| dist(i).is_none_or(|d| d <= 0.0);
     let (mut any_in, mut any_out) = (false, false);
     for i in mesh.cell_points(c) {
         {
@@ -574,6 +577,7 @@ pub fn append(
     };
     // The arrows' field (its three components and magnitude), their grid
     // spacing and where they go.
+    let phase = murmel_mesh::profile::span("extract.vector");
     let arrows = display.arrows.as_ref().filter(|a| a.enabled).and_then(|a| {
         let fields = fields?;
         let comp = |component| {
@@ -590,9 +594,19 @@ pub fn append(
             comp(Component::Y)?,
             comp(Component::Z)?,
         ];
-        let longest = comp(Component::Magnitude)?.range?.1;
+        // The largest magnitude, without the magnitude's node values.
+        let longest = fields
+            .range(
+                mesh,
+                &FieldChoice {
+                    name: a.field.clone(),
+                    component: Component::Magnitude,
+                },
+            )?
+            .1;
         Some((a, vector, longest, a.spacing(mesh)))
     });
+    drop(phase);
     let mut samples: Vec<crate::glyph::Sample> = Vec::new();
     let anchor = mesh.bounds().center();
     for (k, slice) in display.slices.iter().enumerate() {
@@ -637,6 +651,7 @@ pub fn append(
             // iso-surfaces), not only its nodes'.
             let vector = arrows.as_ref().map(|a| &a.1);
             let mut pieces: Vec<(u32, Vec<Vx>)> = Vec::new();
+            let phase = murmel_mesh::profile::span("extract.slice");
             for t in level_set(mesh, fields, Level::Plane(&plane), field, vector, shown) {
                 let verts: Vec<Vx> = t.verts.iter().map(|v| Vx { n: normal, ..*v }).collect();
                 let verts = clip_flat(verts, &flat, borders(t.cell));
@@ -651,6 +666,7 @@ pub fn append(
                     pieces.push((t.cell, verts));
                 }
             }
+            drop(phase);
             if let Some((a, _, _, _)) = &arrows {
                 let h = a.plane_spacing(mesh, &plane);
                 crate::glyph::on_plane(&mut samples, &plane, anchor, h, a.in_plane, &pieces);
@@ -659,17 +675,39 @@ pub fn append(
             if !edges {
                 continue;
             }
-            let dist: Vec<f64> = mesh.points.iter().map(|&p| plane.distance(p)).collect();
-            for (c, &on) in shown.iter().enumerate() {
-                if !on {
-                    continue;
+            let _phase = murmel_mesh::profile::span("extract.outline");
+            let dist = |i: u32| mesh.points.get(i as usize).map(|&p| plane.distance(p));
+            // The sections of the cells shown, found on all threads; of
+            // the cells near the plane only ([`crate::bins`]).
+            let ring_of = |c: usize| (c, section(mesh, c, &dist));
+            let sections: Vec<(usize, Rings)> = match fields.filter(|_| crate::bins::on()) {
+                Some(set) => {
+                    let near = set.bins(mesh).near_plane(|x| plane.distance(x));
+                    murmel_mesh::par::collect(near.len(), 1 << 10, |r| {
+                        near[r]
+                            .iter()
+                            .map(|&c| c as usize)
+                            .filter(|&c| shown.get(c).copied().unwrap_or(false))
+                            .map(ring_of)
+                            .filter(|(_, rings)| !rings.is_empty())
+                            .collect()
+                    })
                 }
+                None => murmel_mesh::par::collect(shown.len(), 1 << 12, |r| {
+                    r.filter(|&c| shown[c])
+                        .map(ring_of)
+                        .filter(|(_, rings)| !rings.is_empty())
+                        .collect()
+                }),
+            };
+            for (c, rings) in sections {
                 let Some(ec) = paint(c).edge else { continue };
-                for ring in section(mesh, c, &dist) {
+                for ring in rings {
                     let verts: Vec<Vx> = ring
                         .iter()
                         .map(|&(a, b)| {
-                            let (da, db) = (dist[a as usize], dist[b as usize]);
+                            let (da, db) =
+                                (dist(a).unwrap_or(f64::NAN), dist(b).unwrap_or(f64::NAN));
                             let t = if da == db { 0.0 } else { da / (da - db) };
                             Vx {
                                 p: lerp3(mesh.points[a as usize], mesh.points[b as usize], t),
@@ -685,6 +723,7 @@ pub fn append(
             }
         }
     }
+    let phase = murmel_mesh::profile::span("extract.iso");
     if let Some(fields) = fields {
         for (k, iso) in display.isos.iter().enumerate() {
             if !iso.enabled {
@@ -726,6 +765,8 @@ pub fn append(
             }
         }
     }
+    drop(phase);
+    let _phase = murmel_mesh::profile::span("extract.arrows");
     if let Some((a, vector, longest, h)) = &arrows {
         if a.surface {
             let v = [&*vector[0], &*vector[1], &*vector[2]];
@@ -874,10 +915,6 @@ fn level_set(
         return Vec::new();
     }
     let node_of = crate::tets::node_value;
-    let centroid = |c: usize| crate::tets::centroid(mesh, fields, c);
-    let face_value = |f: &FieldValues, u: u32, face: &[u32], fc: [f64; 3]| -> f64 {
-        crate::tets::face_value(mesh, fields, f, u, face, fc)
-    };
     let node_level = |n: u32| match level {
         Level::Field(v, _) => node_of(v, n),
         Level::Plane(p) => p.distance(mesh.points[n as usize]),
@@ -890,26 +927,20 @@ fn level_set(
         (Level::Field(v, _), Some(set)) if !v.grad.is_empty() => Some((v, set)),
         _ => None,
     };
-    let node_slope =
-        |n: u32| slope.map_or([0.0; 3], |(v, set)| set.node_gradient(mesh, &v.grad, n));
-    let mut slopes: Vec<[f64; 3]> = Vec::new();
-    // A point of the surface on the segment between two tetrahedron
-    // points, made once: (position, colour value).
-    let mut made: HashMap<(Pt, Pt), u32> = HashMap::new();
-    let mut points: Vec<([f64; 3], [f64; 4])> = Vec::new();
-    let mut normals: Vec<[f64; 3]> = Vec::new();
-    // Triangles by point index, with their cell.
-    let mut tris: Vec<([u32; 3], u32)> = Vec::new();
-    for (c, &on) in shown.iter().enumerate() {
-        if !on {
-            continue;
-        }
+    // Which cells the level set crosses, with the value at each one's
+    // centroid, on all threads: the bounds of the values a cell's
+    // tetrahedra can take, and the value at its centroid.
+    let bounds = |c: usize| -> (f64, f64, f64) {
         // Quick test: the cell's values all on one side.
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for n in mesh.cell_points(c) {
+        let mut add = |n: u32| {
             let v = node_level(n);
             lo = lo.min(v);
             hi = hi.max(v);
+        };
+        match fields {
+            Some(set) => set.nodes_of_cell(mesh, c).iter().for_each(|&n| add(n)),
+            None => mesh.cell_points(c).for_each(add),
         }
         let vc = match level {
             Level::Field(v, _) => {
@@ -945,149 +976,125 @@ fn level_set(
                 }
             }
         }
-        if !lo.is_finite() || !hi.is_finite() || lo == hi || iso < lo || iso > hi {
-            continue;
+        (lo, hi, vc)
+    };
+    let crosses = |(lo, hi): (f64, f64)| lo.is_finite() && hi.is_finite() && lo != hi;
+    let crossing = |c: usize| -> Option<f64> {
+        let (lo, hi, vc) = bounds(c);
+        (crosses((lo, hi)) && iso >= lo && iso <= hi).then_some(vc)
+    };
+    let phase = murmel_mesh::profile::span("extract.crossed");
+    // Only the cells of the bins near the level set ([`crate::bins`]);
+    // all of them without fields.
+    let near: Option<Vec<u32>> = fields.filter(|_| crate::bins::on()).map(|set| {
+        let bins = set.bins(mesh);
+        match level {
+            Level::Plane(p) => bins.near_plane(|x| p.distance(x)),
+            Level::Field(v, iso) => {
+                let spans = v.spans.get_or_init(|| {
+                    bins.spans(|c| {
+                        let (lo, hi, _) = bounds(c);
+                        crosses((lo, hi)).then_some((lo, hi))
+                    })
+                });
+                bins.near_value(spans, iso)
+            }
         }
-        let centre = centroid(c);
-        let vc = match level {
-            Level::Plane(p) => p.distance(centre),
-            Level::Field(..) => vc,
-        };
-        let cc =
-            chans.map(|ch| ch.map_or(f64::NAN, |f| f.cell.get(c).copied().unwrap_or(f64::NAN)));
-        for f in mesh.cell(c) {
-            if f.len() < 3 {
+    });
+    let crossed: Vec<(u32, f64)> = match &near {
+        Some(near) => murmel_mesh::par::collect(near.len(), 1 << 10, |r| {
+            near[r]
+                .iter()
+                .filter(|&&c| shown.get(c as usize).copied().unwrap_or(false))
+                .filter_map(|&c| crossing(c as usize).map(|vc| (c, vc)))
+                .collect()
+        }),
+        None => murmel_mesh::par::collect(shown.len(), 1 << 12, |r| {
+            r.filter(|&c| shown[c])
+                .filter_map(|c| crossing(c).map(|vc| (c as u32, vc)))
+                .collect()
+        }),
+    };
+    // The crossed cells cut into their triangles, run by run on all
+    // threads; each run names its points by the segment they lie on.
+    let cut = |run: std::ops::Range<usize>| -> Piece {
+        let mut piece = Piece::default();
+        let mut made: murmel_mesh::fasthash::FastMap<(Pt, Pt), u32> =
+            murmel_mesh::fasthash::FastMap::default();
+        for &(c, vc) in &crossed[run] {
+            cut_cell(
+                &mut piece,
+                &mut made,
+                c as usize,
+                vc,
+                &Cutting {
+                    mesh,
+                    fields,
+                    level,
+                    iso,
+                    chans,
+                    slope,
+                },
+            );
+        }
+        piece
+    };
+    drop(phase);
+    let phase = murmel_mesh::profile::span("extract.cut");
+    let pieces = murmel_mesh::par::map(crossed.len(), 64, cut);
+    drop(phase);
+    let _phase = murmel_mesh::profile::span("extract.join");
+    // Joined in cell order, as one thread would have made them: a point
+    // two runs made is the first run's, and each triangle's normal and
+    // side are found from the points kept.
+    let mut made: murmel_mesh::fasthash::FastMap<(Pt, Pt), u32> =
+        murmel_mesh::fasthash::FastMap::default();
+    let total: usize = pieces.iter().map(|p| p.points.len()).sum();
+    let mut points: Vec<([f64; 3], [f64; 4])> = Vec::with_capacity(total);
+    let mut slopes: Vec<[f64; 3]> = Vec::new();
+    let mut normals: Vec<[f64; 3]> = Vec::with_capacity(total);
+    let mut tris: Vec<([u32; 3], u32)> = Vec::new();
+    for piece in pieces {
+        let mut to = Vec::with_capacity(piece.points.len());
+        for (i, key) in piece.keys.iter().enumerate() {
+            let mut add = || {
+                points.push(piece.points[i]);
+                normals.push([0.0; 3]);
+                if let Some(&g) = piece.slopes.get(i) {
+                    slopes.push(g);
+                }
+                (points.len() - 1) as u32
+            };
+            // A segment from a centroid lies in its cell alone.
+            let g = if matches!(key.1, Pt::Cell(_)) {
+                add()
+            } else {
+                *made.entry(*key).or_insert_with(add)
+            };
+            to.push(g);
+        }
+        for (t, cell, up) in piece.tris {
+            let t = t.map(|i| to[i as usize]);
+            let (p0, p1, p2) = (
+                points[t[0] as usize].0,
+                points[t[1] as usize].0,
+                points[t[2] as usize].0,
+            );
+            let n = cross(sub(p1, p0), sub(p2, p0));
+            // Turn towards growing values.
+            let (t, n) = if dot(n, up) < 0.0 {
+                ([t[0], t[2], t[1]], n.map(|x| -x))
+            } else {
+                (t, n)
+            };
+            if dot(n, n) == 0.0 {
                 continue;
             }
-            let u = f.id;
-            let fc = crate::tets::face_centre(mesh, f.nodes);
-            let vf = match level {
-                Level::Field(v, _) => face_value(v, u, f.nodes, fc),
-                Level::Plane(p) => p.distance(fc),
-            };
-            let cf = chans.map(|ch| ch.map_or(f64::NAN, |cv| face_value(cv, u, f.nodes, fc)));
-            // A face without a distinct id (should not happen) is made
-            // per cell.
-            let fpt = if u == NO_CELL {
-                Pt::Cell(u32::MAX - c as u32)
-            } else {
-                Pt::Face(u)
-            };
-            for j in 0..f.len() {
-                let (a, b) = (f.at(j), f.at((j + 1) % f.len()));
-                let tet = [
-                    (Pt::Cell(c as u32), centre, vc, cc),
-                    (fpt, fc, vf, cf),
-                    (
-                        Pt::Node(a),
-                        mesh.points[a as usize],
-                        node_level(a),
-                        chans.map(|ch| ch.map_or(f64::NAN, |cv| node_of(cv, a))),
-                    ),
-                    (
-                        Pt::Node(b),
-                        mesh.points[b as usize],
-                        node_level(b),
-                        chans.map(|ch| ch.map_or(f64::NAN, |cv| node_of(cv, b))),
-                    ),
-                ];
-                // The slope at each, made only for a crossed edge's ends.
-                // The slope at each (made only for a crossed edge's ends):
-                // a node's from its cells, a centroid's and a face
-                // centre's the mean of their nodes', so one cell's
-                // gradient never creases the shading on its own.
-                let mean_slope = |ns: &mut dyn Iterator<Item = u32>| {
-                    let (mut k, mut g) = (0.0, [0.0; 3]);
-                    for n in ns {
-                        let s = node_slope(n);
-                        g = [g[0] + s[0], g[1] + s[1], g[2] + s[2]];
-                        k += 1.0;
-                    }
-                    if k > 0.0 { g.map(|x| x / k) } else { g }
-                };
-                let slope_at = |q: usize| match (slope, q) {
-                    (None, _) => [0.0; 3],
-                    (_, 0) => mean_slope(&mut mesh.cell_points(c)),
-                    (_, 1) => mean_slope(&mut f.nodes.iter().copied()),
-                    (_, 2) => node_slope(a),
-                    _ => node_slope(b),
-                };
-                if tet.iter().any(|t| !t.2.is_finite()) {
-                    continue;
-                }
-                let above: Vec<usize> = (0..4).filter(|&q| tet[q].2 > iso).collect();
-                let below: Vec<usize> = (0..4).filter(|&q| tet[q].2 <= iso).collect();
-                if above.is_empty() || below.is_empty() {
-                    continue;
-                }
-                let mut point = |p: usize, q: usize| -> u32 {
-                    let (lo, hi) = if tet[p].0 <= tet[q].0 { (p, q) } else { (q, p) };
-                    *made.entry((tet[lo].0, tet[hi].0)).or_insert_with(|| {
-                        let (vl, vh) = (tet[lo].2, tet[hi].2);
-                        let t = if vh == vl {
-                            0.5
-                        } else {
-                            (iso - vl) / (vh - vl)
-                        };
-                        let t = t.clamp(0.0, 1.0);
-                        let (a, b) = (tet[lo].3, tet[hi].3);
-                        points.push((
-                            lerp3(tet[lo].1, tet[hi].1, t),
-                            std::array::from_fn(|k| lerp(a[k], b[k], t)),
-                        ));
-                        normals.push([0.0; 3]);
-                        if slope.is_some() {
-                            slopes.push(lerp3(slope_at(lo), slope_at(hi), t));
-                        }
-                        (points.len() - 1) as u32
-                    })
-                };
-                // One point above (or below): a triangle; two each: a
-                // quad of the four crossed edges.
-                let corners: Vec<u32> = if above.len() == 1 || below.len() == 1 {
-                    let (lone, rest) = if above.len() == 1 {
-                        (above[0], below.clone())
-                    } else {
-                        (below[0], above.clone())
-                    };
-                    rest.iter().map(|&q| point(lone, q)).collect()
-                } else {
-                    let (a0, a1, b0, b1) = (above[0], above[1], below[0], below[1]);
-                    vec![point(a0, b0), point(a0, b1), point(a1, b1), point(a1, b0)]
-                };
-                // Turn towards growing values: from the mean of the
-                // points below to the mean of those above.
-                let mean = |qs: &[usize]| {
-                    let n = qs.len() as f64;
-                    [0, 1, 2].map(|d| qs.iter().map(|&q| tet[q].1[d]).sum::<f64>() / n)
-                };
-                let up = sub(mean(&above), mean(&below));
-                let mut add = |t: [u32; 3]| {
-                    let (p0, p1, p2) = (
-                        points[t[0] as usize].0,
-                        points[t[1] as usize].0,
-                        points[t[2] as usize].0,
-                    );
-                    let n = cross(sub(p1, p0), sub(p2, p0));
-                    let (t, n) = if dot(n, up) < 0.0 {
-                        ([t[0], t[2], t[1]], n.map(|x| -x))
-                    } else {
-                        (t, n)
-                    };
-                    if dot(n, n) == 0.0 {
-                        return;
-                    }
-                    for &i in &t {
-                        let m = &mut normals[i as usize];
-                        *m = [m[0] + n[0], m[1] + n[1], m[2] + n[2]];
-                    }
-                    tris.push((t, c as u32));
-                };
-                add([corners[0], corners[1], corners[2]]);
-                if corners.len() == 4 {
-                    add([corners[0], corners[2], corners[3]]);
-                }
+            for &i in &t {
+                let m = &mut normals[i as usize];
+                *m = [m[0] + n[0], m[1] + n[1], m[2] + n[2]];
             }
+            tris.push((t, cell));
         }
     }
     tris.into_iter()
@@ -1112,6 +1119,181 @@ fn level_set(
             }),
         })
         .collect()
+}
+
+/// The points and triangles of a run of crossed cells: each point with
+/// the segment it lies on (`keys`), its position and channel values and,
+/// for an iso-surface with gradients, the field's slope there; each
+/// triangle by its points, with its cell and the direction of growing
+/// values it should face.
+#[derive(Default)]
+struct Piece {
+    keys: Vec<(Pt, Pt)>,
+    points: Vec<([f64; 3], [f64; 4])>,
+    slopes: Vec<[f64; 3]>,
+    tris: Vec<([u32; 3], u32, [f64; 3])>,
+}
+
+/// What cutting a cell needs to know of the level set.
+struct Cutting<'a> {
+    mesh: &'a Mesh,
+    fields: Option<&'a FieldSet>,
+    level: Level<'a>,
+    iso: f64,
+    chans: [Option<&'a FieldValues>; 4],
+    slope: Option<(&'a FieldValues, &'a FieldSet)>,
+}
+
+/// Cut cell `c` (`vc` the level at its centroid) into its tetrahedra
+/// and those by the level set, into `piece` (`made` names the points
+/// made in it).
+fn cut_cell(
+    piece: &mut Piece,
+    made: &mut murmel_mesh::fasthash::FastMap<(Pt, Pt), u32>,
+    c: usize,
+    vc: f64,
+    k: &Cutting<'_>,
+) {
+    let Cutting {
+        mesh,
+        fields,
+        level,
+        iso,
+        chans,
+        slope,
+    } = *k;
+    let node_of = crate::tets::node_value;
+    let face_value = |f: &FieldValues, u: u32, face: &[u32], fc: [f64; 3]| -> f64 {
+        crate::tets::face_value(mesh, fields, f, u, face, fc)
+    };
+    let node_level = |n: u32| match level {
+        Level::Field(v, _) => node_of(v, n),
+        Level::Plane(p) => p.distance(mesh.points[n as usize]),
+    };
+    let node_slope =
+        |n: u32| slope.map_or([0.0; 3], |(v, set)| set.node_gradient(mesh, &v.grad, n));
+    let centre = crate::tets::centroid(mesh, fields, c);
+    let vc = match level {
+        Level::Plane(p) => p.distance(centre),
+        Level::Field(..) => vc,
+    };
+    let cc = chans.map(|ch| ch.map_or(f64::NAN, |f| f.cell.get(c).copied().unwrap_or(f64::NAN)));
+    for f in mesh.cell(c) {
+        if f.len() < 3 {
+            continue;
+        }
+        let u = f.id;
+        let fc = crate::tets::face_centre(mesh, f.nodes);
+        let vf = match level {
+            Level::Field(v, _) => face_value(v, u, f.nodes, fc),
+            Level::Plane(p) => p.distance(fc),
+        };
+        let cf = chans.map(|ch| ch.map_or(f64::NAN, |cv| face_value(cv, u, f.nodes, fc)));
+        // A face without a distinct id (should not happen) is made
+        // per cell.
+        let fpt = if u == NO_CELL {
+            Pt::Cell(u32::MAX - c as u32)
+        } else {
+            Pt::Face(u)
+        };
+        for j in 0..f.len() {
+            let (a, b) = (f.at(j), f.at((j + 1) % f.len()));
+            let tet = [
+                (Pt::Cell(c as u32), centre, vc, cc),
+                (fpt, fc, vf, cf),
+                (
+                    Pt::Node(a),
+                    mesh.points[a as usize],
+                    node_level(a),
+                    chans.map(|ch| ch.map_or(f64::NAN, |cv| node_of(cv, a))),
+                ),
+                (
+                    Pt::Node(b),
+                    mesh.points[b as usize],
+                    node_level(b),
+                    chans.map(|ch| ch.map_or(f64::NAN, |cv| node_of(cv, b))),
+                ),
+            ];
+            // The slope at each (made only for a crossed edge's ends):
+            // a node's from its cells, a centroid's and a face centre's
+            // the mean of their nodes', so one cell's gradient never
+            // creases the shading on its own.
+            let mean_slope = |ns: &mut dyn Iterator<Item = u32>| {
+                let (mut k, mut g) = (0.0, [0.0; 3]);
+                for n in ns {
+                    let s = node_slope(n);
+                    g = [g[0] + s[0], g[1] + s[1], g[2] + s[2]];
+                    k += 1.0;
+                }
+                if k > 0.0 { g.map(|x| x / k) } else { g }
+            };
+            let slope_at = |q: usize| match (slope, q) {
+                (None, _) => [0.0; 3],
+                (_, 0) => mean_slope(&mut mesh.cell_points(c)),
+                (_, 1) => mean_slope(&mut f.nodes.iter().copied()),
+                (_, 2) => node_slope(a),
+                _ => node_slope(b),
+            };
+            if tet.iter().any(|t| !t.2.is_finite()) {
+                continue;
+            }
+            let above: Vec<usize> = (0..4).filter(|&q| tet[q].2 > iso).collect();
+            let below: Vec<usize> = (0..4).filter(|&q| tet[q].2 <= iso).collect();
+            if above.is_empty() || below.is_empty() {
+                continue;
+            }
+            let mut point = |p: usize, q: usize| -> u32 {
+                let (lo, hi) = if tet[p].0 <= tet[q].0 { (p, q) } else { (q, p) };
+                *made.entry((tet[lo].0, tet[hi].0)).or_insert_with(|| {
+                    let (vl, vh) = (tet[lo].2, tet[hi].2);
+                    let t = if vh == vl {
+                        0.5
+                    } else {
+                        (iso - vl) / (vh - vl)
+                    };
+                    let t = t.clamp(0.0, 1.0);
+                    let (a, b) = (tet[lo].3, tet[hi].3);
+                    piece.keys.push((tet[lo].0, tet[hi].0));
+                    piece.points.push((
+                        lerp3(tet[lo].1, tet[hi].1, t),
+                        std::array::from_fn(|k| lerp(a[k], b[k], t)),
+                    ));
+                    if slope.is_some() {
+                        piece.slopes.push(lerp3(slope_at(lo), slope_at(hi), t));
+                    }
+                    (piece.points.len() - 1) as u32
+                })
+            };
+            // One point above (or below): a triangle; two each: a quad
+            // of the four crossed edges.
+            let corners: Vec<u32> = if above.len() == 1 || below.len() == 1 {
+                let (lone, rest) = if above.len() == 1 {
+                    (above[0], below.clone())
+                } else {
+                    (below[0], above.clone())
+                };
+                rest.iter().map(|&q| point(lone, q)).collect()
+            } else {
+                let (a0, a1, b0, b1) = (above[0], above[1], below[0], below[1]);
+                vec![point(a0, b0), point(a0, b1), point(a1, b1), point(a1, b0)]
+            };
+            // Towards growing values: from the mean of the points below
+            // to the mean of those above.
+            let mean = |qs: &[usize]| {
+                let n = qs.len() as f64;
+                [0, 1, 2].map(|d| qs.iter().map(|&q| tet[q].1[d]).sum::<f64>() / n)
+            };
+            let up = sub(mean(&above), mean(&below));
+            piece
+                .tris
+                .push(([corners[0], corners[1], corners[2]], c as u32, up));
+            if corners.len() == 4 {
+                piece
+                    .tris
+                    .push(([corners[0], corners[2], corners[3]], c as u32, up));
+            }
+        }
+    }
 }
 
 /// The field an iso-surface shows, with the component a scalar takes.
@@ -1153,6 +1335,94 @@ mod tests {
 
     fn build(m: &Mesh, set: &FieldSet, d: &Display) -> Surface {
         Surface::build_with(m, Some(set), &Tokens::builtin().unwrap(), d)
+    }
+
+    /// The honeycomb with a scalar `p` and a swirling vector `U` in its
+    /// cells (as `murmel bench` gives every mesh).
+    fn honeycomb_with_fields(n: usize) -> (Mesh, FieldSet) {
+        let mesh = murmel_mesh::synth::honeycomb(n);
+        let b = mesh.bounds();
+        let (c, h) = (b.center(), [0, 1, 2].map(|k| 0.5 * (b.max[k] - b.min[k])));
+        let at: Vec<[f64; 3]> = (0..mesh.cell_count())
+            .map(|i| {
+                let q = crate::inspect::cell_centroid(&mesh, i);
+                [0, 1, 2].map(|k| (q[k] - c[k]) / h[k])
+            })
+            .collect();
+        let p = at
+            .iter()
+            .map(|q| (3.0 * q[0]).sin() * (2.0 * q[1]).cos() + 0.5 * q[2])
+            .collect();
+        let u = at
+            .iter()
+            .flat_map(|q| [-q[1], q[0], 0.2 + 0.1 * q[2]])
+            .collect();
+        let f = |name: &str, components, values| murmel_mesh::field::Field {
+            name: name.into(),
+            unit: None,
+            location: murmel_mesh::field::Location::Cell,
+            components,
+            values,
+        };
+        let set = FieldSet::new(murmel_mesh::field::Results {
+            fields: vec![f("p", 1, p), f("U", 3, u)],
+            ..Default::default()
+        });
+        (mesh, set)
+    }
+
+    /// Invariant (fields on large meshes, docs/performance.md): slices
+    /// and iso-surfaces cut on all threads, testing only the cells of the
+    /// bins near them ([`crate::bins`]), are the same, bit for bit, as
+    /// cut on one thread testing every cell: faces, values, normals,
+    /// outlines, arrows. Breaks when the bins leave out a crossed cell (a
+    /// hole), when runs joined out of order number points differently,
+    /// or when a point two runs make is kept twice. The other tests look
+    /// at what a slice covers, not at how it was cut.
+    #[test]
+    fn cut_on_threads_near_the_bins_as_on_one_thread() {
+        let (m, set) = honeycomb_with_fields(16);
+        let b = m.bounds();
+        let c = b.center();
+        let mut d = by_field(&m, &set, "p");
+        let mut series = Slice::new(
+            [c[0] + 0.013 * (b.max[0] - b.min[0]), c[1], c[2]],
+            [1.0, 0.0, 0.0],
+        );
+        series.count = 3;
+        series.spacing = 0.2 * (b.max[0] - b.min[0]);
+        d.slices = vec![series, Slice::new(c, [0.3, 0.8, 0.52])];
+        let iso = |name: &str, value, color| Iso {
+            field: FieldChoice {
+                name: name.into(),
+                component: Component::Magnitude,
+            },
+            value,
+            enabled: true,
+            color,
+        };
+        d.isos = vec![
+            iso("p", 0.25, IsoColor::Field),
+            iso("U", 0.6, IsoColor::Solid),
+        ];
+        d.arrows = Some(crate::glyph::Arrows::new("U"));
+        d.clips = vec![Clip {
+            origin: c,
+            normal: [0.0, 0.0, 1.0],
+            mode: ClipMode::Flat,
+            enabled: true,
+        }];
+        let one =
+            murmel_mesh::par::with_threads(1, || crate::bins::without(|| build(&m, &set, &d)));
+        let many = murmel_mesh::par::with_threads(5, || build(&m, &set, &d));
+        assert!(one.triangles() > 1000 && one.edges() > 1000 && one.arrows > 0);
+        assert_eq!(one.positions, many.positions);
+        assert_eq!(one.normals, many.normals);
+        assert_eq!(one.values, many.values);
+        assert_eq!(one.indices, many.indices);
+        assert_eq!(one.tri_cell, many.tri_cell);
+        assert_eq!(one.edge_positions, many.edge_positions);
+        assert_eq!(one.edge_colors, many.edge_colors);
     }
 
     /// The triangles of `s` that show slices or iso-surfaces (no face of
