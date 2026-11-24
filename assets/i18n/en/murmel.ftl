@@ -5,8 +5,9 @@ app-name = MurmelCraft
 app-no-file = No mesh open
 
 toolbar-open = Open
-toolbar-open-tip = Open a mesh (Ctrl + O; an OpenFOAM case folder: Ctrl + Shift + O)
-open-filter-meshes = Meshes (.vtu, .foam)
+toolbar-open-tip = Open a mesh or a session (Ctrl + O; an OpenFOAM case folder: Ctrl + Shift + O)
+open-filter-meshes = Meshes and sessions (.vtu, .foam, .murmel)
+open-filter-session = MurmelCraft session (.murmel)
 open-filter-vtu = VTK unstructured grid (.vtu)
 open-filter-foam = OpenFOAM case (.foam)
 open-filter-all = All files (a file of a polyMesh folder)
@@ -252,6 +253,8 @@ tool-settings-set-theme = Theme
 tool-settings-set-colors = Mesh colours
 tool-settings-set-bindings = Mouse bindings
 tool-settings-set-view-cube = View cube placement
+tool-session-save = Save session
+tool-session-load = Load session
 
 
 # Views of the cube (view.standard): faces, edges and corners.
@@ -295,6 +298,9 @@ cmd-open = Open mesh…
 cmd-open-folder = Open OpenFOAM case folder…
 cmd-close = Close mesh
 cmd-screenshot = Save a screenshot…
+cmd-session-save = Save session
+cmd-session-save-as = Save session as…
+cmd-session-load = Load session…
 cmd-palette = Command palette
 cmd-shortcuts = Keyboard shortcuts
 cmd-tree = Show or hide the model tree
@@ -393,6 +399,8 @@ rotate-plus = Rotate +{ $deg }° about screen { $axis }
 rotate-minus = Rotate −{ $deg }° about screen { $axis }
 rotate-degrees = Degrees
 screenshot-title = Save a screenshot
+session-save-title = Save the session
+session-load-title = Load a session
 
 # Accessibility (AccessKit names of panes and controls; F6 regions)
 region-title = Title bar

@@ -159,6 +159,10 @@ pub struct Session {
     pub config_dir: Option<PathBuf>,
     /// The undo and redo steps of the open mesh.
     pub journal: Journal,
+    /// Folders that files named inside other files (the mesh of a session
+    /// file) may be read from; the MCP server sets its roots here. `None`
+    /// allows any folder.
+    pub read_roots: Option<Vec<PathBuf>>,
 }
 
 impl Session {
@@ -176,6 +180,7 @@ impl Session {
             surface_revision: 0,
             config_dir: crate::settings::config_dir(),
             journal: Journal::default(),
+            read_roots: None,
         }
     }
 

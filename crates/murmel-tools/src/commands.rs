@@ -174,6 +174,27 @@ pub fn commands() -> Vec<Command> {
             Tool("mesh.close", json!({})),
         ),
         cmd(
+            "window.session_save",
+            "cmd-session-save",
+            "file",
+            &["Ctrl+S"],
+            Window(Some("session.save")),
+        ),
+        cmd(
+            "window.session_save_as",
+            "cmd-session-save-as",
+            "file",
+            &["Ctrl+Shift+S"],
+            Window(Some("session.save")),
+        ),
+        cmd(
+            "window.session_load",
+            "cmd-session-load",
+            "file",
+            &[],
+            Window(Some("session.load")),
+        ),
+        cmd(
             "window.screenshot",
             "cmd-screenshot",
             "file",

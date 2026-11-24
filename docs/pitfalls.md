@@ -127,6 +127,11 @@ problem took more than a few minutes to understand.
   struct with `deny_unknown_fields` refuses the outer struct's fields;
   `settings.set_colors` takes `reset` out of the JSON before parsing the
   colours instead.
+- **serde_json parses floats fast, not exactly.** Without its
+  `float_roundtrip` feature a number written by serde_json can come back
+  one unit in the last place off (a camera pitch of …658 read as …654),
+  so a saved session did not load to the same camera. The workspace turns
+  the feature on.
 
 ## Formats
 

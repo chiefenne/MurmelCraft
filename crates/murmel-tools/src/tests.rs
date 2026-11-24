@@ -733,3 +733,220 @@ fn reads_only_tools_change_nothing() {
     }
     assert!(ran >= 10, "only {ran} reads-only tools");
 }
+
+fn scratch(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("murmel-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// A copy of the channel and its evidence in `dir`.
+fn channel_case(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    for f in ["foehncraft.vtu", "mesh-evidence.json"] {
+        std::fs::copy(root().join("test-fixtures/channel").join(f), dir.join(f)).unwrap();
+    }
+    dir.join("foehncraft.vtu")
+}
+
+/// Invariant: session.load in a fresh session gives back what
+/// session.save wrote: camera, display (colour mode, quality metric and
+/// threshold, render mode, hidden, isolated and coloured items, clip),
+/// the selection, the mesh colours and the view cube placement, with an
+/// empty journal; saving again writes the same file. Breaks when a field
+/// of the display is added to the session but not to the file, or when
+/// loading leaves a part of the state at its default; no other test
+/// reads a session file back.
+#[test]
+fn sessions_round_trip() {
+    let dir = scratch("session-trip");
+    let mesh = channel_case(&dir.join("case"));
+    let file = dir.join("case/view.murmel");
+    let mut s = session();
+    for (tool, input) in [
+        ("mesh.open", json!({"path": mesh})),
+        ("view.orbit", json!({"yaw_deg": 33.0, "pitch_deg": -12.5})),
+        ("view.zoom", json!({"factor": 0.7})),
+        ("display.render_mode", json!({"mode": "shaded"})),
+        (
+            "display.color_by",
+            json!({"by": "quality", "metric": "skewness"}),
+        ),
+        ("display.threshold", json!({"value": 0.2})),
+        (
+            "display.visibility",
+            json!({"action": "hide", "items": ["patch:walls"]}),
+        ),
+        (
+            "display.set_color",
+            json!({"item": "patch:outlet", "color": "#123456"}),
+        ),
+        (
+            "clip.set",
+            json!({"axis": "x", "mode": "flat", "offset": 0.01}),
+        ),
+        ("select.item", json!({"item": "patch:inlet"})),
+        ("select.item", json!({"item": "cell:7", "add": true})),
+        (
+            "settings.set_view_cube",
+            json!({"placement": "bottom_left"}),
+        ),
+        ("settings.set_colors", json!({"solid": "#336699"})),
+    ] {
+        let e = call(tool, input, &mut s);
+        // The settings tools have no config folder here (SET001) but
+        // apply to the session.
+        assert!(
+            e.ok() || e.diagnostics[0].code == "SET001",
+            "{tool}: {:?}",
+            e.diagnostics
+        );
+    }
+    let e = call("session.save", json!({"path": file}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["session"]["mesh"]["path"], "foehncraft.vtu");
+
+    let mut t = session();
+    let e = call("session.load", json!({"path": file}), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["warnings"], json!([]));
+    assert_eq!(
+        murmel_engine::Snapshot::of(&t),
+        murmel_engine::Snapshot::of(&s)
+    );
+    assert_eq!(t.display.selection, s.display.selection);
+    assert_eq!(t.display.pick, s.display.pick);
+    assert_eq!(t.view_cube, s.view_cube);
+    assert_eq!(t.colors, s.colors);
+    assert_eq!(t.tokens.mesh.solid, s.tokens.mesh.solid);
+    assert!(t.display.quality.is_some(), "quality colouring computes it");
+    assert!(t.journal.undo.is_empty());
+    let again = dir.join("again.murmel");
+    assert!(call("session.save", json!({"path": again}), &mut t).ok());
+    let a: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let mut b: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&again).unwrap()).unwrap();
+    // Saved one folder up, so only the relative path differs.
+    assert_eq!(b["mesh"]["path"], "case/foehncraft.vtu");
+    b["mesh"]["path"] = a["mesh"]["path"].clone();
+    assert_eq!(a, b);
+
+    // A session loaded over the same mesh keeps it open (no re-read)
+    // and still puts the view back.
+    assert!(call("view.orbit", json!({"yaw_deg": 90.0}), &mut t).ok());
+    let rev = t.surface_revision;
+    assert!(call("session.load", json!({"path": file}), &mut t).ok());
+    assert_eq!(t.camera, s.camera);
+    assert_eq!(t.surface_revision, rev + 1, "one redraw, no new mesh");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant: a case folder moved as a whole opens through the relative
+/// path, a session file moved on its own through the absolute one.
+/// Breaks when only one of the two paths is kept or tried; the round
+/// trip test never moves a file.
+#[test]
+fn moved_sessions_find_their_mesh() {
+    let dir = scratch("session-moved");
+    let mesh = channel_case(&dir.join("a"));
+    let mut s = session();
+    assert!(call("mesh.open", json!({"path": mesh}), &mut s).ok());
+    assert!(
+        call(
+            "session.save",
+            json!({"path": dir.join("a/s.murmel")}),
+            &mut s
+        )
+        .ok()
+    );
+    std::fs::copy(dir.join("a/s.murmel"), dir.join("alone.murmel")).unwrap();
+    std::fs::rename(dir.join("a"), dir.join("b")).unwrap();
+
+    let mut t = session();
+    let e = call(
+        "session.load",
+        json!({"path": dir.join("b/s.murmel")}),
+        &mut t,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(t.mesh.as_ref().unwrap().path, dir.join("b/foehncraft.vtu"));
+
+    // The absolute path (now gone) is the only one left: MESH001 names
+    // the session's mesh, and the session is unchanged.
+    let e = call(
+        "session.load",
+        json!({"path": dir.join("alone.murmel")}),
+        &mut t,
+    );
+    assert_eq!(e.diagnostics[0].code, "MESH001", "{:?}", e.diagnostics);
+    assert!(e.diagnostics[0].message.starts_with("the session's mesh"));
+    assert_eq!(t.mesh.as_ref().unwrap().path, dir.join("b/foehncraft.vtu"));
+    std::fs::rename(dir.join("b"), dir.join("a")).unwrap();
+    let e = call(
+        "session.load",
+        json!({"path": dir.join("alone.murmel")}),
+        &mut t,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(t.mesh.as_ref().unwrap().path, dir.join("a/foehncraft.vtu"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant: a mesh changed since the save warns SESS003, items it no
+/// longer has are skipped with SESS004 and listed, and the rest of the
+/// session still loads; a broken or foreign file fails SESS001 and an
+/// unwritable path SESS002. Breaks when a stale session loads silently,
+/// or when one unknown id fails the whole load.
+#[test]
+fn stale_and_broken_sessions() {
+    let dir = scratch("session-stale");
+    let mesh = channel_case(&dir);
+    let file = dir.join("s.murmel");
+    let mut s = session();
+    assert!(call("mesh.open", json!({"path": mesh}), &mut s).ok());
+    assert!(
+        call(
+            "display.visibility",
+            json!({"action": "hide", "items": ["patch:walls"]}),
+            &mut s
+        )
+        .ok()
+    );
+    assert!(call("session.save", json!({"path": file}), &mut s).ok());
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    v["mesh"]["sha256"] = "00".into();
+    v["display"]["hidden"] = json!(["patch:walls", "patch:gone", "cell:999999"]);
+    std::fs::write(&file, v.to_string()).unwrap();
+
+    let mut t = session();
+    let e = call("session.load", json!({"path": file}), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let codes: Vec<_> = e.result["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["code"].clone())
+        .collect();
+    assert_eq!(codes, [json!("SESS003"), json!("SESS004")]);
+    assert_eq!(e.result["skipped"], json!(["patch:gone", "cell:999999"]));
+    assert_eq!(e.result["display"]["hidden"], json!(["patch:walls"]));
+
+    let e = call("session.load", json!({"path": mesh}), &mut t);
+    assert_eq!(e.diagnostics[0].code, "SESS001");
+    let e = call(
+        "session.load",
+        json!({"path": dir.join("none.murmel")}),
+        &mut t,
+    );
+    assert_eq!(e.diagnostics[0].code, "SESS001");
+    let e = call(
+        "session.save",
+        json!({"path": dir.join("no/such/dir.murmel")}),
+        &mut t,
+    );
+    assert_eq!(e.diagnostics[0].code, "SESS002");
+    let _ = std::fs::remove_dir_all(&dir);
+}

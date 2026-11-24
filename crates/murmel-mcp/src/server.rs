@@ -130,9 +130,18 @@ pub fn listing() -> Vec<Value> {
 
 impl Server {
     /// The session's config folder is dropped: the settings tools (which
-    /// write files but name none) change the session only over MCP.
+    /// write files but name none) change the session only over MCP. Files
+    /// named inside other files (a session's mesh) are kept to the roots.
     pub fn new(mut session: Session, roots: Roots) -> Self {
         session.config_dir = None;
+        session.read_roots = Some(
+            roots
+                .read_roots()
+                .iter()
+                .chain(roots.write_roots())
+                .cloned()
+                .collect(),
+        );
         Self {
             session,
             roots,

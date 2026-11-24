@@ -264,3 +264,45 @@ fn refuses_paths_outside_the_roots() {
     assert_eq!(envelope(&r)["diagnostics"][0]["code"], "TOOL002");
     assert_eq!(c.request("ping", json!({}))["result"], json!({}));
 }
+
+/// Invariant: the mesh a session file names is kept within the read
+/// roots like a path in a tool input: a session in the write root that
+/// names a mesh outside every root is refused (MCP001) and nothing
+/// opens, one that names a fixture loads. Breaks when session.load opens
+/// the mesh inside the file unchecked, which would let a written file
+/// read past the roots; the input-path checks never see that path.
+#[test]
+fn session_files_stay_inside_the_roots() {
+    let w = scratch("session");
+    let outside = scratch("session-outside");
+    std::fs::copy(
+        root().join("test-fixtures/box/foehncraft.vtu"),
+        outside.join("box.vtu"),
+    )
+    .unwrap();
+    let mut c = Client::start(&w);
+    c.initialize();
+    let r = c.call(
+        "mesh.open",
+        json!({"path": root().join("test-fixtures/box/foehncraft.vtu")}),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let r = c.call("session.save", json!({"path": "box.murmel"}));
+    assert_eq!(r["isError"], false, "{r}");
+    let text = std::fs::read_to_string(w.join("box.murmel")).unwrap();
+    let mut v: Value = serde_json::from_str(&text).unwrap();
+    v["mesh"]["path"] = json!(outside.join("box.vtu"));
+    v["mesh"]["absolute"] = json!(outside.join("box.vtu"));
+    std::fs::write(w.join("escape.murmel"), v.to_string()).unwrap();
+
+    assert_eq!(c.call("mesh.close", json!({}))["isError"], false);
+    let r = c.call("session.load", json!({"path": "escape.murmel"}));
+    assert_eq!(envelope(&r)["diagnostics"][0]["code"], "MCP001", "{r}");
+    assert_eq!(
+        c.call("mesh.info", json!({}))["structuredContent"]["diagnostics"][0]["code"],
+        "VIEW001"
+    );
+    let r = c.call("session.load", json!({"path": "box.murmel"}));
+    assert_eq!(r["isError"], false, "{r}");
+    assert_eq!(c.call("mesh.info", json!({}))["isError"], false);
+}

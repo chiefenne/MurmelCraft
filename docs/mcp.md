@@ -68,7 +68,11 @@ after `_`) is not declared.
 
 The roots confine the paths the tools are given. Files a reader opens next to
 the mesh it is given (`mesh-evidence.json`, the files of a `polyMesh` folder)
-are found beside that mesh.
+are found beside that mesh. The mesh a session file names
+(`session.load`, [sessions.md](sessions.md)) is a path inside a file, not
+in the input, so the server hands its roots to the session
+(`Session::read_roots`) and `session.load` refuses such a mesh outside them
+with `MCP001` before it opens anything.
 
 ## Screenshots
 
