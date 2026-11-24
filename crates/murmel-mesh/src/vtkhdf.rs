@@ -1019,6 +1019,10 @@ impl Builder {
         let Some(polys) = h.child(g, "Polygons")? else {
             return Ok(());
         };
+        // a file without volume cells starts its boundary here
+        if self.mesh.boundary.start.is_empty() {
+            self.mesh.boundary = Polygons::new();
+        }
         let nc = ints(h, &polys, "NumberOfCells")?;
         let ncon = ints(h, &polys, "NumberOfConnectivityIds")?;
         let offsets = ints(h, &polys, "Offsets")?;
@@ -1045,13 +1049,16 @@ impl Builder {
             }
             self.lookup = Some(m);
         }
-        let empty = HashMap::new();
-        let lookup = self.lookup.as_ref().unwrap_or(&empty);
+        let looked_up = ids.len() < total;
+        let mut lookup = self.lookup.take().unwrap_or_default();
         for q in xyz.as_chunks::<3>().0.iter().skip(ids.len()) {
             match lookup.get(&q.map(f64::to_bits)) {
                 Some(&i) => ids.push(i),
                 None if self.mesh.cell_count() == 0 => {
-                    ids.push(self.mesh.points.len() as u32);
+                    // a point of the patches before is found again
+                    let i = self.mesh.points.len() as u32;
+                    lookup.insert(q.map(f64::to_bits), i);
+                    ids.push(i);
                     self.mesh.points.push(*q);
                 }
                 None => {
@@ -1061,6 +1068,9 @@ impl Builder {
                     )));
                 }
             }
+        }
+        if looked_up {
+            self.lookup = Some(lookup);
         }
         let (mut pb, mut ob, mut kb) = (0usize, 0usize, 0usize);
         for part in 0..nc.len().min(np.len()).min(ncon.len()) {
@@ -1348,6 +1358,80 @@ mod tests {
         let half = Values::new(std::borrow::Cow::Owned(vec![0; 12]), &half).unwrap();
         assert!(gather(&half, 1, Some(&[0, 3])).is_empty());
         assert!(gather(&half, 1, None).is_empty());
+    }
+
+    /// Invariant: a VTKHDF file of patches only (PolyData blocks, no
+    /// volume) reads every polygon of every patch, the first one too, with
+    /// one patch number per face and the points the patches share once.
+    /// Breaks when the boundary starts without its first offset (the first
+    /// polygon is lost and the patch numbers no longer match the faces),
+    /// which only a file without volume cells meets: the volume reader
+    /// starts the boundary. No fixture is a surface only.
+    #[test]
+    fn a_file_of_patches_only_reads_every_polygon() {
+        use crate::h5write::{AttrValue, H5Writer, Link};
+        let path =
+            std::env::temp_dir().join(format!("murmel-surface-{}.vtkhdf", std::process::id()));
+        let mut w = H5Writer::create(&path).unwrap();
+        let patch = |w: &mut H5Writer, index: i64, x: f64| {
+            let xyz = [0.0, 0.0, 0.0, x, 0.0, 0.0, x, 1.0, 0.0, 0.0, 1.0, 0.0];
+            let cells = w.dataset(&[1], &[2i64]).unwrap();
+            let ids = w.dataset(&[1], &[6i64]).unwrap();
+            let offsets = w.dataset(&[3], &[0i64, 3, 6]).unwrap();
+            let conn = w.dataset(&[6], &[0i64, 1, 2, 0, 2, 3]).unwrap();
+            let polygons = w
+                .group(
+                    &[
+                        Link::Hard("NumberOfCells".into(), cells),
+                        Link::Hard("NumberOfConnectivityIds".into(), ids),
+                        Link::Hard("Offsets".into(), offsets),
+                        Link::Hard("Connectivity".into(), conn),
+                    ],
+                    &[],
+                )
+                .unwrap();
+            let np = w.dataset(&[1], &[4i64]).unwrap();
+            let points = w.dataset(&[4, 3], &xyz).unwrap();
+            let links = [
+                Link::Hard("NumberOfPoints".into(), np),
+                Link::Hard("Points".into(), points),
+                Link::Hard("Polygons".into(), polygons),
+            ];
+            w.group(
+                &links,
+                &[
+                    ("Index", AttrValue::Int(index)),
+                    ("Type", AttrValue::Text("PolyData".into())),
+                    ("Version", AttrValue::Ints(vec![2, 4])),
+                ],
+            )
+            .unwrap()
+        };
+        let (a, b) = (patch(&mut w, 0, 1.0), patch(&mut w, 1, -1.0));
+        let vtk = w
+            .group(
+                &[Link::Hard("left".into(), a), Link::Hard("right".into(), b)],
+                &[
+                    (
+                        "Type",
+                        AttrValue::Text("PartitionedDataSetCollection".into()),
+                    ),
+                    ("Version", AttrValue::Ints(vec![2, 4])),
+                ],
+            )
+            .unwrap();
+        let root = w.group(&[Link::Hard("VTKHDF".into(), vtk)], &[]).unwrap();
+        w.finish(root).unwrap();
+        let (m, _) = read_vtkhdf(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(m.cell_count(), 0);
+        assert_eq!(m.boundary.len(), 4);
+        assert_eq!(m.boundary_patch, [0, 0, 1, 1]);
+        assert_eq!(m.boundary.get(0), [0, 1, 2]);
+        assert_eq!(m.patches.len(), 2);
+        // (0, 0, 0) and (0, 1, 0) are in both patches
+        assert_eq!(m.points.len(), 6);
+        assert_eq!(m.boundary.get(2), [0, 4, 5]);
     }
 
     /// Invariant: a file that is not HDF5 is refused with MESH018, not
