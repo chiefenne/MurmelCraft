@@ -3,6 +3,7 @@
 //! keys (`prop-<key>` in the translations); values are JSON numbers,
 //! strings or arrays; units name the SI unit of a number.
 
+use murmel_mesh::field::Location;
 use murmel_mesh::{Bounds, Mesh, NO_CELL};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -751,7 +752,7 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             if let Some(name) = &p.name {
                 v.push(row("name", name.clone()));
             }
-            v.extend(probe_rows(m, &p.at));
+            v.extend(probe_rows(m, display, &p.at));
             v.push(row("hidden", !p.visible));
             v
         }
@@ -809,15 +810,44 @@ fn measure_rows(ms: &Measurement) -> Vec<Row> {
 /// cell holding it (type, zone, centroid and the distance to it, volume,
 /// worst non-orthogonality and skewness); only the point outside the
 /// mesh.
-pub fn probe_rows(m: &Mesh, at: &Anchor) -> Vec<Row> {
+pub fn probe_rows(m: &Mesh, display: &Display, at: &Anchor) -> Vec<Row> {
     let mut v = vec![
         unit("point", vec3(at.point, 9), "m"),
         row("snap", at.snap.key()),
     ];
-    let Some(c) = at.cell.map(|c| c as usize).filter(|&c| c < m.cell_count()) else {
-        v.push(row("inside", false));
+    if let Some(c) = at.cell.map(|c| c as usize).filter(|&c| c < m.cell_count()) {
+        v.push(row("inside", true));
+        v.push(row("cell", format!("cell:{c}")));
+        v.extend(probe_cell_rows(m, at.point, c));
         return v;
-    };
+    }
+    // On an overview: the block of the file holding it.
+    match display.probe_found(at) {
+        Some(f) => {
+            if let Some(c) = &f.cell {
+                v.push(row("inside", true));
+                v.extend(c.rows.iter().cloned());
+            } else {
+                v.push(row("inside", false));
+            }
+            if let Some(e) = &f.problem {
+                v.push(row("problem", format!("{}: {}", e.code, e.message)));
+            }
+        }
+        None if display.probe_findings.is_some() => v.push(row("reading", true)),
+        None => v.push(row("inside", false)),
+    }
+    v
+}
+
+/// A row of `key` (for rows made outside this module).
+pub(crate) fn row_of(key: &'static str, value: impl Into<Value>) -> Row {
+    row(key, value)
+}
+
+/// What the Properties panel shows of cell `c` of `m` holding probe
+/// point `point`, from its type on.
+pub(crate) fn probe_cell_rows(m: &Mesh, point: [f64; 3], c: usize) -> Vec<Row> {
     let centroid = cell_centroid(m, c);
     let (no, skew) = cell_quality(m, c);
     let zone = m
@@ -826,9 +856,7 @@ pub fn probe_rows(m: &Mesh, at: &Anchor) -> Vec<Row> {
         .and_then(|&z| m.zones.get(z as usize))
         .cloned()
         .unwrap_or_default();
-    v.extend([
-        row("inside", true),
-        row("cell", format!("cell:{c}")),
+    vec![
         row(
             "type",
             m.cell_kind.get(c).map_or("polyhedron", |k| k.name()),
@@ -837,14 +865,13 @@ pub fn probe_rows(m: &Mesh, at: &Anchor) -> Vec<Row> {
         unit("centroid", vec3(centroid, 9), "m"),
         unit(
             "distance_to_centroid",
-            round(norm(sub(at.point, centroid)), 9),
+            round(norm(sub(point, centroid)), 9),
             "m",
         ),
         unit("volume", cell_volume(m, c), "m³"),
         unit("non_orthogonality_max", round(no, 2), "°"),
         row("skewness_max", round(skew, 4)),
-    ]);
-    v
+    ]
 }
 
 /// The field values of `item` (UI spec to come, Properties: "Fields"):
@@ -877,11 +904,32 @@ pub fn field_values(
         }
         Item::Probe(n) => display
             .probe(n)
-            .and_then(|p| Some((p.at.cell?, &p.at)))
-            .map(|(c, at)| f.probe_values(m, c as usize, at.point, at.face))
+            .map(|p| probe_values(open, display, &p.at))
             .unwrap_or_default(),
         _ => Vec::new(),
     }
+}
+
+/// The field values a probe at `at` reads
+/// ([`crate::field::FieldSet::probe_values`]): in its cell of the mesh
+/// shown, else, on an overview, in the cell of the block of the file
+/// holding its point ([`crate::probe_blocks`]); none outside the mesh or
+/// while its block is read.
+pub fn probe_values(
+    open: &OpenMesh,
+    display: &Display,
+    at: &Anchor,
+) -> Vec<crate::field::FieldValue> {
+    if let Some(c) = at.cell {
+        return open
+            .fields
+            .probe_values(&open.mesh, c as usize, at.point, at.face);
+    }
+    display
+        .probe_found(at)
+        .and_then(|f| f.cell.as_ref())
+        .map(|c| crate::probe_blocks::values(open, c, at))
+        .unwrap_or_default()
 }
 
 /// The worst non-orthogonality (degrees) and skewness over the faces of
@@ -1121,11 +1169,28 @@ pub fn probe_shown(
         return None;
     }
     let choice = display.field.as_ref()?;
-    let cell = p.at.cell? as usize;
+    let Some(cell) = p.at.cell else {
+        // On an overview: the value read in the block holding it.
+        let found = display.probe_found(&p.at)?.cell.as_ref()?;
+        let v = found
+            .values
+            .iter()
+            .find(|v| v.name == choice.name && v.location != Location::Boundary)?;
+        let value = crate::field::pick_component(&v.value, choice.component);
+        return value.is_finite().then(|| ShownValue {
+            title: choice.title(v.value.len() > 1),
+            unit: v.unit.clone(),
+            value,
+        });
+    };
     let f = open.fields.get(&choice.name)?;
-    let value =
-        open.fields
-            .probe_value(&open.mesh, &choice.name, choice.component, cell, p.at.point)?;
+    let value = open.fields.probe_value(
+        &open.mesh,
+        &choice.name,
+        choice.component,
+        cell as usize,
+        p.at.point,
+    )?;
     Some(ShownValue {
         title: choice.title(f.is_vector()),
         unit: f.unit.clone(),

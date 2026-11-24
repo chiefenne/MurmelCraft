@@ -33,6 +33,7 @@ pub mod parcel;
 pub mod pick;
 pub mod preview;
 pub mod preview_cache;
+pub mod probe_blocks;
 pub mod quality;
 pub mod region;
 pub mod series;

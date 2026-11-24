@@ -1458,6 +1458,7 @@ impl eframe::App for MurmelApp {
         self.poll_opening(&ctx);
         self.poll_blocks(&ctx);
         self.poll_preview(&ctx);
+        self.poll_probes(&ctx);
         self.poll_digest(&ctx);
         self.poll_surface(&ctx);
         self.movie_window(&ctx);

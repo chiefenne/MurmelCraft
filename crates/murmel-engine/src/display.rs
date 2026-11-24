@@ -388,6 +388,11 @@ pub struct Display {
     /// regions read ([`crate::block_boxes`], `Session::redraw`); `None`
     /// unless the open mesh is an overview.
     pub block_boxes: Option<Arc<crate::block_boxes::BlockBoxes>>,
+    /// Where the probes the cells shown do not hold were found in the
+    /// blocks of the open overview's file ([`crate::probe_blocks`],
+    /// `Session::sync_probes`); `None` unless the open mesh is an
+    /// overview.
+    pub probe_findings: Option<Arc<crate::probe_blocks::Findings>>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -1021,6 +1026,16 @@ impl Display {
     /// Whether the boxes of an overview's blocks are drawn.
     pub fn blocks_shown(&self) -> bool {
         self.show_blocks && self.block_boxes.is_some()
+    }
+
+    /// Where a probe at `at` outside the cells shown was found in the
+    /// blocks of the open overview's file; `None` inside them, on another
+    /// mesh, or while its blocks are read.
+    pub fn probe_found(&self, at: &crate::measure::Anchor) -> Option<&crate::probe_blocks::Found> {
+        if at.cell.is_some() {
+            return None;
+        }
+        self.probe_findings.as_ref()?.get(at.point)
     }
 
     /// Whether spray parcels are drawn.

@@ -3488,3 +3488,106 @@ fn block_boxes_through_the_tools() {
     assert!(!e.ok());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The probe fields of a tool's result, by name, and whether two of them
+/// agree up to rounding.
+fn probe_fields_agree(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    let list = |v: &serde_json::Value| -> Vec<(String, Vec<f64>)> {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|f| {
+                        let vals = f["value"]
+                            .as_array()
+                            .map(|x| x.iter().filter_map(serde_json::Value::as_f64).collect())
+                            .unwrap_or_default();
+                        (f["name"].as_str().unwrap_or_default().to_string(), vals)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let (a, b) = (list(a), list(b));
+    !a.is_empty()
+        && a.len() == b.len()
+        && a.iter().zip(&b).all(|((n, x), (m, y))| {
+            n == m
+                && x.len() == y.len()
+                && x.iter()
+                    .zip(y)
+                    .all(|(p, q)| (p - q).abs() <= 1e-9 * (1.0 + p.abs().max(q.abs())))
+        })
+}
+
+/// Invariant: through the tools, a probe on an overview (probe.add,
+/// probe.at, measure.list, inspect) gives the fields the whole mesh gives
+/// at its point, says the cell's number in the file and its block, and
+/// probe.at leaves the view as it was. Breaks when a tool reads the
+/// overview's cells (none: no fields), when probe.add answers before the
+/// block holding the probe is read, or when probe.at leaves a probe or a
+/// finding behind. The engine test reads the values but never through
+/// the tools.
+#[test]
+fn probes_on_an_overview_through_the_tools() {
+    let dir = std::env::temp_dir().join(format!("murmel-probe-tool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let b = mesh.bounds();
+    let point: Vec<f64> = (0..3)
+        .map(|k| b.min[k] + [0.37, 0.41, 0.53][k] * (b.max[k] - b.min[k]))
+        .collect();
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = None;
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    let whole = call("probe.at", json!({"at": {"point": point}}), &mut s);
+    assert!(whole.ok(), "{:?}", whole.diagnostics);
+    let cell = whole.result["at"]["cell"].as_u64().unwrap();
+
+    let open = json!({"path": path, "mode": "overview"});
+    assert!(call("mesh.open", open, &mut s).ok());
+    let before = s.display.clone();
+    let at = call("probe.at", json!({"at": {"point": point}}), &mut s);
+    assert!(at.ok(), "{:?}", at.diagnostics);
+    assert!(
+        at.result["at"]["cell"].is_null(),
+        "the overview has no cells"
+    );
+    assert!(
+        probe_fields_agree(&at.result["fields"], &whole.result["fields"]),
+        "{} vs {}",
+        at.result["fields"],
+        whole.result["fields"]
+    );
+    let row = |r: &serde_json::Value, key: &str| {
+        r["rows"]
+            .as_array()
+            .and_then(|a| a.iter().find(|x| x["key"] == key))
+            .map(|x| x["value"].clone())
+    };
+    assert_eq!(row(&at.result, "file_cell"), Some(json!(cell)));
+    assert!(row(&at.result, "block").is_some());
+    assert_eq!(row(&at.result, "inside"), Some(json!(true)));
+    assert_eq!(s.display, before, "probe.at leaves the view as it was");
+
+    let add = call("probe.add", json!({"at": {"point": point}}), &mut s);
+    assert!(add.ok(), "{:?}", add.diagnostics);
+    assert!(probe_fields_agree(
+        &add.result["fields"],
+        &whole.result["fields"]
+    ));
+    assert_eq!(row(&add.result, "file_cell"), Some(json!(cell)));
+    let list = call("measure.list", json!({}), &mut s);
+    let p = &list.result["probes"][0];
+    assert!(probe_fields_agree(&p["fields"], &whole.result["fields"]));
+    let inspect = call("inspect.item", json!({"item": "probe:1"}), &mut s);
+    assert!(inspect.ok(), "{:?}", inspect.diagnostics);
+    assert!(probe_fields_agree(
+        &inspect.result["fields"],
+        &whole.result["fields"]
+    ));
+    s.close();
+    std::fs::remove_dir_all(&dir).unwrap();
+}

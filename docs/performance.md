@@ -1224,3 +1224,34 @@ times and file id, as for the files checked).
   to its folders, does not.
 - On 100 M cells the saving is the whole sampling: the kept grid reads in
   the same half second.
+
+## Probes on an overview (2026-11-24)
+
+An overview shows no volume cells, so a probe there (or outside the
+blocks a region read) reads the block of the file that holds its point
+(the engine's `probe_blocks.rs`, card 8: a block cache for probes). The
+blocks whose boxes hold the point are read with their halo, the deepest
+inside first, until one of their owned cells holds it. On the honeycombs
+a point lies in one to four boxes (median two, mean 1.7 to 1.8, for 120
+cells sampled in 16 and 62 blocks), so a probe reads one or two blocks.
+
+| eight probes at random points, 4 threads | first read of its block | its block kept |
+|---|---:|---:|
+| 1 M cells, 16 blocks of 65,536 | 0.21 to 0.37 s | 0.01 to 0.04 s |
+| 4 M cells, 62 blocks of 65,536 | 0.26 to 0.48 s | 0.02 s |
+
+- The last four blocks read stay (fewer when they would take more than
+  a quarter of the memory budget), and each probe's finding stays with
+  its point, so drawing again reads nothing; moving a probe, or making a
+  field, finds it again.
+- The values are the whole mesh's: the halo holds every cell sharing a
+  node with an owned cell, so the cell's value and gradient read the
+  same cells. Derived and calculated fields are made again on the block;
+  next to the halo their gradient can differ a little, as on the blocks
+  a region reads.
+- A probe in a halo cell of a region's blocks now reads the block owning
+  it rather than the halo cell, whose neighbours are partly missing.
+- In the window each probe's blocks are read on a thread of their own;
+  its label says "reading its block" meanwhile.
+- A block is 65,536 cells whatever the file, so on 100 M cells a probe
+  reads in the same quarter to half second.

@@ -1731,6 +1731,71 @@ fn slices_on_an_overview_in_the_window() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Invariant (the maintainer's card 8 of 2026-11-24, a block cache for
+/// probes): on an overview a probe reads the block of the file holding
+/// it on a thread of its own, the window polling it, and its tree row
+/// then gives the field colouring the mesh at the probe. Breaks when the
+/// window never polls the read (the row stays "…" or "–"), or when the
+/// call waits for it. The engine and tool tests read at once.
+#[test]
+fn probes_on_an_overview_in_the_window() {
+    let dir = std::env::temp_dir().join(format!("murmel-probe-win-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let (open, config) = (path.clone(), dir.clone());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .build_eframe(move |cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = Some(config);
+            app.bridge_path = None;
+            app.session.memory_budget = Some(1e-9);
+            app.session.cache_dir = None;
+            app.open_path(open);
+            app
+        });
+    h.run_steps(3);
+    opened(&mut h);
+    assert!(h.state().session.mesh.as_ref().unwrap().overview.is_some());
+    // (opened as an overview; the probe's block fits the budget)
+    h.state_mut().session.memory_budget = None;
+    h.state_mut().call(
+        "display.color_by",
+        serde_json::json!({"by": "field", "field": "pressure"}),
+    );
+    let b = mesh.bounds();
+    let at: [f64; 3] = std::array::from_fn(|k| b.min[k] + 0.4 * (b.max[k] - b.min[k]));
+    assert!(
+        h.state_mut()
+            .call("probe.add", serde_json::json!({"at": {"point": at}}))
+            .is_some()
+    );
+    assert!(
+        h.state().session.probe_blocks.job.is_some(),
+        "read on a thread of its own"
+    );
+    let start = std::time::Instant::now();
+    while h.state().session.probe_blocks.job.is_some() {
+        assert!(start.elapsed().as_secs() < 60, "the read never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    let row = h.root().children_recursive().find_map(|n| {
+        n.accesskit_node()
+            .label()
+            .filter(|l| l.starts_with("Probe 1: "))
+    });
+    let row = row.expect("the probe's row");
+    assert!(row.starts_with("Probe 1: pressure "), "{row}");
+    assert_eq!(problems(&h), Vec::<String>::new(), "probe on an overview");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Invariant: on an overview the model tree has a "Block boxes" row
 /// whose eye shows and hides the boxes of its blocks, named with how
 /// many blocks there are and, once a region is drawn, how many it reads;

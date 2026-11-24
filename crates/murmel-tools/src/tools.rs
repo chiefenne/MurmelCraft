@@ -1701,7 +1701,7 @@ fn anchor(s: &Session, i: AnchorInput, locate: bool) -> Result<Anchor, Diagnosti
         a.face = a.face.filter(|&u| !mesh.face_nodes(u as usize).is_empty());
         a.cell = a.cell.filter(|&c| (c as usize) < cells);
         if locate && a.cell.is_none() {
-            a.cell = measure::locate(mesh, a.point);
+            a.cell = m.locate(a.point);
         }
         return Ok(a);
     }
@@ -1711,7 +1711,7 @@ fn anchor(s: &Session, i: AnchorInput, locate: bool) -> Result<Anchor, Diagnosti
         }
         let mut a = Anchor::typed(p);
         if locate {
-            a.cell = measure::locate(mesh, p);
+            a.cell = m.locate(p);
         }
         return Ok(a);
     }
@@ -1751,20 +1751,19 @@ fn probe_json(s: &Session, p: &Probe) -> Value {
         "name": p.name,
         "at": p.at,
         "visible": p.visible,
-        "rows": s.mesh.as_ref().map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &p.at)),
+        "rows": s.mesh.as_ref().map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &s.display, &p.at)),
         "fields": probe_fields(s, &p.at),
         "shown": s.mesh.as_ref().and_then(|m| murmel_engine::inspect::probe_shown(m, &s.display, p)),
     })
 }
 
-/// The field values at an anchor inside a cell (none outside the mesh).
+/// The field values at an anchor inside a cell, or on an overview inside
+/// a block read for it (none outside the mesh).
 fn probe_fields(s: &Session, at: &Anchor) -> Vec<field::FieldValue> {
-    match (&s.mesh, at.cell) {
-        (Some(m), Some(c)) => m
-            .fields
-            .probe_values(&m.mesh, c as usize, at.point, at.face),
-        _ => Vec::new(),
-    }
+    s.mesh
+        .as_ref()
+        .map(|m| murmel_engine::inspect::probe_values(m, &s.display, at))
+        .unwrap_or_default()
 }
 
 fn measures_json(s: &Session) -> Value {
@@ -1872,9 +1871,10 @@ fn probe_add(input: Value, s: &mut Session) -> Run {
         at: anchor(s, i.at, true)?,
         visible: true,
     };
-    let out = probe_json(s, &p);
-    s.display.probes.push(p);
-    Ok(out)
+    s.display.probes.push(p.clone());
+    // On an overview: the block holding it is read now.
+    s.sync_probes();
+    Ok(probe_json(s, &p))
 }
 
 #[derive(Deserialize)]
@@ -1887,11 +1887,25 @@ fn probe_at(input: Value, s: &mut Session) -> Run {
     let i: ProbeAt = parse(input)?;
     need_mesh(s)?;
     let at = anchor(s, i.at, true)?;
+    // On an overview, a point outside the cells shown reads the block
+    // holding it, as a probe there would; the view stays as it is.
+    let (probes, findings) = (s.display.probes.clone(), s.display.probe_findings.clone());
+    if at.cell.is_none() && s.display.probe_found(&at).is_none() {
+        s.display.probes.push(Probe {
+            n: u32::MAX,
+            name: None,
+            at: at.clone(),
+            visible: false,
+        });
+        s.sync_probes();
+        s.display.probes.clone_from(&probes);
+    }
     let rows = s
         .mesh
         .as_ref()
-        .map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &at));
+        .map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &s.display, &at));
     let fields = probe_fields(s, &at);
+    s.display.probe_findings = findings;
     Ok(json!({"at": at, "rows": rows, "fields": fields}))
 }
 
@@ -3741,7 +3755,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-probe-add",
-        summary: "Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (derived and calculated fields too: a cell field's value is the cell's own plus its least-squares gradient times the way from the centroid, as a finite-volume solver reconstructs it; a node field's the cell's linear fit to its nodes; on a boundary face also the boundary fields there) and shown, the value of the field colouring the mesh (title, unit, value). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it.",
+        summary: "Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (derived and calculated fields too: a cell field's value is the cell's own plus its least-squares gradient times the way from the centroid, as a finite-volume solver reconstructs it; a node field's the cell's linear fit to its nodes; on a boundary face also the boundary fields there) and shown, the value of the field colouring the mesh (title, unit, value). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). On an overview, a probe outside the cells shown reads the block of the file holding its point (with its halo, so the values are the whole mesh's; rows block and file_cell say where), and keeps it for the next probes. Kept in session files; undo removes it.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -3760,7 +3774,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-probe-at",
-        summary: "What a probe at a point would read, without keeping it: the point given as for measure.add, the cell holding it and that cell's values. Changes nothing.",
+        summary: "What a probe at a point would read, without keeping it: the point given as for measure.add, the cell holding it and that cell's values (on an overview, read in the block of the file holding it, as probe.add does). Changes nothing.",
         outputs: &[],
         reads: &[],
         input_schema: || object(json!({"at": anchor_schema()}), &["at"]),
