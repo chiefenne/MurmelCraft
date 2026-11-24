@@ -11,6 +11,7 @@ pub mod colormap;
 pub mod cube;
 pub mod display;
 pub mod extract;
+mod fasthash;
 pub mod field;
 pub mod glyph;
 pub mod i18n;

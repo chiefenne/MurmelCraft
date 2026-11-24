@@ -272,8 +272,13 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
     st.time("open.digest", 1, || session.wait_digest());
 
     let d0 = Display::default();
-    let s = st.time("surface", r, || Surface::build(&mesh, &tokens, &d0));
-    st.note(surface_note(&s));
+    let s = st.time("surface", r, || {
+        murmel_mesh::profile::record(true);
+        Surface::build(&mesh, &tokens, &d0)
+    });
+    let mut note = surface_note(&s);
+    note["phases"] = phases();
+    st.note(note);
     let b = mesh.bounds();
     let clip = |mode| Display {
         clips: vec![Clip {

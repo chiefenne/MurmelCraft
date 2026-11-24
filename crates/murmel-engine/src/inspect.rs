@@ -59,31 +59,56 @@ fn norm(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
 
+/// `f` on each edge of a polygon given by its point ids in order, the
+/// closing edge last, without collecting the points (millions of faces
+/// go through here when the quality is computed).
+fn for_edges(mesh: &Mesh, face: impl Iterator<Item = u32>, mut f: impl FnMut([f64; 3], [f64; 3])) {
+    let (mut first, mut prev) = (None, None);
+    for i in face {
+        let b = mesh.points[i as usize];
+        match prev {
+            Some(a) => f(a, b),
+            None => first = Some(b),
+        }
+        prev = Some(b);
+    }
+    if let (Some(a), Some(b)) = (prev, first) {
+        f(a, b);
+    }
+}
+
 /// Twice the vector area of a polygon (Newell), about its node average.
 fn area_vector(mesh: &Mesh, face: &[u32]) -> [f64; 3] {
-    let p: Vec<[f64; 3]> = face.iter().map(|&i| mesh.points[i as usize]).collect();
     let mut n = [0.0; 3];
-    for i in 0..p.len() {
-        let c = cross(p[i], p[(i + 1) % p.len()]);
+    for_edges(mesh, face.iter().copied(), |a, b| {
+        let c = cross(a, b);
         for k in 0..3 {
             n[k] += c[k];
         }
-    }
+    });
     n
 }
 
 /// Six times the signed volume a polygon spans with the origin `o`,
 /// as a fan about its node average (divergence theorem).
-fn signed_volume6(mesh: &Mesh, face: impl IntoIterator<Item = u32>, o: [f64; 3]) -> f64 {
-    let p: Vec<[f64; 3]> = face
-        .into_iter()
-        .map(|i| sub(mesh.points[i as usize], o))
-        .collect();
-    let k = p.len() as f64;
-    let c = [0, 1, 2].map(|d| p.iter().map(|q| q[d]).sum::<f64>() / k);
-    (0..p.len())
-        .map(|i| dot(c, cross(p[i], p[(i + 1) % p.len()])))
-        .sum()
+fn signed_volume6<I>(mesh: &Mesh, face: I, o: [f64; 3]) -> f64
+where
+    I: IntoIterator<Item = u32>,
+    I::IntoIter: Clone,
+{
+    let face = face.into_iter();
+    let (mut c, mut k) = ([0.0; 3], 0usize);
+    for i in face.clone() {
+        let q = sub(mesh.points[i as usize], o);
+        for d in 0..3 {
+            c[d] += q[d];
+        }
+        k += 1;
+    }
+    let c = c.map(|v| v / k as f64);
+    let mut v = 0.0;
+    for_edges(mesh, face, |a, b| v += dot(c, cross(sub(a, o), sub(b, o))));
+    v
 }
 
 /// The volume of cell `c` (faces of a VTK polyhedron point outwards; the
@@ -176,21 +201,28 @@ pub fn face_centre_area(mesh: &Mesh, face: &[u32]) -> ([f64; 3], [f64; 3]) {
 
 /// [`face_centre_area`] of a face given by its points in order (a cell's
 /// face in the cell's own turn: [`murmel_mesh::CellFace::oriented`]).
-pub fn face_centre_area_of(
-    mesh: &Mesh,
-    face: impl IntoIterator<Item = u32>,
-) -> ([f64; 3], [f64; 3]) {
-    let p: Vec<[f64; 3]> = face.into_iter().map(|i| mesh.points[i as usize]).collect();
-    if p.is_empty() {
+pub fn face_centre_area_of<I>(mesh: &Mesh, face: I) -> ([f64; 3], [f64; 3])
+where
+    I: IntoIterator<Item = u32>,
+    I::IntoIter: Clone,
+{
+    let face = face.into_iter();
+    let (mut m, mut k) = ([0.0; 3], 0usize);
+    for i in face.clone() {
+        let q = mesh.points[i as usize];
+        for d in 0..3 {
+            m[d] += q[d];
+        }
+        k += 1;
+    }
+    if k == 0 {
         return ([0.0; 3], [0.0; 3]);
     }
-    let k = p.len() as f64;
-    let m = [0, 1, 2].map(|d| p.iter().map(|q| q[d]).sum::<f64>() / k);
+    let m = m.map(|v| v / k as f64);
     let mut s = [0.0; 3];
     let mut c = [0.0; 3];
     let mut total = 0.0;
-    for i in 0..p.len() {
-        let (a, b) = (p[i], p[(i + 1) % p.len()]);
+    for_edges(mesh, face, |a, b| {
         let n = cross(sub(a, m), sub(b, m));
         let w = norm(n);
         for d in 0..3 {
@@ -198,7 +230,7 @@ pub fn face_centre_area_of(
             c[d] += w * (m[d] + a[d] + b[d]) / 3.0;
         }
         total += w;
-    }
+    });
     let centre = if total > 0.0 { c.map(|v| v / total) } else { m };
     (centre, s)
 }
@@ -206,17 +238,25 @@ pub fn face_centre_area_of(
 /// The centroid of cell `c`: the volume-weighted centroids of the
 /// pyramids its faces span with the average of the face centres.
 pub fn cell_centroid(mesh: &Mesh, c: usize) -> [f64; 3] {
-    let faces: Vec<([f64; 3], [f64; 3])> = mesh
-        .cell(c)
-        .map(|f| face_centre_area(mesh, f.nodes))
-        .collect();
+    cell_centroid_in(mesh, c, &mut Vec::new())
+}
+
+/// [`cell_centroid`] with the face centres and areas kept in `faces`, so
+/// a loop over every cell allocates once.
+pub(crate) fn cell_centroid_in(
+    mesh: &Mesh,
+    c: usize,
+    faces: &mut Vec<([f64; 3], [f64; 3])>,
+) -> [f64; 3] {
+    faces.clear();
+    faces.extend(mesh.cell(c).map(|f| face_centre_area(mesh, f.nodes)));
     if faces.is_empty() {
         return [0.0; 3];
     }
     let k = faces.len() as f64;
     let apex = [0, 1, 2].map(|d| faces.iter().map(|f| f.0[d]).sum::<f64>() / k);
     let (mut vol, mut acc) = (0.0, [0.0; 3]);
-    for (fc, s) in &faces {
+    for (fc, s) in faces.iter() {
         let v = dot(*s, sub(*fc, apex)).abs() / 3.0;
         vol += v;
         for d in 0..3 {
