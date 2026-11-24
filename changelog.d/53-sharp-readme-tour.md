@@ -1,0 +1,1 @@
+- README slideshow recipe renders frames at twice the shown width (1760 x 1100, WebP q82) and keeps lossless PNG stills, so text stays sharp on Retina screens.
