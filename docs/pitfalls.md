@@ -203,6 +203,13 @@ problem took more than a few minutes to understand.
   viewport's render key holds the edges, so a frame at rest draws them
   again; a window test that looks at a frame while the camera moves on a
   slow machine may see none. Offscreen pictures always draw them.
+- **The surface's buffers are filled on all threads** (`Fill::chunk`,
+  `Lines::draw` in `surface.rs`). Each run of polygons writes at the
+  place the counts before it give, so a change to how a polygon is
+  triangulated changes the counts (`vstart`, `istart`) with it, or the
+  runs overlap. The edges keep the first polygon's colour in draw order
+  however many threads there are; `threads_give_the_same_surface`
+  checks both.
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,
