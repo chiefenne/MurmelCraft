@@ -1,0 +1,1 @@
+- Field colours default to Rainbow Desaturated (ParaView's eight control points), the colour map now shared by MurmelCraft, FoehnCraft and KoflCraft; Inferno is second in the list and cool-to-warm stays for ranges symmetric about zero. Fields saved with the automatic map open in the new default; a map chosen by name stays as it was.

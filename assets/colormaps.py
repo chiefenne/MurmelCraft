@@ -1,9 +1,16 @@
 """Write assets/colormaps.toml, the colour maps of field colouring.
 
-Each map is a list of sRGB colours at even steps from the low end (0) to
-the high end (1); the viewer mixes neighbouring stops in sRGB, as the
-sources of the data do. Sources and licences (assets/PROVENANCE.md):
+Each map is a list of sRGB colours from the low end (0) to the high end
+(1), at even steps unless the map gives their positions (`at`); the
+viewer mixes neighbouring stops in sRGB, as the sources of the data do.
+Sources and licences (assets/PROVENANCE.md):
 
+- rainbow_desaturated (the default, maintainer's decision 2026-11-24,
+  shared with FoehnCraft and KoflCraft): the eight RGB control points of
+  ParaView's "Rainbow Desaturated" preset (Remoting/Views/ColorMaps.json,
+  colour space RGB), Copyright (c) 2000 Kitware Inc., BSD 3-Clause
+  (Rainbow-Desaturated-LICENSE.txt). The points are written as they are,
+  with their positions; nothing is sampled.
 - viridis, magma, inferno, plasma: the data of Nathaniel J. Smith,
   Stefan van der Walt and Eric Firing (github.com/BIDS/colormap), CC0 1.0,
   sampled from the 256-entry tables that matplotlib ships.
@@ -115,6 +122,21 @@ def cool_warm():
     return [diverging(lo, hi, t) for t in np.linspace(0, 1, STOPS)]
 
 
+# ParaView's "Rainbow Desaturated": (position, colour), interpolated in
+# RGB. Every value of the source is a whole number of 255ths, so the
+# colours below are exact.
+RAINBOW_DESATURATED = [
+    (0.0, "#4747DB"),
+    (0.143, "#00005C"),
+    (0.285, "#00FFFF"),
+    (0.429, "#008000"),
+    (0.571, "#FFFF00"),
+    (0.714, "#FF6100"),
+    (0.857, "#6B0000"),
+    (1.0, "#E04D4D"),
+]
+
+
 def rainbow():
     c = lambda v: min(max(v, 0.0), 1.0)
     return [(c(1.5 - abs(4 * t - 3)), c(1.5 - abs(4 * t - 2)), c(1.5 - abs(4 * t - 1)))
@@ -122,11 +144,12 @@ def rainbow():
 
 
 MAPS = [
-    ("viridis", "sequential", lambda: sampled("viridis")),
+    ("rainbow_desaturated", "rainbow", RAINBOW_DESATURATED),
+    ("inferno", "sequential", lambda: sampled("inferno")),
     ("cool_warm", "diverging", cool_warm),
+    ("viridis", "sequential", lambda: sampled("viridis")),
     ("plasma", "sequential", lambda: sampled("plasma")),
     ("magma", "sequential", lambda: sampled("magma")),
-    ("inferno", "sequential", lambda: sampled("inferno")),
     ("turbo", "rainbow", lambda: sampled("turbo")),
     ("rainbow", "rainbow", rainbow),
     ("grey", "sequential", lambda: [(t, t, t) for t in np.linspace(0, 1, STOPS)]),
@@ -136,17 +159,22 @@ MAPS = [
 def main():
     out = [
         "# Colour maps of field colouring, written by assets/colormaps.py; do",
-        "# not edit by hand. Each map: its kind and its colours at even steps",
-        "# from the low end to the high end (mixed in sRGB). Sources and",
-        "# licences: assets/PROVENANCE.md. The first map is the default for",
-        "# one-sided ranges, cool_warm for symmetric ranges (maintainer's",
-        "# decision, 2026-11-24).",
+        "# not edit by hand. Each map: its kind and its colours from the low",
+        "# end to the high end (mixed in sRGB), at even steps unless `at`",
+        "# gives their positions. Sources and licences: assets/PROVENANCE.md.",
+        "# The first map is the default for one-sided ranges, the same in",
+        "# FoehnCraft and KoflCraft; cool_warm for symmetric ranges",
+        "# (maintainer's decisions, 2026-11-24).",
         "",
     ]
     for name, kind, make in MAPS:
-        cols = hexes(make())
         out.append(f"[{name}]")
         out.append(f'kind = "{kind}"')
+        if isinstance(make, list):
+            out.append("at = [" + ", ".join(repr(a) for a, _ in make) + "]")
+            cols = [f'"{c}"' for _, c in make]
+        else:
+            cols = hexes(make())
         out.append("stops = [")
         for i in range(0, len(cols), 6):
             out.append("  " + ", ".join(cols[i:i + 6]) + ",")

@@ -1625,7 +1625,7 @@ fn field_tools() {
     assert_eq!(e.result["fields"][0]["components"], 3);
     assert_eq!(e.result["fields"][0]["unit"], "m/s");
     assert!(e.result["fields"][0]["ranges"]["x"].is_array());
-    assert_eq!(e.result["colormaps"][0]["id"], "viridis");
+    assert_eq!(e.result["colormaps"][0]["id"], "rainbow_desaturated");
     assert!(e.result["shown"].is_null());
 
     let e = call("display.color_by", json!({"by": "field"}), &mut s);
