@@ -2,7 +2,8 @@
 //!
 //! Ascii text is cut into one piece per thread at a separator, the tokens
 //! of each piece are counted, and then every piece is parsed in place
-//! into its part of the result (no intermediate vectors). Integers are
+//! into its part of the result (no intermediate vectors), whose memory is
+//! first touched by those threads (see [`Filling`]). Integers are
 //! parsed by hand; floating-point numbers by the standard library
 //! (Eisel and Lemire's method). Base64 text is decoded in pieces of whole
 //! four-character groups, and little-endian values are converted with
@@ -68,22 +69,30 @@ impl Number for f64 {
 }
 
 /// The bytes that separate numbers, as a table (one lookup per byte).
-pub(crate) struct Sep([bool; 256]);
+/// Every separator is a control byte, a space or a parenthesis, which the
+/// token count relies on (see [`count_tokens`]).
+pub(crate) struct Sep {
+    table: [bool; 256],
+    /// `(` and `)` separate too.
+    paren: bool,
+}
 
 impl Sep {
     const fn of(chars: &[u8]) -> Sep {
-        let mut t = [false; 256];
+        let mut table = [false; 256];
+        let mut paren = false;
         let mut i = 0;
         while i < chars.len() {
-            t[chars[i] as usize] = true;
+            table[chars[i] as usize] = true;
+            paren |= chars[i] == b'(';
             i += 1;
         }
-        Sep(t)
+        Sep { table, paren }
     }
 
     #[inline]
     pub(crate) fn has(&self, c: u8) -> bool {
-        self.0[c as usize]
+        self.table[c as usize]
     }
 }
 
@@ -113,60 +122,210 @@ fn pieces(text: &[u8], sep: &Sep) -> Vec<Range<usize>> {
         .collect()
 }
 
-/// The tokens of `text`: runs of bytes that are not separators.
+/// The tokens of `text`: runs of bytes that are not separators, counted
+/// sixteen or more bytes at a time. A byte counts as a separator when it
+/// is a control byte, a space or (with `sep.paren`) a parenthesis: a test
+/// with no table lookup, which the compiler turns into vector compares.
+/// That is every separator and more, yet the count can only differ from
+/// the table's when a control byte that is not a separator sits in the
+/// text, and then [`parse_into`] fails on it: the token holding it is not
+/// a number, or it is left over after the last token.
 fn count_tokens(text: &[u8], sep: &Sep) -> usize {
-    let mut n = 0;
-    let mut gap = true;
-    for &c in text {
-        let s = sep.has(c);
-        n += usize::from(gap && !s);
-        gap = s;
+    if sep.paren {
+        count::<true>(text)
+    } else {
+        count::<false>(text)
+    }
+}
+
+/// About how many numbers `bytes` bytes of text like `sample` hold: the
+/// tokens of its first megabyte scaled up, at most one for every two
+/// bytes (a number and its separator).
+pub(crate) fn estimate(sample: &[u8], sep: &Sep, bytes: usize) -> usize {
+    let sample = &sample[..sample.len().min(1 << 20)];
+    if sample.is_empty() {
+        return 0;
+    }
+    let tokens = count_tokens(sample, sep) as u128;
+    let n = tokens * bytes as u128 / sample.len() as u128;
+    usize::try_from(n)
+        .unwrap_or(usize::MAX)
+        .min(bytes.div_ceil(2))
+}
+
+/// A byte that may separate numbers (see [`count_tokens`]).
+#[inline(always)]
+fn loose<const PAREN: bool>(c: u8) -> bool {
+    c <= b' ' || (PAREN && (c | 1) == b')')
+}
+
+/// The runs of bytes that are not [`loose`] separators: the first byte if
+/// it starts one, and every byte that follows a separator. Counted in
+/// blocks of 128 pairs into a byte (at most 64 starts fit), so the pairs
+/// compare as vectors.
+fn count<const PAREN: bool>(text: &[u8]) -> usize {
+    let Some(&first) = text.first() else {
+        return 0;
+    };
+    let mut n = usize::from(!loose::<PAREN>(first));
+    let (before, after) = (&text[..text.len() - 1], &text[1..]);
+    for (a, b) in before.chunks(128).zip(after.chunks(128)) {
+        let mut k: u8 = 0;
+        for (&x, &y) in a.iter().zip(b) {
+            k += u8::from(loose::<PAREN>(x) & !loose::<PAREN>(y));
+        }
+        n += usize::from(k);
     }
     n
 }
 
-/// Parse the tokens of `text` into `out` (sized by `count_tokens`).
+/// Parse the tokens of `text` into `out` (sized by `count_tokens`); any
+/// text left after them must be separators.
 fn parse_into<T: Number>(text: &[u8], sep: &Sep, out: &mut [T]) -> Result<(), String> {
     let (mut i, n) = (0, text.len());
+    let token = |start: usize| {
+        let end = text[start..]
+            .iter()
+            .position(|&c| sep.has(c))
+            .map_or(n, |k| start + k);
+        &text[start..end]
+    };
     for x in out.iter_mut() {
         while i < n && sep.has(text[i]) {
             i += 1;
         }
-        let start = i;
-        while i < n && !sep.has(text[i]) {
-            i += 1;
-        }
-        let t = &text[start..i];
+        let t = token(i);
+        i += t.len();
         *x = T::parse(t).ok_or_else(|| String::from_utf8_lossy(t).into_owned())?;
     }
-    Ok(())
+    match text[i..].iter().position(|&c| !sep.has(c)) {
+        Some(k) => Err(String::from_utf8_lossy(token(i + k)).into_owned()),
+        None => Ok(()),
+    }
 }
 
-/// Parse every token of `text` (tokens between `sep` characters). A token
-/// that is not a `T` is returned as the error.
-pub(crate) fn parse<T: Number>(text: &[u8], sep: &Sep) -> Result<Vec<T>, String> {
-    let mut out = Vec::new();
+/// Parse every token of `text` (tokens between `sep` characters) into
+/// slots of `S`. A token that is not a number is returned as the error,
+/// as is a count of values that does not fill whole slots.
+pub(crate) fn parse<S: Slot>(text: &[u8], sep: &Sep) -> Result<Vec<S>, String> {
+    let mut out = Filling::new(0);
     parse_append(text, sep, &mut out)?;
-    Ok(out)
+    out.finish()
+        .map_err(|flat| format!("{} values, not groups of {}", flat.len(), S::N))
+}
+
+/// How parsed numbers are kept: one value per slot, or the coordinates of
+/// a point together, seen as one flat run of values while parsing.
+pub(crate) trait Slot: Copy + Default + Send + Sync {
+    type Value: Number;
+    /// Values per slot.
+    const N: usize;
+    fn flat(slots: &mut [Self]) -> &mut [Self::Value];
+}
+
+macro_rules! one_value {
+    ($($t:ty),*) => {$(
+        impl Slot for $t {
+            type Value = $t;
+            const N: usize = 1;
+            fn flat(slots: &mut [$t]) -> &mut [$t] {
+                slots
+            }
+        }
+    )*};
+}
+one_value!(f64, u32, i64);
+
+impl Slot for [f64; 3] {
+    type Value = f64;
+    const N: usize = 3;
+    fn flat(slots: &mut [[f64; 3]]) -> &mut [f64] {
+        slots.as_flattened_mut()
+    }
+}
+
+/// Numbers parsed into the front of a buffer whose rest the allocator
+/// handed over zeroed and nobody has touched yet. Growing never fills the
+/// new part on one thread (as `Vec::resize` does): a zeroed allocation of
+/// this size comes as fresh pages from the system, and the threads that
+/// parse into it are the first to write them, in parallel. Sized from the
+/// count a file declares, it never grows at all.
+pub(crate) struct Filling<S> {
+    buf: Vec<S>,
+    /// Values written (not slots).
+    len: usize,
+}
+
+impl<S: Slot> Filling<S> {
+    /// Room for `values` values, untouched until parsed into.
+    pub(crate) fn new(values: usize) -> Filling<S> {
+        Filling {
+            buf: vec![S::default(); values.div_ceil(S::N)],
+            len: 0,
+        }
+    }
+
+    /// Room for `values` values in all, as [`Filling::new`] gives, for a
+    /// count learnt once the first values are read.
+    pub(crate) fn expect(&mut self, values: usize) {
+        self.grow(values.div_ceil(S::N));
+    }
+
+    /// The next `k` values, to be written; the buffer at least doubles
+    /// when they do not fit.
+    fn room(&mut self, k: usize) -> &mut [S::Value] {
+        let need = self.len + k;
+        let slots = need.div_ceil(S::N);
+        if slots > self.buf.len() {
+            self.grow(slots.max(2 * self.buf.len()));
+        }
+        let at = self.len;
+        self.len = need;
+        &mut S::flat(&mut self.buf)[at..need]
+    }
+
+    /// A buffer of `slots` slots, at least, holding the values so far
+    /// (copied over on all threads).
+    fn grow(&mut self, slots: usize) {
+        if slots <= self.buf.len() {
+            return;
+        }
+        let mut grown = vec![S::default(); slots];
+        let old = &self.buf[..self.len.div_ceil(S::N)];
+        par::chunks_mut(&mut grown[..old.len()], 1 << 16, |at, dst| {
+            dst.copy_from_slice(&old[at..at + dst.len()]);
+        });
+        self.buf = grown;
+    }
+
+    /// The slots filled, or every value read when they do not fill whole
+    /// slots (a point cut short).
+    pub(crate) fn finish(mut self) -> Result<Vec<S>, Vec<S::Value>> {
+        if !self.len.is_multiple_of(S::N) {
+            return Err(S::flat(&mut self.buf)[..self.len].to_vec());
+        }
+        // Room beyond the values (a guess too large) is given back.
+        self.buf.truncate(self.len / S::N);
+        self.buf.shrink_to_fit();
+        Ok(self.buf)
+    }
 }
 
 /// Parse every token of `text` onto the end of `out` (a streaming reader
 /// hands its text over piece by piece, each ending at a separator). A
-/// token that is not a `T` is returned as the error.
-pub(crate) fn parse_append<T: Number>(
+/// token that is not a number is returned as the error.
+pub(crate) fn parse_append<S: Slot>(
     text: &[u8],
     sep: &Sep,
-    out: &mut Vec<T>,
+    out: &mut Filling<S>,
 ) -> Result<(), String> {
     let ps = pieces(text, sep);
     let sizes: Vec<usize> = par::collect(ps.len(), 1, |r| {
         r.map(|i| count_tokens(&text[ps[i].clone()], sep)).collect()
     });
-    let at = out.len();
-    out.resize(at + sizes.iter().sum::<usize>(), T::default());
     // Each piece parses into its own part of `out`.
-    let mut parts: Vec<(&[u8], &mut [T])> = Vec::with_capacity(ps.len());
-    let mut rest: &mut [T] = &mut out[at..];
+    let mut parts: Vec<(&[u8], &mut [S::Value])> = Vec::with_capacity(ps.len());
+    let mut rest = out.room(sizes.iter().sum());
     for (r, &k) in ps.iter().zip(&sizes) {
         let (head, tail) = rest.split_at_mut(k);
         rest = tail;
@@ -301,6 +460,83 @@ mod tests {
         assert_eq!(i64::parse(b"-9223372036854775808"), Some(i64::MIN));
         assert_eq!(i64::parse(b"9223372036854775808"), None);
         assert_eq!(i64::parse(b"3.0"), None);
+    }
+
+    /// Invariant: the vector token count agrees with the separator table
+    /// on every byte that separates, and a control byte that does not
+    /// separate is an error wherever it sits (inside a token, alone, or
+    /// after the last token). A count that skipped such a byte would read
+    /// a broken file without a word.
+    #[test]
+    fn stray_control_bytes_are_errors() {
+        for sep in [&SPACE, &SPACE_PAREN] {
+            for c in 0..=255u8 {
+                if sep.has(c) {
+                    assert!(if sep.paren {
+                        loose::<true>(c)
+                    } else {
+                        loose::<false>(c)
+                    });
+                }
+            }
+        }
+        for threads in [1, 3] {
+            par::with_threads(threads, || {
+                assert_eq!(parse::<i64>(b"1 2 \x01", &SPACE).unwrap_err(), "\x01");
+                assert_eq!(parse::<i64>(b"1 \x01 2", &SPACE).unwrap_err(), "\x01");
+                assert_eq!(parse::<i64>(b"1\x012 3", &SPACE).unwrap_err(), "1\x012");
+                assert_eq!(
+                    parse::<u32>(b"3(0 1\x02)", &SPACE_PAREN).unwrap_err(),
+                    "1\x02"
+                );
+                assert_eq!(parse::<f64>(b"\x00", &SPACE).unwrap_err(), "\x00");
+            });
+        }
+        // Long runs cross the blocks the count works in.
+        let text: String = (0..1000)
+            .map(|i| format!("{i}{}", " ".repeat(1 + i % 300)))
+            .collect();
+        assert_eq!(count_tokens(text.as_bytes(), &SPACE), 1000);
+    }
+
+    /// Invariant: numbers parse into points three by three however the
+    /// text arrives, into room sized right, too small (it grows, keeping
+    /// what was read) or too large (the rest is dropped), and a count that
+    /// does not fill whole points comes back as plain values. A growth
+    /// that lost the front of the buffer would move every point.
+    #[test]
+    fn filling_grows_and_groups() {
+        let xyz: Vec<f64> = (0..3000).map(|i| f64::from(i) * 0.25 - 7.0).collect();
+        let text: String = xyz.iter().map(|v| format!("{v} ")).collect();
+        let bytes = text.as_bytes();
+        let cuts: Vec<usize> = (1..9)
+            .map(|k| {
+                let c = k * bytes.len() / 9;
+                c + bytes[c..].iter().position(|&b| b == b' ').unwrap_or(0)
+            })
+            .collect();
+        for threads in [1, 4] {
+            for room in [0, 1, 2999, 3000, 9000] {
+                par::with_threads(threads, || {
+                    let mut out = Filling::<[f64; 3]>::new(room);
+                    let mut from = 0;
+                    for &c in cuts.iter().chain([&bytes.len()]) {
+                        parse_append(&bytes[from..c], &SPACE, &mut out).unwrap();
+                        from = c;
+                    }
+                    let points = out.finish().unwrap();
+                    assert_eq!(points.as_flattened(), xyz.as_slice());
+                    let mut cut = Filling::<[f64; 3]>::new(room);
+                    parse_append(b"1 2 3 4", &SPACE, &mut cut).unwrap();
+                    assert_eq!(cut.finish().unwrap_err(), [1., 2., 3., 4.]);
+                });
+            }
+        }
+        assert!(parse::<[f64; 3]>(b"1 2", &SPACE).is_err());
+        assert_eq!(
+            parse::<[f64; 3]>(b"(1 2 3)(4 5 6)", &SPACE_PAREN).unwrap(),
+            [[1., 2., 3.], [4., 5., 6.]]
+        );
     }
 
     /// Invariant: base64 decodes in pieces to what one decode gives, piece
