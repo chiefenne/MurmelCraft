@@ -11,6 +11,7 @@
 //! murmel info
 //! murmel bench make --cells N --out DIR [--formats vtu,polymesh-binary,…]
 //! murmel bench run MESH [--repeat N] [--no-render] [--size WxH] [--json]
+//! murmel blocks make MESH --out FILE [--block-cells N]
 //! ```
 
 use std::io::Read;
@@ -39,6 +40,10 @@ const USAGE: &str = "Usage: murmel COMMAND
   murmel bench run MESH [--repeat N] [--no-render] [--size WxH] [--json]
                                         time reading, the surface, picking and
                                         drawing of a mesh (docs/performance.md)
+  murmel blocks make MESH --out FILE [--block-cells N]
+                                        write MESH and its fields as a blocked
+                                        VTKHDF file (docs/blocked-vtkhdf.md), the
+                                        layout read by regions of a large mesh
 
 Example: a headless screenshot of a KoflCraft mesh
   murmel call view.screenshot --input '{\"mesh\": \"foehncraft.vtu\", \"view\": \"iso\", \"path\": \"shot.png\"}'
@@ -129,6 +134,26 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         ["info"] => murmel_tools::call("system.info", json!({}), &mut s),
         ["diag", "codes"] => murmel_tools::call("diag.codes", json!({}), &mut s),
         ["bench", rest @ ..] => return bench(rest),
+        ["blocks", "make", mesh, rest @ ..] => {
+            let value = |name: &str| {
+                rest.iter()
+                    .position(|a| *a == name)
+                    .and_then(|i| rest.get(i + 1))
+                    .copied()
+            };
+            let Some(out) = value("--out") else {
+                return Ok(usage_error("blocks make needs --out FILE"));
+            };
+            let mut input = json!({"mesh": mesh, "out": out});
+            if let Some(n) = value("--block-cells") {
+                let n: u64 = n
+                    .replace('_', "")
+                    .parse()
+                    .map_err(|_| "--block-cells takes a whole number")?;
+                input["block_cells"] = json!(n);
+            }
+            murmel_tools::call("blocks.make", input, &mut s)
+        }
         ["call", id] => murmel_tools::call(id, json!({}), &mut s),
         ["call", id, "--input", input] => murmel_tools::call(id, read_input(Some(input))?, &mut s),
         ["run", "--script", file] => {

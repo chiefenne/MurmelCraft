@@ -184,6 +184,12 @@ problem took more than a few minutes to understand.
   (`numbers::count_tokens`), so a separator stays a control byte, a space
   or a parenthesis: with any other, the count and the parse disagree and
   every array that uses it fails to read.
+- **The face topology numbers faces on all threads** (`boundary::number`):
+  a distinct face's number is its place among the first faces before it,
+  and its neighbour the smallest other cell, so the result is the same
+  for any split. A change that keeps more per face (a third cell, say)
+  keeps it in a form whose result does not depend on which thread came
+  first, such as a minimum, or the meshes differ from run to run.
 - **The window hashes a mesh after it opens** (`Session::hash_after_open`):
   until the SHA-256 is taken on its own thread, `OpenMesh::digest` and the
   files' digests are empty and the badge is `Validity::Checking`. A tool

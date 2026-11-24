@@ -1,0 +1,30 @@
+# Laminar air flow through KoflCraft's Manifold fixture (pipe, bend, box,
+# rounded junction, outlet pipe); D = 50 mm, U = 0.05 m/s, Re = 167.
+case_format = "0.6"
+
+[mesh]
+file = "manifold-mesh/foehncraft.vtu"
+scale = 0.001
+renumber = "rcm"
+
+[fluid]
+density = 1.2
+viscosity = 1.8e-5
+
+[boundary.inlet]
+type = "velocity-inlet"
+normal_velocity = 0.05
+[boundary.outlet]
+type = "static-pressure-outlet"
+pressure = 0.0
+[boundary.walls]
+type = "wall"
+
+[solver]
+tolerance = 1e-5
+max_iterations = 800
+
+[output]
+vtkhdf = true
+wall_csv = false
+derived = ["vorticity", "q-criterion", "wall-shear-stress", "total-pressure"]

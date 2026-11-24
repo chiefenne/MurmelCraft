@@ -2201,6 +2201,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("measure.list", READS_ONLY),
     ("probe.at", READS_ONLY),
     ("region.list", READS_ONLY),
+    ("blocks.make", "writes a file; the view stays as it is"),
 ];
 
 /// The reason in `NOT_JOURNALED` of a tool that changes nothing: no file,
@@ -2883,6 +2884,17 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: no_input,
         run: crate::region::region_list,
+    },
+    Tool {
+        id: "blocks.make",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-blocks-make",
+        summary: "Write a mesh and its fields as a blocked VTKHDF file (docs/blocked-vtkhdf.md, layout 1), the layout from which MurmelCraft reads a region of a large mesh without reading it all: the cells sorted along a 3-D Hilbert curve and cut into blocks of block_cells owned cells (default 65536, 16384 to 1048576), each block a partition with its own points and one layer of ghost cells (the point neighbours), global point and cell ids, the bounds and field ranges of every block, and the boundary patches as PolyData with their owner cells. mesh: the mesh to convert (a .vtu, an OpenFOAM case or polyMesh folder, or a VTKHDF file; it is read, not opened); left out, the open mesh and its fields. The file is an ordinary VTKHDF 2.4 file that ParaView 5.13 and later open; it opens whole with mesh.open. The result counts the blocks, ghost cells, linear cells and polyhedra written.",
+        outputs: &["out"],
+        reads: &["mesh"],
+        input_schema: crate::blocks::blocks_make_schema,
+        run: crate::blocks::blocks_make,
     },
     Tool {
         id: "display.mesh_look",

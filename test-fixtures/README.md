@@ -25,6 +25,19 @@ tests know every value.
 | `vtkhdf/box_chunked.vtkhdf` | the 4 Voronoi polyhedra of `box/` with 14 cell fields (two chunks each, deflate with the shuffle filter), units in one attribute, step and time |
 | `vtkhdf/box_latest.vtkhdf` | the same written with the newest HDF5 file format (`libver="latest"`): compact datasets, a single-chunk dataset, a big-endian dataset and many root attributes |
 
+## Blocked VTKHDF from KoflCraft (`vtkhdf/koflcraft/`)
+
+Written by KoflCraft's own writer of the blocked layout
+(`docs/blocked-vtkhdf.md`, layout 1), KoflCraft PR #38 (MIT, branch
+`claude/project-thread-3olzu6`, 2026-11-24), and copied unchanged, so the
+blocked reader is checked against a writer that is not MurmelCraft's.
+KoflCraft checked them with h5py 3.16 and VTK 9.7.2.
+
+| File | What it checks |
+|---|---|
+| `vtkhdf/koflcraft/channel.vtkhdf` | the mesh of `channel/foehncraft.vtu` (776 cells) in one block, patches with their `role` attributes |
+| `vtkhdf/koflcraft/box4.vtkhdf` | the mesh of `box/foehncraft.vtu` (4 Voronoi cells), 6 patches, the `koflcraft_*` digests as attributes of `/VTKHDF` |
+
 ## OpenFOAM polyMesh cases (`openfoam/`)
 
 | Folder | Made with | What it checks |

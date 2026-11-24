@@ -14,6 +14,14 @@
 //! as fields, and the cell data of the patches as boundary fields. The
 //! root attributes of a FoehnCraft run give the units, the time, the step
 //! or iteration. Time-dependent files (`Steps`) are not read yet.
+//!
+//! A blocked file (`docs/blocked-vtkhdf.md`, written by `murmel blocks
+//! make`, KoflCraft and FoehnCraft) reads whole here: ghost cells
+//! (`vtkGhostType` with the duplicate bit) are left out with their field
+//! rows, points with the same `GlobalPointIds` are one point, the patches
+//! join the cells by those ids, and `zone_names`, the patches' `role` and
+//! the strings of `/VTKHDF` are kept. Reading only some of the blocks
+//! comes with the large-mesh overview.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -133,30 +141,50 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
     let mut cell_fields: Vec<Vec<Field>> = Vec::new();
     let mut point_fields: Vec<Vec<Field>> = Vec::new();
     let multi = volumes.len() > 1;
+    let mut roles: BTreeMap<usize, String> = BTreeMap::new();
     for (zone, (name, obj)) in volumes.iter().enumerate() {
-        let start = (b.mesh.cell_count(), b.mesh.points.len());
-        let zones = b.grid(h, obj, multi.then_some(zone as u32))?;
-        let (cells, points) = (b.mesh.cell_count() - start.0, b.mesh.points.len() - start.1);
+        let read = b.grid(h, obj, multi.then_some(zone as u32))?;
         if multi {
             b.zone_names.insert(zone as u32, name.clone());
-        } else if let Some(z) = zones {
-            b.zone_values = Some(z);
+        } else {
+            if let Some(z) = read.zones {
+                b.zone_values = Some(z);
+            }
+            // zone names and patch roles as field-data strings (§ 8)
+            if let Some(fd) = h.child(obj, "FieldData")? {
+                for (key, table) in [("zone_names", 0), ("boundary_roles", 1)] {
+                    let Some(o) = h.child(&fd, key)? else {
+                        continue;
+                    };
+                    let ds = h.dataset(&o)?;
+                    let Ok(entries) = h.read_strings(&ds) else {
+                        continue;
+                    };
+                    for (id, text) in crate::vtu::id_table(&entries) {
+                        if table == 0 {
+                            b.zone_names.insert(id as u32, text);
+                        } else {
+                            roles.insert(id, text);
+                        }
+                    }
+                }
+            }
         }
         cell_fields.push(data_fields(
             h,
             obj,
             "CellData",
             Location::Cell,
-            cells,
-            &["zone"],
+            (read.cell_rows_total, read.cell_rows.as_deref()),
+            &["zone", "vtkGhostType", "GlobalCellIds", "OriginalCellIds"],
         )?);
         point_fields.push(data_fields(
             h,
             obj,
             "PointData",
             Location::Point,
-            points,
-            &[],
+            (read.point_rows_total, read.point_rows.as_deref()),
+            &["vtkGhostType", "GlobalPointIds"],
         )?);
     }
     let mut boundary_fields: Vec<(usize, Vec<Field>)> = Vec::new();
@@ -164,14 +192,25 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
         let p = b.mesh.patches.len() as u32;
         let before = b.mesh.boundary.len();
         b.poly_data(h, obj, p)?;
+        let role = match attr_text(h, obj, "role").or_else(|| roles.get(&(p as usize)).cloned()) {
+            Some(r) => crate::PatchRole::parse(&r),
+            None => crate::polymesh::patch_role(name, ""),
+        };
         b.mesh.patches.push(Patch {
             name: name.clone(),
-            role: crate::polymesh::patch_role(name, ""),
+            role,
         });
         let n = b.mesh.boundary.len() - before;
         boundary_fields.push((
             before,
-            data_fields(h, obj, "CellData", Location::Boundary, n, &["boundary"])?,
+            data_fields(
+                h,
+                obj,
+                "CellData",
+                Location::Boundary,
+                (n, None),
+                &["boundary", "OwnerCell"],
+            )?,
         ));
     }
     let mut mesh = b.finish()?;
@@ -204,9 +243,18 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
         iteration: num("iteration").map(|v| v as u64),
         attrs: attrs.clone(),
     };
-    for k in ["foehncraft_version", "case", "foehncraft_format"] {
-        if let Some(v) = attrs.get(k) {
-            mesh.metadata.insert(k.into(), v.clone());
+    for (k, v) in &attrs {
+        if k == "case" || k.starts_with("foehncraft_") || k.starts_with("koflcraft_") {
+            mesh.metadata.insert(k.clone(), v.clone());
+        }
+    }
+    // the strings of /VTKHDF: the block layout, digests and versions
+    for (k, v) in h.attrs(&vtk)? {
+        if k == "Type" || k == "Version" {
+            continue;
+        }
+        if let Some(t) = v.text() {
+            mesh.metadata.insert(k, t);
         }
     }
     // Front ends name the format from this key.
@@ -240,16 +288,19 @@ fn count(v: i64, what: &str) -> Result<usize, MeshError> {
     usize::try_from(v).map_err(|_| bad(format!("{what} {v} is negative")))
 }
 
-/// The numeric datasets of `obj/<group>` with `n` rows, as fields;
-/// `skip` names datasets the mesh itself uses.
+/// The numeric datasets of `obj/<group>` with `rows.0` rows, as fields,
+/// keeping only the rows `rows.1` names when it is given (the owned cells
+/// and the distinct points of a file with ghosts); `skip` names datasets
+/// the mesh itself uses.
 fn data_fields(
     h: &H5,
     obj: &Object,
     group: &str,
     location: Location,
-    n: usize,
+    rows: (usize, Option<&[u32]>),
     skip: &[&str],
 ) -> Result<Vec<Field>, MeshError> {
+    let (n, keep) = rows;
     let Some(g) = h.child(obj, group)? else {
         return Ok(Vec::new());
     };
@@ -286,7 +337,16 @@ fn data_fields(
                 ));
             }
         };
-        let values = h.read_f64(&ds)?;
+        let mut values = h.read_f64(&ds)?;
+        if let Some(keep) = keep {
+            values = keep
+                .iter()
+                .flat_map(|&r| {
+                    let at = r as usize * comps;
+                    values[at..at + comps].iter().copied()
+                })
+                .collect();
+        }
         if comps == 1 || comps == 3 {
             out.push(Field {
                 name: link.name.clone(),
@@ -398,17 +458,43 @@ struct Builder {
     zone_names: BTreeMap<u32, String>,
     /// Volume points by their exact coordinates, for the patches.
     lookup: Option<HashMap<[u64; 3], u32>>,
+    /// Volume points by their `GlobalPointIds`, when the file has them.
+    gids: Option<HashMap<i64, u32>>,
+}
+
+/// What [`Builder::grid`] read besides the mesh: the `zone` cell data, and
+/// which rows of the cell and point datasets the mesh took (`None`: all,
+/// in order).
+struct GridRead {
+    zones: Option<Vec<u32>>,
+    cell_rows_total: usize,
+    cell_rows: Option<Vec<u32>>,
+    point_rows_total: usize,
+    point_rows: Option<Vec<u32>>,
+}
+
+/// The integer dataset `name` of subgroup `group`, when there is one.
+fn optional_ints(
+    h: &H5,
+    obj: &Object,
+    group: &str,
+    name: &str,
+) -> Result<Option<Vec<i64>>, MeshError> {
+    let Some(g) = h.child(obj, group)? else {
+        return Ok(None);
+    };
+    match h.child(&g, name)? {
+        Some(o) => Ok(Some(h.read_i64(&h.dataset(&o)?)?)),
+        None => Ok(None),
+    }
 }
 
 impl Builder {
-    /// Read an UnstructuredGrid block (all its partitions); returns its
-    /// `zone` cell data when it has one.
-    fn grid(
-        &mut self,
-        h: &H5,
-        g: &Object,
-        zone: Option<u32>,
-    ) -> Result<Option<Vec<u32>>, MeshError> {
+    /// Read an UnstructuredGrid block (all its partitions). Ghost cells
+    /// (`vtkGhostType` with the duplicate bit) are left out, and points
+    /// with the same `GlobalPointIds` are one point, so the partitions of
+    /// a blocked file join into one mesh.
+    fn grid(&mut self, h: &H5, g: &Object, zone: Option<u32>) -> Result<GridRead, MeshError> {
         let np = ints(h, g, "NumberOfPoints")?;
         let nc = ints(h, g, "NumberOfCells")?;
         let ncon = ints(h, g, "NumberOfConnectivityIds")?;
@@ -453,17 +539,58 @@ impl Builder {
             },
             None => None,
         };
-        let point_base = self.mesh.points.len();
-        self.mesh
-            .points
-            .extend(xyz.as_chunks::<3>().0.iter().copied());
+        let ghost = optional_ints(h, g, "CellData", "vtkGhostType")?;
+        let total_cells: usize = nc
+            .iter()
+            .map(|&n| count(n, "cells"))
+            .sum::<Result<_, _>>()?;
+        if ghost.as_ref().is_some_and(|v| v.len() != total_cells) {
+            return Err(MeshError::new(
+                "MESH005",
+                "CellData/vtkGhostType does not have one value per cell",
+            ));
+        }
+        let gids = optional_ints(h, g, "PointData", "GlobalPointIds")?;
+        // the mesh point of each row of Points
+        let mut pmap: Vec<u32> = Vec::with_capacity(total_points);
+        let mut point_rows: Option<Vec<u32>> = None;
+        match gids {
+            Some(ids) if ids.len() == total_points => {
+                let map = self.gids.get_or_insert_with(HashMap::new);
+                let points = &mut self.mesh.points;
+                let mut rows = Vec::new();
+                for (r, (q, id)) in xyz.as_chunks::<3>().0.iter().zip(ids).enumerate() {
+                    let i = *map.entry(id).or_insert_with(|| {
+                        points.push(*q);
+                        rows.push(r as u32);
+                        (points.len() - 1) as u32
+                    });
+                    pmap.push(i);
+                }
+                point_rows = Some(rows);
+            }
+            Some(_) => {
+                return Err(MeshError::new(
+                    "MESH005",
+                    "PointData/GlobalPointIds does not have one value per point",
+                ));
+            }
+            None => {
+                let base = self.mesh.points.len() as u32;
+                pmap.extend((0..total_points as u32).map(|r| base + r));
+                self.mesh
+                    .points
+                    .extend(xyz.as_chunks::<3>().0.iter().copied());
+            }
+        }
+        let mut cell_rows: Vec<u32> = Vec::with_capacity(total_cells);
         if self.mesh.cell_faces.is_empty() {
             self.mesh.cell_faces.push(0);
             self.polys = Polygons::new();
             self.mesh.boundary = Polygons::new();
         }
         // running starts of each partition in the concatenated arrays
-        let (mut pb, mut cb, mut ob, mut kb) = (point_base, 0usize, 0usize, 0usize);
+        let (mut pb, mut cb, mut ob, mut kb) = (0usize, 0usize, 0usize, 0usize);
         let (mut pob, mut p2fb, mut fob, mut fcb) = (0usize, 0usize, 0usize, 0usize);
         let mut zones_out = Vec::new();
         for part in 0..parts {
@@ -504,12 +631,15 @@ impl Builder {
                 usize::try_from(v)
                     .ok()
                     .filter(|&v| v < npart)
-                    .and_then(|v| u32::try_from(v + pb).ok())
+                    .and_then(|v| pmap.get(v + pb).copied())
                     .ok_or_else(|| {
                         MeshError::new("MESH006", format!("point {v} is out of range 0..{npart}"))
                     })
             };
             for c in 0..ncell {
+                if ghost.as_ref().is_some_and(|g| g[cb + c] & 1 != 0) {
+                    continue;
+                }
                 let (s, e) = (offs[c], offs[c + 1]);
                 let nodes = usize::try_from(s)
                     .ok()
@@ -565,6 +695,7 @@ impl Builder {
                         &mut self.zone_max,
                     );
                     zones_out.push(z);
+                    cell_rows.push((cb + c) as u32);
                 } else if t == POLYHEDRON {
                     let (a, b) = (po.get(c), po.get(c + 1));
                     let range = a
@@ -605,6 +736,7 @@ impl Builder {
                     );
                     orient_last(&self.mesh, &mut self.polys);
                     zones_out.push(z);
+                    cell_rows.push((cb + c) as u32);
                 } else if matches!(t, TRIANGLE | POLYGON | QUAD) {
                     if nodes.len() < 3 {
                         return Err(MeshError::new(
@@ -628,7 +760,15 @@ impl Builder {
             ob += ncell + 1;
             kb += ncn;
         }
-        Ok(zone_data.map(|_| zones_out))
+        let all_cells = cell_rows.len() == total_cells;
+        let all_points = point_rows.as_ref().is_none_or(|r| r.len() == total_points);
+        Ok(GridRead {
+            zones: zone_data.map(|_| zones_out),
+            cell_rows_total: total_cells,
+            cell_rows: (!all_cells).then_some(cell_rows),
+            point_rows_total: total_points,
+            point_rows: point_rows.filter(|_| !all_points),
+        })
     }
 
     /// Read a PolyData block's polygons as boundary faces of patch `p`.
@@ -652,16 +792,31 @@ impl Builder {
         let ncon = ints(h, &polys, "NumberOfConnectivityIds")?;
         let offsets = ints(h, &polys, "Offsets")?;
         let conn = ints(h, &polys, "Connectivity")?;
-        if self.lookup.is_none() {
+        let mut ids: Vec<u32> = Vec::with_capacity(total);
+        // a blocked file joins its patches by GlobalPointIds (§ 3)
+        if let (Some(map), Some(gp)) = (
+            self.gids.as_ref(),
+            optional_ints(h, g, "PointData", "GlobalPointIds")?,
+        ) && gp.len() == total
+        {
+            for id in gp {
+                ids.push(*map.get(&id).ok_or_else(|| {
+                    bad(format!(
+                        "patch {p} has the global point {id}, which no volume cell uses"
+                    ))
+                })?);
+            }
+        }
+        if ids.len() < total && self.lookup.is_none() {
             let mut m = HashMap::with_capacity(self.mesh.points.len());
             for (i, q) in self.mesh.points.iter().enumerate() {
                 m.entry(q.map(f64::to_bits)).or_insert(i as u32);
             }
             self.lookup = Some(m);
         }
-        let lookup = self.lookup.as_ref().ok_or_else(|| bad("no point lookup"))?;
-        let mut ids: Vec<u32> = Vec::with_capacity(total);
-        for q in xyz.as_chunks::<3>().0 {
+        let empty = HashMap::new();
+        let lookup = self.lookup.as_ref().unwrap_or(&empty);
+        for q in xyz.as_chunks::<3>().0.iter().skip(ids.len()) {
             match lookup.get(&q.map(f64::to_bits)) {
                 Some(&i) => ids.push(i),
                 None if self.mesh.cell_count() == 0 => {
