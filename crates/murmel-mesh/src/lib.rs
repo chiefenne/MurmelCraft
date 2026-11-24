@@ -557,6 +557,21 @@ impl Mesh {
         self.summary.take();
     }
 
+    /// The bytes of the model's arrays (points, faces, cells, topology),
+    /// as `murmel bench` reports the mesh model and region estimates
+    /// scale it.
+    pub fn model_bytes(&self) -> usize {
+        self.points.len() * 24
+            + (self.distinct.start.len() + self.distinct.nodes.len()) * 4
+            + (self.boundary.start.len() + self.boundary.nodes.len()) * 4
+            + (self.cell_faces.len() + self.cell_zone.len()) * 4
+            + self.cell_kind.len() * std::mem::size_of::<CellKind>()
+            + (self.boundary_patch.len() + self.boundary_owner.len()) * 4
+            + (self.cell_face_id.len() + self.face_owner.len() + self.face_neighbour.len()) * 4
+            + self.cell_face_flip.len()
+            + (self.boundary_face_id.len() + self.face_boundary.len()) * 4
+    }
+
     /// The bounds of the points the boundary uses (all points when there
     /// is no boundary).
     pub fn bounds(&self) -> Bounds {

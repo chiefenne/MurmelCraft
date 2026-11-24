@@ -85,7 +85,8 @@ impl MurmelApp {
                 | Item::Probe(_)
                 | Item::Slice(_)
                 | Item::Iso(_)
-                | Item::Arrows => {}
+                | Item::Arrows
+                | Item::Region(_) => {}
             }
         }
         patches.sort_by(|a, b| a.label.cmp(&b.label));
@@ -200,6 +201,9 @@ impl MurmelApp {
                     action = Some(a);
                 }
                 if let Some(a) = self.extract_section(ui, &p) {
+                    action = Some(a);
+                }
+                if let Some(a) = self.region_section(ui, &p) {
                     action = Some(a);
                 }
                 if let Some(a) = self.measure_section(ui, &p, &filter) {
@@ -680,7 +684,7 @@ impl MurmelApp {
             Some((area, name)) => {
                 let name = if area == "kind" {
                     self.i18n.tr(&format!("kind-{name}"))
-                } else if area == "clip" || area == "slice" || area == "iso" {
+                } else if area == "clip" || area == "slice" || area == "iso" || area == "region" {
                     self.i18n
                         .tr_args("props-clip-name", &[("n", name.to_string().into())])
                 } else if area == "measure" || area == "probe" {

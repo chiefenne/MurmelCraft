@@ -23,6 +23,7 @@ mod movie_dialog;
 mod opening;
 mod panels;
 mod quality;
+mod regions;
 mod style;
 mod viewport;
 

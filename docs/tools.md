@@ -45,6 +45,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `iso.clear` | 1 | read | Remove an iso-surface (iso: its number; left out: the current one), or all of them (all); those after it move up one. |
 | `arrows.set` | 1 | read | Show or change the vector arrows: shaded 3D arrows of a vector field (field: left out, their own, else the field shown if it is a vector, else the file's first vector) on every slice shown, on an even square grid anchored at the mesh's centre, and on the mesh surface shown when surface is true (one boundary face per cube of the grid). density is the arrows across the mesh's largest extent (4 to 200, 25 by default); the length follows the magnitude, the field's largest being 0.9 of a spacing times scale (above 0, up to 100). in_plane draws only the part of the vector in each slice's plane, the longest of those then 0.9 of a spacing. color solid gives them a colour of their own (display.set_color on arrows), field the colour of the field on the colour bar there. enabled false keeps the settings and draws none. At most 10 000 are drawn (capped in the result). |
 | `arrows.clear` | 1 | read | Remove the vector arrows and their settings. |
+| `region.set` | 1 | read | Add or change a region of interest (region: its number, region:1 is the first; left out: the current region, the one selected last or else added last; new: add one, up to 16). While a region is enabled, only the cells of the enabled regions show and slices, iso-surfaces, arrows and quality are computed only there; several enabled regions show their union. shape: box (center, size: full lengths along x, y, z; a new one is half the mesh's box), sphere (center, radius), slab (the cells between two planes thickness apart, the middle one through origin with normal), zone (zone: a cell zone's name), patch (patch: its name, layers: the cells along it and layers - 1 rings further in, 1 to 64), cells (cells: ids, left out: the cells picked now; rings: rings of face neighbours added, 0 to 64). A cell belongs to a box, sphere or slab when one of its points is inside, so the shape is fully covered and the border shows whole cells. Changing shape replaces the region's shape; fields of another shape are refused. enabled false keeps the region but shows the whole mesh. The result lists each region with the cells it takes, its halo (the cells around it a mesh read in pieces also loads) and the size of that part of the mesh model. |
+| `region.clear` | 1 | read | Remove a region (region: its number; left out: the current region), or all of them (all); the regions after it move up one. With no region enabled the whole mesh shows. |
+| `region.list` | 1 | read | The regions of interest: each with its shape, whether it is enabled, and what it takes (cells, halo cells, points and the size of that part of the mesh model in MiB); shown is what the enabled regions take together (null while none is enabled and the whole mesh shows). |
 | `display.mesh_look` | 1 | read | What the mesh looks like while slices or iso-surfaces show: outline (the default: its feature edges only, faint, so what is inside stands out; a click then picks the slices) or faces (as the render mode says). |
 | `select.item` | 2 | read | Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected. |
 | `select.pick` | 1 | read | Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked. |
@@ -1327,6 +1330,131 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `region.set`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "cells": {
+      "items": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "type": "array"
+    },
+    "center": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "layers": {
+      "maximum": 64,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "new": {
+      "type": "boolean"
+    },
+    "normal": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "origin": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "patch": {
+      "type": "string"
+    },
+    "radius": {
+      "exclusiveMinimum": 0,
+      "type": "number"
+    },
+    "region": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "rings": {
+      "maximum": 64,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "shape": {
+      "enum": [
+        "box",
+        "sphere",
+        "slab",
+        "zone",
+        "patch",
+        "cells"
+      ]
+    },
+    "size": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "thickness": {
+      "exclusiveMinimum": 0,
+      "type": "number"
+    },
+    "zone": {
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `region.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "all": {
+      "type": "boolean"
+    },
+    "region": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `region.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `display.mesh_look`
 
 ```json
@@ -2406,6 +2534,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `ISO001` | error | No iso-surface has this number. | Iso-surfaces count from 1 (iso:1); the isos list of the result names them. |
 | `ISO002` | error | The display has the most iso-surfaces it holds (8). | Remove one with iso.clear, or change one with iso.set. |
 | `ARROW001` | error | Arrows need a vector field (one with x, y and z components), and the field named or the open mesh has none. | Name a vector field (field.list shows each field's components), or open a result with velocity. |
+| `REGION001` | error | No region of interest has this number. | Regions count from 1 (region:1); region.list names them. |
+| `REGION002` | error | The region's shape is broken (a size, radius or thickness that is not positive, a zero normal, too many rings) or names a zone, patch or cell the mesh does not have. | mesh.info lists the zones and patches; cells count from 0 to the cell count minus one; sizes must be positive. |
+| `REGION003` | error | The display has the most regions it holds (16). | Remove a region with region.clear, or change one with region.set. |
 | `ARROW002` | error | The arrows' density is outside 4 to 200, or their scale is not above 0 and up to 100. | Give density 4 to 200 (arrows across the mesh's largest extent) and a scale above 0, up to 100. |
 | `MCP001` | error | The MCP server refused a path outside its read or write roots. | Use a path below a --read-root (files read) or a --write-root (files written), or start the server with more roots. |
 | `MCP002` | error | The MCP server could not resolve a path (it does not exist, or its folder does not). | Check the path; relative paths resolve from the first --write-root. |

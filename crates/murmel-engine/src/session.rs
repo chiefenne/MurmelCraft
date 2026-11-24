@@ -267,6 +267,8 @@ fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
     d.isos.clear();
     d.arrows = None;
     d.field_values = None;
+    d.regions.clear();
+    d.region_cells = None;
     if d.field
         .as_ref()
         .is_some_and(|c| fields.get(&c.name).is_none())
@@ -290,6 +292,7 @@ fn prepare(
     fields: &FieldSet,
     tokens: &Tokens,
 ) -> (Display, Surface) {
+    crate::region::ensure(&mut base, mesh);
     ensure_quality(&mut base, mesh);
     crate::field::ensure_field(&mut base, mesh, fields);
     let _t = murmel_mesh::profile::span("open.surface");
@@ -590,6 +593,8 @@ impl Session {
         self.display.isos.clear();
         self.display.arrows = None;
         self.display.field_values = None;
+        self.display.regions.clear();
+        self.display.region_cells = None;
         self.surface_revision += 1;
     }
 
@@ -606,6 +611,7 @@ impl Session {
     /// Build the surface again after a change of `display`.
     pub fn redraw(&mut self) {
         if let Some(m) = &mut self.mesh {
+            crate::region::ensure(&mut self.display, &m.mesh);
             ensure_quality(&mut self.display, &m.mesh);
             crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
             m.surface = Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display);

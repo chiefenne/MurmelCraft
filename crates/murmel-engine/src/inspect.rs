@@ -312,6 +312,65 @@ fn vec3(v: [f64; 3], digits: i32) -> Value {
     json!(v.map(|x| round(x, digits) + 0.0))
 }
 
+/// The rows of region `k`: its shape, whether it is on, and what it
+/// takes (cells, halo, points and the size of that part of the model).
+fn region_rows(display: &Display, k: usize) -> Vec<Row> {
+    use crate::region::Shape;
+    let Some(r) = display.regions.get(k) else {
+        return Vec::new();
+    };
+    let mut v = vec![
+        row("name", format!("{}", k + 1)),
+        row("shape", r.shape.kind()),
+        row("enabled", r.enabled),
+    ];
+    match &r.shape {
+        Shape::Box { center, size } => {
+            v.push(unit("centre", vec3(*center, 6), "m"));
+            v.push(unit("size", vec3(*size, 6), "m"));
+        }
+        Shape::Sphere { center, radius } => {
+            v.push(unit("centre", vec3(*center, 6), "m"));
+            v.push(unit("radius", round(*radius, 6), "m"));
+        }
+        Shape::Slab {
+            origin,
+            normal,
+            thickness,
+        } => {
+            v.push(unit("origin", vec3(*origin, 6), "m"));
+            v.push(row("normal", vec3(*normal, 4)));
+            v.push(unit("thickness", round(*thickness, 6), "m"));
+        }
+        Shape::Zone { zone } => v.push(row("zone", zone.clone())),
+        Shape::Patch { patch, layers } => {
+            v.push(row("patch", patch.clone()));
+            v.push(row("layers", *layers));
+        }
+        Shape::Cells { cells, rings } => {
+            v.push(row("seed_cells", cells.len()));
+            v.push(row("rings", *rings));
+        }
+    }
+    if let Some(e) = display
+        .region_cells
+        .as_ref()
+        .filter(|rc| rc.regions == display.regions)
+        .and_then(|rc| rc.estimates.get(k))
+    {
+        v.push(row("cells", e.cells));
+        v.push(row("halo_cells", e.halo));
+        v.push(row("vertices", e.points));
+        v.push(unit(
+            "model_size",
+            round(e.bytes as f64 / (1024.0 * 1024.0), 1),
+            "MiB",
+        ));
+    }
+    v.push(row("current_region", display.current_region() == Some(k)));
+    v
+}
+
 /// The rows of `item` in the open mesh.
 pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
     let m = &open.mesh;
@@ -455,6 +514,7 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ));
             v
         }
+        Item::Region(k) => region_rows(display, k as usize),
         Item::Iso(k) => {
             let Some(c) = display.isos.get(k as usize) else {
                 return Vec::new();
