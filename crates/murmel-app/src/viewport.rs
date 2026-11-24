@@ -89,7 +89,7 @@ impl MurmelApp {
         } else {
             self.legend(ui, rect, dark);
         }
-        self.clip_gizmo(ui, rect, &cam, dark);
+        self.clip_handles(ui, rect, &cam, dark);
         self.view_cube(ui, rect, &cam, dark);
 
         let desc = self.describe();
@@ -496,94 +496,6 @@ impl MurmelApp {
                 egui::FontId::proportional(11.0),
                 color(c),
             );
-        }
-    }
-}
-
-impl MurmelApp {
-    /// A world point on screen, through the camera the window draws.
-    fn to_screen(&self, cam: &murmel_engine::Camera, rect: Rect, p: [f64; 3]) -> Option<Pos2> {
-        let surface = &self.session.mesh.as_ref()?.surface;
-        let aspect = (rect.width() / rect.height().max(1.0)) as f64;
-        let [x, y] = cam.project(surface.origin, surface.radius, aspect, p)?;
-        Some(Pos2::new(
-            rect.left() + ((x + 1.0) * 0.5) as f32 * rect.width(),
-            rect.top() + ((1.0 - y) * 0.5) as f32 * rect.height(),
-        ))
-    }
-
-    /// The clip plane's gizmo: its outline inside the mesh's box, tinted
-    /// with the accent, and an arrow along the normal that slides the
-    /// plane when dragged (`clip.set` with an offset). Drawn by the
-    /// painter, like the view cube, so screenshots leave it out.
-    fn clip_gizmo(&mut self, ui: &Ui, rect: Rect, cam: &murmel_engine::Camera, dark: bool) {
-        let Some(c) = self.session.display.active_clip().copied() else {
-            return;
-        };
-        let Some(m) = &self.session.mesh else { return };
-        let bounds = m.mesh.bounds();
-        let section = c.box_section(&bounds);
-        if section.is_empty() {
-            return;
-        }
-        let accent = color(self.session.tokens.palette(dark).accent);
-        let pts: Vec<Pos2> = section
-            .iter()
-            .filter_map(|&p| self.to_screen(cam, rect, p))
-            .collect();
-        if pts.len() != section.len() {
-            return;
-        }
-        let painter = ui.painter_at(rect);
-        painter.add(egui::Shape::convex_polygon(
-            pts.clone(),
-            accent.gamma_multiply(0.10),
-            egui::Stroke::NONE,
-        ));
-        let mut ring = pts.clone();
-        ring.push(pts[0]);
-        painter.add(egui::Shape::dashed_line(
-            &ring,
-            egui::Stroke::new(1.5, accent),
-            6.0,
-            4.0,
-        ));
-        let n = section.len() as f64;
-        let centre = [0, 1, 2].map(|k| section.iter().map(|p| p[k]).sum::<f64>() / n);
-        let len = 0.18 * bounds.radius();
-        let tip = [0, 1, 2].map(|k| centre[k] + c.normal[k] * len);
-        let (Some(s0), Some(s1)) = (
-            self.to_screen(cam, rect, centre),
-            self.to_screen(cam, rect, tip),
-        ) else {
-            return;
-        };
-        let axis = s1 - s0;
-        let px = axis.length();
-        let id = ui.scope_id().with("clip-gizmo");
-        let hit = Rect::from_center_size(s1, egui::vec2(22.0, 22.0)).union(Rect::from_center_size(
-            s0 + axis * 0.5,
-            egui::vec2(14.0, 14.0),
-        ));
-        let resp = ui.interact(hit, id, Sense::drag());
-        let name = self.i18n.tr("toolbar-clip-position");
-        resp.widget_info(|| WidgetInfo::labeled(Role::Slider, true, name.clone()));
-        let hot = resp.hovered() || resp.dragged();
-        let stroke = egui::Stroke::new(if hot { 3.0 } else { 2.0 }, accent);
-        if px > 4.0 {
-            painter.arrow(s0, axis, stroke);
-        }
-        painter.circle_filled(s0, 3.5, accent);
-        let resp = resp.on_hover_text(self.i18n.tr("toolbar-clip-position-tip"));
-        if resp.dragged() && px > 4.0 {
-            let d = resp.drag_delta();
-            let along = (d.x * axis.x + d.y * axis.y) / px;
-            let metres = along as f64 * len / px as f64;
-            if metres != 0.0 {
-                let (off, [lo, hi]) = c.offset(&bounds);
-                let v = (off + metres).clamp(lo, hi);
-                self.call("clip.set", json!({ "offset": v }));
-            }
         }
     }
 }

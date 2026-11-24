@@ -91,3 +91,12 @@ prism = "#E79504"
 hexahedron = "#7C90AF"
 tetrahedron = "#9E5D62"
 pyramid = "#C9DB72"
+
+# The clip plane's handles (the slide arrow and the tilt arcs) are drawn
+# as shaded tubes in the accent: the sides turned from the light mix in
+# up to shade_mix of shade, the highlight up to shine_mix of shine.
+[gizmo]
+shade = "#140A12"
+shade_mix = 0.6
+shine = "#FFFFFF"
+shine_mix = 0.55

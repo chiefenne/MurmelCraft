@@ -132,6 +132,14 @@ fn clip_step(s: &Session, share: f64) -> Option<Value> {
     Some(json!({"offset": (off - share * (hi - lo)).clamp(lo, hi)}))
 }
 
+/// The input of a `Dynamic` command, read from the session.
+type Input = fn(&Session) -> Option<Value>;
+
+/// A tilt of the clip plane, when there is one.
+fn tilt(s: &Session, axis: &str, deg: f64) -> Option<Value> {
+    s.display.clip.map(|_| json!({ "axis": axis, "deg": deg }))
+}
+
 /// The saved view `by` places after the one the camera is at (the first
 /// or the last when it is at none), wrapping round.
 fn step_view(s: &Session, by: isize) -> Option<Value> {
@@ -496,12 +504,18 @@ pub fn commands() -> Vec<Command> {
             Tool("clip.set", json!({ "mode": m })),
         ));
     }
-    for (dir, step) in [("more", 0.05), ("less", -0.05)] {
+    // The clip plane by keys: Alt + Shift + Up and Down slide it (as
+    // Shift + arrows pan the camera), Alt + arrows tilt it (as the
+    // arrows orbit the camera).
+    for (dir, step, key) in [
+        ("more", 0.05, "Alt+Shift+Up"),
+        ("less", -0.05, "Alt+Shift+Down"),
+    ] {
         v.push(cmd(
             format!("clip.set:{dir}"),
             format!("cmd-clip-{dir}"),
             "clip",
-            &[],
+            &[key],
             Dynamic(
                 "clip.set",
                 if step > 0.0 {
@@ -510,6 +524,23 @@ pub fn commands() -> Vec<Command> {
                     |s| clip_step(s, -0.05)
                 },
             ),
+        ));
+    }
+    // The normal turns towards the screen side named: about the screen's
+    // up axis for left and right, about its right axis for up and down.
+    let tilts: [(&str, &'static str, Input); 4] = [
+        ("left", "Alt+Left", |s| tilt(s, "y", -5.0)),
+        ("right", "Alt+Right", |s| tilt(s, "y", 5.0)),
+        ("up", "Alt+Up", |s| tilt(s, "x", -5.0)),
+        ("down", "Alt+Down", |s| tilt(s, "x", 5.0)),
+    ];
+    for (dir, key, input) in tilts {
+        v.push(cmd(
+            format!("clip.rotate:{dir}"),
+            format!("cmd-clip-tilt-{dir}"),
+            "clip",
+            &[key],
+            Dynamic("clip.rotate", input),
         ));
     }
     v.push(cmd(

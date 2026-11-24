@@ -147,6 +147,45 @@ impl Clip {
         pts.sort_by(|a, b| angle(a).total_cmp(&angle(b)));
         pts
     }
+
+    /// The point the plane turns about: the centre of its section with
+    /// `bounds` (inside the box, so a tilt keeps the plane in the mesh),
+    /// or the centre of the box moved onto the plane when the plane
+    /// misses it.
+    pub fn pivot(&self, bounds: &Bounds) -> [f64; 3] {
+        let section = self.box_section(bounds);
+        if section.is_empty() {
+            let c = if bounds.is_empty() {
+                self.origin
+            } else {
+                bounds.center()
+            };
+            let d = self.distance(c);
+            return [0, 1, 2].map(|k| c[k] - d * self.normal[k]);
+        }
+        let n = section.len() as f64;
+        [0, 1, 2].map(|k| section.iter().map(|p| p[k]).sum::<f64>() / n)
+    }
+
+    /// Tilt the plane by `deg` about the line through `pivot` along
+    /// `axis` (right-hand rule). The normal turns by Rodrigues' formula
+    /// and the plane passes through `pivot` afterwards. `None` (and no
+    /// change) for a zero axis or a non-finite angle.
+    pub fn rotate(&mut self, axis: [f64; 3], deg: f64, pivot: [f64; 3]) -> Option<()> {
+        let a = unit(axis)?;
+        if !deg.is_finite() || !pivot.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        // Rodrigues: n' = n cos t + (a x n) sin t + a (a . n)(1 - cos t).
+        let (s, c) = deg.to_radians().sin_cos();
+        let n = self.normal;
+        let axn = cross(a, n);
+        let an: f64 = (0..3).map(|k| a[k] * n[k]).sum();
+        let turned = [0, 1, 2].map(|k| n[k] * c + axn[k] * s + a[k] * an * (1.0 - c));
+        self.normal = unit(turned)?;
+        self.origin = pivot;
+        Some(())
+    }
 }
 
 /// Two unit vectors that span the plane with normal `n`.
@@ -221,5 +260,49 @@ mod tests {
         assert!(c.keeps([0.7, 0.0, 0.0]) && !c.keeps([0.8, 0.0, 0.0]));
         c.set_offset(&b, 2.0);
         assert!(c.box_section(&b).is_empty());
+    }
+
+    /// Invariant: tilting turns the normal about the axis by the angle
+    /// (90 degrees about Y takes +X to -Z), keeps it a unit vector, puts
+    /// the plane through the pivot, and the pivot of a plane that cuts
+    /// the box lies inside the box, so a tilt never moves the plane out
+    /// of the mesh. Breaks if the rotation sense or the pivot changes;
+    /// the tool and the window's tilt arcs rely on both.
+    #[test]
+    fn rotate_about_pivot() {
+        let b = Bounds {
+            min: [0.0; 3],
+            max: [2.0, 2.0, 2.0],
+        };
+        let mut c = Clip {
+            origin: [1.5, 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            mode: ClipMode::Crinkle,
+            enabled: true,
+        };
+        let p = c.pivot(&b);
+        assert!((p[0] - 1.5).abs() < 1e-12 && (p[1] - 1.0).abs() < 1e-12);
+        c.rotate([0.0, 1.0, 0.0], 90.0, p).unwrap();
+        assert!((c.normal[2] + 1.0).abs() < 1e-12, "{:?}", c.normal);
+        assert!(c.distance(p).abs() < 1e-12);
+        for _ in 0..7 {
+            c.rotate([0.3, 0.2, 0.9], 37.0, c.pivot(&b)).unwrap();
+            let l: f64 = c.normal.iter().map(|v| v * v).sum();
+            assert!((l - 1.0).abs() < 1e-12);
+            let q = c.pivot(&b);
+            assert!((0..3).all(|k| (0.0..=2.0).contains(&q[k])), "{q:?}");
+            assert!(c.box_section(&b).len() >= 3);
+        }
+        let before = c;
+        assert!(c.rotate([0.0; 3], 10.0, p).is_none());
+        assert!(c.rotate([1.0, 0.0, 0.0], f64::NAN, p).is_none());
+        assert_eq!(c, before);
+        // A plane beside the box turns about the box centre moved onto it.
+        let off = Clip {
+            origin: [5.0, 0.0, 0.0],
+            ..before
+        };
+        let q = off.pivot(&b);
+        assert!(off.distance(q).abs() < 1e-12);
     }
 }
