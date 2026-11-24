@@ -75,6 +75,7 @@ pub const GROUPS: &[&str] = &[
     "slice",
     "region",
     "measure",
+    "series",
     "selection",
     "settings",
 ];
@@ -1031,6 +1032,45 @@ pub fn commands() -> Vec<Command> {
             s.display.parcels.as_ref().map(|_| json!({}))
         }),
     ));
+    // Time series (D268): open one, play or pause it (Space), step on
+    // and back (. and ,), go to the first or the last step.
+    v.push(cmd(
+        "window.series_open",
+        "cmd-series-open",
+        "series",
+        &[],
+        Window(Some("series.open")),
+    ));
+    v.push(cmd(
+        "series.play:toggle",
+        "cmd-series-play",
+        "series",
+        &["Space"],
+        Dynamic("series.play", |s| {
+            let r = s.series.as_ref()?;
+            (r.len() > 1).then(|| json!({"playing": !r.playback.playing}))
+        }),
+    ));
+    let steps: [(&str, &str, &[&'static str], Input); 4] = [
+        ("series.go:next", "cmd-series-next", &["Period"], |s| {
+            s.series.as_ref().map(|_| json!({"by": 1}))
+        }),
+        (
+            "series.go:previous",
+            "cmd-series-previous",
+            &["Comma"],
+            |s| s.series.as_ref().map(|_| json!({"by": -1})),
+        ),
+        ("series.go:first", "cmd-series-first", &[], |s| {
+            s.series.as_ref().map(|_| json!({"to": "first"}))
+        }),
+        ("series.go:last", "cmd-series-last", &[], |s| {
+            s.series.as_ref().map(|_| json!({"to": "last"}))
+        }),
+    ];
+    for (id, key, keys, input) in steps {
+        v.push(cmd(id, key, "series", keys, Dynamic("series.go", input)));
+    }
     // Streamlines: Alt + L adds a seed line across the mesh near the low
     // end of its longest side (where a duct's inlet usually is), or turns
     // the current set on and off.
@@ -1835,8 +1875,23 @@ mod tests {
                 values: vec![1e-4],
             };
             let at = s.mesh.as_ref().unwrap().mesh.bounds().center();
-            murmel_mesh::parcels::write_parcels(&parcels, &[at], &[d], 0.1, 1, "c").unwrap();
-            assert!(crate::call("parcels.open", json!({"path": parcels}), s).ok());
+            murmel_mesh::parcels::write_parcels(
+                &parcels,
+                &[at],
+                std::slice::from_ref(&d),
+                0.1,
+                1,
+                "c",
+            )
+            .unwrap();
+            let second = parcels.with_file_name("parcels_000002.vtkhdf");
+            murmel_mesh::parcels::write_parcels(&second, &[at], &[d], 0.2, 2, "c").unwrap();
+            // A time series of the two (the channel stays the mesh), for
+            // the player's commands; it opens the first file's parcels.
+            let dir = parcels.parent().unwrap();
+            let e = crate::call("series.open", json!({"path": dir}), s);
+            assert!(e.ok(), "{:?}", e.diagnostics);
+            assert!(s.display.parcels.is_some());
             // A slice selected, so its settings can become the defaults.
             assert!(crate::call("select.item", json!({"item": "slice:1", "add": true}), s).ok());
             assert!(crate::call("select.item", json!({"item": "measure:1", "add": true}), s).ok());

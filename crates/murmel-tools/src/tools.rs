@@ -1444,7 +1444,20 @@ fn session_load(input: Value, s: &mut Session) -> Run {
     {
         v.path = p;
     }
-    let missing = s.restore(f);
+    let series = f.series.clone().zip(f.series_path(&i.path));
+    let mut missing = s.restore(f);
+    // The series walked, at the step shown (its files are open already).
+    if let Some((r, p)) = series {
+        match murmel_engine::series::Series::read(&p) {
+            Ok(mut walked) => {
+                walked.current = walked.index_of_step(r.step).unwrap_or(0);
+                walked.playback.rate = r.rate;
+                walked.playback.looping = r.looping;
+                s.series = Some(walked);
+            }
+            Err(_) => missing.push(format!("series:{}", p.display())),
+        }
+    }
     if !missing.is_empty() {
         warnings.push(json!(Diagnostic::new(
             "SESS004",
@@ -1456,6 +1469,7 @@ fn session_load(input: Value, s: &mut Session) -> Run {
         "mesh": s.mesh.as_ref().map(|m| &m.path),
         "camera": camera_json(s),
         "display": display_json(s),
+        "series": crate::series::series_json(s),
         "view_cube": s.view_cube,
         "skipped": missing,
         "warnings": warnings,
@@ -2236,6 +2250,15 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("probe.at", READS_ONLY),
     ("region.list", READS_ONLY),
     ("blocks.make", "writes a file; the view stays as it is"),
+    (
+        "series.open",
+        "opens files of a run; the view stays as it is",
+    ),
+    (
+        "series.go",
+        "shows another time step of the run; the view stays as it is",
+    ),
+    ("series.play", "how the window plays the series, not a view"),
 ];
 
 /// The reason in `NOT_JOURNALED` of a tool that changes nothing: no file,
@@ -2962,6 +2985,39 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::parcel::parcels_clear_schema,
         run: crate::parcel::parcels_clear,
+    },
+    Tool {
+        id: "series.open",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-series-open",
+        summary: "Open a time series of one run and show its first step (or step): FoehnCraft's series.json (format foehncraft.series 1: entries of step, time and files fields and parcels, relative to its folder; other keys ignored) or an output folder (its series.json, else its fields_<step>.vtkhdf and spray/parcels_<step>.vtkhdf, matched by step). Each step opens its fields file as the next time step of the open mesh (same cells: the display, derived fields, camera and journal stay, only the values change) and its parcel file with the parcel settings kept; a step without a fields file keeps the mesh shown, one without parcels draws none. The result's series gives the count, the index, step and time shown, its files, the first and last step and time, and the playback. Opening another mesh ends the series.",
+        outputs: &[],
+        reads: &["path"],
+        input_schema: crate::series::series_open_schema,
+        run: crate::series::series_open,
+    },
+    Tool {
+        id: "series.go",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-series-go",
+        summary: "Show another step of the open series: index (from 0), step, time (the nearest entry with a time), by (entries on, negative back; wraps round while the player loops, else holds at the ends) or to first or last; exactly one. A step the series lacks is refused with the steps it has.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::series::series_go_schema,
+        run: crate::series::series_go,
+    },
+    Tool {
+        id: "series.play",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-series-play",
+        summary: "Play or pause the open series in the window (playing), at rate steps a second (0.1 to 60, default 4), looping or stopping at the last step (loop, default on). The window's player bar and the status bar show it; on the command line and for scripts the setting is kept and steps are made with series.go, and export.movie with motion series writes a movie of the steps.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::series::series_play_schema,
+        run: crate::series::series_play,
     },
     Tool {
         id: "region.set",

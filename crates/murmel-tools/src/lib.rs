@@ -26,6 +26,7 @@ mod markdown;
 pub mod movie;
 mod parcel;
 mod region;
+pub mod series;
 mod stream;
 mod tools;
 

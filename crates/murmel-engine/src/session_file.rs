@@ -12,7 +12,8 @@
 //! vector arrows (since 1.6), the regions of interest (since 1.7; their
 //! flat cut since 1.8), the streamlines (since 1.9), the derived fields
 //! as recipes, computed again on loading (since 1.11), the spray
-//! parcels shown, their file read again on loading (since 1.12), the user's mesh
+//! parcels shown, their file read again on loading (since 1.12), the time
+//! series walked and the step shown (since 1.13), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -44,9 +45,22 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.12";
+pub const SESSION_VERSION: &str = "1.13";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
+
+/// The time series a session walks (1.13): its manifest or folder, kept
+/// twice as the mesh is, the step shown and the player's rate and loop.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeriesRef {
+    pub path: PathBuf,
+    pub absolute: PathBuf,
+    pub step: u64,
+    pub rate: f64,
+    #[serde(rename = "loop")]
+    pub looping: bool,
+}
 
 /// The mesh a session shows.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -145,6 +159,9 @@ pub struct SessionFile {
     /// (1.11); loading computes them again before the display returns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived: Vec<Recipe>,
+    /// The time series walked (1.13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<SeriesRef>,
 }
 
 /// `path` made absolute from the working folder, without touching the
@@ -296,6 +313,16 @@ impl SessionFile {
                 Vec::new()
             },
             derived: s.fields().map(|f| f.recipes().to_vec()).unwrap_or_default(),
+            series: s.series.as_ref().map(|r| {
+                let abs = absolute(&r.path);
+                SeriesRef {
+                    path: relative(&dir, &abs).unwrap_or_else(|| abs.clone()),
+                    absolute: abs,
+                    step: r.entry().step,
+                    rate: r.playback.rate,
+                    looping: r.playback.looping,
+                }
+            }),
         }
     }
 
@@ -456,6 +483,16 @@ impl SessionFile {
                 crate::parcel::MAX_SCALE
             )));
         }
+        if let Some(r) = &f.series
+            && !(r.rate.is_finite()
+                && (crate::series::MIN_RATE..=crate::series::MAX_RATE).contains(&r.rate))
+        {
+            return Err(Refused(format!(
+                "series: a rate of {} to {} steps a second",
+                crate::series::MIN_RATE,
+                crate::series::MAX_RATE
+            )));
+        }
         if f.display.streams.len() > crate::stream::MAX_STREAMS {
             return Err(Refused(format!(
                 "at most {} streamline sets",
@@ -514,6 +551,19 @@ impl SessionFile {
         Some(match abs {
             Some(a) if !rel.exists() && a.exists() => a,
             _ => rel,
+        })
+    }
+
+    /// The series manifest or folder to read: relative to `file`'s folder
+    /// if that exists, else the absolute path saved.
+    pub fn series_path(&self, file: &Path) -> Option<PathBuf> {
+        let r = self.series.as_ref()?;
+        let dir = absolute(file).parent().map(Path::to_path_buf)?;
+        let rel = absolute(&dir.join(&r.path));
+        Some(if rel.exists() || !r.absolute.exists() {
+            rel
+        } else {
+            r.absolute.clone()
         })
     }
 
@@ -799,6 +849,7 @@ mod tests {
                 camera: Camera::default(),
             }],
             derived: vec![Recipe::new(crate::derive::Quantity::Vorticity)],
+            series: None,
         };
         assert!(SessionFile::parse(&ok.to_json()).is_ok());
         let with = |f: &dyn Fn(&mut serde_json::Value)| {

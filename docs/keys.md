@@ -68,6 +68,9 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Alt + S` | Add a slice | `slice.set` (input from the session) |
 | `Alt + I` | Add an iso-surface | `iso.set` (input from the session) |
 | `Alt + V` | Vector arrows: show or hide | `arrows.set` (input from the session) |
+| `Space` | Play or pause the time series | `series.play` (input from the session) |
+| `Period` | Next time step | `series.go` (input from the session) |
+| `Comma` | Previous time step | `series.go` (input from the session) |
 | `Alt + L` | Streamlines: show or hide (adds a seed line if there is none) | `stream.set` (input from the session) |
 | `Alt + R` | Region: show or hide (adds a box if there is none) | `region.set` (input from the session) |
 | `Alt + Shift + R` | Region: cut flat along its border, or whole cells | `region.set` (input from the session) |
@@ -187,6 +190,9 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Spray parcels: show or hide | `parcels.set` (input from the session) |
 | palette | Spray parcels: size by diameter, or all the same | `parcels.set` (input from the session) |
 | palette | Remove the spray parcels | `parcels.clear` (input from the session) |
+| palette | Open time series… | window, then `series.open` |
+| palette | First time step | `series.go` (input from the session) |
+| palette | Last time step | `series.go` (input from the session) |
 | palette | Add streamlines from a line of seeds | `stream.set` (input from the session) |
 | palette | Add streamlines from a ball of seeds | `stream.set` (input from the session) |
 | palette | Add streamlines from a patch | `stream.set` (input from the session) |

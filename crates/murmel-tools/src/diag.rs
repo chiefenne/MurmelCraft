@@ -167,6 +167,26 @@ const OWN: &[Code] = &[
         ),
     },
     Code {
+        code: "SERIES001",
+        severity: Severity::Error,
+        meaning: "The time series cannot be read: the path does not exist, the manifest is not foehncraft.series 1 or names a step twice or a step without files, or the folder holds no numbered files.",
+        fix: Some(
+            "Give FoehnCraft's series.json or its output folder (fields_<step>.vtkhdf, spray/parcels_<step>.vtkhdf).",
+        ),
+    },
+    Code {
+        code: "SERIES002",
+        severity: Severity::Error,
+        meaning: "No time series is open.",
+        fix: Some("Open a series.json or an output folder with series.open."),
+    },
+    Code {
+        code: "SERIES003",
+        severity: Severity::Error,
+        meaning: "The series has no such step, index or time, or the rate is outside 0.1 to 60 steps a second.",
+        fix: Some("series.open's result gives the count, the first and last step and the times."),
+    },
+    Code {
         code: "STREAM001",
         severity: Severity::Error,
         meaning: "No streamline set has this number, or the display has the most it holds (8).",
