@@ -122,6 +122,48 @@ struct Plane {
     nodes: Option<(Vec<bool>, Vec<f64>)>,
 }
 
+/// The planes of a [`Cutter`] and the sides of the mesh nodes, without
+/// the cut points it numbers as it finds them: shared by threads.
+#[derive(Clone, Copy)]
+struct Sides<'a> {
+    points: &'a [[f64; 3]],
+    planes: &'a [Plane],
+    flat: &'a [usize],
+    regions: Option<&'a (&'a RegionCells, Vec<std::ops::Range<usize>>)>,
+}
+
+impl<'a> Sides<'a> {
+    /// The planes that slice cell `c` (`NO_CELL`: the clip planes only),
+    /// in order.
+    fn flat_of(self, c: u32) -> impl Iterator<Item = usize> + 'a {
+        let region = self.regions.and_then(|(rc, ranges)| {
+            let k = *rc.cut_by.as_ref()?.get(c as usize)?;
+            (k != NOT_CUT).then(|| ranges[k as usize].clone())
+        });
+        self.flat
+            .iter()
+            .copied()
+            .chain(region.into_iter().flatten())
+    }
+
+    /// Whether plane `p` keeps node `i` (a node on the plane counts as
+    /// kept).
+    fn keeps_node(self, p: usize, i: u32) -> bool {
+        let plane = &self.planes[p];
+        match &plane.nodes {
+            Some((keep, _)) => keep[i as usize],
+            None => plane.bound.distance(self.points[i as usize]) <= 0.0,
+        }
+    }
+
+    /// Whether a plane that slices cell `c` cuts away a node of it: the
+    /// cells with a section.
+    fn crosses(self, mesh: &Mesh, c: usize) -> bool {
+        self.flat_of(c as u32)
+            .any(|p| mesh.cell_points(c).any(|i| !self.keeps_node(p, i)))
+    }
+}
+
 /// The cut points found so far: where each is, which plane made it, and
 /// its name (plane, edge).
 #[derive(Default)]
@@ -160,11 +202,23 @@ impl<'a> Cutter<'a> {
         let mut planes: Vec<Plane> = display
             .active_clips()
             .map(|clip| {
-                let dist: Vec<f64> = mesh.points.iter().map(|&p| clip.distance(p)).collect();
+                let points = &mesh.points;
+                let mut dist = vec![0.0; points.len()];
+                murmel_mesh::par::chunks_mut(&mut dist, 1 << 16, |at, part| {
+                    for (d, &p) in part.iter_mut().zip(&points[at..]) {
+                        *d = clip.distance(p);
+                    }
+                });
+                let mut keeps = vec![false; points.len()];
+                murmel_mesh::par::chunks_mut(&mut keeps, 1 << 16, |at, part| {
+                    for (k, &d) in part.iter_mut().zip(&dist[at..]) {
+                        *k = d <= 0.0;
+                    }
+                });
                 Plane {
                     bound: Bound::from(clip),
                     flat: clip.mode == ClipMode::Flat,
-                    nodes: Some((dist.iter().map(|&d| d <= 0.0).collect(), dist)),
+                    nodes: Some((keeps, dist)),
                 }
             })
             .collect();
@@ -208,25 +262,20 @@ impl<'a> Cutter<'a> {
         !self.flat.is_empty() || self.regions.is_some()
     }
 
-    /// The region that cuts cell `c` flat, or `NOT_CUT`.
-    fn cut_by(&self, c: u32) -> u8 {
-        self.regions
-            .as_ref()
-            .and_then(|(rc, _)| rc.cut_by.as_ref()?.get(c as usize).copied())
-            .unwrap_or(NOT_CUT)
-    }
-
     /// The planes that slice cell `c` (`NO_CELL`: the clip planes only),
     /// in order.
     fn flat_of(&self, c: u32) -> impl Iterator<Item = usize> + '_ {
-        let region = self.regions.as_ref().and_then(|(rc, ranges)| {
-            let k = *rc.cut_by.as_ref()?.get(c as usize)?;
-            (k != NOT_CUT).then(|| ranges[k as usize].clone())
-        });
-        self.flat
-            .iter()
-            .copied()
-            .chain(region.into_iter().flatten())
+        self.sides().flat_of(c)
+    }
+
+    /// What the cutter knows before it cuts anything, for the threads.
+    fn sides(&self) -> Sides<'_> {
+        Sides {
+            points: self.points,
+            planes: &self.planes,
+            flat: &self.flat,
+            regions: self.regions.as_ref(),
+        }
     }
 
     fn pos(&self, v: V) -> [f64; 3] {
@@ -325,6 +374,10 @@ impl<'a> Cutter<'a> {
             if v.len() < 3 {
                 break;
             }
+            // Most polygons lie wholly on the kept side: left as they are.
+            if v.iter().all(|&x| self.keeps(p, x)) {
+                continue;
+            }
             v = self.clip_poly(p, &v);
         }
         v
@@ -391,11 +444,10 @@ impl<'a> Cutter<'a> {
     /// polygons the next one cuts (convex clipping of a polyhedron by
     /// half-spaces, one plane at a time).
     fn sections(&self, mesh: &Mesh, c: usize) -> Vec<Vec<V>> {
-        let planes: Vec<usize> = self.flat_of(c as u32).collect();
-        let crossed = |p: usize| mesh.cell_points(c).any(|i| !self.keeps(p, V::Node(i)));
-        if !planes.iter().any(|&p| crossed(p)) {
+        if !self.sides().crosses(mesh, c) {
             return Vec::new();
         }
+        let planes: Vec<usize> = self.flat_of(c as u32).collect();
         let mut set: Vec<(Vec<V>, bool)> = mesh
             .cell(c)
             .map(|f| (f.oriented().map(V::Node).collect(), false))
@@ -1077,21 +1129,33 @@ fn polygons(
             patch(b),
         );
     }
-    for u in 0..mesh.face_owner.len().min(mesh.face_neighbour.len()) {
+    // The faces between cells, and the boundary faces of the cells: on
+    // all threads, in face order, unless something cuts flat (the cut
+    // points are numbered as they are found, on one thread).
+    let regions_cut = flat
+        .and_then(|c| c.regions.as_ref())
+        .and_then(|(rc, _)| rc.cut_by.as_deref());
+    let slicing = flat.is_some();
+    let cut_by = |c: u32| {
+        regions_cut
+            .and_then(|k| k.get(c as usize).copied())
+            .unwrap_or(NOT_CUT)
+    };
+    let between = |u: usize, add: &mut dyn FnMut(Vec<V>, u32, u32, u32, Rgb, u32)| {
         let (o, n) = (mesh.face_owner[u], mesh.face_neighbour[u]);
         if o == NO_CELL {
-            continue;
+            return;
         }
         let so = shown[o as usize];
         if n == NO_CELL {
             if !so {
-                continue;
+                return;
             }
             match mesh.face_boundary.get(u).copied() {
                 Some(b) if b != NO_CELL => {
                     let b = b as usize;
                     if !display.face_visible(mesh, b) {
-                        continue;
+                        return;
                     }
                     add(
                         nodes(mesh.boundary.get(b)),
@@ -1111,7 +1175,7 @@ fn polygons(
                     GROUP_OPEN,
                 ),
             }
-            continue;
+            return;
         }
         let sn = shown[n as usize];
         if so && sn {
@@ -1119,9 +1183,7 @@ fn polygons(
             // whole or by another region): each side draws the face as
             // its own clip keeps it, so where one side is cut away the
             // other's face closes the surface (the rest lies inside).
-            if let Some(cut) = flat
-                && cut.cut_by(o) != cut.cut_by(n)
-            {
+            if slicing && cut_by(o) != cut_by(n) {
                 for c in [o, n] {
                     add(
                         nodes(mesh.face_nodes(u)),
@@ -1133,10 +1195,10 @@ fn polygons(
                     );
                 }
             }
-            continue;
+            return;
         }
         if !so && !sn {
-            continue;
+            return;
         }
         let c = if so { o } else { n };
         add(
@@ -1147,6 +1209,34 @@ fn polygons(
             display.cell_color(mesh, tokens, c as usize),
             GROUP_OPEN,
         );
+    };
+    let faces = mesh.face_owner.len().min(mesh.face_neighbour.len());
+    if slicing {
+        for u in 0..faces {
+            between(u, &mut add);
+        }
+    } else {
+        let found = murmel_mesh::par::collect(faces, 1 << 14, |r| {
+            let mut out = Vec::new();
+            let mut keep = |verts: Vec<V>, cell, face, boundary, color, group| {
+                if verts.len() >= 3 {
+                    out.push(Poly {
+                        verts,
+                        cell,
+                        face,
+                        boundary,
+                        color,
+                        group,
+                    });
+                }
+            };
+            for u in r {
+                between(u, &mut keep);
+            }
+            out
+        });
+        let mut add_all = |p: Poly| add(p.verts, p.cell, p.face, p.boundary, p.color, p.group);
+        found.into_iter().for_each(&mut add_all);
     }
     // Faces isolated on their own (I on picked faces), unless a cell
     // shown beside them already draws them.
@@ -1185,7 +1275,13 @@ fn polygons(
         }
     }
     if let Some(cutter) = flat {
-        for (c, &on) in shown.iter().enumerate() {
+        // The cells a plane crosses, found on all threads: a thin layer
+        // of the cells shown.
+        let sides = cutter.sides();
+        let crossed: Vec<bool> = murmel_mesh::par::collect(shown.len(), 1 << 12, |r| {
+            r.map(|c| shown[c] && sides.crosses(mesh, c)).collect()
+        });
+        for (c, &on) in crossed.iter().enumerate() {
             if !on {
                 continue;
             }

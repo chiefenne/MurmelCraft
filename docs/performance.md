@@ -412,3 +412,40 @@ What is left at 4 M cells: choosing and cutting the polygons is now
 most of a clipped surface (500 ms of the crinkle cut, 980 ms of the
 flat one, on one thread), and the feature edges spend 315 ms finding
 creases. Those are next.
+
+## Clipped surfaces on all threads (2026-11-24)
+
+With the buffers on all threads, choosing and cutting the polygons was
+most of a clipped surface, on one thread: the distance of every node
+to the plane, the cells the clip keeps, the faces between cells, and
+for a flat cut the cells the plane crosses.
+
+- The distances to each clip plane and the cells it keeps are found on
+  all threads (`Cutter::new`, `Display::shown_cells`, `kept_cells`).
+- The faces between cells are walked on all threads, in face order,
+  unless something cuts flat: the cut points of a flat cut are numbered
+  as they are found, so that walk stays on one thread.
+- A flat cut finds the cells the plane crosses on all threads first
+  (`Sides::crosses`, a thin layer of the cells) and builds the sections
+  of those only, instead of testing every cell on one thread. Polygons
+  the plane keeps whole are no longer copied through the clipper.
+- The buffers are the same, bit for bit, as before.
+
+polyMesh binary, same machine (4 threads), `--repeat 3`, old (main at
+e8bc81d) and new run one after the other; in brackets the polygon
+phase:
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| surface.crinkle | 108 (211) | 417 (733) |
+| — polygons | 58 (134) | 223 (547) |
+| surface.flat | 170 (353) | 659 (1,292) |
+| — polygons | 126 (296) | 503 (1,147) |
+| surface.hidden_zone | 75 (110) | 276 (330) |
+| clip.step.built | 118 (226) | 447 (702) |
+| clip.exact | 275 (366) | 859 (1,116) |
+
+A clip step built at once (the command line, agents) now takes 0.45 s
+at 4 M cells, and the exact cut after a drag follows in 0.86 s. Left
+in a flat cut: the sections of the crossed cells and the faces they
+clip, on one thread (cut points are named as found), about 0.3 s at 4 M.

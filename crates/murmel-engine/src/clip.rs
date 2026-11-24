@@ -222,9 +222,10 @@ fn normalize(v: [f64; 3]) -> [f64; 3] {
 /// kept side (crinkle and flat alike; flat then slices the cells it
 /// crosses).
 pub fn kept_cells(mesh: &Mesh, keeps_point: &[bool]) -> Vec<bool> {
-    (0..mesh.cell_count())
-        .map(|c| mesh.cell_points(c).any(|i| keeps_point[i as usize]))
-        .collect()
+    murmel_mesh::par::collect(mesh.cell_count(), 1 << 14, |r| {
+        r.map(|c| mesh.cell_points(c).any(|i| keeps_point[i as usize]))
+            .collect()
+    })
 }
 
 #[cfg(test)]
