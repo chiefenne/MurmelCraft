@@ -2694,3 +2694,177 @@ fn parcel_tools() {
     let e = call(tool, input, &mut s);
     assert_eq!(e.result["parcels"]["enabled"], false);
 }
+
+/// A run of two time steps of the channel (the same mesh and fields) with
+/// parcels: fields_000010/20.vtkhdf, spray/parcels_000010/20.vtkhdf and,
+/// with `manifest`, a series.json giving times 0.1 and 0.2.
+fn series_run(s: &mut Session, name: &str, manifest: bool) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("murmel-series-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("spray")).unwrap();
+    let mesh = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": mesh }), s).ok());
+    for step in [10u64, 20] {
+        std::fs::copy(&mesh, dir.join(format!("fields_{step:06}.vtkhdf"))).unwrap();
+        let p = parcel_file(s, &format!("parcels_{step:06}.vtkhdf"));
+        std::fs::copy(&p, dir.join(format!("spray/parcels_{step:06}.vtkhdf"))).unwrap();
+    }
+    if manifest {
+        let entry = |step: u64, t: f64| {
+            json!({"step": step, "time": t, "extra": true, "files": {
+                "fields": format!("fields_{step:06}.vtkhdf"),
+                "parcels": format!("spray/parcels_{step:06}.vtkhdf")}})
+        };
+        let m = json!({"format": "foehncraft.series", "format_version": 1, "case": "channel",
+            "entries": [entry(10, 0.1), entry(20, 0.2)]});
+        std::fs::write(dir.join("series.json"), m.to_string()).unwrap();
+    }
+    call("mesh.close", json!({}), s);
+    dir
+}
+
+/// Invariant: series.open reads FoehnCraft's manifest (or a folder) and
+/// shows the first step with its parcels; series.go to another step of
+/// the same mesh keeps the slice, the colouring, the parcel settings,
+/// the camera and the journal and only changes the files; steps, times
+/// and offsets out of the series are refused with what it has
+/// (SERIES003); series.play keeps the rate and refuses one out of range;
+/// a session file brings the series back at the step shown; export.movie
+/// with motion series writes one frame set per step and shows the step
+/// it started from again; opening another mesh ends the series. Breaks
+/// if stepping through a run reset the view (the player would be
+/// useless) or a movie left the session at its last step.
+#[test]
+fn series_tools() {
+    let mut s = session();
+    let e = call("series.go", json!({"by": 1}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES002");
+    let dir = series_run(&mut s, "tools", true);
+    let e = call("series.open", json!({"path": dir.join("nope")}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES001");
+    let e = call("series.open", json!({ "path": dir }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let r = &e.result["series"];
+    assert_eq!(
+        (r["count"].clone(), r["step"].clone(), r["time"].clone()),
+        (json!(2), json!(10), json!(0.1))
+    );
+    assert_eq!(r["source"], "manifest");
+    assert_eq!(e.result["parcels"]["parcels"], 9);
+    assert!(call("slice.set", json!({"axis": "z"}), &mut s).ok());
+    assert!(
+        call(
+            "parcels.set",
+            json!({"color": "velocity", "scale": 3.0}),
+            &mut s
+        )
+        .ok()
+    );
+    assert!(call("view.orbit", json!({"yaw_deg": 20.0}), &mut s).ok());
+    let camera = s.camera.clone();
+    let steps = s.journal.undo.len();
+    let e = call("series.go", json!({"step": 20}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["series"]["time"], 0.2);
+    assert_eq!(
+        s.mesh.as_ref().unwrap().path,
+        dir.join("fields_000020.vtkhdf")
+    );
+    assert_eq!(s.display.slices.len(), 1, "the slice stays");
+    let v = s.display.parcels.as_ref().unwrap();
+    assert_eq!(
+        (v.color.as_ref().unwrap().name.as_str(), v.scale),
+        ("velocity", 3.0)
+    );
+    assert_eq!(v.path, dir.join("spray/parcels_000020.vtkhdf"));
+    assert_eq!(s.camera, camera, "the camera stays");
+    assert_eq!(
+        s.journal.undo.len(),
+        steps,
+        "the journal stays, with no step"
+    );
+    // Undo keeps the step shown: the parcels stay those of step 20.
+    assert!(call("journal.undo", json!({}), &mut s).ok());
+    assert_eq!(
+        s.display.parcels.as_ref().unwrap().path,
+        dir.join("spray/parcels_000020.vtkhdf")
+    );
+    assert!(call("journal.redo", json!({}), &mut s).ok());
+    let e = call("series.go", json!({"step": 15}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES003");
+    assert!(
+        e.diagnostics[0].message.contains("10, 20"),
+        "{}",
+        e.diagnostics[0].message
+    );
+    assert_eq!(
+        call("series.go", json!({"index": 2}), &mut s).diagnostics[0].code,
+        "SERIES003"
+    );
+    let e = call("series.go", json!({"by": 1, "step": 10}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let e = call("series.go", json!({"by": 1}), &mut s);
+    assert_eq!(
+        e.result["series"]["step"], 10,
+        "by wraps round while looping"
+    );
+    let e = call("series.go", json!({"time": 0.18}), &mut s);
+    assert_eq!(e.result["series"]["step"], 20);
+    let e = call("series.play", json!({"rate": 100.0}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES003");
+    let e = call(
+        "series.play",
+        json!({"rate": 8.0, "loop": false, "playing": true}),
+        &mut s,
+    );
+    assert_eq!(
+        e.result["series"]["playback"],
+        json!({"playing": true, "rate": 8.0, "loop": false})
+    );
+    assert_eq!(
+        call("series.go", json!({"by": 1}), &mut s).result["series"]["step"],
+        20,
+        "held at the end"
+    );
+    // A movie of the steps: 2 steps of 3 frames, then step 20 again.
+    let frames = dir.join("movie");
+    let e = call(
+        "export.movie",
+        json!({"path": frames, "motion": "series", "hold": 0.25, "fps": 12, "width": 64, "height": 48}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["frames"], 6);
+    assert_eq!(e.result["motion"]["steps"], 2);
+    assert_eq!(s.series.as_ref().unwrap().entry().step, 20);
+    let e = call(
+        "export.movie",
+        json!({"path": frames, "motion": "series", "to": 15}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "SERIES003");
+    // A session file keeps the series and the step.
+    let file = dir.join("run.murmel");
+    assert!(call("session.save", json!({ "path": file }), &mut s).ok());
+    let mut t = session();
+    let e = call("session.load", json!({ "path": file }), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let r = t.series.as_ref().unwrap();
+    assert_eq!(
+        (r.entry().step, r.playback.rate, r.playback.looping),
+        (20, 8.0, false)
+    );
+    assert!(!r.playback.playing, "a loaded session does not play");
+    // Another mesh ends the series.
+    let mesh = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": mesh }), &mut s).ok());
+    assert!(s.series.is_none());
+    // A folder without a manifest: the numbered files, times from them.
+    let dir2 = series_run(&mut s, "folder", false);
+    let e = call("series.open", json!({"path": dir2, "step": 20}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["series"]["source"], "folder");
+    assert_eq!(e.result["series"]["time"], 0.5, "the parcel file's time");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
+}

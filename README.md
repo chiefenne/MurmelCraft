@@ -75,6 +75,18 @@ every change.
 
   <img src="assets/readme/spray-parcels.png" width="700" alt="Droplets of a FoehnCraft spray in a duct, seen from the top: a stream of small spheres enters at the upper left, slows from about 9 to 4 m/s (yellow to dark purple) and bends down towards the lower wall, over a slice of the gas coloured by speed">
 
+- Time series (`series.open`, `series.go`, `series.play`): the steps of
+  one run, from FoehnCraft's `series.json` or an output folder of
+  `fields_<step>.vtkhdf` and `spray/parcels_<step>.vtkhdf`. Each step
+  shows its fields and parcels with the slices, colouring, parcel
+  settings and camera kept; a player bar below the view (first, back,
+  play or pause, on, last, a step slider, speed and loop; Space, comma
+  and full stop) and the time in the status bar; `export.movie` with
+  motion `series` makes a movie of the steps; session files keep the
+  series and the step.
+
+  <img src="assets/readme/spray-series.gif" width="700" alt="A movie of the FoehnCraft spray in a duct, seen from the top: the stream of droplets grows from the injector at the upper left across the duct towards the lower wall, step by step, over a slice of the gas coloured by speed">
+
 - Derived fields (`field.derive`, the Derived fields window): vorticity,
   Q criterion, λ₂, total pressure and pressure coefficient computed from
   the result's velocity and pressure (the velocity gradient by least

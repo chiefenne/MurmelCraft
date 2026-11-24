@@ -28,6 +28,7 @@ pub mod parcel;
 pub mod pick;
 pub mod quality;
 pub mod region;
+pub mod series;
 pub mod session;
 pub mod session_file;
 pub mod settings;

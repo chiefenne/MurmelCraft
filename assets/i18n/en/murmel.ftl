@@ -773,6 +773,11 @@ movie-motion = Motion
 movie-motion-orbit = Turn around
 movie-motion-clip = Sweep a clip plane
 movie-motion-views = Fly through saved views
+movie-motion-series = Play the time series
+movie-steps = Steps
+movie-steps-n = { $n } steps of the series
+movie-no-series = No time series is open (File, Open time series…)
+movie-step-hold = Each step
 movie-degrees = Angle
 movie-seconds = Length
 movie-plane = Plane
@@ -1085,3 +1090,30 @@ derived-from-defaults = your default
 derived-from-built_in = built in
 derived-from-edited = typed here
 derived-foehncraft = Turbomachinery, turbulence and wall quantities come from FoehnCraft (foehn post derive).
+
+## Time series (D268): the player bar and its commands
+group-series = Time series
+region-player = Player
+cmd-series-open = Open time series…
+cmd-series-play = Play or pause the time series
+cmd-series-next = Next time step
+cmd-series-previous = Previous time step
+cmd-series-first = First time step
+cmd-series-last = Last time step
+tool-series-open = Open a time series
+tool-series-go = Go to a time step
+tool-series-play = Play the time series
+player-first = First step
+player-previous = Previous step
+player-play = Play
+player-pause = Pause
+player-next = Next step
+player-last = Last step
+player-slider = Time step
+player-at = Step { $step } · { $k } of { $n }
+player-at-time = Step { $step } · t = { $time } s · { $k } of { $n }
+player-rate = Speed
+player-rate-unit = { " " }steps/s
+player-loop = Loop
+status-series-time = t = { $time } s (step { $step })
+status-series-step = Step { $step }

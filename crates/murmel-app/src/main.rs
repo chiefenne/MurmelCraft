@@ -27,6 +27,7 @@ mod opening;
 mod own_bars;
 mod panels;
 mod parcels;
+mod player;
 mod quality;
 mod regions;
 mod stream_handle;

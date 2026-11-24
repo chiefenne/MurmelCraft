@@ -1,0 +1,8 @@
+[
+ {"tool": "series.open", "input": {"path": "output/spray_duct"}},
+ {"tool": "slice.set", "input": {"axis": "z"}},
+ {"tool": "display.color_by", "input": {"by": "field", "field": "velocity"}},
+ {"tool": "parcels.set", "input": {"color": "velocity", "map": "inferno", "scale": 2, "range": "fixed", "min": 3, "max": 10}},
+ {"tool": "view.standard", "input": {"view": "top"}},
+ {"tool": "export.movie", "input": {"path": "spray-series.gif", "motion": "series", "hold": 0.1, "fps": 10, "width": 800, "height": 320}}
+]

@@ -417,6 +417,13 @@ fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
     d.field_values = None;
     d.regions.clear();
     d.region_cells = None;
+    keep_field(&mut d, fields);
+    d
+}
+
+/// The field colouring stays when `fields` has the field, else it falls
+/// back to solid.
+fn keep_field(d: &mut Display, fields: &FieldSet) {
     if d.field
         .as_ref()
         .is_some_and(|c| fields.get(&c.name).is_none())
@@ -429,7 +436,6 @@ fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
     if d.color_by == ColorBy::Field && d.field.is_none() {
         d.color_by = ColorBy::Solid;
     }
-    d
 }
 
 /// The display (with the quality or field values it colours by) and the
@@ -662,6 +668,9 @@ pub struct Session {
     pub defer_clips: bool,
     /// The clip planes moving while their exact cut is built.
     pub preview: Option<ClipPreview>,
+    /// The time series being walked (`series.open`), whose current entry
+    /// is the open mesh and parcels; ended by opening another mesh.
+    pub series: Option<crate::series::Series>,
 }
 
 impl Session {
@@ -687,6 +696,7 @@ impl Session {
             remember_checked: false,
             defer_clips: false,
             preview: None,
+            series: None,
         }
     }
 
@@ -744,7 +754,65 @@ impl Session {
             Some(l) if l.path == path && l.is_fresh() => l,
             _ => load_checked(path, !self.hash_after_open, self.checked_dir())?,
         };
+        self.series = None;
         Ok(self.install(loaded))
+    }
+
+    /// Open the fields file of another time step of the same run: when
+    /// its mesh has the open one's cells and points, the display (slices,
+    /// iso-surfaces, streamlines, clip planes, …), the derived fields,
+    /// the camera and the journal stay and only the values change;
+    /// otherwise it opens as a new mesh does, but the camera stays. The
+    /// series stays open either way.
+    pub fn open_step(&mut self, path: &Path) -> Result<(), MeshError> {
+        let mut l = load_with(path, !self.hash_after_open)?;
+        let same = self.mesh.as_ref().is_some_and(|m| {
+            m.mesh.cell_count() == l.mesh.cell_count() && m.mesh.points.len() == l.mesh.points.len()
+        });
+        if !same {
+            let camera = self.camera.clone();
+            self.install(l);
+            self.camera = camera;
+            return Ok(());
+        }
+        let Some(old) = self.mesh.take() else {
+            return Ok(());
+        };
+        // The fields derived on the step before, made again of this one's.
+        for r in old.fields.recipes() {
+            if let Ok(f) = crate::derive::compute(&l.mesh, &l.fields, r) {
+                l.fields = l.fields.with_derived(f, r.clone());
+            }
+        }
+        if let Some(h) = self.hashing.take() {
+            h.stop();
+        }
+        if l.pending {
+            self.hashing = Some(Hashing::start(l.mesh.files.clone()));
+        }
+        let mut base = self.display.clone();
+        base.field_values = None;
+        base.stream_traces = None;
+        base.quality = None;
+        base.region_cells = None;
+        keep_field(&mut base, &l.fields);
+        let (display, surface) = prepare(base, &l.mesh, &l.fields, &self.tokens);
+        self.display = display;
+        self.surface_revision += 1;
+        self.preview = None;
+        self.mesh = Some(OpenMesh {
+            path: l.path,
+            built_for: self.display.clone(),
+            mesh: Arc::new(l.mesh),
+            evidence: l.evidence,
+            evidence_problem: l.evidence_problem,
+            surface,
+            digest: l.digest,
+            files: l.files,
+            validity: l.validity,
+            fields: Arc::new(l.fields),
+        });
+        Ok(())
     }
 
     /// Put a loaded mesh in place of the open one and fit the view. The
@@ -809,6 +877,9 @@ impl Session {
         self.display.field_values = None;
         self.display.regions.clear();
         self.display.region_cells = None;
+        self.display.parcels = None;
+        self.display.parcel_data = None;
+        self.series = None;
         self.surface_revision += 1;
     }
 

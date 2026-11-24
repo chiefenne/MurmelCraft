@@ -56,6 +56,17 @@ impl Snapshot {
         d.field_values = s.display.field_values.take();
         // Found again by the redraw when the regions differ.
         d.region_cells = s.display.region_cells.take();
+        // The values of the time step open now: streamlines traced on it,
+        // and its parcel file under the restored parcel settings.
+        d.stream_traces = if d.streams == s.display.streams {
+            s.display.stream_traces.take()
+        } else {
+            None
+        };
+        if let (Some(v), Some(now)) = (d.parcels.as_mut(), s.display.parcels.as_ref()) {
+            v.path.clone_from(&now.path);
+            d.parcel_data = s.display.parcel_data.clone();
+        }
         s.display = d;
         if redraw {
             s.redraw();
