@@ -23,6 +23,8 @@ const BAR_W: f32 = 16.0;
 /// The bar's height when the viewport has room, and the least it gets.
 const BAR_H: f32 = 220.0;
 const BAR_H_MIN: f32 = 72.0;
+/// Room right of the bar for the iso-surfaces' marks.
+const MARK_W: f32 = 12.0;
 /// Room for the header (name, unit) and the footer (range mode).
 const HEADER: f32 = 46.0;
 const FOOTER: f32 = 22.0;
@@ -57,7 +59,7 @@ impl MurmelApp {
                 })
                 .fold(0.0, f32::max)
         };
-        let width = (label_w + 10.0 + BAR_W).max(132.0);
+        let width = (label_w + 10.0 + BAR_W + MARK_W).max(132.0);
         let (top, bottom) = self.cube_right_room();
         let room = rect.height() - top - bottom - 32.0 - HEADER - FOOTER - 20.0;
         let bar_h = room.clamp(BAR_H_MIN, BAR_H);
@@ -65,6 +67,7 @@ impl MurmelApp {
         let at = Pos2::new(rect.right() - 16.0 - size.x, rect.top() + 16.0 + top);
         let area = Rect::from_min_size(at, size);
         let range_key = self.session.field_style().range.key();
+        let mut click: Option<(&'static str, Value)> = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
             egui::Frame::NONE
                 .fill(color(p.bg_panel).gamma_multiply(0.92))
@@ -91,13 +94,27 @@ impl MurmelApp {
                             .small()
                             .color(color(p.text_secondary)),
                     );
+                    // The marks of the iso-surfaces sit right of the bar.
                     let (resp, painter) =
-                        ui.allocate_painter(egui::vec2(width, bar_h + 12.0), Sense::hover());
+                        ui.allocate_painter(egui::vec2(width, bar_h + 12.0), Sense::click());
                     let bar = Rect::from_min_size(
-                        Pos2::new(resp.rect.right() - BAR_W, resp.rect.top() + 6.0),
+                        Pos2::new(resp.rect.right() - BAR_W - MARK_W, resp.rect.top() + 6.0),
                         egui::vec2(BAR_W, bar_h),
                     );
                     paint_bar(&painter, bar, ramp, color(line));
+                    self.iso_marks(&painter, bar, ramp);
+                    // A click on the bar places an iso-surface there
+                    // (decided 2026-11-24: "typed or clicked on the colour
+                    // bar").
+                    let near = |p: Pos2| bar.expand2(egui::vec2(4.0, 2.0)).contains(p);
+                    if resp.hover_pos().is_some_and(near) {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if resp.clicked()
+                        && let Some(at) = resp.interact_pointer_pos().filter(|&p| near(p))
+                    {
+                        click = self.iso_click(crate::extracts::bar_value(bar, ramp, at.y));
+                    }
                     painter.rect_stroke(
                         bar,
                         0.0,
@@ -126,6 +143,7 @@ impl MurmelApp {
                             ("hi", ramp.tick_label(ramp.hi).into()),
                         ],
                     );
+                    let resp = resp.on_hover_text(self.i18n.tr("field-bar-tip"));
                     resp.widget_info(|| WidgetInfo::labeled(Role::Image, true, desc.clone()));
                     ui.label(
                         RichText::new(self.i18n.tr(&format!("field-range-{range_key}")))
@@ -134,6 +152,9 @@ impl MurmelApp {
                     );
                 });
         });
+        if let Some((tool, input)) = click {
+            self.call(tool, input);
+        }
     }
 
     /// The field's settings, in the legend's menu.

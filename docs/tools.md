@@ -38,6 +38,12 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `clip.set` | 2 | read | Set a clip plane (plane: its number, clip:1 is the first; left out: the current plane, the one selected last or else added last; new: add one, up to 8): its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). A cell shows when every enabled plane keeps it; flat planes slice in the order they were added. |
 | `clip.rotate` | 1 | read | Tilt a clip plane (plane: its number; left out: the current plane) by deg degrees about an axis through pivot (right-hand rule). The axis is a screen axis (x right, y up, z towards the viewer, as in view.rotate) or a world vector; the pivot defaults to the centre of the plane inside the mesh's box, so the plane stays in the mesh. The window's tilt arcs and Alt + arrow keys call it. |
 | `clip.clear` | 2 | read | Remove a clip plane (plane: its number; left out: the current plane), or all of them (all); the planes after it move up one. |
+| `slice.set` | 1 | read | Add or change a slice (slice: its number, slice:1 is the first; left out: the current slice, the one selected last or else added last; new: add one, up to 8): a plane through the cells shown that cuts nothing away and draws their sections in the colours of the mesh (the field shown in its style, or the colour mode's cell colours). Its normal by axis (x, y, z or view) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, flip and enabled, as for clip.set. A series: count planes (1 to 64) spacing apart along the normal, the middle one at the origin; a count without spacing spreads them evenly through the mesh. While slices or iso-surfaces show, the mesh draws as a faint outline (display.mesh_look). Clip planes cut slices too. |
+| `slice.rotate` | 1 | read | Tilt a slice (slice: its number; left out: the current slice) by deg degrees about an axis through pivot, as clip.rotate tilts a clip plane: a screen axis (x right, y up, z towards the viewer) or a world vector; the pivot defaults to the centre of the plane inside the mesh's box. The window's tilt arcs call it. |
+| `slice.clear` | 1 | read | Remove a slice (slice: its number; left out: the current slice), or all of them (all); the slices after it move up one. |
+| `iso.set` | 1 | read | Add or change an iso-surface (iso: its number, iso:1 is the first; left out: the current one; new: add one, up to 8): the surface where field (with component for a vector; left out: its own field, else the field shown, else the file's first) takes value (left out: its own value, or the middle of the field's range for a new one or a new field). color solid gives it a colour of its own (the patch hues in turn, or display.set_color on iso:<n>); field colours it by the field on the colour bar in that field's style. Made by marching tetrahedra in every cell shown (cell centroid, face centres and nodes), so it closes across cells; clip planes cut it. |
+| `iso.clear` | 1 | read | Remove an iso-surface (iso: its number; left out: the current one), or all of them (all); those after it move up one. |
+| `display.mesh_look` | 1 | read | What the mesh looks like while slices or iso-surfaces show: outline (the default: its feature edges only, faint, so what is inside stands out; a click then picks the slices) or faces (as the render mode says). |
 | `select.item` | 2 | read | Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected. |
 | `select.pick` | 1 | read | Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked. |
 | `select.filter` | 1 | read | Choose what a click in the viewport picks: cell (the default) or face. |
@@ -1074,6 +1080,216 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     }
   },
   "required": [],
+  "type": "object"
+}
+```
+
+### `slice.set`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axis": {
+      "enum": [
+        "x",
+        "y",
+        "z",
+        "view"
+      ]
+    },
+    "count": {
+      "maximum": 64,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "flip": {
+      "type": "boolean"
+    },
+    "new": {
+      "type": "boolean"
+    },
+    "normal": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "offset": {
+      "type": "number"
+    },
+    "origin": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "slice": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "spacing": {
+      "exclusiveMinimum": 0,
+      "type": "number"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `slice.rotate`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axis": {
+      "oneOf": [
+        {
+          "enum": [
+            "x",
+            "y",
+            "z"
+          ]
+        },
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ]
+    },
+    "deg": {
+      "type": "number"
+    },
+    "pivot": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "slice": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "axis",
+    "deg"
+  ],
+  "type": "object"
+}
+```
+
+### `slice.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "all": {
+      "type": "boolean"
+    },
+    "slice": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `iso.set`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "color": {
+      "enum": [
+        "solid",
+        "field"
+      ]
+    },
+    "component": {
+      "enum": [
+        "magnitude",
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "field": {
+      "type": "string"
+    },
+    "iso": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "new": {
+      "type": "boolean"
+    },
+    "value": {
+      "type": "number"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `iso.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "all": {
+      "type": "boolean"
+    },
+    "iso": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `display.mesh_look`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "look": {
+      "enum": [
+        "outline",
+        "faces"
+      ]
+    }
+  },
+  "required": [
+    "look"
+  ],
   "type": "object"
 }
 ```
@@ -2131,6 +2347,11 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `VIEW004` | error | The view name is empty, longer than 64 characters, holds control characters, or another saved view has it. | Choose another name, or delete the other view first. |
 | `CLIP001` | error | No clip plane has this number. | Clip planes count from 1 (clip:1); the clips list of the result names them. |
 | `CLIP002` | error | The display has the most clip planes it holds (8). | Remove a clip plane with clip.clear, or change one with clip.set. |
+| `SLICE001` | error | No slice has this number. | Slices count from 1 (slice:1); the slices list of the result names them. |
+| `SLICE002` | error | The display has the most slices it holds (8; a series counts once). | Remove a slice with slice.clear, change one with slice.set, or make a series (count). |
+| `SLICE003` | error | A series has a count outside 1 to 64 or a spacing that is not positive. | Give count 1 to 64, and a positive spacing or none (the planes then spread through the mesh). |
+| `ISO001` | error | No iso-surface has this number. | Iso-surfaces count from 1 (iso:1); the isos list of the result names them. |
+| `ISO002` | error | The display has the most iso-surfaces it holds (8). | Remove one with iso.clear, or change one with iso.set. |
 | `MCP001` | error | The MCP server refused a path outside its read or write roots. | Use a path below a --read-root (files read) or a --write-root (files written), or start the server with more roots. |
 | `MCP002` | error | The MCP server could not resolve a path (it does not exist, or its folder does not). | Check the path; relative paths resolve from the first --write-root. |
 | `LIVE001` | error | No MurmelCraft window listens for agents (none is open, agents are switched off in its Settings, or the platform has no live bridge yet). | Open MurmelCraft and switch on Settings > Agents > Let agents drive this window, or start the MCP server without --live for a headless session. |

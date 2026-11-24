@@ -22,6 +22,7 @@ use murmel_mesh::{Bounds, Mesh, NO_CELL};
 
 use crate::clip::{Clip, ClipMode};
 use crate::display::{Display, Item, RenderMode};
+use crate::field::FieldSet;
 
 /// Feature edges (render mode 4) bend by more than this angle between
 /// their two faces (UI spec, Display).
@@ -351,8 +352,20 @@ impl Surface {
     }
 
     /// Triangulate the outside of the cells of `mesh` that `display`
-    /// shows, in the colours it asks for.
+    /// shows, in the colours it asks for, with its slices (iso-surfaces
+    /// need the fields: [`Surface::build_with`]).
     pub fn build(mesh: &Mesh, tokens: &Tokens, display: &Display) -> Surface {
+        Self::build_with(mesh, None, tokens, display)
+    }
+
+    /// [`Surface::build`] with the slices and iso-surfaces of `display`
+    /// ([`crate::extract`]) drawn into the same buffers.
+    pub fn build_with(
+        mesh: &Mesh,
+        fields: Option<&FieldSet>,
+        tokens: &Tokens,
+        display: &Display,
+    ) -> Surface {
         let bounds = mesh.bounds();
         let origin = bounds.center();
         let mut s = Surface {
@@ -396,7 +409,13 @@ impl Surface {
             .map(|p| p.verts.iter().map(|&v| pos(v)).collect())
             .collect();
         let normals: Vec<[f32; 3]> = pts.iter().map(|p| newell(p)).collect();
-        let features = (display.render_mode == RenderMode::FeatureEdges).then(|| {
+        // While slices or iso-surfaces show, the mesh is a faint outline
+        // of its feature edges (or, in a render mode without faces, its
+        // lines): its triangles are left out, so a click picks what is
+        // inside.
+        let faint = display.outline_mesh();
+        let mesh_triangles = !(display.extracts_shown() && !display.mesh_faces());
+        let features = (display.render_mode == RenderMode::FeatureEdges || faint).then(|| {
             feature_edges(
                 polys
                     .iter()
@@ -446,12 +465,21 @@ impl Surface {
                 }
                 flat.is_finite().then_some((flat, corners))
             });
-            if let Some((flat, corners)) = valued {
+            if let Some((flat, corners)) = valued
+                && mesh_triangles
+            {
                 drawn.add(flat);
                 corners.iter().for_each(|&x| drawn.add(x));
             }
             let sel_mix = if unselected { 0.0 } else { mix };
-            let (color, ec) = if field.is_some() {
+            let (color, ec) = if faint {
+                let ec = if unselected {
+                    tokens.mesh.field.outline
+                } else {
+                    sel
+                };
+                (rgb.linear(), ec.linear())
+            } else if field.is_some() {
                 let face = if valued.is_some() {
                     rgb
                 } else {
@@ -514,7 +542,9 @@ impl Surface {
                 s.values.push(v);
             };
             let tris_before = s.indices.len() / 3;
-            if pts.len() == 3 {
+            if !mesh_triangles {
+                // Edges only.
+            } else if pts.len() == 3 {
                 for (j, &p) in pts.iter().enumerate() {
                     push(&mut s, p, value(corner(j)));
                 }
@@ -554,6 +584,9 @@ impl Surface {
         }
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
         s.field_range = drawn.range();
+        if display.extracts_shown() {
+            crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
+        }
         s.outline_color = sel.linear();
         for (a, b) in outline(mesh, display) {
             for i in [a, b] {
@@ -754,7 +787,7 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         Item::Kind(k) => cell.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
         Item::Cell(c) => poly.cell == c,
         Item::Face(u) => poly.face == u,
-        Item::Clip(_) | Item::Measure(_) | Item::Probe(_) => false,
+        Item::Clip(_) | Item::Measure(_) | Item::Probe(_) | Item::Slice(_) | Item::Iso(_) => false,
     })
 }
 

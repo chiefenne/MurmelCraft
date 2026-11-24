@@ -522,7 +522,7 @@ fn item(s: &Session, id: &str) -> Result<Item, Diagnostic> {
         .ok_or_else(|| Diagnostic::new("VIEW002", format!("no item {id} in the open mesh")))
 }
 
-fn display_json(s: &Session) -> Value {
+pub(crate) fn display_json(s: &Session) -> Value {
     let d = &s.display;
     let Some(m) = &s.mesh else {
         return json!({"color_by": d.color_by, "render_mode": d.render_mode});
@@ -547,6 +547,9 @@ fn display_json(s: &Session) -> Value {
         "colors": colors,
         "quality": quality_json(s),
         "field": field_shown_json(s),
+        "slices": (0..d.slices.len()).map(|k| crate::extract::slice_json(s, k)).collect::<Vec<_>>(),
+        "isos": (0..d.isos.len()).map(|k| crate::extract::iso_json(s, k)).collect::<Vec<_>>(),
+        "mesh_look": d.mesh_look,
     })
 }
 
@@ -703,6 +706,12 @@ fn display_set_color(input: Value, s: &mut Session) -> Run {
         return Err(Diagnostic::new(
             "VIEW002",
             "a clip plane has no colour; it cuts the mesh",
+        ));
+    }
+    if matches!(it, Item::Slice(_)) {
+        return Err(Diagnostic::new(
+            "VIEW002",
+            "a slice takes the colours of the cells it cuts",
         ));
     }
     if matches!(it, Item::Measure(_) | Item::Probe(_)) {
@@ -1818,7 +1827,7 @@ fn measure_list(_: Value, s: &mut Session) -> Run {
 // ---- fields -------------------------------------------------------------
 
 /// The fields of the open mesh; FIELD001 when it has none.
-fn need_fields(s: &Session) -> Result<&FieldSet, Diagnostic> {
+pub(crate) fn need_fields(s: &Session) -> Result<&FieldSet, Diagnostic> {
     need_mesh(s)?;
     match s.fields() {
         Some(f) if !f.is_empty() => Ok(f),
@@ -1831,7 +1840,7 @@ fn need_fields(s: &Session) -> Result<&FieldSet, Diagnostic> {
 
 /// The field `name` (or the one chosen now, or the first of the file)
 /// with `component` (or the one chosen now for the same field).
-fn field_choice(
+pub(crate) fn field_choice(
     s: &Session,
     name: Option<&str>,
     component: Option<Component>,
@@ -2109,6 +2118,12 @@ pub const JOURNALED: &[&str] = &[
     "display.color_by",
     "display.threshold",
     "field.style",
+    "slice.set",
+    "slice.rotate",
+    "slice.clear",
+    "iso.set",
+    "iso.clear",
+    "display.mesh_look",
     "display.set_color",
     "display.visibility",
     "clip.set",
@@ -2746,6 +2761,72 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: clip_clear,
+    },
+    Tool {
+        id: "slice.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-slice-set",
+        summary: "Add or change a slice (slice: its number, slice:1 is the first; left out: the current slice, the one selected last or else added last; new: add one, up to 8): a plane through the cells shown that cuts nothing away and draws their sections in the colours of the mesh (the field shown in its style, or the colour mode's cell colours). Its normal by axis (x, y, z or view) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, flip and enabled, as for clip.set. A series: count planes (1 to 64) spacing apart along the normal, the middle one at the origin; a count without spacing spreads them evenly through the mesh. While slices or iso-surfaces show, the mesh draws as a faint outline (display.mesh_look). Clip planes cut slices too.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::extract::slice_set_schema,
+        run: crate::extract::slice_set,
+    },
+    Tool {
+        id: "slice.rotate",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-slice-rotate",
+        summary: "Tilt a slice (slice: its number; left out: the current slice) by deg degrees about an axis through pivot, as clip.rotate tilts a clip plane: a screen axis (x right, y up, z towards the viewer) or a world vector; the pivot defaults to the centre of the plane inside the mesh's box. The window's tilt arcs call it.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::extract::slice_rotate_schema,
+        run: crate::extract::slice_rotate,
+    },
+    Tool {
+        id: "slice.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-slice-clear",
+        summary: "Remove a slice (slice: its number; left out: the current slice), or all of them (all); the slices after it move up one.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::extract::slice_clear_schema,
+        run: crate::extract::slice_clear,
+    },
+    Tool {
+        id: "iso.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-iso-set",
+        summary: "Add or change an iso-surface (iso: its number, iso:1 is the first; left out: the current one; new: add one, up to 8): the surface where field (with component for a vector; left out: its own field, else the field shown, else the file's first) takes value (left out: its own value, or the middle of the field's range for a new one or a new field). color solid gives it a colour of its own (the patch hues in turn, or display.set_color on iso:<n>); field colours it by the field on the colour bar in that field's style. Made by marching tetrahedra in every cell shown (cell centroid, face centres and nodes), so it closes across cells; clip planes cut it.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::extract::iso_set_schema,
+        run: crate::extract::iso_set,
+    },
+    Tool {
+        id: "iso.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-iso-clear",
+        summary: "Remove an iso-surface (iso: its number; left out: the current one), or all of them (all); those after it move up one.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::extract::iso_clear_schema,
+        run: crate::extract::iso_clear,
+    },
+    Tool {
+        id: "display.mesh_look",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-display-mesh-look",
+        summary: "What the mesh looks like while slices or iso-surfaces show: outline (the default: its feature edges only, faint, so what is inside stands out; a click then picks the slices) or faces (as the render mode says).",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::extract::mesh_look_schema,
+        run: crate::extract::mesh_look,
     },
     Tool {
         id: "select.item",

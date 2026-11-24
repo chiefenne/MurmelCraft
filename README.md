@@ -24,6 +24,13 @@ tool that the window, the command line and the MCP server share.
   cool-warm for ranges symmetric about zero), each reversible, and a
   colour bar with its settings menu. Properties and probes show the
   values.
+- Slices and iso-surfaces of the results (`slice.set`, `slice.rotate`,
+  `iso.set`): slices placed and moved like clip planes (handles, X/Y/Z,
+  typed origin and normal), single or as a series with count and
+  spacing, in the mesh's field style; iso-surfaces at one value each
+  (typed, or clicked on the colour bar), solid or coloured by the field
+  shown, by marching tetrahedra. The mesh shows as a faint outline
+  meanwhile, its faces one click away.
 - Shaded with edges, patch colours, orbit, pan, zoom to the cursor, fit,
   home, the three projection modes (default: perspective with orthographic
   faces), dark and light themes switched live.

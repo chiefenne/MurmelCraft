@@ -22,6 +22,12 @@
 //! dashed line and, during the drag, a wedge of the angle turned so far.
 //! Like the view cube they are painted by egui, so screenshots
 //! (`view.screenshot`) leave them out.
+//!
+//! Slices (field results, stage 2) take the same handles, calling
+//! `slice.set` and `slice.rotate` (decided 2026-11-24: "placed and moved
+//! like clip planes"). One plane carries them at a time: the clip plane
+//! or slice selected last, else the slice added last, else the current
+//! clip plane.
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{Color32, CursorIcon, FontId, Pos2, Rect, Role, Sense, Ui, WidgetInfo};
@@ -63,6 +69,25 @@ impl Handle {
     }
 }
 
+/// The plane the handles move (0-based).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    Clip(usize),
+    Slice(usize),
+}
+
+impl Target {
+    /// The tool that slides or tilts it, and its input naming it.
+    fn tool(self, rotate: bool) -> (&'static str, &'static str, usize) {
+        match (self, rotate) {
+            (Target::Clip(k), false) => ("clip.set", "plane", k + 1),
+            (Target::Clip(k), true) => ("clip.rotate", "plane", k + 1),
+            (Target::Slice(k), false) => ("slice.set", "slice", k + 1),
+            (Target::Slice(k), true) => ("slice.rotate", "slice", k + 1),
+        }
+    }
+}
+
 /// A drag of a handle under way: what it turns about stays fixed until
 /// the button is let go, so the plane turns smoothly about one line.
 #[derive(Clone, Copy, Debug)]
@@ -75,9 +100,9 @@ pub struct ClipDrag {
     /// Which side of the pivot each arc sits on (+1 or -1), kept for the
     /// drag so the arcs do not jump.
     pub sides: [f64; 2],
-    /// The clip plane dragged (0-based); a drag ends when another plane
-    /// becomes the current one.
-    pub plane: usize,
+    /// The plane dragged; a drag ends when another plane takes the
+    /// handles.
+    pub plane: Target,
 }
 
 /// Where a handle is on screen this frame: the middle of its centre line
@@ -486,23 +511,50 @@ fn short(v: f64) -> String {
 }
 
 impl MurmelApp {
-    /// The clip plane's outline inside the mesh's box and its handles.
+    /// The plane that carries the handles, if it shows: the clip plane or
+    /// slice selected last, else the slice added last, else the current
+    /// clip plane. A slice series moves by its middle plane.
+    pub(crate) fn handle_target(&self) -> Option<(Target, Clip)> {
+        let d = &self.session.display;
+        let clip = |k: usize| {
+            d.clips
+                .get(k)
+                .filter(|c| c.enabled)
+                .map(|c| (Target::Clip(k), *c))
+        };
+        let slice = |k: usize| {
+            d.slices
+                .get(k)
+                .filter(|c| c.enabled)
+                .map(|c| (Target::Slice(k), c.plane()))
+        };
+        let picked = d.selection.iter().rev().find_map(|&i| match i {
+            murmel_engine::Item::Clip(k) => Some(clip(k as usize)),
+            murmel_engine::Item::Slice(k) => Some(slice(k as usize)),
+            _ => None,
+        });
+        match picked {
+            Some(t) => t,
+            None => d
+                .current_slice()
+                .and_then(slice)
+                .or_else(|| d.current_clip().and_then(clip)),
+        }
+    }
+
+    /// The outline inside the mesh's box of the clip plane or slice that
+    /// carries the handles, and the handles.
     pub(crate) fn clip_handles(&mut self, ui: &Ui, rect: Rect, cam: &Camera, dark: bool) {
         self.clip_spots.clear();
         self.rotation_plane = None;
-        let Some(c) = self.session.display.active_clip().copied() else {
+        // The calls name the plane, so the drag stays on it.
+        let Some((current, c)) = self.handle_target() else {
             self.clip_drag = None;
-            return;
-        };
-        // The handles belong to the current plane (selected, else added
-        // last); the calls name it, so the drag stays on it.
-        let Some(current) = self.session.display.current_clip() else {
             return;
         };
         if self.clip_drag.is_some_and(|d| d.plane != current) {
             self.clip_drag = None;
         }
-        let plane = current + 1;
         let Some(m) = &self.session.mesh else { return };
         let bounds = m.mesh.bounds();
         let section = c.box_section(&bounds);
@@ -729,7 +781,8 @@ impl MurmelApp {
                         if metres != 0.0 {
                             let (off, [lo, hi]) = c.offset(&bounds);
                             let v = (off + metres).clamp(lo, hi);
-                            self.call("clip.set", json!({ "plane": plane, "offset": v }));
+                            let (tool, key, n) = current.tool(false);
+                            self.call(tool, json!({ key: n, "offset": v }));
                         }
                     }
                 }
@@ -746,9 +799,10 @@ impl MurmelApp {
                         let rad = k * (d.x * t.x + d.y * t.y) as f64 / l2;
                         if rad != 0.0 {
                             let deg = rad.to_degrees();
+                            let (tool, key, n) = current.tool(true);
                             self.call(
-                                "clip.rotate",
-                                json!({ "plane": plane, "axis": axis, "deg": deg, "pivot": pivot }),
+                                tool,
+                                json!({ key: n, "axis": axis, "deg": deg, "pivot": pivot }),
                             );
                         }
                     }

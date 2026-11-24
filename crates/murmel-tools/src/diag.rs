@@ -73,6 +73,40 @@ const OWN: &[Code] = &[
         fix: Some("Remove a clip plane with clip.clear, or change one with clip.set."),
     },
     Code {
+        code: "SLICE001",
+        severity: Severity::Error,
+        meaning: "No slice has this number.",
+        fix: Some("Slices count from 1 (slice:1); the slices list of the result names them."),
+    },
+    Code {
+        code: "SLICE002",
+        severity: Severity::Error,
+        meaning: "The display has the most slices it holds (8; a series counts once).",
+        fix: Some(
+            "Remove a slice with slice.clear, change one with slice.set, or make a series (count).",
+        ),
+    },
+    Code {
+        code: "SLICE003",
+        severity: Severity::Error,
+        meaning: "A series has a count outside 1 to 64 or a spacing that is not positive.",
+        fix: Some(
+            "Give count 1 to 64, and a positive spacing or none (the planes then spread through the mesh).",
+        ),
+    },
+    Code {
+        code: "ISO001",
+        severity: Severity::Error,
+        meaning: "No iso-surface has this number.",
+        fix: Some("Iso-surfaces count from 1 (iso:1); the isos list of the result names them."),
+    },
+    Code {
+        code: "ISO002",
+        severity: Severity::Error,
+        meaning: "The display has the most iso-surfaces it holds (8).",
+        fix: Some("Remove one with iso.clear, or change one with iso.set."),
+    },
+    Code {
         code: "MCP001",
         severity: Severity::Error,
         meaning: "The MCP server refused a path outside its read or write roots.",

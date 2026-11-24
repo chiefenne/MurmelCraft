@@ -578,3 +578,108 @@ fn field_legend_and_settings() {
     assert!(named(&h, "Bands"), "the menu stays open with the bands");
     assert_eq!(problems(&h), Vec::<String>::new(), "banded with lines");
 }
+
+/// Invariant (stage 2 of field results, the maintainer's cards of
+/// 2026-11-24): the tree's "Add slice" adds a slice that takes the clip
+/// planes' handles (a drag of the arrow slides it, one undo step), the
+/// mesh turns into its faint outline with a named "Show the mesh faces"
+/// box that brings the faces back, a click on the colour bar adds an
+/// iso-surface of the field shown at that height, and with that
+/// iso-surface selected a second click moves it instead of adding one;
+/// every control and row keeps a clean name. Breaks if the handles stay
+/// on clip planes only, the bar stops taking clicks, or a row loses its
+/// name; the tool tests do not click.
+#[test]
+fn slices_and_iso_surfaces_in_the_window() {
+    use crate::clip_handle::{Handle, Target};
+    let mut h = harness();
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.state_mut().call(
+        "display.color_by",
+        serde_json::json!({"by": "field", "field": "pressure"}),
+    );
+    h.run_steps(3);
+    h.get_by_label("Add slice (Alt + S)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.display.slices.len(), 1);
+    assert!(h.state().session.display.outline_mesh(), "faint outline");
+    assert_eq!(problems(&h), Vec::<String>::new(), "a slice");
+    assert!(named(&h, "Slice 1: X"), "slice row");
+
+    // The slice carries the handles; the arrow slides it.
+    assert!(matches!(
+        h.state().handle_target(),
+        Some((Target::Slice(0), _))
+    ));
+    assert_eq!(h.state().clip_spots.len(), 3);
+    let start = h.state().session.display.slices[0];
+    let s = *h
+        .state()
+        .clip_spots
+        .iter()
+        .find(|s| s.handle == Handle::Slide)
+        .unwrap();
+    drag(&mut h, s.at, s.dir * 40.0, 6);
+    let slid = h.state().session.display.slices[0];
+    assert_eq!(slid.normal, start.normal, "a slide does not turn");
+    assert!(slid.plane().distance(start.origin).abs() > 1e-6, "it moved");
+    h.state_mut().call("journal.undo", serde_json::json!({}));
+    assert_eq!(h.state().session.display.slices[0], start, "one undo step");
+    h.run_steps(2);
+
+    // A click on the colour bar adds an iso-surface of pressure there.
+    let bar = h
+        .root()
+        .children_recursive()
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Colour bar of pressure, from "))
+        })
+        .map(|n| n.rect())
+        .expect("the colour bar");
+    let x = bar.right() - 12.0 - 8.0;
+    click(&mut h, egui::pos2(x, bar.center().y), egui::Modifiers::NONE);
+    let isos = h.state().session.display.isos.clone();
+    assert_eq!(isos.len(), 1, "one iso-surface");
+    assert_eq!(isos[0].field.name, "pressure");
+    let (lo, hi) = h.state().session.field_range().unwrap();
+    let mid = 0.5 * (lo + hi);
+    assert!(
+        (isos[0].value - mid).abs() < 0.1 * (hi - lo),
+        "{} near the middle {mid}",
+        isos[0].value
+    );
+    h.run_steps(2);
+    assert_eq!(problems(&h), Vec::<String>::new(), "an iso-surface");
+    let label = h.state().iso_label(0);
+    assert!(label.starts_with("Iso 1: pressure = "), "{label}");
+
+    // Selected, a lower click moves it.
+    h.get_by_label(&label).click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.selection,
+        [murmel_engine::Item::Iso(0)]
+    );
+    click(
+        &mut h,
+        egui::pos2(x, bar.bottom() - 20.0),
+        egui::Modifiers::NONE,
+    );
+    let isos = &h.state().session.display.isos;
+    assert_eq!(isos.len(), 1, "moved, not added");
+    assert!(isos[0].value < mid, "{} moved down", isos[0].value);
+
+    // The mesh's faces come back with one click.
+    h.get_by_label("Show the mesh faces").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.mesh_look,
+        murmel_engine::MeshLook::Faces
+    );
+    assert!(!h.state().session.display.outline_mesh());
+    assert_eq!(problems(&h), Vec::<String>::new(), "mesh faces");
+}

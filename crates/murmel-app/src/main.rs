@@ -14,6 +14,7 @@ mod color_edit;
 mod commands;
 mod cube;
 mod export_dialog;
+mod extracts;
 mod field;
 mod focus;
 mod i18n;
