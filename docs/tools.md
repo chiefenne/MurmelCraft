@@ -26,6 +26,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `views.delete` | 1 | read | Delete a saved view (undo brings it back). |
 | `views.list` | 1 | read | The saved views of the open mesh, in the order they were saved, with their cameras. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
+| `export.image` | 1 | write-files | Export the view as a PNG at path for reports and posters: the viewport's size times scale (or width and height in pixels), lines, legend and text grown with the scale so the picture looks like the window, the colour legend (top left) and the axis triad (bottom left) each optional, the background transparent if asked, the resolution (dpi) stored for print. |
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
 | `display.color_by` | 2 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
@@ -503,6 +504,76 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     },
     "width": {
       "default": 1280,
+      "maximum": 8192,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+### `export.image`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axes": {
+      "default": true,
+      "description": "Draw the axis triad (bottom left)",
+      "type": "boolean"
+    },
+    "dpi": {
+      "description": "Resolution stored in the PNG (pHYs), for print",
+      "maximum": 10000,
+      "minimum": 1,
+      "type": "number"
+    },
+    "height": {
+      "description": "Pixels; without it the viewport's height times the scale (or the width's aspect)",
+      "maximum": 8192,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "legend": {
+      "default": true,
+      "description": "Draw the colour legend (top left)",
+      "type": "boolean"
+    },
+    "line_width": {
+      "description": "Edge width in pixels (default: the scale)",
+      "maximum": 32,
+      "minimum": 1,
+      "type": "number"
+    },
+    "path": {
+      "description": "The PNG file to write",
+      "type": "string"
+    },
+    "scale": {
+      "description": "Pixels per point of the window: the size without width and height, and the size of lines, legend and text (default: 1, or the height over the viewport's height)",
+      "maximum": 8.0,
+      "minimum": 0.25,
+      "type": "number"
+    },
+    "theme": {
+      "enum": [
+        "dark",
+        "light",
+        "system"
+      ]
+    },
+    "transparent": {
+      "default": false,
+      "description": "Leave the background out (alpha 0)",
+      "type": "boolean"
+    },
+    "width": {
+      "description": "Pixels; without it the viewport's width times the scale (or the height's aspect)",
       "maximum": 8192,
       "minimum": 1,
       "type": "integer"
@@ -1843,6 +1914,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `LIVE003` | error | The window could not listen for agents: another window listens already, or the socket folder is not private. | Close the other window, or make the socket folder private (chmod 700); MURMEL_LIVE_SOCKET names another socket. |
 | `SET001` | error | A settings file could not be written, or no config folder is known. | Set MURMEL_CONFIG_DIR to a writable folder. |
 | `SET002` | error | The navigation bindings bind one input to two actions. | Give each gesture, button and modifier combination one action. |
+| `EXPORT001` | error | An export setting is out of range (scale, line width, dpi). | Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000. |
 | `MEAS001` | error | Nothing of the mesh lies under the screen point, so there is no point to measure from. | Point at a face of the mesh, or give typed coordinates (point), a node, a face or a cell. |
 | `MEAS002` | error | The open mesh has no node, face or cell with this number. | mesh.info gives the counts; numbers start at 0. |
 | `MEAS003` | error | The name of a measurement or probe is empty, longer than 64 characters or holds control characters. |  |
@@ -1869,3 +1941,4 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |
 | `RENDER003` | error | The screenshot size is outside 1 to 8192 pixels per side. | Pass width and height between 1 and 8192. |
 | `RENDER004` | error | The PNG could not be written. | Check that the folder exists and is writable. |
+| `RENDER005` | error | The font of the overlays (Inter) could not be read. | Rebuild MurmelCraft; assets/fonts/Inter-Regular.ttf is part of the build. |

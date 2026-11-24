@@ -13,6 +13,7 @@ mod clip_handle;
 mod color_edit;
 mod commands;
 mod cube;
+mod export_dialog;
 mod focus;
 mod i18n;
 mod measure;

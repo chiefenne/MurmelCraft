@@ -1852,6 +1852,8 @@ dependencies = [
  "murmel-mesh",
  "png",
  "pollster",
+ "skrifa",
+ "vello_cpu",
  "wgpu",
 ]
 
@@ -1862,6 +1864,7 @@ dependencies = [
  "murmel-engine",
  "murmel-mesh",
  "murmel-render",
+ "png",
  "serde",
  "serde_json",
 ]

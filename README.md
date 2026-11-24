@@ -24,6 +24,11 @@ tool that the window, the command line and the MCP server share.
 - Title bar, toolbar, viewport with view note and axis triad, status bar.
 - Headless screenshots with `murmel call view.screenshot`, checked by
   render tests in CI.
+- Picture export for reports and posters (`export.image`, File, "Export
+  image…", Ctrl + Shift + E): any size up to 8192 pixels or a scale of the
+  viewport, lines and legend scaled to match, colour legend and axis triad
+  each optional, transparent background, dpi for print
+  ([docs/export.md](docs/export.md)).
 - An MCP server for agents (`murmel mcp`, [docs/mcp.md](docs/mcp.md)): every
   tool of the registry on one headless session, paths confined to read and
   write roots, screenshots returned as images.
