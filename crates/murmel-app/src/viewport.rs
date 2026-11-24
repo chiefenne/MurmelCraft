@@ -101,7 +101,7 @@ impl MurmelApp {
                 rect.right() - 16.0
             }
         };
-        self.stream_legends(ui, rect, dark, free);
+        self.own_legends(ui, rect, dark, free);
         self.clip_handles(ui, rect, &cam, dark);
         self.stream_handles(ui, rect, &cam, dark);
         self.view_cube(ui, rect, &cam, dark);

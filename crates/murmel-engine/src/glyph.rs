@@ -13,18 +13,27 @@
 //!   values would pull the core flow down to a third). A surface arrow
 //!   sits outside the mesh, lifted off the face by its head's radius: it
 //!   starts at the face when it points out (an outlet) and ends there
-//!   when it points in (an inlet). The grid spacing is the mesh's largest
-//!   extent divided by the density (25 by default).
-//! - **Size.** The length grows with the vector's magnitude; the
+//!   when it points in (an inlet). On a slice the grid spacing is the
+//!   largest extent of the slice's section of the mesh's box divided by
+//!   the density (40 by default; the maintainer's review of 2026-11-24
+//!   found 25 across the whole mesh too sparse), so a cross-section of a
+//!   long duct gets as many arrows across as its length; on the surface
+//!   it is the mesh's largest extent divided by the density.
+//! - **Size.** The length grows with the vector's magnitude: the
 //!   largest magnitude of the field is 0.9 of the grid spacing, times
 //!   the scale (with the part in the plane only, the largest of the
 //!   arrows drawn, the part in a plane being often a small fraction of
-//!   the whole). Shaft and head keep their thickness whatever the length,
-//!   so short arrows stay readable.
-//! - **Colour.** Solid in a colour of their own (the default), or the
-//!   colour of the field on the colour bar at the arrow's point.
+//!   the whole). With [`Length::Floor`] no arrow is shorter than a
+//!   quarter of that, so the direction still reads where the flow is
+//!   slow; with [`Length::Equal`] every arrow has that length and the
+//!   magnitude shows in the colour only. Shaft and head keep their
+//!   thickness whatever the length, so short arrows stay readable.
+//! - **Colour.** Solid in a colour of their own, the colour of the
+//!   field on the colour bar at the arrow's point, or their own
+//!   magnitude in their field's style with a colour bar of their own
+//!   ([`crate::legend::Legend::own_bars`]).
 //! - **Look.** A shaft (a cylinder) and a head (a cone), with a cap at
-//!   the tail, eight sides each, lit like the mesh; on a slice centred
+//!   the tail, twelve sides each, lit like the mesh; on a slice centred
 //!   on their point. They go into the mesh's [`crate::surface::Surface`], so
 //!   pictures and movies draw them as the window does.
 
@@ -34,21 +43,27 @@ use murmel_mesh::Mesh;
 use serde::{Deserialize, Serialize};
 
 use crate::clip::{Clip, plane_axes};
+use crate::colormap::Colormap;
 use crate::display::Display;
-use crate::extract::{IsoColor, Vx};
-use crate::field::FieldValues;
+use crate::extract::Vx;
+use crate::field::{
+    Component, FieldChoice, FieldMode, FieldSet, FieldValues, MAX_BANDS, MIN_BANDS, RangeMode,
+};
+use crate::theme::Rgb;
 
-/// Arrows across the mesh's largest extent: the least, the default and
-/// the most.
+/// Arrows across a slice's (or on the surface the mesh's) largest
+/// extent: the least, the default and the most.
 pub const MIN_DENSITY: u32 = 4;
-pub const DEFAULT_DENSITY: u32 = 25;
+pub const DEFAULT_DENSITY: u32 = 40;
 pub const MAX_DENSITY: u32 = 200;
 /// The largest scale factor.
 pub const MAX_SCALE: f64 = 100.0;
 /// The most arrows drawn; more are left out (the surface says so).
 pub const MAX_ARROWS: usize = 10_000;
 /// Sides of the shaft and the head.
-const SIDES: usize = 8;
+pub(crate) const SIDES: usize = 12;
+/// The shortest arrow with [`Length::Floor`], as a share of the longest.
+pub const FLOOR: f64 = 0.25;
 /// The radii of the shaft and the head, in grid spacings.
 const SHAFT_RADIUS: f64 = 0.05;
 const HEAD_RADIUS: f64 = 0.12;
@@ -73,6 +88,73 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// How an arrow's length follows its vector's magnitude.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Length {
+    /// As long as the magnitude (slow arrows shrink to dots).
+    Magnitude,
+    /// As long as the magnitude, but at least [`FLOOR`] of the longest.
+    #[default]
+    Floor,
+    /// All the same length; the magnitude shows in the colour.
+    Equal,
+}
+
+impl Length {
+    pub const ALL: [Length; 3] = [Length::Magnitude, Length::Floor, Length::Equal];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Length::Magnitude => "magnitude",
+            Length::Floor => "floor",
+            Length::Equal => "equal",
+        }
+    }
+
+    /// The share of the longest length an arrow of magnitude `m` gets,
+    /// when `longest` is drawn full length.
+    pub fn share(self, m: f64, longest: f64) -> f64 {
+        let t = if longest > 0.0 { m / longest } else { 0.0 };
+        match self {
+            Length::Magnitude => t,
+            Length::Floor => t.max(FLOOR),
+            Length::Equal => 1.0,
+        }
+    }
+}
+
+/// How the arrows are coloured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowColor {
+    /// One colour of their own.
+    Solid,
+    /// The field on the colour bar, in its style (when colour mode field
+    /// shows one; else solid).
+    Field,
+    /// Their own magnitude, in their field's style, with a colour bar of
+    /// their own.
+    #[default]
+    Magnitude,
+}
+
+impl ArrowColor {
+    pub const ALL: [ArrowColor; 3] = [ArrowColor::Solid, ArrowColor::Field, ArrowColor::Magnitude];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ArrowColor::Solid => "solid",
+            ArrowColor::Field => "field",
+            ArrowColor::Magnitude => "magnitude",
+        }
+    }
+}
+
+fn is_default_length(l: &Length) -> bool {
+    *l == Length::default()
+}
+
 /// The arrows of one vector field (`arrows.set`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -87,7 +169,8 @@ pub struct Arrows {
     /// On slices, only the part of the vector in the slice's plane.
     #[serde(default, skip_serializing_if = "is_false")]
     pub in_plane: bool,
-    /// Arrows across the mesh's largest extent.
+    /// Arrows across a slice's (on the surface the mesh's) largest
+    /// extent.
     #[serde(
         default = "default_density",
         skip_serializing_if = "is_default_density"
@@ -96,8 +179,11 @@ pub struct Arrows {
     /// Factor on the length (1: the longest arrow is 0.9 of a spacing).
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub scale: f64,
+    /// How the length follows the magnitude (format 1.10).
+    #[serde(default, skip_serializing_if = "is_default_length")]
+    pub length: Length,
     #[serde(default)]
-    pub color: IsoColor,
+    pub color: ArrowColor,
 }
 
 impl Arrows {
@@ -109,23 +195,133 @@ impl Arrows {
             in_plane: false,
             density: DEFAULT_DENSITY,
             scale: 1.0,
-            color: IsoColor::Solid,
+            length: Length::default(),
+            color: ArrowColor::default(),
         }
     }
 
-    /// The distance between neighbouring arrows in `mesh`.
+    /// The distance between neighbouring arrows on the surface of `mesh`.
     pub fn spacing(&self, mesh: &Mesh) -> f64 {
         let b = mesh.bounds();
         let extent = (0..3).map(|k| b.max[k] - b.min[k]).fold(0.0_f64, f64::max);
-        extent / self.density.clamp(MIN_DENSITY, MAX_DENSITY) as f64
+        extent / self.density() as f64
+    }
+
+    /// The distance between neighbouring arrows on `plane` in `mesh`:
+    /// the largest extent of the plane's section of the mesh's box, along
+    /// the plane's own axes, divided by the density (the mesh's spacing
+    /// when the plane misses the box).
+    pub fn plane_spacing(&self, mesh: &Mesh, plane: &Clip) -> f64 {
+        let section = plane.box_section(&mesh.bounds());
+        let (u, v) = plane_axes(plane.normal);
+        let extent = [u, v]
+            .iter()
+            .map(|ax| {
+                let d: Vec<f64> = section.iter().map(|p| dot(*p, *ax)).collect();
+                let lo = d.iter().copied().fold(f64::INFINITY, f64::min);
+                let hi = d.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                hi - lo
+            })
+            .fold(0.0_f64, f64::max);
+        if extent.is_finite() && extent > 0.0 {
+            extent / self.density() as f64
+        } else {
+            self.spacing(mesh)
+        }
+    }
+
+    fn density(&self) -> u32 {
+        self.density.clamp(MIN_DENSITY, MAX_DENSITY)
+    }
+
+    /// The magnitude of the arrows' field.
+    pub fn magnitude(&self) -> FieldChoice {
+        FieldChoice {
+            name: self.field.clone(),
+            component: Component::Magnitude,
+        }
+    }
+}
+
+/// The colour range of arrows coloured by their own magnitude, in their
+/// field's style: the whole field's magnitude (range mode field and
+/// symmetric), or the arrows drawn (`drawn`, range mode shown, and
+/// always with the part in the plane only, which the field's range does
+/// not describe), or the style's fixed range. `None` when the arrows are
+/// not coloured by their magnitude or nothing gives a range.
+pub fn color_range(
+    display: &Display,
+    mesh: &Mesh,
+    fields: Option<&FieldSet>,
+    drawn: Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let a = display.arrows.as_ref().filter(|a| a.enabled)?;
+    if a.color != ArrowColor::Magnitude {
+        return None;
+    }
+    let style = display.style_of(&a.field);
+    let whole = if a.in_plane {
+        drawn
+    } else {
+        fields
+            .and_then(|f| f.values_cached(mesh, &a.magnitude()))
+            .and_then(|v| v.range)
+            .or(drawn)
+    };
+    let r = match style.range {
+        RangeMode::Field => whole?,
+        RangeMode::Shown => drawn?,
+        RangeMode::Symmetric => {
+            let (lo, hi) = whole?;
+            let m = lo.abs().max(hi.abs());
+            (-m, m)
+        }
+        RangeMode::Fixed { min, max } => (min, max),
+    };
+    Some(crate::field::widen(r))
+}
+
+/// How arrows coloured by their magnitude get their colour: the map of
+/// their field's style over the range, banded in colour mode banded.
+pub(crate) struct OwnColors {
+    map: &'static Colormap,
+    reverse: bool,
+    lo: f64,
+    hi: f64,
+    bands: Option<u32>,
+}
+
+impl OwnColors {
+    pub(crate) fn new(display: &Display, a: &Arrows, (lo, hi): (f64, f64)) -> Option<Self> {
+        let style = display.style_of(&a.field);
+        let map = crate::field::map_for(&style, (lo, hi))?;
+        Some(Self {
+            map,
+            reverse: style.reverse,
+            lo,
+            hi,
+            bands: (style.mode == FieldMode::Banded)
+                .then(|| style.bands.clamp(MIN_BANDS, MAX_BANDS)),
+        })
+    }
+
+    /// The colour of magnitude `m`.
+    pub(crate) fn of(&self, m: f64) -> Rgb {
+        let mut t = ((m - self.lo) / (self.hi - self.lo)).clamp(0.0, 1.0);
+        if let Some(b) = self.bands.filter(|&b| b > 0) {
+            let b = b as f64;
+            t = ((t * b).floor().min(b - 1.0) + 0.5) / b;
+        }
+        self.map.sample(t, self.reverse)
     }
 }
 
 /// Where an arrow goes: its point, its vector, the value of the colour
-/// field there (NaN when none), its cell, and on the surface the face's
-/// outward normal.
+/// field there (NaN when none), its cell, on the surface the face's
+/// outward normal, and the spacing of its grid.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Sample {
+    pub(crate) h: f64,
     pub(crate) p: [f64; 3],
     pub(crate) w: [f64; 3],
     pub(crate) v: f64,
@@ -225,6 +421,7 @@ pub(crate) fn on_plane(
                     }
                     let p = add_scaled(add_scaled(a, u, x * h), v, y * h);
                     out.push(Sample {
+                        h,
                         p,
                         w,
                         v: mix(&|x: &Vx| x.v),
@@ -324,6 +521,7 @@ pub(crate) fn on_surface(
             continue;
         };
         out.push(Sample {
+            h,
             p: c,
             w: vector.map(|f| face_value(f, b, cell)),
             v: colour.map_or(f64::NAN, |f| face_value(f, b, cell)),

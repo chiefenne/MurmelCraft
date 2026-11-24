@@ -22,6 +22,7 @@ mod i18n;
 mod measure;
 mod movie_dialog;
 mod opening;
+mod own_bars;
 mod panels;
 mod quality;
 mod regions;

@@ -3,25 +3,21 @@
 //! (the eye turns it on and off, a click selects it so its seed handles
 //! show, a double-click fits it, the context menu sets the direction,
 //! the look, the colour and the seeds, and removes it), the seeds and the
-//! length under the row, the menu that adds a set, and the sets' own
-//! colour bars (decided 2026-11-24: their own field and their own colour
-//! bar) left of the field legend. Every change calls a tool.
+//! length under the row, the menu that adds a set, and the settings of
+//! the sets' own colour bars (decided 2026-11-24: their own field and
+//! their own colour bar; drawn by [`crate::own_bars`]). Every change
+//! calls a tool.
 
-use egui::containers::menu::{MenuButton, MenuConfig};
-use egui::{Color32, Pos2, Rect, RichText, Role, Sense, Stroke, Ui, WidgetInfo};
+use egui::containers::menu::MenuButton;
+use egui::{Rect, RichText, Role, Sense, Ui, WidgetInfo};
 use murmel_engine::field::Component;
-use murmel_engine::legend::{Body, Legend};
+use murmel_engine::legend::{Body, Legend, Owner};
 use murmel_engine::stream::{MAX_COUNT, MAX_STREAMS, MIN_COUNT};
 use murmel_engine::{Direction, Item, Look, Seed};
 use serde_json::{Value, json};
 
 use crate::app::MurmelApp;
 use crate::style::color;
-
-/// Width and height of a streamline colour bar.
-const BAR_W: f32 = 16.0;
-const BAR_H: f32 = 160.0;
-const BAR_H_MIN: f32 = 60.0;
 
 impl MurmelApp {
     /// The label of streamline set `k`: its number, its field and its
@@ -58,7 +54,7 @@ impl MurmelApp {
         let d = &self.session.display;
         let tokens = &self.session.tokens;
         let secondary = color(p.text_secondary);
-        let bars = Legend::streams(&self.session);
+        let bars = Legend::own_bars(&self.session);
         let names: Vec<String> = m.fields.names().iter().map(|n| n.to_string()).collect();
         let vectors: Vec<&String> = names
             .iter()
@@ -92,7 +88,7 @@ impl MurmelApp {
                         let none = tokens.mesh.field.none;
                         let ends = bars
                             .iter()
-                            .find(|(sets, _)| sets.contains(&k))
+                            .find(|(o, _)| matches!(o, Owner::Streams(sets) if sets.contains(&k)))
                             .and_then(|(_, l)| match &l.body {
                                 Body::Ramp(r) => Some((r.sample(0.15), r.sample(0.85))),
                                 Body::Categories(_) => None,
@@ -370,150 +366,10 @@ impl MurmelApp {
         action
     }
 
-    /// The streamlines' colour bars, side by side leftwards from `right`
-    /// (the left edge of the field legend, or the viewport's right edge),
-    /// below the view cube when it sits top right. The title opens the
-    /// bar's settings: the colour field (and a vector's component) of its
-    /// sets, and the field's style.
-    pub(crate) fn stream_legends(&mut self, ui: &mut Ui, rect: Rect, dark: bool, right: f32) {
-        let bars = Legend::streams(&self.session);
-        if bars.is_empty() {
-            return;
-        }
-        let p = self.session.tokens.palette(dark).clone();
-        let line = color(self.session.tokens.mesh.field.line);
-        let font = egui::FontId::proportional(12.0);
-        let (top, bottom) = self.cube_right_room();
-        let room = rect.height() - top - bottom - 32.0 - 120.0;
-        let bar_h = room.clamp(BAR_H_MIN, BAR_H);
-        let mut right = right;
-        let mut calls: Vec<(&'static str, Value)> = Vec::new();
-        for (b, (sets, legend)) in bars.iter().enumerate() {
-            let Body::Ramp(ramp) = &legend.body else {
-                continue;
-            };
-            let field = legend.title.text(&self.i18n);
-            let title = self
-                .i18n
-                .tr_args("legend-streams", &[("field", field.clone().into())]);
-            let labels: Vec<(f64, String)> = ramp
-                .ticks
-                .iter()
-                .map(|&t| (t, ramp.tick_label(t)))
-                .collect();
-            let widest = |texts: &mut dyn Iterator<Item = &str>, font: &egui::FontId| {
-                let painter = ui.painter();
-                texts
-                    .map(|l| {
-                        painter
-                            .layout_no_wrap(l.to_string(), font.clone(), Color32::WHITE)
-                            .size()
-                            .x
-                    })
-                    .fold(0.0, f32::max)
-            };
-            let label_w = widest(&mut labels.iter().map(|(_, l)| l.as_str()), &font);
-            // The title is a menu button, in the buttons' text style.
-            let button = egui::TextStyle::Button.resolve(ui.style());
-            let title_w = widest(&mut std::iter::once(title.as_str()), &button);
-            let width = (label_w + 10.0 + BAR_W)
-                .max(title_w + 2.0 * ui.spacing().button_padding.x + 8.0)
-                .max(110.0);
-            let size = egui::vec2(width + 20.0, 46.0 + bar_h + 12.0 + 22.0 + 20.0);
-            let at = Pos2::new(right - size.x, rect.top() + 16.0 + top);
-            let area = Rect::from_min_size(at, size);
-            right = area.left() - 8.0;
-            let first = sets.first().copied().unwrap_or(0);
-            let choice = self
-                .session
-                .display
-                .streams
-                .get(first)
-                .and_then(|s| s.color.clone());
-            let Some(choice) = choice else { continue };
-            let style = self.session.display.style_of(&choice.name);
-            let range_key = style.range.key();
-            ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
-                egui::Frame::NONE
-                    .fill(color(p.bg_panel).gamma_multiply(0.92))
-                    .corner_radius(6.0)
-                    .inner_margin(egui::Margin::same(10))
-                    .show(ui, |ui| {
-                        ui.set_width(width);
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        let name = self
-                            .i18n
-                            .tr_args("stream-settings-name", &[("field", field.clone().into())]);
-                        let (r, _) = MenuButton::new(RichText::new(&title).strong())
-                            .config(
-                                MenuConfig::new()
-                                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
-                            )
-                            .ui(ui, |ui| {
-                                ui.push_id(("stream-bar", b), |ui| {
-                                    self.stream_bar_menu(ui, sets, &choice, &mut calls);
-                                });
-                            });
-                        r.on_hover_text(self.i18n.tr("stream-settings-tip"))
-                            .widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
-                        ui.label(
-                            RichText::new(ramp.unit.clone().unwrap_or_default())
-                                .small()
-                                .color(color(p.text_secondary)),
-                        );
-                        let (resp, painter) =
-                            ui.allocate_painter(egui::vec2(width, bar_h + 12.0), Sense::hover());
-                        let bar = Rect::from_min_size(
-                            Pos2::new(resp.rect.right() - BAR_W, resp.rect.top() + 6.0),
-                            egui::vec2(BAR_W, bar_h),
-                        );
-                        crate::field::paint_bar(&painter, bar, ramp, line);
-                        painter.rect_stroke(
-                            bar,
-                            0.0,
-                            Stroke::new(1.0, color(p.line)),
-                            egui::StrokeKind::Outside,
-                        );
-                        for (v, text) in &labels {
-                            let y = bar.bottom() - ramp.position(*v) as f32 * bar.height();
-                            painter.line_segment(
-                                [Pos2::new(bar.left() - 4.0, y), Pos2::new(bar.left(), y)],
-                                Stroke::new(1.0, color(p.text_secondary)),
-                            );
-                            painter.text(
-                                Pos2::new(bar.left() - 7.0, y),
-                                egui::Align2::RIGHT_CENTER,
-                                text,
-                                font.clone(),
-                                color(p.text_primary),
-                            );
-                        }
-                        let desc = self.i18n.tr_args(
-                            "stream-legend-name",
-                            &[
-                                ("field", field.clone().into()),
-                                ("lo", ramp.tick_label(ramp.lo).into()),
-                                ("hi", ramp.tick_label(ramp.hi).into()),
-                            ],
-                        );
-                        resp.widget_info(|| WidgetInfo::labeled(Role::Image, true, desc.clone()));
-                        ui.label(
-                            RichText::new(self.i18n.tr(&format!("field-range-{range_key}")))
-                                .small()
-                                .color(color(p.text_secondary)),
-                        );
-                    });
-            });
-        }
-        for (tool, input) in calls {
-            self.call(tool, input);
-        }
-    }
-
     /// The settings of one streamline colour bar: the colour field of its
     /// sets (`stream.set` on each), a vector's component, and the
     /// field's style (`field.style`, shared with the mesh's legend).
-    fn stream_bar_menu(
+    pub(crate) fn stream_bar_menu(
         &self,
         ui: &mut Ui,
         sets: &[usize],

@@ -1291,7 +1291,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     "color": {
       "enum": [
         "solid",
-        "field"
+        "field",
+        "magnitude"
       ]
     },
     "density": {
@@ -1307,6 +1308,13 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     },
     "in_plane": {
       "type": "boolean"
+    },
+    "length": {
+      "enum": [
+        "magnitude",
+        "floor",
+        "equal"
+      ]
     },
     "scale": {
       "exclusiveMinimum": 0,

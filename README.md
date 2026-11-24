@@ -46,10 +46,13 @@ every change.
   shown, by marching tetrahedra. The mesh shows as a faint outline
   meanwhile, its faces one click away.
 - Vector arrows (`arrows.set`, Alt + V): shaded 3D arrows of the velocity
-  (or another vector field) on every slice, on an even grid with a
-  density setting, and on the mesh surface on request; as long as the
-  magnitude (with a length factor), the full vector or only its part in
-  the slice, solid or coloured by the field shown.
+  (or another vector field) on every slice, on an even grid of 40 across
+  each slice (a density setting), and on the mesh surface on request; as
+  long as the magnitude with a floor so slow flow still shows, strictly
+  as long as the magnitude, or all the same length (with a length
+  factor); the full vector or only its part in the slice; coloured by
+  their own magnitude with their own colour bar, by the field shown, or
+  solid.
 - Streamlines (`stream.set`, Alt + L): up to 8 sets traced through the
   cells (fourth-order Runge-Kutta) from seeds on a line, in a ball, on a
   patch or on a plane, placed by drag handles that snap to the mesh or

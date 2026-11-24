@@ -394,7 +394,7 @@ fn field_export_with_legend() {
         320,
         &Overlays {
             legend: Some(&legend),
-            streams: &[],
+            own_bars: &[],
             triad: None,
             i18n: &i18n,
             tokens: &s.tokens,
@@ -456,15 +456,16 @@ fn field_iso_surfaces() {
     check_session("field-iso-surfaces", &s);
 }
 
-/// Stage 3 vector arrows (decided 2026-11-24: even spacing, length by
-/// magnitude, solid or by the field, shaded 3D arrows): the duct's
-/// velocity on its horizontal mid-plane, coloured by speed, with solid
-/// arrows 20 across, longest in the core and short at the side walls.
-/// Arrows that leave the grid, lose their length, turn inside out (dark
-/// on the lit side) or take the wrong colour token move pixels here.
+/// Stage 3 vector arrows with the defaults of the review of 2026-11-24
+/// (the maintainer's card: a floor on the length, coloured by their own
+/// magnitude): the duct's velocity on its horizontal mid-plane over the
+/// pressure, 20 across the slice, longest in the core, the slow ones at
+/// the side walls a quarter of that and dark in the colour map. Arrows
+/// that leave the grid, lose their length or floor, turn inside out
+/// (dark on the lit side) or lose their own colours move pixels here.
 #[test]
 fn field_arrows_on_a_slice() {
-    let mut s = field_session("speed", murmel_mesh::Component::Magnitude);
+    let mut s = field_session("pressure", murmel_mesh::Component::Magnitude);
     let b = s.mesh.as_ref().unwrap().mesh.bounds();
     let mut slice = murmel_engine::Slice::new(b.center(), [0.0, 0.0, 1.0]);
     slice.origin[2] += 0.013;
@@ -474,6 +475,25 @@ fn field_arrows_on_a_slice() {
     s.display.arrows = Some(a);
     s.redraw();
     check_session("field-arrows-slice", &s);
+}
+
+/// Arrows all the same length (the maintainer's card of 2026-11-24),
+/// coloured by their own magnitude, at the default density of 40 across
+/// the slice: the industrial look, where the colour alone carries the
+/// speed. Lengths that follow the magnitude or a grid that thins out
+/// move pixels here.
+#[test]
+fn field_arrows_equal_length() {
+    let mut s = field_session("pressure", murmel_mesh::Component::Magnitude);
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    let mut slice = murmel_engine::Slice::new(b.center(), [0.0, 0.0, 1.0]);
+    slice.origin[2] += 0.013;
+    s.display.slices = vec![slice];
+    let mut a = murmel_engine::Arrows::new("velocity");
+    a.length = murmel_engine::glyph::Length::Equal;
+    s.display.arrows = Some(a);
+    s.redraw();
+    check_session("field-arrows-equal", &s);
 }
 
 /// Stage 3 vector arrows on the surface (on request), coloured by the
@@ -487,7 +507,8 @@ fn field_arrows_on_the_surface() {
     let mut a = murmel_engine::Arrows::new("velocity");
     a.density = 12;
     a.surface = true;
-    a.color = murmel_engine::IsoColor::Field;
+    a.length = murmel_engine::glyph::Length::Magnitude;
+    a.color = murmel_engine::glyph::ArrowColor::Field;
     s.display.arrows = Some(a);
     s.redraw();
     check_session("field-arrows-surface", &s);
@@ -514,7 +535,7 @@ fn field_streamlines_lines() {
     s.redraw();
     let mut shot = render_session(&s, 480, 320).unwrap();
     let legend = murmel_engine::Legend::of(&s);
-    let streams: Vec<_> = murmel_engine::Legend::streams(&s)
+    let streams: Vec<_> = murmel_engine::Legend::own_bars(&s)
         .into_iter()
         .map(|(_, l)| l)
         .collect();
@@ -526,7 +547,7 @@ fn field_streamlines_lines() {
         320,
         &Overlays {
             legend: legend.as_ref(),
-            streams: &streams,
+            own_bars: &streams,
             triad: None,
             i18n: &i18n,
             tokens: &s.tokens,
@@ -591,7 +612,7 @@ fn export_scaled_with_legend_and_triad() {
         320,
         &Overlays {
             legend: Some(&legend),
-            streams: &[],
+            own_bars: &[],
             triad: Some(&s.camera),
             i18n: &i18n,
             tokens: &s.tokens,
