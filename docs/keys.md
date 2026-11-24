@@ -13,6 +13,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Ctrl + Shift + O` | Open OpenFOAM case folder… | window, then `mesh.open` |
 | `Ctrl + S` | Save session | window, then `session.save` |
 | `Ctrl + Shift + S` | Save session as… | window, then `session.save` |
+| `Ctrl + Shift + E` | Export image… | window, then `export.image` |
 | `Ctrl + K` | Command palette | window |
 | `F1` | Keyboard shortcuts | window |
 | `T` | Show or hide the model tree | window |

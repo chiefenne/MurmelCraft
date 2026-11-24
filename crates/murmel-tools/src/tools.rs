@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use crate::{Action, Diagnostic, Run, Tool};
 
-fn parse<T: DeserializeOwned>(input: Value) -> Result<T, Diagnostic> {
+pub(crate) fn parse<T: DeserializeOwned>(input: Value) -> Result<T, Diagnostic> {
     serde_json::from_value(input).map_err(|e| Diagnostic::new("TOOL002", e.to_string()))
 }
 
@@ -30,7 +30,7 @@ fn mesh_err(e: murmel_mesh::MeshError) -> Diagnostic {
     Diagnostic::new(e.code, e.message)
 }
 
-fn object(props: Value, required: &[&str]) -> Value {
+pub(crate) fn object(props: Value, required: &[&str]) -> Value {
     json!({"type": "object", "properties": props, "required": required, "additionalProperties": false})
 }
 
@@ -38,7 +38,7 @@ fn no_input() -> Value {
     object(json!({}), &[])
 }
 
-fn camera_json(s: &Session) -> Value {
+pub(crate) fn camera_json(s: &Session) -> Value {
     let c = &s.camera;
     json!({
         "target": c.target,
@@ -55,7 +55,7 @@ fn camera_json(s: &Session) -> Value {
     })
 }
 
-fn need_mesh(s: &Session) -> Result<(), Diagnostic> {
+pub(crate) fn need_mesh(s: &Session) -> Result<(), Diagnostic> {
     if s.mesh.is_none() {
         return Err(Diagnostic::new("VIEW001", "no mesh is open"));
     }
@@ -2134,6 +2134,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
         "view.screenshot",
         "writes a file; a mesh or view it is given is for the picture",
     ),
+    ("export.image", "writes a file; the view stays as it is"),
     (
         "select.item",
         "the selection is not undone, as in CAD tools",
@@ -2520,6 +2521,17 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: view_screenshot,
+    },
+    Tool {
+        id: "export.image",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-export-image",
+        summary: "Export the view as a PNG at path for reports and posters: the viewport's size times scale (or width and height in pixels), lines, legend and text grown with the scale so the picture looks like the window, the colour legend (top left) and the axis triad (bottom left) each optional, the background transparent if asked, the resolution (dpi) stored for print.",
+        outputs: &["path"],
+        reads: &[],
+        input_schema: crate::export::export_image_schema,
+        run: crate::export::export_image,
     },
     Tool {
         id: "display.render_mode",

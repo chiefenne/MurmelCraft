@@ -121,6 +121,14 @@ const OWN: &[Code] = &[
         fix: Some("Give each gesture, button and modifier combination one action."),
     },
     Code {
+        code: "EXPORT001",
+        severity: Severity::Error,
+        meaning: "An export setting is out of range (scale, line width, dpi).",
+        fix: Some(
+            "Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000.",
+        ),
+    },
+    Code {
         code: "MEAS001",
         severity: Severity::Error,
         meaning: "Nothing of the mesh lies under the screen point, so there is no point to measure from.",

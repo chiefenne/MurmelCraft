@@ -413,6 +413,8 @@ impl MurmelApp {
                     bg_bottom: p.viewport_bottom.linear(),
                     faces: self.session.display.render_mode.faces(),
                     edges: self.session.display.render_mode.edges(),
+                    line_width: 1.0,
+                    transparent: false,
                     field: field.as_ref(),
                     scale: ppp,
                 },

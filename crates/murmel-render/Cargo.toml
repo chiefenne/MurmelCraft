@@ -11,6 +11,8 @@ glam.workspace = true
 murmel-engine.workspace = true
 png.workspace = true
 pollster.workspace = true
+skrifa.workspace = true
+vello_cpu.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]

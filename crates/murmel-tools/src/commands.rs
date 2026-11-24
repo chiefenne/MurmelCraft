@@ -230,6 +230,13 @@ pub fn commands() -> Vec<Command> {
             Window(Some("view.screenshot")),
         ),
         cmd(
+            "window.export_image",
+            "cmd-export-image",
+            "file",
+            &["Ctrl+Shift+E"],
+            Window(Some("export.image")),
+        ),
+        cmd(
             "window.palette",
             "cmd-palette",
             "window",

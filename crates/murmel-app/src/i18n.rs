@@ -21,6 +21,7 @@ mod tests {
             include_str!("cube.rs"),
             include_str!("focus.rs"),
             include_str!("agents.rs"),
+            include_str!("export_dialog.rs"),
         ];
         for s in src {
             for part in s
