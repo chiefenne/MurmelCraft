@@ -37,6 +37,14 @@ impl MurmelApp {
         }
         let jobs = self.bridge.as_ref().map(|b| b.jobs()).unwrap_or_default();
         for job in jobs {
+            // A movie is made on a thread of its own, as from the movie
+            // window, so the window stays live and shows its progress; the
+            // agent gets the answer when it is done.
+            if job.tool == "export.movie" {
+                let input = job.input.clone();
+                self.start_movie(input, Some(job));
+                continue;
+            }
             let input = self.agent_input(&job.tool, job.input.clone());
             // As over the headless server, the settings tools change this
             // window only and never write the person's files (SET001).

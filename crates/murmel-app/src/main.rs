@@ -17,6 +17,7 @@ mod export_dialog;
 mod focus;
 mod i18n;
 mod measure;
+mod movie_dialog;
 mod panels;
 mod quality;
 mod style;

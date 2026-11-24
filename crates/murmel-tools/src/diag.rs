@@ -125,8 +125,46 @@ const OWN: &[Code] = &[
         severity: Severity::Error,
         meaning: "An export setting is out of range (scale, line width, dpi).",
         fix: Some(
-            "Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000.",
+            "Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000; a movie 1 to 60 frames a second and at most 36000 frames, an MP4 without transparency.",
         ),
+    },
+    Code {
+        code: "EXPORT002",
+        severity: Severity::Error,
+        meaning: "An MP4 needs ffmpeg, and none was found (MURMEL_FFMPEG, PATH, /opt/homebrew/bin, /usr/local/bin).",
+        fix: Some(
+            "Install ffmpeg (macOS: brew install ffmpeg), set MURMEL_FFMPEG to its path, or write a GIF or PNG frames.",
+        ),
+    },
+    Code {
+        code: "EXPORT003",
+        severity: Severity::Error,
+        meaning: "ffmpeg could not be started or failed while writing the MP4; the message ends with what it said.",
+        fix: Some("Check the path and the free space; try another ffmpeg with MURMEL_FFMPEG."),
+    },
+    Code {
+        code: "EXPORT004",
+        severity: Severity::Error,
+        meaning: "A movie file or a frame could not be written.",
+        fix: Some("Check that the folder exists and is writable, and the free space."),
+    },
+    Code {
+        code: "EXPORT005",
+        severity: Severity::Error,
+        meaning: "The movie has nothing to move: no clip plane to sweep, fewer than two saved views, or a view name that is not saved.",
+        fix: Some("Add a clip plane (clip.set) or save views (views.save); views.list names them."),
+    },
+    Code {
+        code: "EXPORT006",
+        severity: Severity::Error,
+        meaning: "The movie was cancelled; a half-written MP4 or GIF is removed, PNG frames written stay.",
+        fix: None,
+    },
+    Code {
+        code: "EXPORT007",
+        severity: Severity::Error,
+        meaning: "The window is making a movie already; it makes one at a time.",
+        fix: Some("Wait for the movie, or cancel it in the Export movie window."),
     },
     Code {
         code: "MEAS001",

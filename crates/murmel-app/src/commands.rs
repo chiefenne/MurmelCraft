@@ -103,6 +103,7 @@ impl MurmelApp {
                 "window.open_folder" => self.open_folder_dialog(),
                 "window.screenshot" => self.screenshot_dialog(),
                 "window.export_image" => self.export.open = true,
+                "window.export_movie" => self.movie.open = true,
                 "window.session_save" => self.save_session(false),
                 "window.session_save_as" => self.save_session(true),
                 "window.session_load" => self.load_session_dialog(),
