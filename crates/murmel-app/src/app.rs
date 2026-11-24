@@ -19,6 +19,9 @@ pub struct MurmelApp {
     pub(crate) i18n: I18n,
     pub(crate) gpu: Option<GpuView>,
     pub(crate) error: Option<Diagnostic>,
+    /// When the status bar first showed `error`; it goes away
+    /// `ERROR_SECONDS` later, or sooner when a journalled call works.
+    pub(crate) error_since: Option<f64>,
     /// The session file last saved or loaded, where Ctrl + S saves.
     pub(crate) session_path: Option<PathBuf>,
     pub(crate) drag: Option<murmel_engine::navigation::Action>,
@@ -127,6 +130,8 @@ pub struct MurmelApp {
 
 /// A pause of the wheel this long (seconds) ends its undo step.
 const WHEEL_PAUSE: f64 = 0.3;
+/// How long a message stays in the status bar after it is first shown.
+const ERROR_SECONDS: f64 = 10.0;
 
 impl MurmelApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Result<Self, String> {
@@ -159,6 +164,7 @@ impl MurmelApp {
             i18n: I18n::english()?,
             gpu,
             error,
+            error_since: None,
             session_path: None,
             drag: None,
             hover: None,
@@ -260,8 +266,10 @@ impl MurmelApp {
             self.flight = Some((from, self.now));
         }
         if e.ok() {
-            if id == "mesh.open" {
-                self.error = None;
+            // The person (or an agent) moved on: an older message no
+            // longer describes what is on screen.
+            if id == "mesh.open" || murmel_tools::JOURNALED.contains(&id) {
+                self.set_error(None);
             }
             // Points placed on another mesh mean nothing on this one.
             if matches!(id, "mesh.open" | "mesh.close" | "session.load") {
@@ -272,18 +280,41 @@ impl MurmelApp {
             if id == "session.load" {
                 // The first warning (a changed mesh, skipped items) shows
                 // in the status bar.
-                self.error = e.result["warnings"]
+                let first = e.result["warnings"]
                     .as_array()
                     .and_then(|w| w.first())
                     .and_then(|w| {
                         let c = murmel_tools::code(w["code"].as_str()?)?;
                         Some(Diagnostic::new(c.code, w["message"].as_str()?))
                     });
+                self.set_error(first);
             }
         } else {
-            self.error = e.diagnostics.first().cloned();
+            self.set_error(e.diagnostics.first().cloned());
         }
         e
+    }
+
+    /// Show a message in the status bar (or none); its time starts when
+    /// it is first drawn.
+    pub(crate) fn set_error(&mut self, d: Option<Diagnostic>) {
+        self.error = d;
+        self.error_since = None;
+    }
+
+    /// Drop the status bar's message `ERROR_SECONDS` after it was first
+    /// shown, and wake the window then if nothing else does.
+    fn expire_error(&mut self, ctx: &egui::Context) {
+        if self.error.is_none() {
+            return;
+        }
+        let since = *self.error_since.get_or_insert(self.now);
+        let left = since + ERROR_SECONDS - self.now;
+        if left <= 0.0 {
+            self.set_error(None);
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(left));
+        }
     }
 
     /// Group the calls of one mouse gesture (while a button is held) and
@@ -1171,6 +1202,7 @@ impl eframe::App for MurmelApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.now = ctx.input(|i| i.time);
+        self.expire_error(&ctx);
         self.focus.begin(&ctx);
         self.apply_theme(&ctx);
         self.group_steps(&ctx);

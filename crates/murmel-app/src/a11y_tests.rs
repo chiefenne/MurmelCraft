@@ -945,3 +945,32 @@ fn regions_in_the_window() {
     };
     assert_eq!(back, all, "no region on, every cell shows");
 }
+
+/// Invariant: a message in the status bar goes away ten seconds after it
+/// is first shown, or as soon as a journalled call works, and a new one
+/// starts its own time. Breaks when a stale message stays (an agent's
+/// SET001 stayed until the next error).
+#[test]
+fn status_message_expires() {
+    let mut h = harness();
+    let test = || Some(murmel_tools::Diagnostic::new("SET001", "test"));
+    h.state_mut().set_error(test());
+    h.run_steps(2);
+    let since = h.state().error_since.expect("stamped when first shown");
+    assert!(h.state().error.is_some(), "shown at first");
+    // As if it had been shown eleven seconds ago.
+    h.state_mut().error_since = Some(since - 11.0);
+    h.run_steps(1);
+    assert!(h.state().error.is_none(), "gone after ten seconds");
+    h.state_mut().set_error(test());
+    assert!(
+        h.state().error_since.is_none(),
+        "a new message starts its own time"
+    );
+    h.state_mut()
+        .call("view.zoom", serde_json::json!({"factor": 0.9}));
+    assert!(
+        h.state().error.is_none(),
+        "gone when a journalled call works"
+    );
+}
