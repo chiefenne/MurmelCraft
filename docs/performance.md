@@ -39,6 +39,9 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `surface.feature_edges` | render mode 4 (feature edges found on the surface) |
 | `quality` | the cell quality metrics (colour by quality) |
 | `tree.frame` | what the model tree and the legend ask of the mesh on each frame (counts, items), median of 5 |
+| `clip.step` | one step of a clip drag as the window does it (the plane moves, the GPU cuts), median of 5 |
+| `clip.exact` | from the last step until the exact crinkle cut is in place (built on its own thread once the plane rests) |
+| `clip.step.built` | one step that builds the exact cut before it returns (the command line, agents; every step before the preview) |
 | `pick.9` | nine picks over the iso view (the hover tooltip, a click, snapping) |
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
 
@@ -303,3 +306,35 @@ polyMesh binary, same machine (4 threads). "was" is main at 6e49af0.
 | tree.frame, ms per frame | 0.0 (10.2) | 0.0 (49.3) |
 | pick.9, ms for nine picks | 1.1 (72.3) | 2.5 (330.6) |
 | surface.boxes, ms (new) | 7 | 12 |
+
+## Clip drag: the GPU cuts first, the exact cut follows (2026-11-24)
+
+The maintainer's choice for the clip drag: an instant preview, with the
+exact cut following. Every step of a drag (the handle's arrow or arcs,
+the toolbar slider, Alt and the arrow keys) used to build the whole
+surface before the next frame: 1.1 s a step at 4 M cells.
+
+- The window sets `Session::defer_clips`. A change of the display that
+  only moves or turns clip planes leaves the surface as it is and starts
+  a `ClipPreview`: the renderer draws the surface built without the
+  moving planes and cuts it in the shader (`View::clip_planes`, a
+  fragment on the cut-away side is discarded), so the cut follows the
+  pointer at once. The cut faces show hollow (the inside of the far
+  walls) until the exact cut is in place.
+- The surface without the moving planes is built on a thread of its own
+  when the drag starts; until it is there, the surface cut at the old
+  place is cut again by the shader. Once the planes rest for 120 ms the
+  exact cut is built on another thread and put in place when it is done,
+  if the planes have not moved since (else the next one starts).
+- The open mesh and its fields are shared (`Arc`), so the builds need no
+  copy. Tools call `Session::settle` before they run (the clip tools
+  excepted), so a screenshot, an export, a pick or an agent's call sees
+  the exact cut; the command line and agents on a headless session never
+  defer.
+
+polyMesh binary, crinkle cut, same machine (4 threads), `murmel bench`:
+
+| | 1 M | 4 M |
+|---|---:|---:|
+| clip.step, ms (was clip.step.built) | 0.0 (289) | 0.0 (1,104) |
+| clip.exact, ms after the last step | 453 | 1,165 |

@@ -317,6 +317,41 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
     tree_frame();
     st.time("tree.frame", r.max(5), tree_frame);
 
+    // The clip drag as the window does it: each step moves the plane and
+    // returns at once (the renderer cuts on the GPU); the exact crinkle
+    // cut is built on a thread of its own once the plane rests. As
+    // before, a step that builds the cut before it returns.
+    let along = |f: f64| Clip {
+        origin: [
+            b.min[0] + f * (b.max[0] - b.min[0]),
+            b.center()[1],
+            b.center()[2],
+        ],
+        normal: [1.0, 0.0, 0.0],
+        mode: ClipMode::Crinkle,
+        enabled: true,
+    };
+    session.display.clips = vec![along(0.5)];
+    session.redraw();
+    session.defer_clips = true;
+    let mut f = 0.5;
+    st.time("clip.step", r.max(5), || {
+        f += 0.01;
+        session.display.clips = vec![along(f)];
+        session.redraw();
+    });
+    st.time("clip.exact", 1, || {
+        while session.poll_surface() {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    });
+    session.defer_clips = false;
+    st.time("clip.step.built", r, || {
+        f -= 0.01;
+        session.display.clips = vec![along(f)];
+        session.redraw();
+    });
+
     let mut cam = Camera::default();
     cam.set_standard(StandardView::ISO);
     let aspect = f64::from(opts.size[0]) / f64::from(opts.size[1].max(1));

@@ -852,7 +852,7 @@ pub struct FieldPaint {
 impl Session {
     /// The fields of the open mesh.
     pub fn fields(&self) -> Option<&FieldSet> {
-        self.mesh.as_ref().map(|m| &m.fields)
+        self.mesh.as_ref().map(|m| m.fields.as_ref())
     }
 
     /// The values of the field shown now (colour mode field, values

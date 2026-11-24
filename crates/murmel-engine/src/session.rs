@@ -4,11 +4,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use murmel_mesh::{Evidence, Mesh, MeshError};
 
 use crate::camera::Camera;
+use crate::clip::Clip;
 use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Display, Item};
 use crate::field::FieldSet;
@@ -22,7 +23,9 @@ use crate::theme::{MeshColors, Theme, Tokens};
 #[derive(Clone, Debug)]
 pub struct OpenMesh {
     pub path: PathBuf,
-    pub mesh: Mesh,
+    /// Shared, so a surface can be built on a thread of its own (the
+    /// window's clip drag: [`Session::defer_clips`]).
+    pub mesh: Arc<Mesh>,
     pub evidence: Option<Evidence>,
     /// Why the evidence beside the mesh could not be read (MESH011).
     pub evidence_problem: Option<MeshError>,
@@ -37,7 +40,9 @@ pub struct OpenMesh {
     pub validity: Validity,
     /// The fields read with the mesh (a `.vtkhdf` result, the data
     /// arrays of a `.vtu`); empty for a bare mesh.
-    pub fields: FieldSet,
+    pub fields: Arc<FieldSet>,
+    /// The display `surface` was built for.
+    pub built_for: Display,
 }
 
 /// The validity badge (UI spec, Model tree): green when the evidence
@@ -236,6 +241,139 @@ impl Hashing {
 /// SHA-256 of bytes, hex.
 pub fn sha256_bytes(bytes: &[u8]) -> String {
     murmel_mesh::sha256_hex(bytes)
+}
+
+/// Whether two displays are equal, with the values per cell they carry
+/// (the quality, the field's values, the cells of the regions) compared
+/// by allocation, not value by value: they are made once and shared by
+/// every copy of the display, and the preview compares displays on every
+/// frame, where comparing millions of values would cost more than the
+/// frame.
+fn same_display(a: &Display, b: &Display) -> bool {
+    fn same<T>(x: &Option<Arc<T>>, y: &Option<Arc<T>>) -> bool {
+        match (x, y) {
+            (None, None) => true,
+            (Some(p), Some(q)) => Arc::ptr_eq(p, q),
+            _ => false,
+        }
+    }
+    let bare = |d: &Display| Display {
+        quality: None,
+        field_values: None,
+        region_cells: None,
+        ..d.clone()
+    };
+    same(&a.quality, &b.quality)
+        && same(&a.field_values, &b.field_values)
+        && same(&a.region_cells, &b.region_cells)
+        && bare(a) == bare(b)
+}
+
+/// The clip planes that move in `new` against `old` (their origin or
+/// normal changed, nothing else in the display), or `None` when the
+/// change is not only such a move.
+fn clip_moves(old: &Display, new: &Display) -> Option<Vec<usize>> {
+    if old.clips.len() != new.clips.len() {
+        return None;
+    }
+    let mut moving = Vec::new();
+    for (k, (a, b)) in old.clips.iter().zip(&new.clips).enumerate() {
+        if a.mode != b.mode || a.enabled != b.enabled {
+            return None;
+        }
+        if a != b {
+            moving.push(k);
+        }
+    }
+    let same_otherwise = same_display(
+        &Display {
+            clips: new.clips.clone(),
+            ..old.clone()
+        },
+        new,
+    );
+    (same_otherwise && !moving.is_empty()).then_some(moving)
+}
+
+/// A clip drag in the window: the planes `moving` have left the place
+/// the surface was cut at. Until the exact cut is built (on a thread of
+/// its own), the renderer draws the surface built without the moving
+/// planes (`base`) and cuts it on the GPU, which shows the cut faces
+/// hollow but follows the pointer at once.
+#[derive(Clone, Debug, Default)]
+pub struct ClipPreview {
+    /// The planes (indices into `Display::clips`) that moved.
+    pub moving: Vec<usize>,
+    /// When a plane last moved.
+    changed: Option<Instant>,
+    /// The surface without the moving planes, the display it was built
+    /// for and its revision.
+    base: Option<(Display, Arc<Surface>, u64)>,
+    /// The builds running: of the surface without the moving planes, and
+    /// of the exact cut (started once the planes rest).
+    base_job: Option<SurfaceJob>,
+    exact_job: Option<SurfaceJob>,
+}
+
+impl ClipPreview {
+    /// How long the planes rest before the exact cut is built, so a
+    /// drag does not start a build on every step.
+    pub const REST: Duration = Duration::from_millis(120);
+
+    /// The display of the surface without the moving planes: `display`
+    /// with them switched off where the surface had them, so moving them
+    /// further keeps it.
+    fn base_display(&self, built_for: &Display, display: &Display) -> Display {
+        let mut d = display.clone();
+        for &k in &self.moving {
+            if let (Some(c), Some(old)) = (d.clips.get_mut(k), built_for.clips.get(k)) {
+                *c = Clip {
+                    enabled: false,
+                    ..*old
+                };
+            }
+        }
+        d
+    }
+}
+
+/// A surface built on a thread of its own for `display`.
+#[derive(Clone, Debug)]
+struct SurfaceJob {
+    display: Display,
+    done: Arc<(Mutex<Option<Surface>>, Condvar)>,
+}
+
+impl SurfaceJob {
+    fn start(m: &OpenMesh, tokens: &Tokens, display: Display) -> SurfaceJob {
+        let done = Arc::new((Mutex::new(None), Condvar::new()));
+        let (mesh, fields, tokens, d, out) = (
+            m.mesh.clone(),
+            m.fields.clone(),
+            tokens.clone(),
+            display.clone(),
+            done.clone(),
+        );
+        std::thread::spawn(move || {
+            let s = Surface::build_with(&mesh, Some(&fields), &tokens, &d);
+            let (lock, ready) = &*out;
+            if let Ok(mut v) = lock.lock() {
+                *v = Some(s);
+                ready.notify_all();
+            }
+        });
+        SurfaceJob { display, done }
+    }
+
+    /// The surface once built (waiting for it with `wait`).
+    fn take(&self, wait: bool) -> Option<Surface> {
+        let (lock, ready) = &*self.done;
+        let mut v = lock.lock().ok()?;
+        while wait && v.is_none() {
+            v = ready.wait(v).ok()?;
+        }
+        v.take()
+    }
 }
 
 /// Compute the cell quality of `mesh` the first time colour mode quality
@@ -463,6 +601,15 @@ pub struct Session {
     pub hash_after_open: bool,
     /// The SHA-256 of the open mesh's files being taken.
     pub hashing: Option<Hashing>,
+    /// Build the cut of a moving clip plane on a thread of its own (the
+    /// window, the user's choice for the clip drag): a change of `display`
+    /// that only moves or turns clip planes leaves the surface as it is
+    /// and starts a [`ClipPreview`]; the renderer clips on the GPU until
+    /// the exact cut is in place. Off, every change builds the surface
+    /// before it returns, as the command line and agents expect.
+    pub defer_clips: bool,
+    /// The clip planes moving while their exact cut is built.
+    pub preview: Option<ClipPreview>,
 }
 
 impl Session {
@@ -484,6 +631,8 @@ impl Session {
             preloaded: None,
             hash_after_open: false,
             hashing: None,
+            defer_clips: false,
+            preview: None,
         }
     }
 
@@ -560,21 +709,24 @@ impl Session {
             self.camera.fit(b, self.aspect());
         }
         self.surface_revision += 1;
+        self.preview = None;
         self.mesh.insert(OpenMesh {
             path: l.path,
-            mesh: l.mesh,
+            built_for: self.display.clone(),
+            mesh: Arc::new(l.mesh),
             evidence: l.evidence,
             evidence_problem: l.evidence_problem,
             surface,
             digest: l.digest,
             files: l.files,
             validity: l.validity,
-            fields: l.fields,
+            fields: Arc::new(l.fields),
         })
     }
 
     pub fn close(&mut self) {
         self.mesh = None;
+        self.preview = None;
         if let Some(h) = self.hashing.take() {
             h.stop();
         }
@@ -608,15 +760,120 @@ impl Session {
         Ok(())
     }
 
-    /// Build the surface again after a change of `display`.
+    /// Build the surface again after a change of `display`. With
+    /// [`Session::defer_clips`], a change that only moves or turns clip
+    /// planes starts a [`ClipPreview`] instead and returns at once.
     pub fn redraw(&mut self) {
-        if let Some(m) = &mut self.mesh {
-            crate::region::ensure(&mut self.display, &m.mesh);
-            ensure_quality(&mut self.display, &m.mesh);
-            crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
-            m.surface = Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
+        let Some(m) = &mut self.mesh else {
+            self.preview = None;
+            self.surface_revision += 1;
+            return;
+        };
+        crate::region::ensure(&mut self.display, &m.mesh);
+        ensure_quality(&mut self.display, &m.mesh);
+        crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
+        if self.defer_clips
+            && let Some(moving) = clip_moves(&m.built_for, &self.display)
+        {
+            let p = self.preview.get_or_insert_with(ClipPreview::default);
+            p.moving = moving;
+            p.changed = Some(Instant::now());
+            return;
         }
+        self.preview = None;
+        m.surface = Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
+        m.built_for = self.display.clone();
         self.surface_revision += 1;
+    }
+
+    /// Follow the clip preview: put a finished surface in place and start
+    /// the builds it needs (the surface without the moving planes, and,
+    /// once the planes have rested for [`ClipPreview::REST`], the exact
+    /// cut; one of each at a time, the latest display winning). True
+    /// while the preview goes on; the window asks every frame.
+    pub fn poll_surface(&mut self) -> bool {
+        let (Some(p), Some(m)) = (&mut self.preview, &mut self.mesh) else {
+            self.preview = None;
+            return false;
+        };
+        if let Some(surface) = p.exact_job.as_ref().and_then(|j| j.take(false)) {
+            let job = p.exact_job.take();
+            if let Some(job) = job.filter(|j| same_display(&j.display, &self.display)) {
+                m.surface = surface;
+                m.built_for = job.display;
+                self.surface_revision += 1;
+                self.preview = None;
+                return false;
+            }
+        }
+        let base = p.base_display(&m.built_for, &self.display);
+        if let Some(surface) = p.base_job.as_ref().and_then(|j| j.take(false))
+            && let Some(job) = p
+                .base_job
+                .take()
+                .filter(|j| same_display(&j.display, &base))
+        {
+            self.surface_revision += 1;
+            p.base = Some((job.display, Arc::new(surface), self.surface_revision));
+        }
+        if p.base_job.is_none() && p.base.as_ref().is_none_or(|b| !same_display(&b.0, &base)) {
+            p.base_job = Some(SurfaceJob::start(m, &self.tokens, base));
+        }
+        let rested = p.changed.is_none_or(|t| t.elapsed() >= ClipPreview::REST);
+        if rested && p.exact_job.is_none() {
+            p.exact_job = Some(SurfaceJob::start(m, &self.tokens, self.display.clone()));
+        }
+        true
+    }
+
+    /// Put the exact surface of `display` in place now, waiting for the
+    /// build of it already running or building it here; nothing to do
+    /// without a preview. Tools call this first, so what they read or
+    /// draw is the exact cut.
+    pub fn settle(&mut self) {
+        let Some(p) = self.preview.take() else {
+            return;
+        };
+        let Some(m) = &mut self.mesh else {
+            return;
+        };
+        let done = p
+            .exact_job
+            .filter(|j| same_display(&j.display, &self.display))
+            .and_then(|j| j.take(true));
+        m.surface = done.unwrap_or_else(|| {
+            Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display)
+        });
+        m.built_for = self.display.clone();
+        self.surface_revision += 1;
+    }
+
+    /// The surface to draw, its revision and the clip planes the renderer
+    /// cuts it with (`[n, d]`: a point `p` relative to the surface's
+    /// origin is cut away where `n · p + d > 0`; empty without a preview).
+    pub fn drawn(&self) -> Option<(&Surface, u64, Vec<[f32; 4]>)> {
+        let m = self.mesh.as_ref()?;
+        let Some(p) = &self.preview else {
+            return Some((&m.surface, self.surface_revision, Vec::new()));
+        };
+        let base = p.base_display(&m.built_for, &self.display);
+        let (surface, revision) = match &p.base {
+            Some((d, s, r)) if same_display(d, &base) => (s.as_ref(), *r),
+            _ => (&m.surface, self.surface_revision),
+        };
+        let o = surface.origin;
+        let planes = p
+            .moving
+            .iter()
+            .filter_map(|&k| self.display.clips.get(k))
+            .filter(|c| c.enabled)
+            .map(|c| {
+                let n = c.normal;
+                let d: f64 = (0..3).map(|k| n[k] * (o[k] - c.origin[k])).sum();
+                [n[0] as f32, n[1] as f32, n[2] as f32, d as f32]
+            })
+            .collect();
+        Some((surface, revision, planes))
     }
 
     /// Frame the faces shown (or the whole mesh when everything is
@@ -683,6 +940,91 @@ mod tests {
         assert!(matches!(stale, Validity::Failed(w) if w.len() == 1));
         let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
         assert_eq!(m.validity, Validity::NoEvidence);
+    }
+
+    /// Invariant: with `defer_clips`, moving a clip plane leaves the
+    /// surface as it was and starts a preview that the renderer cuts on
+    /// the GPU; polling ends it with exactly the surface a direct build
+    /// gives, and so does `settle`; any change other than a plane move
+    /// builds at once and ends the preview. A preview that never ends, or
+    /// ends with a surface built for an older position, would leave the
+    /// window showing a cut the plane has left.
+    #[test]
+    fn clip_moves_are_previewed_then_cut_exactly() {
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        s.open(&fixture("channel/foehncraft.vtu")).unwrap();
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        let at = |f: f64| Clip {
+            origin: [b.min[0] + f * (b.max[0] - b.min[0]), 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            mode: crate::ClipMode::Crinkle,
+            enabled: true,
+        };
+        let exact = |s: &Session| {
+            let m = s.mesh.as_ref().unwrap();
+            Surface::build_with(&m.mesh, Some(&m.fields), &s.tokens, &s.display)
+        };
+        s.defer_clips = true;
+        // A new plane is not a move: it is cut at once.
+        s.display.clips = vec![at(0.8)];
+        s.redraw();
+        assert!(s.preview.is_none());
+        let before = s.mesh.as_ref().unwrap().surface.clone();
+        assert_eq!(before, exact(&s));
+        // A move previews: the surface stays, the renderer gets the plane.
+        s.display.clips = vec![at(0.4)];
+        s.redraw();
+        assert!(s.preview.is_some());
+        assert_eq!(s.mesh.as_ref().unwrap().surface, before);
+        let (_, _, planes) = s.drawn().unwrap();
+        assert_eq!(planes.len(), 1);
+        assert_eq!(planes[0][..3], [1.0, 0.0, 0.0]);
+        // Polling ends it with the exact cut.
+        let start = Instant::now();
+        while s.poll_surface() {
+            assert!(
+                start.elapsed() < Duration::from_secs(60),
+                "the preview never ended"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
+        assert_eq!(s.mesh.as_ref().unwrap().built_for, s.display);
+        assert!(s.drawn().unwrap().2.is_empty());
+        // settle ends it at once, with the same cut.
+        s.display.clips = vec![at(0.6)];
+        s.redraw();
+        s.poll_surface();
+        s.display.clips = vec![at(0.3)];
+        s.redraw();
+        s.settle();
+        assert!(s.preview.is_none());
+        assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
+        // Anything but a move builds at once and ends the preview.
+        s.display.clips = vec![at(0.5)];
+        s.redraw();
+        assert!(s.preview.is_some());
+        s.display.hidden.insert(Item::Zone(0));
+        s.redraw();
+        assert!(s.preview.is_none());
+        assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
+        // Colouring by quality keeps its values across moves (shared, not
+        // copied), so a move still previews.
+        s.display.color_by = ColorBy::Quality;
+        s.redraw();
+        assert!(s.preview.is_none());
+        s.display.clips = vec![at(0.45)];
+        s.redraw();
+        assert!(s.preview.is_some());
+        s.settle();
+        assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
+        // Without defer_clips (the command line, agents) a move cuts at once.
+        s.defer_clips = false;
+        s.display.clips = vec![at(0.2)];
+        s.redraw();
+        assert!(s.preview.is_none());
+        assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
     }
 
     /// Invariant: with `hash_after_open` a mesh opens before its files are

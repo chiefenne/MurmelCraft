@@ -916,13 +916,14 @@ mod tests {
         let open = crate::session::OpenMesh {
             path: "channel.vtu".into(),
             surface: Default::default(),
-            mesh: m.clone(),
+            mesh: std::sync::Arc::new(m.clone()),
             evidence: None,
             evidence_problem: None,
             digest: String::new(),
             files: Vec::new(),
             validity: Validity::NoEvidence,
             fields: Default::default(),
+            built_for: Display::default(),
         };
         let d = Display::default();
         let rows = rows(&open, &d, Item::Cell(0));
