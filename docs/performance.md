@@ -1269,3 +1269,38 @@ What is left in a slice step is the mesh's own surface, built again
 with it (about 220 ms), and joining the iso-surface's runs on one
 thread. Those come next, with the field's node values (`field.color`,
 `arrows.set`).
+
+## A field's node values: one pass, only what is needed (2026-11-24)
+
+Colouring by a field the first time makes its node values from the
+cells' least-squares gradients. That cost more than it needed:
+
+- **The topology** (each cell's nodes, the cells of each node, the
+  centroids) was made on one thread: now each cell's nodes and the
+  centroids are made on all threads (1,617 to 706 ms at 1 M cells).
+- **A vector made every component for each one asked**: colouring by
+  `U.x` made the gradients and node values of x, y and z, and kept x.
+  Now a component is made alone, and the magnitude makes the three
+  components' and its own gradient in one pass over the cells around
+  each cell (the stencil found once, each input fitted as before).
+- **The arrows** asked for x, y, z and the magnitude, each making all
+  three components again (twelve gradient passes); now three, and the
+  magnitude's largest value is read from the cells without its node
+  values (`FieldSet::range`).
+- The node values of a vector's magnitude are put together on all
+  threads, without a list per node.
+
+The values are the same, bit for bit (a test compares a component made
+alone with it made with all three).
+
+1 M honeycomb, polyMesh binary, 4 threads, `--no-render`; in brackets
+before this and the section above:
+
+| Stage (ms) | now (was) | inside |
+|---|---:|---|
+| field.color | 1,157 (2,256) | topology 706, gradients 180, node values 110 |
+| field.switch | 882 (1,892) | gradients 322, node values 356 |
+| arrows.set | 1,420 (4,972) | the vector's node values 900 |
+
+Left: the topology's centroids and its node to cell lists (about 470
+ms of the 706), made once per mesh.

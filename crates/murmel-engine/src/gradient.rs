@@ -53,6 +53,47 @@ pub(crate) fn cell_gradients(
     .collect()
 }
 
+/// The values of one field component, by cell, and its values on the
+/// boundary faces with their centres when the file has them.
+pub(crate) type Input<'a> = (&'a [f64], Option<(&'a [f64], &'a [[f64; 3]])>);
+
+/// [`cell_gradients`] of each of `inputs` (each the same as alone), the
+/// cells around each cell found once for all of them.
+pub(crate) fn cell_gradients_many(
+    mesh: &Mesh,
+    centre: &[[f64; 3]],
+    inputs: &[Input<'_>],
+    near: Near<'_>,
+) -> Vec<Vec<[f64; 3]>> {
+    let ns: Vec<usize> = inputs
+        .iter()
+        .map(|(v, _)| mesh.cell_count().min(v.len()).min(centre.len()))
+        .collect();
+    let n = ns.iter().copied().max().unwrap_or(0);
+    let parts = murmel_mesh::par::map(n, 4096, |r| {
+        let mut around = Vec::new();
+        let mut out: Vec<Vec<[f64; 3]>> =
+            inputs.iter().map(|_| Vec::with_capacity(r.len())).collect();
+        for c in r {
+            around.clear();
+            near(c, &mut around);
+            for (k, &(values, boundary)) in inputs.iter().enumerate() {
+                if c < ns[k] {
+                    out[k].push(gradient_of(mesh, centre, values, boundary, c, &around));
+                }
+            }
+        }
+        out
+    });
+    let mut all: Vec<Vec<[f64; 3]>> = ns.iter().map(|&n| Vec::with_capacity(n)).collect();
+    for part in parts {
+        for (k, g) in part.into_iter().enumerate() {
+            all[k].extend(g);
+        }
+    }
+    all
+}
+
 /// The gradient of `values` in cell `c` alone, fitted to the cells
 /// `around` it (see [`cell_gradients`]).
 pub(crate) fn gradient_of(

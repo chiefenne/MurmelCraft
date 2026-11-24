@@ -594,7 +594,16 @@ pub fn append(
             comp(Component::Y)?,
             comp(Component::Z)?,
         ];
-        let longest = comp(Component::Magnitude)?.range?.1;
+        // The largest magnitude, without the magnitude's node values.
+        let longest = fields
+            .range(
+                mesh,
+                &FieldChoice {
+                    name: a.field.clone(),
+                    component: Component::Magnitude,
+                },
+            )?
+            .1;
         Some((a, vector, longest, a.spacing(mesh)))
     });
     drop(phase);
@@ -930,7 +939,7 @@ fn level_set(
             hi = hi.max(v);
         };
         match fields {
-            Some(set) => set.cell_nodes_of(mesh, c).iter().for_each(|&n| add(n)),
+            Some(set) => set.nodes_of_cell(mesh, c).iter().for_each(|&n| add(n)),
             None => mesh.cell_points(c).for_each(add),
         }
         let vc = match level {
