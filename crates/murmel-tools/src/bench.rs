@@ -3,8 +3,9 @@
 //!
 //! `make` writes the synthetic honeycomb of `murmel_mesh::synth` in the
 //! formats the viewer reads; `run` opens a mesh and times reading,
-//! hashing, the surface of several displays, cell quality, picking and
-//! the first and a later offscreen frame, and reports the peak memory.
+//! hashing, opening as the window does (the files hashed afterwards), the
+//! surface of several displays, cell quality, picking and the first and a
+//! later offscreen frame, and reports the peak memory.
 //! The report is JSON (`murmelcraft.bench`), so runs can be compared.
 
 use std::path::{Path, PathBuf};
@@ -259,12 +260,16 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
     });
     let mut session = Session::new(tokens.clone());
     session.config_dir = None;
+    // As the window opens: the files are hashed after the mesh opens, and
+    // the wait for the digest from then on is a stage of its own.
+    session.hash_after_open = true;
     st.time("open", r, || {
         murmel_mesh::profile::record(true);
         session.open(path).map(|_| ())
     })
     .map_err(|e| e.to_string())?;
     st.note(json!({ "phases": phases() }));
+    st.time("open.digest", 1, || session.wait_digest());
 
     let d0 = Display::default();
     let s = st.time("surface", r, || Surface::build(&mesh, &tokens, &d0));

@@ -30,7 +30,8 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 |---|---|
 | `read` | the reader: file to mesh model, face topology included |
 | `digest` | SHA-256 of the mesh files (the validity badge needs it) |
-| `open` | `mesh.open` as the window does it: read, digest, evidence, first surface |
+| `open` | `mesh.open` as the window does it: read, evidence, first surface (the files are hashed afterwards) |
+| `open.digest` | the wait, after `open`, until the SHA-256 of the files is in place (the validity badge) |
 | `surface` | the surface of the default display (boundary faces) |
 | `surface.crinkle`, `surface.flat` | the surface with one clip plane through the centre |
 | `surface.hidden_zone` | one zone hidden, so the faces between zones lie open |
@@ -210,3 +211,30 @@ What it shows:
   hash of a 10 M cell ascii file (12 GB) would take longer than the
   parsing, roughly 15 to 30 s (estimate). Taking it after the mesh is
   open is the next step for opening speed.
+
+## Hashing after the mesh opens (2026-11-24)
+
+The maintainer's choice: the window opens a mesh as soon as it is read and
+takes the SHA-256 of its files afterwards, on a thread of its own
+(`Session::hash_after_open`). The validity badge says *Checking* until the
+digest is in place, then turns green, amber or red as before; counts the
+evidence contradicts turn it red at once. The command line and agents on
+a headless session still hash while reading, so `mesh.open` returns the
+digest there.
+
+`open` is the time until the mesh shows; `open.digest` the time from
+then until the badge is final. Same machine and meshes, `--no-render`.
+The second pair of columns is a build with the portable SHA-256
+(`sha2`'s `force-soft`), as on a CPU without SHA instructions such as
+the iMac's Core i9.
+
+| | 1 M: vtu | 4 M: vtu | 1 M: vtu, portable SHA | 4 M: vtu, portable SHA |
+|---|---:|---:|---:|---:|
+| open, ms (was) | 2,311 (2,692) | 9,596 (10,181) | 2,503 (4,021) | 9,350 (16,583) |
+| open.digest, ms | 371 | 2,676 | 2,798 | 12,566 |
+
+Without SHA instructions opening was bound by the hash (13 s of the
+16.6 s at 4 M cells); now the mesh shows in 9.4 s and the badge follows
+12.6 s later. With the instructions, the parsing sets the pace either
+way. A 10 M cell ascii `.vtu` on the iMac should show in about the time
+its parsing takes, with the badge some 15 to 30 s later (estimate).

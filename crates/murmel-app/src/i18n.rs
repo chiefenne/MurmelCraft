@@ -71,7 +71,7 @@ mod tests {
         for r in murmel_mesh::PatchRole::ALL {
             assert!(t.has(&format!("role-{}", r.name())));
         }
-        for v in ["valid", "no_evidence", "failed"] {
+        for v in ["valid", "no_evidence", "failed", "checking"] {
             assert!(t.has(&format!("validity-{v}")));
         }
         for a in [

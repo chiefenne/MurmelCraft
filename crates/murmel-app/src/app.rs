@@ -130,6 +130,8 @@ impl MurmelApp {
         let tokens = Tokens::builtin()?;
         style::install(&cc.egui_ctx, &tokens);
         let mut session = Session::new(tokens);
+        // The window opens a mesh first and hashes its files afterwards.
+        session.hash_after_open = true;
         let mut error = None;
         if let Some(dir) = settings::config_dir() {
             let (st, nav, problems) = settings::load(&dir, cfg!(target_os = "macos"));
@@ -1247,6 +1249,7 @@ impl eframe::App for MurmelApp {
         self.export_window(&ctx);
         self.poll_movie(&ctx);
         self.poll_opening(&ctx);
+        self.poll_digest(&ctx);
         self.movie_window(&ctx);
         crate::focus::ring(&ctx, &self.focus, color(p.accent));
         self.focus.end(&ctx);

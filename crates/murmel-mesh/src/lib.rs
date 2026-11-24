@@ -623,23 +623,77 @@ pub fn read(path: &Path) -> Result<Mesh, MeshError> {
 /// (FoehnCraft's `fields.vtkhdf`), the data arrays of a `.vtu`, or an
 /// OpenFOAM mesh (no fields yet).
 pub fn read_results(path: &Path) -> Result<(Mesh, field::Results), MeshError> {
+    read_results_with(path, true)
+}
+
+/// As [`read_results`]. With `hash` false the readers do not take the
+/// SHA-256 of the files beside the parsing and leave
+/// [`Mesh::file_sha256`] empty: the window opens a mesh first and hashes
+/// its files afterwards ([`sha256_file`]), since hashing a large file can
+/// take longer than reading it.
+pub fn read_results_with(path: &Path, hash: bool) -> Result<(Mesh, field::Results), MeshError> {
     if path.is_file() && vtkhdf::is_vtkhdf(path) {
-        return vtkhdf::read_vtkhdf(path);
+        return vtkhdf::read_vtkhdf_with(path, hash);
     }
     let vtu = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("vtu"));
     if !vtu && polymesh::is_openfoam(path) {
-        return read_polymesh(path).map(|m| (m, field::Results::default()));
+        return polymesh::read_polymesh_with(path, hash).map(|m| (m, field::Results::default()));
     }
-    let (mut mesh, results) = vtu::read_vtu_results(path)?;
+    let (mut mesh, results) = vtu::read_vtu_file(path, hash)?;
     mesh.files = vec![path.to_path_buf()];
     Ok((mesh, results))
+}
+
+/// SHA-256 (hex) of the file at `path`, read in pieces so that a file of
+/// many gigabytes is never held whole. `None` when `stop` was set
+/// before the end (checked between pieces).
+pub fn sha256_file(
+    path: &Path,
+    stop: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<Option<String>> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read as _;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 8 << 20];
+    loop {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let n = match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        h.update(&buf[..n]);
+    }
+    Ok(Some(hex(&h.finalize())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Invariant: a file hashed in pieces has the SHA-256 of its bytes
+    /// hashed at once (a file longer than one piece), and a set `stop`
+    /// ends the hashing without a digest. A piece lost or hashed twice
+    /// would change the digest the validity badge compares.
+    #[test]
+    fn sha256_of_a_file_in_pieces() {
+        let path = std::env::temp_dir().join(format!("murmel-sha-{}", std::process::id()));
+        let bytes: Vec<u8> = (0..(9u32 << 20) + 7).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let go = std::sync::atomic::AtomicBool::new(false);
+        let d = sha256_file(&path, &go).unwrap();
+        assert_eq!(d.as_deref(), Some(sha256_hex(&bytes).as_str()));
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(sha256_file(&path, &stop).unwrap(), None);
+        let _ = std::fs::remove_file(&path);
+        assert!(sha256_file(&path, &go).is_err());
+    }
 
     /// Invariant: the spec's face-count rules class KoflCraft's prism
     /// layers (polyhedra with prism topology) as prisms. A change that

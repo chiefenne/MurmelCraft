@@ -1377,6 +1377,8 @@ struct SessionPath {
 
 fn session_save(input: Value, s: &mut Session) -> Run {
     let i: SessionPath = parse(input)?;
+    // The file names the mesh by its digest.
+    s.wait_digest();
     let f = SessionFile::of(s, &i.path);
     std::fs::write(&i.path, f.to_json())
         .map_err(|e| Diagnostic::new("SESS002", format!("{}: {e}", i.path.display())))?;
@@ -1400,6 +1402,8 @@ fn session_load(input: Value, s: &mut Session) -> Run {
     let mut warnings = Vec::new();
     match (f.mesh_path(&i.path), &f.mesh) {
         (Some(p), Some(saved)) => {
+            // The open mesh is recognised by its digest.
+            s.wait_digest();
             let open = s
                 .mesh
                 .as_ref()
@@ -1408,6 +1412,7 @@ fn session_load(input: Value, s: &mut Session) -> Run {
                 s.open(&p).map_err(|e| {
                     Diagnostic::new(e.code, format!("the session's mesh: {}", e.message))
                 })?;
+                s.wait_digest();
             }
             if s.mesh.as_ref().is_some_and(|m| m.digest != saved.sha256) {
                 warnings.push(json!(Diagnostic::new(
@@ -2291,10 +2296,10 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "mesh.open",
-        version: 3,
+        version: 4,
         action: Action::Read,
         label_key: "tool-mesh-open",
-        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip).",
+        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). In the window the SHA-256 of the files is taken after the mesh opens: until it is, `validity` is `checking` and `digest` and the files' `sha256` are empty.",
         outputs: &[],
         reads: &["path"],
         input_schema: || {

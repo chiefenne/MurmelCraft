@@ -83,6 +83,10 @@ impl MurmelApp {
         let display = self.session.display.clone();
         let tokens = self.session.tokens.clone();
         let from = path.clone();
+        // A mesh opens before its files are hashed (the session hashes
+        // them afterwards); a session file needs the digest at once, to
+        // tell whether its mesh changed, so its mesh is hashed here.
+        let hash = matches!(then, Then::Session(_)) || !self.session.hash_after_open;
         #[cfg(test)]
         let gate = self.opening_gate.take();
         let handle = std::thread::spawn(move || {
@@ -91,7 +95,7 @@ impl MurmelApp {
                 let _ = g.recv();
             }
             profile::watch(watched, || {
-                let mut l = murmel_engine::load(&from)?;
+                let mut l = murmel_engine::load_with(&from, hash)?;
                 profile::check()?;
                 l.prepare(&display, &tokens);
                 Ok(l)
@@ -138,6 +142,16 @@ impl MurmelApp {
             // The reader stopped unexpectedly: open the usual way, which
             // reports what went wrong.
             Err(_) => self.open_now(o.then),
+        }
+    }
+
+    /// Show the badge the digests of the open mesh's files decide once
+    /// they are taken; keep looking while they are.
+    pub(crate) fn poll_digest(&mut self, ctx: &egui::Context) {
+        if self.session.poll_digest() {
+            ctx.request_repaint();
+        } else if self.session.hashing.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
     }
 

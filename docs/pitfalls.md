@@ -175,6 +175,14 @@ problem took more than a few minutes to understand.
   `kind_of` first. A chunk can end anywhere (inside a number, a base64
   group, a tag), so a change to the streaming path is tested with the
   file handed over a few bytes at a time (`streams_in_any_pieces`).
+- **The window hashes a mesh after it opens** (`Session::hash_after_open`):
+  until the SHA-256 is taken on its own thread, `OpenMesh::digest` and the
+  files' digests are empty and the badge is `Validity::Checking`. A tool
+  that needs the digest (`session.save` writes it, `session.load` compares
+  it) calls `Session::wait_digest` first. The command line and agents on a
+  headless session hash while reading, as before, so `mesh.open` returns
+  the digest. A window test that tells meshes apart compares paths, not
+  digests.
 
 ## Serde
 
