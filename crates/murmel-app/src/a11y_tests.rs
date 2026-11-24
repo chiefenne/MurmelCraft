@@ -100,6 +100,17 @@ fn every_control_has_a_clean_name() {
     h.run_steps(3);
     assert_eq!(problems(&h), Vec::<String>::new(), "patch, clip, quality");
     h.get_by_label("Clip mode: Crinkle");
+    // A saved view (Ctrl + B names it in the person's language), and its
+    // name field while it is renamed.
+    h.state_mut().save_view();
+    h.run_steps(2);
+    assert!(named(&h, "Saved view View 1"), "saved view row");
+    assert!(named(&h, "Save view (Ctrl + B)"), "save view button");
+    h.state_mut().view_edit = Some(("View 1".into(), "View 1".into()));
+    h.run_steps(2);
+    assert_eq!(problems(&h), Vec::<String>::new(), "saved views");
+    assert!(named(&h, "New name for View 1"), "rename field");
+    h.state_mut().view_edit = None;
     h.state_mut().settings_open = true;
     h.state_mut().shortcuts_open = true;
     h.run_steps(2);

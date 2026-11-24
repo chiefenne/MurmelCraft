@@ -768,6 +768,10 @@ fn sessions_round_trip() {
         ("mesh.open", json!({"path": mesh})),
         ("view.orbit", json!({"yaw_deg": 33.0, "pitch_deg": -12.5})),
         ("view.zoom", json!({"factor": 0.7})),
+        ("views.save", json!({"name": "Close up"})),
+        ("view.standard", json!({"view": "top"})),
+        ("views.save", json!({})),
+        ("view.orbit", json!({"yaw_deg": 5.0})),
         ("display.render_mode", json!({"mode": "shaded"})),
         (
             "display.color_by",
@@ -806,6 +810,7 @@ fn sessions_round_trip() {
     let e = call("session.save", json!({"path": file}), &mut s);
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert_eq!(e.result["session"]["mesh"]["path"], "foehncraft.vtu");
+    assert_eq!(s.display.views.len(), 2);
 
     let mut t = session();
     let e = call("session.load", json!({"path": file}), &mut t);
@@ -820,6 +825,7 @@ fn sessions_round_trip() {
     assert_eq!(t.view_cube, s.view_cube);
     assert_eq!(t.colors, s.colors);
     assert_eq!(t.tokens.mesh.solid, s.tokens.mesh.solid);
+    assert_eq!(t.display.views, s.display.views, "saved views come back");
     assert!(t.display.quality.is_some(), "quality colouring computes it");
     assert!(t.journal.undo.is_empty());
     let again = dir.join("again.murmel");
@@ -949,4 +955,134 @@ fn stale_and_broken_sessions() {
     );
     assert_eq!(e.diagnostics[0].code, "SESS002");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant: saved views are named cameras of the open mesh: views.save
+/// names a new one "View N" or updates the one with the name given,
+/// views.go puts its camera back, rename refuses a taken or empty name
+/// (VIEW004) and an unknown view is VIEW003; save, rename and delete are
+/// undo steps that do not rebuild the surface, and opening a mesh drops
+/// them. The V and Shift + V commands cycle through them. Breaks when a
+/// view keeps a copy of the camera that later moves with it, when the
+/// journal leaves views out, or when undoing a bookmark redraws the
+/// mesh; the session round trip only checks they are saved.
+#[test]
+fn saved_views() {
+    let mut s = session();
+    let path = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert_eq!(
+        call("views.save", json!({}), &mut s).diagnostics[0].code,
+        "VIEW001"
+    );
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    let home = s.camera.clone();
+    let e = call("views.save", json!({}), &mut s);
+    assert_eq!(e.result["name"], "View 1");
+    assert_eq!(e.result["updated"], false);
+    assert!(call("view.standard", json!({"view": "top"}), &mut s).ok());
+    let top = s.camera.clone();
+    let e = call("views.save", json!({"name": "  Top  "}), &mut s);
+    assert_eq!(e.result["name"], "Top");
+    assert_eq!(e.result["views"], json!(["View 1", "Top"]));
+    assert_eq!(
+        call("views.save", json!({}), &mut s).result["name"],
+        "View 2"
+    );
+    assert!(call("view.orbit", json!({"yaw_deg": 40.0}), &mut s).ok());
+    let e = call("views.save", json!({"name": "View 2"}), &mut s);
+    assert_eq!(e.result["updated"], true);
+    assert_eq!(s.display.view("View 2").unwrap().camera, s.camera);
+
+    let e = call("views.go", json!({"name": "View 1"}), &mut s);
+    assert!(e.ok());
+    assert_eq!(s.camera, home);
+    assert_eq!(
+        call("views.go", json!({"name": "nope"}), &mut s).diagnostics[0].code,
+        "VIEW003"
+    );
+    let clash = call(
+        "views.rename",
+        json!({"name": "Top", "to": "View 1"}),
+        &mut s,
+    );
+    assert_eq!(clash.diagnostics[0].code, "VIEW004");
+    let empty = call("views.save", json!({"name": " "}), &mut s);
+    assert_eq!(empty.diagnostics[0].code, "VIEW004");
+    let long = call("views.save", json!({"name": "x".repeat(65)}), &mut s);
+    assert_eq!(long.diagnostics[0].code, "VIEW004");
+    assert!(call("views.rename", json!({"name": "Top", "to": "Plan"}), &mut s).ok());
+    assert!(call("views.go", json!({"name": "Plan"}), &mut s).ok());
+    assert_eq!(s.camera, top);
+
+    // The commands step from the view the camera is at.
+    let next = crate::commands::commands()
+        .into_iter()
+        .find(|c| c.id == "views.go:next")
+        .unwrap();
+    assert_eq!(next.input(&s).unwrap().1, json!({"name": "View 2"}));
+    let prev = crate::commands::commands()
+        .into_iter()
+        .find(|c| c.id == "views.go:previous")
+        .unwrap();
+    assert_eq!(prev.input(&s).unwrap().1, json!({"name": "View 1"}));
+
+    let rev = s.surface_revision;
+    assert!(call("views.delete", json!({"name": "Plan"}), &mut s).ok());
+    assert!(s.display.view("Plan").is_none());
+    let e = call("journal.undo", json!({}), &mut s);
+    assert_eq!(e.result["undone"], "views.delete");
+    assert!(s.display.view("Plan").is_some());
+    assert_eq!(s.surface_revision, rev, "a bookmark is not a redraw");
+    let e = call("views.list", json!({}), &mut s);
+    assert_eq!(e.result["views"].as_array().unwrap().len(), 3);
+    assert_eq!(e.result["views"][1]["view"], "top");
+
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    assert!(
+        s.display.views.is_empty(),
+        "views are cameras of the old mesh"
+    );
+    assert!(next.input(&s).is_none());
+}
+
+/// Invariant: colour mode zone gives each cell zone of an OpenFOAM case
+/// (cellZones) its own colour on the boundary and in the tree, and a
+/// colour set on a zone wins. Breaks when the zone mode falls back to the
+/// solid colour or ignores display.set_color; no other test colours by
+/// zone.
+#[test]
+fn colour_by_cell_zone() {
+    let mut s = session();
+    let path = root().join("test-fixtures/openfoam/channel_ascii");
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    assert!(call("display.color_by", json!({"by": "zone"}), &mut s).ok());
+    let m = &s.mesh.as_ref().unwrap().mesh;
+    let left = murmel_engine::Item::parse("zone:left", m).unwrap();
+    let right = murmel_engine::Item::parse("zone:right", m).unwrap();
+    let d = &s.display;
+    let (cl, cr) = (
+        d.item_color(m, &s.tokens, left).unwrap(),
+        d.item_color(m, &s.tokens, right).unwrap(),
+    );
+    assert_ne!(cl, cr);
+    let colours: std::collections::BTreeSet<[u8; 3]> = (0..m.boundary.len())
+        .map(|f| d.face_color(m, &s.tokens, f).0)
+        .collect();
+    assert!(
+        colours.contains(&cl.0) && colours.contains(&cr.0),
+        "{colours:?}"
+    );
+    assert!(
+        call(
+            "display.set_color",
+            json!({"item": "zone:left", "color": "#102030"}),
+            &mut s
+        )
+        .ok()
+    );
+    let m = &s.mesh.as_ref().unwrap().mesh;
+    assert_eq!(
+        s.display.item_color(m, &s.tokens, left).unwrap().hex(),
+        "#102030"
+    );
 }

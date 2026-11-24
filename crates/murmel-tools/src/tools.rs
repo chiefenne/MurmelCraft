@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use murmel_engine::display::all_items;
+use murmel_engine::display::{SavedView, VIEW_NAME_MAX, all_items, view_name};
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::session_file::{SessionFile, absolute};
 use murmel_engine::settings::{Agents, Settings, save_navigation, save_settings};
@@ -312,6 +312,137 @@ fn view_rotate(input: Value, s: &mut Session) -> Run {
     let i: Rotate = parse(input)?;
     s.camera.rotate(i.axis, finite(i.deg, "deg")?);
     Ok(camera_json(s))
+}
+
+// ---- saved views --------------------------------------------------------
+
+fn views_json(s: &Session) -> Value {
+    json!(
+        s.display
+            .views
+            .iter()
+            .map(|v| v.name.as_str())
+            .collect::<Vec<_>>()
+    )
+}
+
+fn view_index(s: &Session, name: &str) -> Result<usize, Diagnostic> {
+    s.display
+        .views
+        .iter()
+        .position(|v| v.name == name.trim())
+        .ok_or_else(|| Diagnostic::new("VIEW003", format!("no saved view is called {name:?}")))
+}
+
+fn new_view_name(name: &str) -> Result<String, Diagnostic> {
+    view_name(name).ok_or_else(|| {
+        Diagnostic::new(
+            "VIEW004",
+            format!("{name:?} is empty, longer than {VIEW_NAME_MAX} characters or holds control characters"),
+        )
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewSave {
+    /// Left out: the first free "View N".
+    name: Option<String>,
+}
+
+fn views_save(input: Value, s: &mut Session) -> Run {
+    let i: ViewSave = parse(input)?;
+    need_mesh(s)?;
+    let name = match i.name {
+        Some(n) => new_view_name(&n)?,
+        None => s.display.next_view_name("View"),
+    };
+    let camera = s.camera.clone();
+    let updated = match s.display.views.iter_mut().find(|v| v.name == name) {
+        Some(v) => {
+            v.camera = camera;
+            true
+        }
+        None => {
+            s.display.views.push(SavedView {
+                name: name.clone(),
+                camera,
+            });
+            false
+        }
+    };
+    Ok(json!({"name": name, "updated": updated, "views": views_json(s)}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewName {
+    name: String,
+}
+
+fn views_go(input: Value, s: &mut Session) -> Run {
+    let i: ViewName = parse(input)?;
+    need_mesh(s)?;
+    let k = view_index(s, &i.name)?;
+    s.camera = s.display.views[k].camera.clone();
+    Ok(json!({"name": s.display.views[k].name, "camera": camera_json(s)}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewRename {
+    name: String,
+    to: String,
+}
+
+fn views_rename(input: Value, s: &mut Session) -> Run {
+    let i: ViewRename = parse(input)?;
+    need_mesh(s)?;
+    let k = view_index(s, &i.name)?;
+    let to = new_view_name(&i.to)?;
+    if s.display
+        .views
+        .iter()
+        .enumerate()
+        .any(|(j, v)| j != k && v.name == to)
+    {
+        return Err(Diagnostic::new(
+            "VIEW004",
+            format!("another saved view is called {to:?}"),
+        ));
+    }
+    s.display.views[k].name = to.clone();
+    Ok(json!({"name": to, "views": views_json(s)}))
+}
+
+fn views_delete(input: Value, s: &mut Session) -> Run {
+    let i: ViewName = parse(input)?;
+    need_mesh(s)?;
+    let k = view_index(s, &i.name)?;
+    let gone = s.display.views.remove(k);
+    Ok(json!({"deleted": gone.name, "views": views_json(s)}))
+}
+
+fn views_list(_: Value, s: &mut Session) -> Run {
+    let views: Vec<Value> = s
+        .display
+        .views
+        .iter()
+        .map(|v| {
+            let c = &v.camera;
+            json!({
+                "name": v.name,
+                "target": c.target,
+                "distance": c.distance,
+                "yaw_deg": c.yaw_deg,
+                "pitch_deg": c.pitch_deg,
+                "roll_deg": c.roll_deg,
+                "projection": c.projection,
+                "view": c.standard().map(|v| v.name()),
+            })
+        })
+        .collect();
+    Ok(json!({"views": views}))
 }
 
 #[derive(Deserialize)]
@@ -1125,6 +1256,10 @@ pub const JOURNALED: &[&str] = &[
     "view.fit",
     "view.standard",
     "view.rotate",
+    "views.save",
+    "views.go",
+    "views.rename",
+    "views.delete",
     "display.render_mode",
     "display.color_by",
     "display.threshold",
@@ -1143,6 +1278,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("mesh.close", "closing the mesh ends its journal"),
     ("mesh.info", READS_ONLY),
     ("view.get_camera", READS_ONLY),
+    ("views.list", READS_ONLY),
     (
         "view.screenshot",
         "writes a file; a mesh or view it is given is for the picture",
@@ -1443,6 +1579,71 @@ pub static TOOLS: &[Tool] = &[
         run: view_rotate,
     },
     Tool {
+        id: "views.save",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-views-save",
+        summary: "Save the camera as a named view of the open mesh (a bookmark in the model tree); name left out takes the first free \"View N\", a name that exists gets the current camera. Saved views go into session files; opening another mesh drops them.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({"name": {"type": "string", "minLength": 1, "maxLength": VIEW_NAME_MAX}}),
+                &[],
+            )
+        },
+        run: views_save,
+    },
+    Tool {
+        id: "views.go",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-views-go",
+        summary: "Go to a saved view: its target, distance, angles, roll and projection (the window flies there).",
+        outputs: &[],
+        reads: &[],
+        input_schema: || object(json!({"name": {"type": "string"}}), &["name"]),
+        run: views_go,
+    },
+    Tool {
+        id: "views.rename",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-views-rename",
+        summary: "Rename a saved view; the new name must be free.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({"name": {"type": "string"}, "to": {"type": "string", "minLength": 1, "maxLength": VIEW_NAME_MAX}}),
+                &["name", "to"],
+            )
+        },
+        run: views_rename,
+    },
+    Tool {
+        id: "views.delete",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-views-delete",
+        summary: "Delete a saved view (undo brings it back).",
+        outputs: &[],
+        reads: &[],
+        input_schema: || object(json!({"name": {"type": "string"}}), &["name"]),
+        run: views_delete,
+    },
+    Tool {
+        id: "views.list",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-views-list",
+        summary: "The saved views of the open mesh, in the order they were saved, with their cameras.",
+        outputs: &[],
+        reads: &[],
+        input_schema: no_input,
+        run: views_list,
+    },
+    Tool {
         id: "view.screenshot",
         version: 1,
         action: Action::WriteFiles,
@@ -1486,13 +1687,13 @@ pub static TOOLS: &[Tool] = &[
         version: 2,
         action: Action::Read,
         label_key: "tool-display-color-by",
-        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold.",
+        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold.",
         outputs: &[],
         reads: &[],
         input_schema: || {
             object(
                 json!({
-                    "by": {"enum": ["solid", "patch", "role", "cell_type", "quality"]},
+                    "by": {"enum": ["solid", "patch", "role", "cell_type", "zone", "quality"]},
                     "metric": {"enum": ["non_orthogonality", "skewness", "volume_ratio", "face_count"]}
                 }),
                 &["by"],
@@ -1524,7 +1725,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-display-set-color",
-        summary: "Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type.",
+        summary: "Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -1864,7 +2065,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-session-save",
-        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the mesh colours and the view cube placement.",
+        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the mesh colours and the view cube placement.",
         outputs: &["path"],
         reads: &[],
         input_schema: || {
