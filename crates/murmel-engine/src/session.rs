@@ -12,7 +12,7 @@ use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Display, Item};
-use crate::field::FieldSet;
+use crate::field::{Component, FieldSet};
 use crate::journal::Journal;
 use crate::navigation::Navigation;
 use crate::quality::Quality;
@@ -794,6 +794,84 @@ impl Session {
         m.surface = Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
         m.built_for = self.display.clone();
         self.surface_revision += 1;
+    }
+
+    /// Compute the derived field of `recipe` ([`crate::derive`]) on the
+    /// open mesh and add it to the mesh's fields, in place of one the
+    /// recipe made before, then draw again; the name of the field made.
+    pub fn derive(
+        &mut self,
+        recipe: crate::derive::Recipe,
+    ) -> Result<&'static str, crate::derive::Refusal> {
+        let Some(m) = &mut self.mesh else {
+            return Err(crate::derive::Refusal::NoFields);
+        };
+        let fields = crate::derive::compute(&m.mesh, &m.fields, &recipe)?;
+        let name = recipe.field();
+        m.fields = Arc::new(m.fields.with_derived(fields, recipe));
+        self.forget_values(name);
+        self.redraw();
+        Ok(name)
+    }
+
+    /// Remove derived field `name` from the open mesh's fields. Refused
+    /// while an iso-surface, the arrows or a streamline set is made from
+    /// it (their ids are given); colouring by it moves on to the
+    /// result's first field.
+    pub fn underive(&mut self, name: &str) -> Result<(), crate::derive::Refusal> {
+        use crate::derive::Refusal;
+        let Some(m) = &mut self.mesh else {
+            return Err(Refusal::NotDerived(name.into()));
+        };
+        let Some(set) = m.fields.without_derived(name) else {
+            return Err(Refusal::NotDerived(name.into()));
+        };
+        let d = &self.display;
+        let mut users: Vec<Item> = Vec::new();
+        for (k, iso) in d.isos.iter().enumerate() {
+            if iso.field.name == name {
+                users.push(Item::Iso(k as u32));
+            }
+        }
+        if d.arrows.as_ref().is_some_and(|a| a.field == name) {
+            users.push(Item::Arrows);
+        }
+        for (k, st) in d.streams.iter().enumerate() {
+            if st.field == name || st.color.as_ref().is_some_and(|c| c.name == name) {
+                users.push(Item::Stream(k as u32));
+            }
+        }
+        if !users.is_empty() {
+            let ids = users.iter().map(|i| i.id(&m.mesh)).collect();
+            return Err(Refusal::InUse(name.into(), ids));
+        }
+        let first = set.names().first().map(|n| n.to_string());
+        m.fields = Arc::new(set);
+        let d = &mut self.display;
+        if d.field.as_ref().is_some_and(|c| c.name == name) {
+            d.field = first.map(|name| crate::field::FieldChoice {
+                name,
+                component: Component::Magnitude,
+            });
+            if d.field.is_none() && d.color_by == ColorBy::Field {
+                d.color_by = ColorBy::Solid;
+            }
+        }
+        self.forget_values(name);
+        self.redraw();
+        Ok(())
+    }
+
+    /// Drop what the display computed from field `name` (it changed).
+    fn forget_values(&mut self, name: &str) {
+        let d = &mut self.display;
+        if d.field_values
+            .as_ref()
+            .is_some_and(|v| v.choice.name == name)
+        {
+            d.field_values = None;
+        }
+        d.stream_traces = None;
     }
 
     /// Follow the clip preview: put a finished surface in place and start

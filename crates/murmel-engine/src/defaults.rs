@@ -10,7 +10,9 @@
 //!
 //! Only values that make sense on any mesh can be defaults: an item's
 //! look, density, count and mode, never where it is, which field it
-//! shows or a length in metres. [`Kind::keys`] lists them; a value is
+//! shows or a length in metres; the reference values of derived
+//! pressure fields (density, pressure, velocity) belong to the fluid,
+//! not the mesh, so they can be too. [`Kind::keys`] lists them; a value is
 //! checked against a fresh item of its kind and the kind's limits before
 //! it is kept, and a value edited by hand that no longer fits is left out
 //! when an item is made.
@@ -23,6 +25,7 @@ use serde_json::{Map, Value};
 
 use crate::camera::Projection;
 use crate::clip::{Clip, ClipMode};
+use crate::derive::Reference;
 use crate::display::{Item, RenderMode};
 use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle};
@@ -45,10 +48,13 @@ pub enum Kind {
     FieldStyle,
     /// How the mesh is drawn when the window starts.
     View,
+    /// The reference values derived pressure fields start from when the
+    /// result's case does not give them.
+    Reference,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::Arrows,
         Kind::Slice,
         Kind::Iso,
@@ -57,6 +63,7 @@ impl Kind {
         Kind::Region,
         Kind::FieldStyle,
         Kind::View,
+        Kind::Reference,
     ];
 
     pub fn key(self) -> &'static str {
@@ -69,6 +76,7 @@ impl Kind {
             Kind::Region => "region",
             Kind::FieldStyle => "field_style",
             Kind::View => "view",
+            Kind::Reference => "reference",
         }
     }
 
@@ -96,6 +104,7 @@ impl Kind {
                 "range",
             ],
             Kind::View => &["render_mode", "mesh_look", "projection"],
+            Kind::Reference => &["density", "pressure", "velocity"],
         }
     }
 
@@ -142,6 +151,7 @@ impl Kind {
             })),
             Kind::FieldStyle => serde_json::to_value(FieldStyle::default()),
             Kind::View => serde_json::to_value(View::default()),
+            Kind::Reference => serde_json::to_value(Reference::default()),
         };
         v.unwrap_or(Value::Null)
     }
@@ -174,6 +184,7 @@ impl Kind {
             Kind::Region => serde_json::from_value::<Region>(item).map(|_| ()),
             Kind::FieldStyle => serde_json::from_value::<FieldStyle>(item).map(|_| ()),
             Kind::View => serde_json::from_value::<View>(item).map(|_| ()),
+            Kind::Reference => serde_json::from_value::<Reference>(item).map(|_| ()),
         };
         typed.map_err(|e| format!("{}.{key} = {value}: {e}", self.key()))?;
         let number = value.as_f64().unwrap_or(f64::NAN);
@@ -213,6 +224,12 @@ impl Kind {
                 )),
                 _ => Ok(()),
             },
+            (Kind::Reference, "density" | "velocity") if number <= 0.0 => {
+                Err(format!("reference.{key} = {value} must be above 0"))
+            }
+            (Kind::Reference, _) => {
+                within(-crate::derive::MAX_REFERENCE, crate::derive::MAX_REFERENCE)
+            }
             // A fixed range belongs to one field.
             (Kind::FieldStyle, "range") if value.is_object() => Err(
                 "a fixed range belongs to one field; a default range is field, shown or symmetric"

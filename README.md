@@ -64,6 +64,13 @@ every change.
   length limit; thin lines, or shaded tubes with a radius setting and
   arrowheads on request; a solid colour, or any field with its own
   colour bar beside the mesh's, in exported pictures too.
+- Derived fields (`field.derive`, the Derived fields window): vorticity,
+  Q criterion, λ₂, total pressure and pressure coefficient computed from
+  the result's velocity and pressure (the velocity gradient by least
+  squares in each cell), with FoehnCraft's names and units. They join the
+  file's fields for colouring, slices, iso-surfaces, arrows and
+  streamlines, and sessions save how each was made. The reference values
+  come from FoehnCraft's case beside the result, else your defaults.
 - Shaded with edges, shaded, wireframe or feature edges (keys 1 to 4);
   one solid colour (green by default) or colours by patch, patch role,
   cell type, cell zone or cell quality (non-orthogonality, skewness,
@@ -72,7 +79,8 @@ every change.
   themes switch live.
 - Your defaults: right-click a value or an item (arrows, slices,
   iso-surfaces, streamlines, clip planes, regions, field colouring, the
-  render mode and projection) to save it as your default
+  render mode and projection, the reference values of derived fields) to
+  save it as your default
   (`settings.set_default`); new items start from it, items already open
   keep theirs, and Settings lists each default with a Forget button.
 - Model tree (T): the mesh with its evidence badge, cell zones, cell

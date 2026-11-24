@@ -10,6 +10,7 @@ pub mod clip;
 pub mod colormap;
 pub mod cube;
 pub mod defaults;
+pub mod derive;
 pub mod display;
 pub mod extract;
 mod fasthash;

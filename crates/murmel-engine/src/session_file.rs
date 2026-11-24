@@ -10,7 +10,8 @@
 //! the field shown and each field's style (since 1.4), the slices,
 //! iso-surfaces and the mesh's look beside them (since 1.5), the
 //! vector arrows (since 1.6), the regions of interest (since 1.7; their
-//! flat cut since 1.8), the streamlines (since 1.9), the user's mesh
+//! flat cut since 1.8), the streamlines (since 1.9), the derived fields
+//! as recipes, computed again on loading (since 1.11), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
+use crate::derive::Recipe;
 use crate::display::{ColorBy, Item, PickTarget, RenderMode, SavedView};
 use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, RangeMode};
@@ -40,7 +42,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.10";
+pub const SESSION_VERSION: &str = "1.11";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -131,6 +133,10 @@ pub struct SessionFile {
     /// The saved views of the mesh, in the order they were saved (1.1).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<SavedView>,
+    /// The derived fields, as recipes, in the order they were made
+    /// (1.11); loading computes them again before the display returns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub derived: Vec<Recipe>,
 }
 
 /// `path` made absolute from the working folder, without touching the
@@ -269,6 +275,7 @@ impl SessionFile {
             } else {
                 Vec::new()
             },
+            derived: s.fields().map(|f| f.recipes().to_vec()).unwrap_or_default(),
         }
     }
 
@@ -295,6 +302,12 @@ impl SessionFile {
         check_camera(&mut f.camera).map_err(|()| {
             Refused("the camera needs finite numbers and a positive distance".into())
         })?;
+        for r in &f.derived {
+            if let Some(rf) = &r.reference {
+                rf.check()
+                    .map_err(|e| Refused(format!("derived field {}: {e}", r.field())))?;
+            }
+        }
         let mut names = Vec::new();
         for v in &mut f.views {
             let name = crate::display::view_name(&v.name)
@@ -507,6 +520,13 @@ impl Session {
         }
         self.view_cube = f.view_cube;
         self.camera = f.camera;
+        // The derived fields first, so the display finds them.
+        for r in f.derived {
+            let name = r.field();
+            if let Err(e) = self.derive(r) {
+                missing.push(format!("derived field {name}: {}", e.message()));
+            }
+        }
         let d = &mut self.display;
         let s = f.display;
         d.color_by = s.color_by;
@@ -720,6 +740,7 @@ mod tests {
                 name: "Inlet".into(),
                 camera: Camera::default(),
             }],
+            derived: vec![Recipe::new(crate::derive::Quantity::Vorticity)],
         };
         assert!(SessionFile::parse(&ok.to_json()).is_ok());
         let with = |f: &dyn Fn(&mut serde_json::Value)| {
@@ -769,6 +790,15 @@ mod tests {
         }
         assert!(with(&|v| v["camera"]["distance"] = 0.0.into()).is_err());
         assert!(with(&|v| v["surprise"] = 1.into()).is_err());
+        // A derived field with a reference density of 0, or unknown.
+        assert!(
+            with(&|v| v["derived"] = serde_json::json!([{
+                "quantity": "pressure-coefficient",
+                "reference": {"density": 0.0, "pressure": 0.0, "velocity": 1.0}
+            }]))
+            .is_err()
+        );
+        assert!(with(&|v| v["derived"] = serde_json::json!([{"quantity": "helicity"}])).is_err());
         assert!(
             with(&|v| v["display"]["clip"] = serde_json::json!({
                 "origin": [0, 0, 0], "normal": [0, 0, 0], "mode": "flat", "enabled": true

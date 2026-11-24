@@ -92,6 +92,8 @@ pub struct MurmelApp {
     pub(crate) export: crate::export_dialog::ExportDialog,
     /// The movie window and its settings (File, "Export movie…").
     pub(crate) movie: crate::movie_dialog::MovieDialog,
+    /// The Derived fields window ("Derived fields…").
+    pub(crate) derived: crate::derived::DerivedWindow,
     /// The movie being made on its own thread, if one is.
     pub(crate) movie_job: Option<crate::movie_dialog::MovieJob>,
     /// The large mesh being read on its own thread, if one is.
@@ -207,6 +209,7 @@ impl MurmelApp {
             color_edit: None,
             export: Default::default(),
             movie: Default::default(),
+            derived: Default::default(),
             movie_job: None,
             opening: None,
             background_bytes: crate::opening::BACKGROUND_BYTES,
@@ -741,6 +744,7 @@ impl MurmelApp {
         let by = self.session.display.color_by;
         let metric = self.session.display.metric;
         let mut pick = None;
+        let mut open_derived = false;
         let label = self.i18n.tr("toolbar-color-by");
         let current = self.color_by_name();
         let text = if self.toolbar_compact {
@@ -788,6 +792,7 @@ impl MurmelApp {
                 let shown = (by == murmel_engine::ColorBy::Field)
                     .then(|| self.session.display.field.as_ref().map(|c| c.name.clone()))
                     .flatten();
+                let any = !fields.is_empty();
                 for n in fields {
                     let on = shown.as_deref() == Some(n.as_str());
                     let text = self
@@ -796,6 +801,13 @@ impl MurmelApp {
                     if ui.selectable_label(on, text).clicked() && !on {
                         pick = Some(json!({"by": "field", "field": n}));
                     }
+                }
+                if any
+                    && ui
+                        .selectable_label(false, self.i18n.tr("cmd-derived"))
+                        .clicked()
+                {
+                    open_derived = true;
                 }
             });
         let tip = format!(
@@ -809,6 +821,9 @@ impl MurmelApp {
             i["by"] != json!(by) || i.get("metric").is_some() || i.get("field").is_some()
         }) {
             self.call("display.color_by", input);
+        }
+        if open_derived {
+            self.open_derived();
         }
         ui.separator();
         self.clip_group(ui, secondary);
@@ -1312,6 +1327,7 @@ impl eframe::App for MurmelApp {
         self.palette_window(&ctx);
         self.color_window(&ctx);
         self.export_window(&ctx);
+        self.derived_window(&ctx);
         self.poll_movie(&ctx);
         self.poll_opening(&ctx);
         self.poll_digest(&ctx);

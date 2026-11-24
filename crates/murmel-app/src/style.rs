@@ -1,6 +1,10 @@
 //! egui style from the design tokens (UI spec, "Design tokens, fonts and
 //! icons"): Inter and JetBrains Mono (SIL OFL), Lucide icons (ISC), the
-//! dark and light palettes, a 4 px grid and 6 px radius.
+//! dark and light palettes, a 4 px grid and 6 px radius. Inter's Greek
+//! letters, sub- and superscripts and a few maths signs come from a
+//! subset of their own (`Inter-Greek.otf`, for the formulas and symbols
+//! of derived fields), after the Latin subset, so Latin text draws as
+//! before.
 
 use std::sync::Arc;
 
@@ -36,6 +40,11 @@ pub fn fonts() -> FontDefinitions {
     );
     add(
         &mut f,
+        "inter-greek",
+        include_bytes!("../../../assets/fonts/Inter-Greek.otf"),
+    );
+    add(
+        &mut f,
         "jetbrains-mono",
         include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
     );
@@ -46,12 +55,18 @@ pub fn fonts() -> FontDefinitions {
     );
     let prop = f.families.entry(FontFamily::Proportional).or_default();
     prop.insert(0, "inter".into());
-    prop.insert(1, "lucide".into());
+    prop.insert(1, "inter-greek".into());
+    prop.insert(2, "lucide".into());
     let mono = f.families.entry(FontFamily::Monospace).or_default();
     mono.insert(0, "jetbrains-mono".into());
     f.families.insert(
         FontFamily::Name(SEMIBOLD.into()),
-        vec!["inter-semibold".into(), "inter".into(), "lucide".into()],
+        vec![
+            "inter-semibold".into(),
+            "inter".into(),
+            "inter-greek".into(),
+            "lucide".into(),
+        ],
     );
     f.families.insert(
         FontFamily::Name(ICONS.into()),

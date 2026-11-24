@@ -542,6 +542,24 @@ pub fn commands() -> Vec<Command> {
         &[],
         Tool("field.style", json!({"reset": true})),
     ));
+    // Derived fields: the catalogue window, and each quantity at once
+    // with its inputs found by name.
+    v.push(cmd(
+        "window.derived",
+        "cmd-derived",
+        "field",
+        &[],
+        Window(Some("field.derive")),
+    ));
+    for q in murmel_engine::derive::Quantity::ALL {
+        v.push(cmd(
+            format!("field.derive:{}", q.key()),
+            format!("cmd-derive-{}", q.key()),
+            "field",
+            &[],
+            Tool("field.derive", json!({"quantity": q.key()})),
+        ));
+    }
     for m in Metric::ALL {
         v.push(cmd(
             format!("display.color_by:quality-{}", m.key()),
@@ -1537,6 +1555,7 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "field.list",
         "the colour-by menu and the legend show the fields",
     ),
+    ("field.catalogue", "the Derived fields window shows it"),
     ("views.list", "the model tree shows the saved views"),
     (
         "views.rename",

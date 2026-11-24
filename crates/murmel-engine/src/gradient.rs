@@ -70,14 +70,40 @@ pub(crate) fn gradient_of(
         return [0.0; 3];
     }
     let x = centre[c];
+    let cells = around
+        .iter()
+        .map(|&o| o as usize)
+        .filter(|&o| o != c)
+        .filter_map(|o| Some((*centre.get(o)?, *values.get(o)?)));
+    let faces = boundary.into_iter().flat_map(|(bv, bc)| {
+        mesh.cell(c).filter_map(move |f| {
+            let k = *mesh.face_boundary.get(f.id as usize)?;
+            if k == NO_CELL {
+                return None;
+            }
+            Some((*bc.get(k as usize)?, *bv.get(k as usize)?))
+        })
+    });
+    fit(x, v, cells.chain(faces))
+}
+
+/// The gradient about `x`, where the value is `v`, that best predicts
+/// the `samples` (a place and its value), each difference weighted by
+/// the inverse square of its distance. A sample at `x` itself or
+/// without a finite value is skipped.
+pub(crate) fn fit(
+    x: [f64; 3],
+    v: f64,
+    samples: impl IntoIterator<Item = ([f64; 3], f64)>,
+) -> [f64; 3] {
     // The normal equations: a g = b, a symmetric.
     let mut a = [[0.0f64; 3]; 3];
     let mut b = [0.0f64; 3];
-    let mut add = |to: [f64; 3], value: f64| {
+    for (to, value) in samples {
         let d = [to[0] - x[0], to[1] - x[1], to[2] - x[2]];
         let dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
         if !(value.is_finite() && dd > 0.0 && dd.is_finite()) {
-            return;
+            continue;
         }
         let w = 1.0 / dd;
         let dv = value - v;
@@ -86,25 +112,6 @@ pub(crate) fn gradient_of(
                 a[i][j] += w * d[i] * d[j];
             }
             b[i] += w * d[i] * dv;
-        }
-    };
-    for &o in around {
-        let o = o as usize;
-        if o == c {
-            continue;
-        }
-        if let (Some(&vo), Some(&xo)) = (values.get(o), centre.get(o)) {
-            add(xo, vo);
-        }
-    }
-    if let Some((bv, bc)) = boundary {
-        for f in mesh.cell(c) {
-            if let Some(&k) = mesh.face_boundary.get(f.id as usize)
-                && k != NO_CELL
-                && let (Some(&vb), Some(&xb)) = (bv.get(k as usize), bc.get(k as usize))
-            {
-                add(xb, vb);
-            }
         }
     }
     solve(a, b)
