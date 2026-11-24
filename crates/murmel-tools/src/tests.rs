@@ -3772,7 +3772,14 @@ fn time_label_in_exports() {
     assert_eq!(crate::series::time_text(0.0), "0");
     let mut s = session();
     let dir = box_steps("time-label");
-    assert!(call("series.open", json!({ "path": dir.join("series.json") }), &mut s).ok());
+    assert!(
+        call(
+            "series.open",
+            json!({ "path": dir.join("series.json") }),
+            &mut s
+        )
+        .ok()
+    );
     let i18n = crate::export::i18n().unwrap();
     assert_eq!(
         crate::series::caption(&s, &i18n).as_deref(),
