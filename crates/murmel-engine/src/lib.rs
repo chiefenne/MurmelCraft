@@ -1,13 +1,14 @@
 //! The engine of MurmelCraft: everything the viewer knows and does without
 //! a window or a GPU. The scene (the open mesh and its triangulated
 //! surface), the camera, the tool journal (undo and redo), the navigation bindings, the design tokens, the
-//! settings files and session files. Front ends (the egui window, the CLI, the MCP server)
+//! settings files and session files, and the translations. Front ends (the egui window, the CLI, the MCP server)
 //! change this state only through the tools of `murmel-tools`.
 
 pub mod camera;
 pub mod clip;
 pub mod cube;
 pub mod display;
+pub mod i18n;
 pub mod inspect;
 pub mod journal;
 pub mod navigation;

@@ -1786,7 +1786,6 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui_kittest",
- "fluent-bundle",
  "murmel-engine",
  "murmel-mesh",
  "murmel-render",
@@ -1794,7 +1793,6 @@ dependencies = [
  "png",
  "rfd",
  "serde_json",
- "unic-langid",
  "wgpu",
 ]
 
@@ -1812,12 +1810,14 @@ dependencies = [
 name = "murmel-engine"
 version = "0.1.0"
 dependencies = [
+ "fluent-bundle",
  "glam",
  "murmel-mesh",
  "serde",
  "serde_json",
  "sha2",
  "toml",
+ "unic-langid",
 ]
 
 [[package]]
