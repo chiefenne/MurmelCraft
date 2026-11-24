@@ -41,6 +41,9 @@ How it works:
   blended frames of 60 ms crossfade to the next (smoothstep), quality 82,
   method 6, looping; about 2.4 MB for five slides. The stills are the
   2880 x 1800 captures as lossless PNG.
+- Only the slides named in [approved.txt](approved.txt) go into the
+  slideshow and the stills: the user approves every slide before it is
+  public. The other captures stay in the script's work folder for review.
 - The README shows it with `<img src="assets/readme/tour.webp" width="880">`.
 
 What bit us:

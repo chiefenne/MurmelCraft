@@ -2,7 +2,8 @@
 
     python3 -I make_webp.py SHOTS_DIR OUT_DIR
 
-Reads SHOTS_DIR/01-*.png ... (2x window captures, in name order) and writes
+Reads SHOTS_DIR/01-*.png ... (2x window captures, in name order), keeps
+only the slides listed in approved.txt beside this script, and writes
 OUT_DIR/tour.webp (1760 x 1100, 4 s per slide, a 0.3 s crossfade, looping)
 and OUT_DIR/tour/NN-name.png (the 2880 x 1800 captures, lossless).
 
@@ -21,7 +22,12 @@ SLIDE = (1760, 1100)
 
 src, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 (out / "tour").mkdir(parents=True, exist_ok=True)
-shots = sorted(src.glob("[0-9][0-9]-*.png"))
+approved = {ln.strip() for ln in (pathlib.Path(__file__).with_name("approved.txt")).read_text().splitlines()
+            if ln.strip() and not ln.startswith("#")}
+shots = [p for p in sorted(src.glob("[0-9][0-9]-*.png")) if p.stem in approved]
+missing = approved - {p.stem for p in shots}
+if missing:
+    sys.exit(f"approved slides without a capture: {', '.join(sorted(missing))}")
 caps = [Image.open(p).convert("RGB") for p in shots]
 for p, im in zip(shots, caps):
     im.save(out / "tour" / (p.stem + ".png"), optimize=True)

@@ -1,0 +1,8 @@
+# Slides the user has approved for the README, one capture name per line.
+# make_webp.py puts only these into tour.webp and tour/; every slide needs
+# the user's approval before it goes public.
+01-mesh
+02-cell-types-clip
+06-region-of-interest
+07-measure-probe
+08-light-theme-pressure
