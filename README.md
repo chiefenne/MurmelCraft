@@ -165,7 +165,9 @@ every change.
   `murmel bench`). A blocked VTKHDF file that needs more than the memory
   budget (half the computer's memory unless set in Settings) opens as an
   overview: its boundary with the cell fields on it, without reading the
-  cells ([docs/blocked-vtkhdf.md](docs/blocked-vtkhdf.md)).
+  cells, and slices, iso-surfaces and arrows across the whole volume on a
+  preview grid of the cell fields
+  ([docs/blocked-vtkhdf.md](docs/blocked-vtkhdf.md)).
 - Mouse presets (three-button, Apple, Fusion, ParaView), every binding
   editable through `settings.set_bindings` and saved in `navigation.toml`.
 - Title bar, toolbar, viewport with view note and axis triad, status bar.

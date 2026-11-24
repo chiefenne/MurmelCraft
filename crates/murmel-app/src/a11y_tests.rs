@@ -1634,6 +1634,101 @@ fn regions_on_an_overview_in_the_window() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Invariant (the maintainer's card 7 of 2026-11-24: the overview is the
+/// surface, the block ranges and a preview grid): in the window a slice
+/// on an overview reads the preview grid on a thread of its own; the
+/// status bar says so with Cancel, the slice draws once the grid is in,
+/// and the tree's note tells the grid. Esc stops a read. Every control
+/// keeps a clean name. Breaks when the read holds the window, the status
+/// or the note is lost, or Esc does not reach the read; the engine tests
+/// do not draw the window.
+#[test]
+fn slices_on_an_overview_in_the_window() {
+    let dir = std::env::temp_dir().join(format!("murmel-preview-win-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let (open, config) = (path.clone(), dir.clone());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .build_eframe(move |cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = Some(config);
+            app.bridge_path = None;
+            app.session.memory_budget = Some(1e-9);
+            app.session.preview_cells = 16;
+            app.open_path(open);
+            app
+        });
+    h.run_steps(3);
+    opened(&mut h);
+    assert!(h.state().session.mesh.as_ref().unwrap().overview.is_some());
+
+    assert!(
+        h.state_mut()
+            .call("slice.set", serde_json::json!({"axis": "x"}))
+            .is_some()
+    );
+    assert!(
+        h.state().session.preview_job.is_some(),
+        "read in the background"
+    );
+    h.run_steps(1);
+    assert!(
+        named_from(&h, "Sampling the volume on a preview grid"),
+        "the status bar"
+    );
+    assert!(named(
+        &h,
+        "Cancel. Stop sampling; the slices show again when you add one (Esc)"
+    ));
+    let start = std::time::Instant::now();
+    while h.state().session.preview_job.is_some() {
+        assert!(start.elapsed().as_secs() < 60, "the read never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    let m = h.state().session.mesh.as_ref().unwrap();
+    assert!(m.fields.preview().is_some());
+    assert!(m.surface.triangles() > 0, "the slice draws");
+    // the tree's note, after what it says of the overview and the regions
+    let note = "Slices, iso-surfaces and arrows show on a preview grid of 16 × 8 × 4 cells";
+    assert!(h.root().children_recursive().any(|n| {
+        let a = n.accesskit_node();
+        [a.label(), a.value()]
+            .into_iter()
+            .flatten()
+            .any(|t| t.starts_with("Overview:") && t.contains(note))
+    }));
+    assert_eq!(problems(&h), Vec::<String>::new(), "preview shown");
+
+    // Opened again and sliced: Esc stops the read.
+    let again = path.clone();
+    h.state_mut().open_path(again);
+    h.run_steps(3);
+    opened(&mut h);
+    assert!(
+        h.state_mut()
+            .call("slice.set", serde_json::json!({"axis": "y"}))
+            .is_some()
+    );
+    assert!(h.state().session.preview_job.is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let s = &h.state().session;
+    assert!(s.preview_job.is_none());
+    assert!(
+        matches!(&s.preview_problem, Some((1, None))),
+        "{:?}",
+        s.preview_problem
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Invariant (the maintainer's card of 2026-11-24: beyond the memory
 /// budget a blocked VTKHDF file opens as an overview): the model tree
 /// says so, with the file's cells and blocks, and "Read the cells

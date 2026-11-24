@@ -206,6 +206,59 @@ impl MurmelApp {
         true
     }
 
+    /// Draw the slices of an overview on its preview grid once it is
+    /// read, or say why it could not be; keep looking while it is read.
+    pub(crate) fn poll_preview(&mut self, ctx: &egui::Context) {
+        let Some(j) = &self.session.preview_job else {
+            return;
+        };
+        if !j.is_done() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        self.session.poll_preview();
+        if let Some((_, Some(e))) = &self.session.preview_problem {
+            self.set_error(Some(Diagnostic::new(e.code, e.message.clone())));
+        }
+        ctx.request_repaint();
+    }
+
+    /// What the window says while the preview grid of an overview is
+    /// read: the phase and the seconds so far.
+    pub(crate) fn preview_text(&self) -> Option<String> {
+        let j = self.session.preview_job.as_ref()?;
+        let phase = self.i18n.tr(phase_message(j.progress.phase()));
+        Some(self.i18n.tr_args(
+            "status-preview",
+            &[
+                ("phase", phase.into()),
+                (
+                    "seconds",
+                    format!("{:.1}", j.started.elapsed().as_secs_f64()).into(),
+                ),
+            ],
+        ))
+    }
+
+    /// The status bar while the preview grid is read: what it says and
+    /// Cancel.
+    pub(crate) fn preview_status(&mut self, ui: &mut Ui, said: &mut Vec<String>) -> bool {
+        let Some(text) = self.preview_text() else {
+            return false;
+        };
+        let cancel = self.i18n.tr("status-loading-cancel");
+        let tip = self.i18n.tr("status-preview-cancel-tip");
+        let b = ui.small_button(&cancel).on_hover_text(&tip);
+        let name = format!("{cancel}. {tip}");
+        b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+        if b.clicked() {
+            self.session.cancel_preview();
+        }
+        ui.label(RichText::new(&text).small());
+        said.push(text);
+        true
+    }
+
     /// Show the badge the digests of the open mesh's files decide once
     /// they are taken; keep looking while they are.
     pub(crate) fn poll_digest(&mut self, ctx: &egui::Context) {
@@ -306,6 +359,7 @@ fn phase_message(phase: &str) -> &'static str {
         "read.cells" => "loading-phase-cells",
         "read.overview" => "loading-phase-overview",
         p if p.starts_with("read.blocks") => "loading-phase-blocks",
+        p if p.starts_with("read.preview") => "loading-phase-preview",
         p if p == "read.topology" || p.starts_with("topology.") => "loading-phase-topology",
         p if p == "open.surface" || p.starts_with("surface.") => "loading-phase-surface",
         _ => "loading-phase-file",
@@ -320,7 +374,8 @@ mod tests {
     /// "matching the faces" through every step of the linking
     /// (`topology.*`), not only at its start, and "reading the cells of
     /// the blocks" through every step of a region's read
-    /// (`read.blocks.*`). Dropping the `topology.` arm
+    /// (`read.blocks.*`), and the same for the preview grid
+    /// (`read.preview.*`). Dropping the `topology.` arm
     /// would show "reading the file" for most of that time. The window test
     /// of a background open reads the text once, before the reader starts,
     /// so it would not notice.
@@ -333,6 +388,10 @@ mod tests {
         // and every step of reading a region's blocks as reading them
         for p in ["read.blocks", "read.blocks.points", "read.blocks.join"] {
             assert_eq!(phase_message(p), "loading-phase-blocks", "{p}");
+        }
+        // and of the preview grid as sampling it
+        for p in ["read.preview", "read.preview.cells", "read.preview.fields"] {
+            assert_eq!(phase_message(p), "loading-phase-preview", "{p}");
         }
     }
 }

@@ -1160,3 +1160,38 @@ fills fewer grid cells: a channel four times as long as it is wide has
 block (about a quarter of these files) and each cell field nearly
 whole, so on 100 M cells it reads tens of GB; it is meant to run once,
 in the background.
+
+## Slices and iso-surfaces on an overview (2026-11-24)
+
+An overview has no volume cells, so slices, iso-surfaces and arrows draw
+on its preview grid (the engine's `preview.rs`), as on a mesh read
+whole: the field's colours, the clip planes and hidden zones apply, and
+the colour range is the volume's, as on the boundary.
+
+- The grid is read the first time a slice, an iso-surface or the arrows
+  show on the overview, not when it opens: on 100 M cells the sampling
+  reads tens of GB. The window reads it on a thread of its own (the
+  status bar says so, with Cancel or Esc), the tools before they return.
+- It stays with the overview's fields: while a region's blocks show,
+  slices draw on their cells, and the grid comes back with the overview,
+  not read again. A stopped read starts again once one more slice,
+  iso-surface or the arrows show; opening the mesh again forgets it.
+- The triangles name no cell, so a click on them picks nothing of the
+  overview's mesh. Fields made on the overview (derived, calculated)
+  and streamlines do not draw on the grid; they need a region's cells.
+- `mesh.info` tells the grid under `overview.preview`.
+
+1 M blocked file with three cell fields, 4 threads, file in the page
+cache; the grid is 128³ (the honeycomb fills its box: the most a grid
+holds), against the same file read whole:
+
+| step | overview, on the grid | read whole |
+|---|---:|---:|
+| first slice, coloured by `p` | 3.2 to 3.3 s (the grid 1.1 s, the field's node values on it 1.6 s, the slice 0.45 s) | 0.8 s (the node values were made with the colouring, 2.0 s) |
+| slice moved | 0.55 to 0.69 s | 0.86 to 0.93 s |
+| iso-surface of `p` | 1.7 s (1.07 M triangles) | 2.4 s (1.31 M triangles) |
+
+The grid holds at most 2 M cells whatever the size of the file, so on
+100 M cells moving a slice costs what it costs here; only reading the
+grid grows with the file. Keeping the grid in the cache folder, so a
+second open does not sample again, comes next.

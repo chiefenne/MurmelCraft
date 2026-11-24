@@ -179,7 +179,21 @@ impl MurmelApp {
                 }
                 None => self.i18n.tr("overview-regions-tip"),
             };
-            format!("{note}\n{regions}")
+            // what slices and iso-surfaces draw on meanwhile
+            let preview = match (&m.blocks, m.fields.preview()) {
+                (None, Some(p)) => {
+                    let [nx, ny, nz] = p.grid.shape.map(|n| (n as f64).into());
+                    format!(
+                        "\n{}",
+                        self.i18n.tr_args(
+                            "overview-preview-note",
+                            &[("nx", nx), ("ny", ny), ("nz", nz)],
+                        )
+                    )
+                }
+                _ => String::new(),
+            };
+            format!("{note}\n{regions}{preview}")
         });
         let selection = self.session.display.selection.clone();
         let mut action: Option<(&'static str, Value)> = None;
