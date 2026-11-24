@@ -440,8 +440,8 @@ pub fn winding_number(mesh: &Mesh, c: usize, p: [f64; 3]) -> f64 {
     let mut sum = 0.0;
     for face in mesh.cell(c) {
         let q: Vec<DVec3> = face
-            .iter()
-            .filter_map(|&i| mesh.points.get(i as usize))
+            .oriented()
+            .filter_map(|i| mesh.points.get(i as usize))
             .map(|&x| DVec3::from(x) - p)
             .collect();
         if q.len() < 3 {
@@ -478,8 +478,8 @@ pub fn locate(mesh: &Mesh, p: [f64; 3]) -> Option<u32> {
     for c in 0..mesh.cell_count() {
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
-        for f in mesh.cell(c) {
-            for &i in f {
+        for i in mesh.cell_points(c) {
+            {
                 if let Some(q) = mesh.points.get(i as usize) {
                     for k in 0..3 {
                         lo[k] = lo[k].min(q[k]);

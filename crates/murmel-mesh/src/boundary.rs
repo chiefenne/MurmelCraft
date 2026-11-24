@@ -99,30 +99,49 @@ fn first_twins(faces: &Polygons, buckets: &Buckets, points: usize) -> Vec<u32> {
     first
 }
 
-/// Fill the face topology of `mesh` (`cell_face_id`, `face_owner`,
-/// `face_neighbour`, `face_first`, `boundary_owner`, `boundary_face_id`,
-/// `face_boundary`, `unique_faces`) and extract the boundary when the file
-/// had none.
-pub(crate) fn link(mesh: &mut Mesh) {
+/// Whether `b` lists the points of `a` the other way round (`a` and `b`
+/// hold the same points; a face of fewer than three points has no turn).
+fn turned(a: &[u32], b: &[u32]) -> bool {
+    let n = b.len();
+    if a.len() < 3 || n != a.len() {
+        return false;
+    }
+    match b.iter().position(|&p| p == a[0]) {
+        Some(k) => b[(k + 1) % n] != a[1],
+        None => false,
+    }
+}
+
+/// Fill the face topology of `mesh` from the faces of its cells, `polys`
+/// (cell `c` has `polys` `cell_faces[c]..cell_faces[c + 1]`, as the file
+/// lists them): the distinct faces, each stored once as its owner lists
+/// it (`distinct`), `cell_face_id`, `cell_face_flip`, `face_owner`,
+/// `face_neighbour`, `boundary_owner`, `boundary_face_id`,
+/// `face_boundary` and `unique_faces`; and extract the boundary when the
+/// file had none.
+pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
     let cells = mesh.cell_count();
     if cells == 0 {
         let n = mesh.boundary.len();
+        mesh.distinct = Polygons::new();
         mesh.boundary_owner = vec![NO_CELL; n];
         mesh.unique_faces = n;
         mesh.cell_face_id = Vec::new();
+        mesh.cell_face_flip = Vec::new();
         mesh.face_owner = vec![NO_CELL; n];
         mesh.face_neighbour = vec![NO_CELL; n];
-        mesh.face_first = vec![NO_CELL; n];
         mesh.boundary_face_id = (0..n as u32).collect();
         mesh.face_boundary = (0..n as u32).collect();
         return;
     }
     let points = mesh.points.len();
-    let buckets = Buckets::new(&mesh.faces, points);
-    let twin = first_twins(&mesh.faces, &buckets, points);
+    let buckets = Buckets::new(&polys, points);
+    let twin = first_twins(&polys, &buckets, points);
     // Distinct faces numbered in the order their first cell face comes;
-    // the owner is the first cell that uses a face.
-    let mut cell_face_id = vec![NO_CELL; mesh.faces.len()];
+    // the owner is the first cell that uses a face, and its listing is
+    // the one stored.
+    let mut cell_face_id = vec![NO_CELL; polys.len()];
+    let mut cell_face_flip = vec![false; polys.len()];
     let (mut owner, mut neighbour, mut first) = (Vec::new(), Vec::new(), Vec::new());
     let mut uses: Vec<u8> = Vec::new();
     for c in 0..cells {
@@ -150,13 +169,52 @@ pub(crate) fn link(mesh: &mut Mesh) {
     drop(twin);
     mesh.unique_faces = owner.len();
     let n_unique = owner.len();
+    // Which cell faces list their distinct face the other way round.
+    let (ids, firsts, cell_polys) = (&cell_face_id, &first, &polys);
+    par::chunks_mut(&mut cell_face_flip, 1 << 15, |at, part| {
+        for (k, flip) in part.iter_mut().enumerate() {
+            let f = at + k;
+            let owners = firsts[ids[f] as usize] as usize;
+            *flip = owners != f && turned(cell_polys.get(owners), cell_polys.get(f));
+        }
+    });
+    // The distinct faces as their owners list them, copied in parallel.
+    let mut start = Vec::with_capacity(n_unique + 1);
+    start.push(0u32);
+    let mut at = 0u32;
+    for &f in &first {
+        at += polys.start[f as usize + 1] - polys.start[f as usize];
+        start.push(at);
+    }
+    let mut nodes = vec![0u32; at as usize];
+    let ranges = par::ranges(n_unique, 1 << 15);
+    let cuts: Vec<usize> = ranges
+        .iter()
+        .map(|r| start[r.start] as usize)
+        .chain([at as usize])
+        .collect();
+    let parts = par::split_mut(&mut nodes, &cuts);
+    let starts = &start;
+    std::thread::scope(|sc| {
+        for (r, part) in ranges.iter().zip(parts) {
+            let base = starts[r.start] as usize;
+            sc.spawn(move || {
+                for u in r.clone() {
+                    let src = cell_polys.get(firsts[u] as usize);
+                    let a = starts[u] as usize - base;
+                    part[a..a + src.len()].copy_from_slice(src);
+                }
+            });
+        }
+    });
+    let distinct = Polygons { start, nodes };
     if mesh.boundary.is_empty() {
         let mut b = Polygons::new();
         let mut bid = Vec::new();
         let mut bowner = Vec::new();
         for u in 0..n_unique {
             if uses[u] == 1 {
-                b.push(mesh.faces.get(first[u] as usize).iter().copied());
+                b.push(distinct.get(u).iter().copied());
                 bid.push(u as u32);
                 bowner.push(owner[u]);
             }
@@ -171,7 +229,7 @@ pub(crate) fn link(mesh: &mut Mesh) {
         }];
         mesh.boundary_extracted = true;
     } else {
-        let (faces, boundary, ids) = (&mesh.faces, &mesh.boundary, &cell_face_id);
+        let (faces, boundary, ids) = (&polys, &mesh.boundary, &cell_face_id);
         mesh.boundary_face_id = par::collect(boundary.len(), 1 << 12, |r| {
             let (mut sa, mut sb) = (Vec::new(), Vec::new());
             r.map(|b| {
@@ -208,10 +266,11 @@ pub(crate) fn link(mesh: &mut Mesh) {
             face_boundary[u as usize] = b as u32;
         }
     }
+    mesh.distinct = distinct;
     mesh.cell_face_id = cell_face_id;
+    mesh.cell_face_flip = cell_face_flip;
     mesh.face_owner = owner;
     mesh.face_neighbour = neighbour;
-    mesh.face_first = first;
     mesh.face_boundary = face_boundary;
 }
 
@@ -225,7 +284,7 @@ mod tests {
     /// module used before the buckets): cell-face ids, owners,
     /// neighbours, first cell faces and boundary matches.
     #[allow(clippy::type_complexity)]
-    fn reference(m: &Mesh) -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>) {
+    fn reference(m: &Mesh, polys: &Polygons) -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>) {
         let key = |f: &[u32]| {
             let mut k = f.to_vec();
             k.sort_unstable();
@@ -236,7 +295,7 @@ mod tests {
         for c in 0..m.cell_count() {
             for f in m.cell_faces[c]..m.cell_faces[c + 1] {
                 let next = owner.len() as u32;
-                let u = *ids.entry(key(m.faces.get(f as usize))).or_insert(next);
+                let u = *ids.entry(key(polys.get(f as usize))).or_insert(next);
                 if u == next {
                     owner.push(c as u32);
                     nei.push(NO_CELL);
@@ -255,38 +314,60 @@ mod tests {
         (ids_of, owner, nei, first, bound)
     }
 
+    /// Whether `a` is `b` started at another point.
+    fn same_cycle(a: &[u32], b: &[u32]) -> bool {
+        a.len() == b.len()
+            && (0..a.len().max(1)).any(|k| a.iter().cycle().skip(k).zip(b).all(|(x, y)| x == y))
+    }
+
     /// Invariant: matching faces in groups of their smallest point gives
-    /// exactly the topology of the hash map it replaced, on a KoflCraft
-    /// mesh, on OpenFOAM's polyhedra converted to cell faces, and on the
-    /// honeycomb with every face starting at another corner, at one and
-    /// at several threads. A face compared by its first point only, or a
-    /// group cut between threads, would number faces differently or miss
-    /// twins.
+    /// exactly the topology of the hash map it replaced, on KoflCraft
+    /// meshes and on the honeycomb with every face starting at another
+    /// corner, at one and at several threads; each distinct face is
+    /// stored once as its owner lists it, and every cell reads back its
+    /// faces in its own turn. A face compared by its first point only, a
+    /// group cut between threads or a wrong flip would number faces
+    /// differently, miss twins, or turn a neighbour's face inside out (its
+    /// volume and sections would change; the inspect and surface tests
+    /// see only the meshes as a whole).
     #[test]
     fn buckets_match_the_hash_map() {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-fixtures");
         let mut meshes = vec![
             crate::read(&fixtures.join("channel/foehncraft.vtu")).unwrap(),
             crate::read(&fixtures.join("box/foehncraft.vtu")).unwrap(),
+            crate::read(&fixtures.join("openfoam/box")).unwrap(),
         ];
-        let mut h = crate::synth::honeycomb(5);
-        for f in 0..h.faces.len() {
-            let (a, b) = (h.faces.start[f] as usize, h.faces.start[f + 1] as usize);
-            h.faces.nodes[a..b].rotate_left(f % (b - a));
-        }
-        meshes.push(h);
-        for m in &mut meshes {
-            for threads in ["1", "3"] {
-                // The variable only steers how work is split; both must agree.
-                let r = crate::par::with_threads(threads.parse().unwrap(), || {
-                    link(m);
-                    reference(m)
+        meshes.push(crate::synth::honeycomb(5));
+        for (i, m) in meshes.iter_mut().enumerate() {
+            let mut polys = m.cell_polygons();
+            if i == 3 {
+                for f in 0..polys.len() {
+                    let (a, b) = (polys.start[f] as usize, polys.start[f + 1] as usize);
+                    polys.nodes[a..b].rotate_left(f % (b - a));
+                }
+            }
+            for threads in [1, 3] {
+                // The threads only steer how work is split; both must agree.
+                let r = crate::par::with_threads(threads, || {
+                    link(m, polys.clone());
+                    reference(m, &polys)
                 });
                 assert_eq!(r.0, m.cell_face_id);
                 assert_eq!(r.1, m.face_owner);
                 assert_eq!(r.2, m.face_neighbour);
-                assert_eq!(r.3, m.face_first);
+                for (u, &f) in r.3.iter().enumerate() {
+                    assert_eq!(m.distinct.get(u), polys.get(f as usize));
+                }
                 assert_eq!(r.4, m.boundary_face_id);
+                let mut f = 0;
+                for c in 0..m.cell_count() {
+                    for face in m.cell(c) {
+                        let own: Vec<u32> = face.oriented().collect();
+                        assert!(same_cycle(&own, polys.get(f)), "cell {c} face {f}");
+                        f += 1;
+                    }
+                }
             }
         }
     }

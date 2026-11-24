@@ -96,10 +96,10 @@ pub fn read_vtu_results(path: &Path) -> Result<(Mesh, Results), MeshError> {
         (parsed, hash.join().unwrap_or_default())
     });
     drop(bytes);
-    let (mut mesh, results) = parsed?;
+    let (mut mesh, polys, results) = parsed?;
     crate::profile::check()?;
     let _t = crate::profile::span("read.topology");
-    boundary::link(&mut mesh);
+    boundary::link(&mut mesh, polys);
     mesh.file_sha256 = vec![digest];
     Ok((mesh, results))
 }
@@ -159,14 +159,16 @@ pub fn read_vtu_str(text: &str) -> Result<Mesh, MeshError> {
 
 /// Read a `.vtu` from its text, with its data arrays as fields.
 pub fn read_vtu_str_results(text: &str) -> Result<(Mesh, Results), MeshError> {
-    let (mut mesh, results) = parse(text)?;
-    boundary::link(&mut mesh);
+    let (mut mesh, polys, results) = parse(text)?;
+    boundary::link(&mut mesh, polys);
     Ok((mesh, results))
 }
 
 /// The mesh and fields of a `.vtu`'s text, before the face topology
 /// (`boundary::link`), so a caller can free the text first.
-fn parse(text: &str) -> Result<(Mesh, Results), MeshError> {
+/// The mesh of a `.vtu` text before its face topology, with the faces of
+/// its cells as listed, and its data arrays.
+fn parse(text: &str) -> Result<(Mesh, Polygons, Results), MeshError> {
     let xml = crate::profile::span("read.xml");
     let len = text.len();
     let mut reader = Reader::from_str(text);
@@ -247,10 +249,11 @@ fn parse(text: &str) -> Result<(Mesh, Results), MeshError> {
     }
     let header = header.ok_or_else(|| err("MESH003", "no Piece element"))?;
     drop(xml);
-    let (mesh, slots) = assemble(&header, &arrays)?;
+    let (mesh, polys, slots) = assemble(&header, &arrays)?;
     let fields = data_fields(&header, &arrays, &slots, &mesh)?;
     Ok((
         mesh,
+        polys,
         Results {
             fields,
             ..Results::default()
@@ -594,7 +597,7 @@ fn face_len(p: &Polygons, f: usize) -> usize {
     (p.start[f + 1] - p.start[f]) as usize
 }
 
-fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), MeshError> {
+fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Polygons, Vec<Slot>), MeshError> {
     let hb = h.header64;
     let mut mesh = Mesh::default();
     let mut slots = Vec::with_capacity(h.cells);
@@ -660,7 +663,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
     crate::profile::check()?;
     let _cells = crate::profile::span("read.cells");
     let np = mesh.points.len();
-    mesh.faces = Polygons::new();
+    let mut polys = Polygons::new();
     mesh.cell_faces = vec![0];
     mesh.boundary = Polygons::new();
     let mut start = 0usize;
@@ -704,7 +707,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
             face_pos = fend;
             let nf = stream[0] as usize;
             let mut k = 1usize;
-            let first = mesh.faces.len();
+            let first = polys.len();
             for _ in 0..nf {
                 let n = stream
                     .get(k)
@@ -715,7 +718,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
                     .get(k + 1..k + 1 + n)
                     .ok_or_else(|| err("MESH009", format!("cell {c}: face runs past its cell")))?;
                 points_in_range(face, np)?;
-                mesh.faces.push(face.iter().copied());
+                polys.push(face.iter().copied());
                 k += 1 + n;
             }
             if k != stream.len() {
@@ -724,9 +727,9 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
                     format!("cell {c}: {} values left after its faces", stream.len() - k),
                 ));
             }
-            let sizes = (first..mesh.faces.len()).map(|f| face_len(&mesh.faces, f));
+            let sizes = (first..polys.len()).map(|f| face_len(&polys, f));
             let kind = CellKind::classify(sizes);
-            push_cell(&mut mesh, reg, kind, &mut zone_max);
+            push_cell(&mut mesh, polys.len(), reg, kind, &mut zone_max);
             slots.push(Slot::Volume);
         } else if let Some(table) = table {
             let need = table
@@ -742,10 +745,10 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
             }
             points_in_range(nodes, np)?;
             for f in table {
-                mesh.faces.push(f.iter().map(|&i| nodes[i]));
+                polys.push(f.iter().map(|&i| nodes[i]));
             }
             let kind = CellKind::classify(table.iter().map(|f| f.len()));
-            push_cell(&mut mesh, reg, kind, &mut zone_max);
+            push_cell(&mut mesh, polys.len(), reg, kind, &mut zone_max);
             slots.push(Slot::Volume);
         } else if matches!(t, TRIANGLE | POLYGON | QUAD) {
             if nodes.len() < 3 {
@@ -819,11 +822,18 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
     if mesh.cell_count() == 0 && mesh.boundary.is_empty() {
         return Err(err("MESH010", "no volume cells and no boundary faces"));
     }
-    Ok((mesh, slots))
+    Ok((mesh, polys, slots))
 }
 
-pub(crate) fn push_cell(mesh: &mut Mesh, zone: u32, kind: CellKind, zone_max: &mut Option<u32>) {
-    mesh.cell_faces.push(mesh.faces.len() as u32);
+/// Close a cell whose faces end at cell face `faces`.
+pub(crate) fn push_cell(
+    mesh: &mut Mesh,
+    faces: usize,
+    zone: u32,
+    kind: CellKind,
+    zone_max: &mut Option<u32>,
+) {
+    mesh.cell_faces.push(faces as u32);
     mesh.cell_zone.push(zone);
     mesh.cell_kind.push(kind);
     *zone_max = Some(zone_max.map_or(zone, |m| m.max(zone)));

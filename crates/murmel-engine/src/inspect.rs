@@ -74,10 +74,10 @@ fn area_vector(mesh: &Mesh, face: &[u32]) -> [f64; 3] {
 
 /// Six times the signed volume a polygon spans with the origin `o`,
 /// as a fan about its node average (divergence theorem).
-fn signed_volume6(mesh: &Mesh, face: &[u32], o: [f64; 3]) -> f64 {
+fn signed_volume6(mesh: &Mesh, face: impl IntoIterator<Item = u32>, o: [f64; 3]) -> f64 {
     let p: Vec<[f64; 3]> = face
-        .iter()
-        .map(|&i| sub(mesh.points[i as usize], o))
+        .into_iter()
+        .map(|i| sub(mesh.points[i as usize], o))
         .collect();
     let k = p.len() as f64;
     let c = [0, 1, 2].map(|d| p.iter().map(|q| q[d]).sum::<f64>() / k);
@@ -90,11 +90,13 @@ fn signed_volume6(mesh: &Mesh, face: &[u32], o: [f64; 3]) -> f64 {
 /// absolute value keeps an inside-out cell from cancelling others).
 pub fn cell_volume(mesh: &Mesh, c: usize) -> f64 {
     let o = mesh.cell(c).next().map_or([0.0; 3], |f| {
-        f.first().map_or([0.0; 3], |&i| mesh.points[i as usize])
+        f.nodes
+            .first()
+            .map_or([0.0; 3], |&i| mesh.points[i as usize])
     });
     (mesh
         .cell(c)
-        .map(|f| signed_volume6(mesh, f, o))
+        .map(|f| signed_volume6(mesh, f.oriented(), o))
         .sum::<f64>()
         / 6.0)
         .abs()
@@ -106,7 +108,7 @@ pub fn enclosed_volume(mesh: &Mesh) -> f64 {
     (mesh
         .boundary
         .iter()
-        .map(|f| signed_volume6(mesh, f, o))
+        .map(|f| signed_volume6(mesh, f.iter().copied(), o))
         .sum::<f64>()
         / 6.0)
         .abs()
@@ -169,7 +171,16 @@ pub fn patch_stats(mesh: &Mesh, p: u32) -> PatchStats {
 /// Centre (area-weighted, from the fan about the node average) and area
 /// vector of a polygon; the area vector follows the node order.
 pub fn face_centre_area(mesh: &Mesh, face: &[u32]) -> ([f64; 3], [f64; 3]) {
-    let p: Vec<[f64; 3]> = face.iter().map(|&i| mesh.points[i as usize]).collect();
+    face_centre_area_of(mesh, face.iter().copied())
+}
+
+/// [`face_centre_area`] of a face given by its points in order (a cell's
+/// face in the cell's own turn: [`murmel_mesh::CellFace::oriented`]).
+pub fn face_centre_area_of(
+    mesh: &Mesh,
+    face: impl IntoIterator<Item = u32>,
+) -> ([f64; 3], [f64; 3]) {
+    let p: Vec<[f64; 3]> = face.into_iter().map(|i| mesh.points[i as usize]).collect();
     if p.is_empty() {
         return ([0.0; 3], [0.0; 3]);
     }
@@ -195,8 +206,10 @@ pub fn face_centre_area(mesh: &Mesh, face: &[u32]) -> ([f64; 3], [f64; 3]) {
 /// The centroid of cell `c`: the volume-weighted centroids of the
 /// pyramids its faces span with the average of the face centres.
 pub fn cell_centroid(mesh: &Mesh, c: usize) -> [f64; 3] {
-    let faces: Vec<([f64; 3], [f64; 3])> =
-        mesh.cell(c).map(|f| face_centre_area(mesh, f)).collect();
+    let faces: Vec<([f64; 3], [f64; 3])> = mesh
+        .cell(c)
+        .map(|f| face_centre_area(mesh, f.nodes))
+        .collect();
     if faces.is_empty() {
         return [0.0; 3];
     }
@@ -604,12 +617,10 @@ pub fn field_values(
 pub fn cell_quality(m: &Mesh, c: usize) -> (f64, f64) {
     let centroid = cell_centroid(m, c);
     let (mut worst_no, mut worst_skew) = (0.0f64, 0.0f64);
-    for f in m.cell_face_range(c) {
-        let Some(&u) = m.cell_face_id.get(f) else {
-            continue;
-        };
+    for f in m.cell(c) {
+        let u = f.id;
         let other = m.across(u as usize, c as u32);
-        let (fc, s) = face_centre_area(m, m.faces.get(f));
+        let (fc, s) = face_centre_area_of(m, f.oriented());
         let nb = (other != NO_CELL).then(|| cell_centroid(m, other as usize));
         let (no, skew) = face_quality(fc, s, centroid, nb);
         worst_no = worst_no.max(no);
@@ -626,7 +637,7 @@ fn cell_rows(m: &Mesh, display: &Display, c: usize) -> Vec<Row> {
         return Vec::new();
     }
     let centroid = cell_centroid(m, c);
-    let mut nodes: Vec<u32> = m.cell(c).flatten().copied().collect();
+    let mut nodes: Vec<u32> = m.cell_points(c).collect();
     nodes.sort_unstable();
     nodes.dedup();
     let neighbours: Vec<u32> = m
@@ -759,10 +770,8 @@ mod tests {
             let v = cell_volume(&m, c);
             let x = cell_centroid(&m, c);
             let mut b = Bounds::empty();
-            for f in m.cell(c) {
-                for &n in f {
-                    b.add(m.points[n as usize]);
-                }
+            for n in m.cell_points(c) {
+                b.add(m.points[n as usize]);
             }
             assert!((0..3).all(|k| x[k] >= b.min[k] - 1e-9 && x[k] <= b.max[k] + 1e-9));
             vol += v;

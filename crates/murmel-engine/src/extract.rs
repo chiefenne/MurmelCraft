@@ -467,8 +467,8 @@ impl Out<'_> {
 fn section(mesh: &Mesh, c: usize, dist: &[f64]) -> Vec<Vec<(u32, u32)>> {
     let behind = |i: u32| dist.get(i as usize).is_none_or(|&d| d <= 0.0);
     let (mut any_in, mut any_out) = (false, false);
-    for f in mesh.cell(c) {
-        for &i in f {
+    for i in mesh.cell_points(c) {
+        {
             if behind(i) {
                 any_in = true;
             } else {
@@ -485,7 +485,7 @@ fn section(mesh: &Mesh, c: usize, dist: &[f64]) -> Vec<Vec<(u32, u32)>> {
         let n = f.len();
         let mut cuts: Vec<((u32, u32), bool)> = Vec::new();
         for i in 0..n {
-            let (a, b) = (f[i], f[(i + 1) % n]);
+            let (a, b) = (f.at(i), f.at((i + 1) % n));
             let (ka, kb) = (behind(a), behind(b));
             if ka != kb {
                 cuts.push((key(a, b), ka));
@@ -894,15 +894,12 @@ fn level_set(
         if !on {
             continue;
         }
-        let range = mesh.cell_face_range(c);
         // Quick test: the cell's values all on one side.
         let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-        for i in range.clone() {
-            for &n in mesh.faces.get(i) {
-                let v = node_level(n);
-                lo = lo.min(v);
-                hi = hi.max(v);
-            }
+        for n in mesh.cell_points(c) {
+            let v = node_level(n);
+            lo = lo.min(v);
+            hi = hi.max(v);
         }
         let vc = match level {
             Level::Field(v, _) => {
@@ -928,20 +925,24 @@ fn level_set(
         };
         let cc =
             chans.map(|ch| ch.map_or(f64::NAN, |f| f.cell.get(c).copied().unwrap_or(f64::NAN)));
-        for i in range {
-            let f = mesh.faces.get(i);
+        for f in mesh.cell(c) {
             if f.len() < 3 {
                 continue;
             }
-            let u = mesh.cell_face_id.get(i).copied().unwrap_or(NO_CELL);
+            let u = f.id;
             let k = f.len() as f64;
-            let fc =
-                [0, 1, 2].map(|d| f.iter().map(|&n| mesh.points[n as usize][d]).sum::<f64>() / k);
+            let fc = [0, 1, 2].map(|d| {
+                f.nodes
+                    .iter()
+                    .map(|&n| mesh.points[n as usize][d])
+                    .sum::<f64>()
+                    / k
+            });
             let vf = match level {
-                Level::Field(v, _) => face_value(v, u, f, fc),
+                Level::Field(v, _) => face_value(v, u, f.nodes, fc),
                 Level::Plane(p) => p.distance(fc),
             };
-            let cf = chans.map(|ch| ch.map_or(f64::NAN, |cv| face_value(cv, u, f, fc)));
+            let cf = chans.map(|ch| ch.map_or(f64::NAN, |cv| face_value(cv, u, f.nodes, fc)));
             // A face without a distinct id (should not happen) is made
             // per cell.
             let fpt = if u == NO_CELL {
@@ -950,7 +951,7 @@ fn level_set(
                 Pt::Face(u)
             };
             for j in 0..f.len() {
-                let (a, b) = (f[j], f[(j + 1) % f.len()]);
+                let (a, b) = (f.at(j), f.at((j + 1) % f.len()));
                 let tet = [
                     (Pt::Cell(c as u32), centre, vc, cc),
                     (fpt, fc, vf, cf),

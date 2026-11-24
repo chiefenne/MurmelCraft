@@ -151,3 +151,23 @@ What it shows, towards the target of 10 M cells:
 - The surface (1 to 1.3 s at 4 M), the quality (7 s at 4 M) and picking
   (30 ms per pick at 4 M) are single threaded or walk everything; they
   come next.
+
+## Each face stored once (2026-11-24)
+
+The mesh model kept every face of every cell, so each interior face was
+stored twice. It now keeps each distinct face once, as its owner lists it
+(`Mesh::distinct`), and per cell face only the distinct face and whether
+the cell turns it the other way (`cell_face_id`, `cell_face_flip`);
+`Mesh::cell(c)` gives the cell's faces in its own turn. OpenFOAM stores
+faces this way already, so a polyMesh is no longer copied face by face
+into cells.
+
+| | 1 M: vtu | 1 M: polymesh | 1 M: polymesh-binary | 4 M: vtu | 4 M: polymesh-binary |
+|---|---:|---:|---:|---:|---:|
+| mesh model, MiB (was) | 476 (655) | 476 (655) | 476 (655) | 1,891 (2,615) | 1,891 (2,615) |
+| peak memory, MiB (was) | 2,768 (2,952) | 1,829 (2,344) | 1,620 (2,048) | 11,050 (11,762) | 5,879 (7,980) |
+| open, ms (was) | 3,167 (3,347) | 1,988 (2,294) | 1,347 (1,473) | 11,350 (11,393) | 4,433 (5,041) |
+
+At 10 M cells the model takes about 4.7 GB instead of 6.5 GB. The ascii
+`.vtu` still peaks at about six times its model: the whole text is in
+memory while it is parsed (5 GB at 4 M cells, 12 GB at 10 M).
