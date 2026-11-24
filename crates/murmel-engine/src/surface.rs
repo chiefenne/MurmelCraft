@@ -312,15 +312,15 @@ impl<'a> Cutter<'a> {
     /// half-spaces, one plane at a time).
     fn sections(&self, mesh: &Mesh, c: usize) -> Vec<Vec<V>> {
         let crossed = |p: usize| {
-            mesh.cell(c)
-                .any(|f| f.iter().any(|&i| !self.planes[p].keep[i as usize]))
+            mesh.cell_points(c)
+                .any(|i| !self.planes[p].keep[i as usize])
         };
         if !self.flat.iter().any(|&p| crossed(p)) {
             return Vec::new();
         }
         let mut set: Vec<(Vec<V>, bool)> = mesh
             .cell(c)
-            .map(|f| (f.iter().map(|&i| V::Node(i)).collect(), false))
+            .map(|f| (f.oriented().map(V::Node).collect(), false))
             .collect();
         for &p in &self.flat {
             let polys: Vec<Vec<V>> = set.iter().map(|(v, _)| v.clone()).collect();
@@ -817,7 +817,7 @@ fn outline(mesh: &Mesh, display: &Display) -> Vec<(u32, u32)> {
         match item {
             Item::Cell(c) if (c as usize) < mesh.cell_count() => {
                 for f in mesh.cell(c as usize) {
-                    add_face(f, &mut out);
+                    add_face(f.nodes, &mut out);
                 }
             }
             Item::Face(u) => add_face(mesh.face_nodes(u as usize), &mut out),

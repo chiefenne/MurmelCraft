@@ -244,12 +244,7 @@ impl Topology {
         let mut scratch: Vec<u32> = Vec::new();
         for c in 0..mesh.cell_count() {
             scratch.clear();
-            scratch.extend(
-                mesh.cell(c)
-                    .flatten()
-                    .copied()
-                    .filter(|&i| (i as usize) < np),
-            );
+            scratch.extend(mesh.cell_points(c).filter(|&i| (i as usize) < np));
             scratch.sort_unstable();
             scratch.dedup();
             cell_nodes.extend_from_slice(&scratch);
@@ -1082,7 +1077,7 @@ mod tests {
         let n = set
             .node_values(&m, "pressure", Component::Magnitude)
             .unwrap();
-        let node = m.cell(3).next().unwrap()[0] as usize;
+        let node = m.cell(3).next().unwrap().nodes[0] as usize;
         let at_node = set
             .sample(
                 &m,

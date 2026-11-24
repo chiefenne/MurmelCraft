@@ -302,13 +302,55 @@ impl Polygons {
     }
 }
 
+/// A face of a cell: its distinct face (`face:<id>`) with the points as
+/// stored, and whether the cell lists them the other way round. Code that
+/// needs the cell's own turn (volumes, winding numbers, sections) reads
+/// [`CellFace::oriented`] or [`CellFace::at`]; code that needs only the
+/// points reads `nodes`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellFace<'a> {
+    pub id: u32,
+    pub nodes: &'a [u32],
+    pub flip: bool,
+}
+
+impl<'a> CellFace<'a> {
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    /// Point `i` in the cell's own order: the stored order, or for a
+    /// flipped face its first point and then the others backwards.
+    pub fn at(&self, i: usize) -> u32 {
+        if self.flip && i > 0 {
+            self.nodes[self.nodes.len() - i]
+        } else {
+            self.nodes[i]
+        }
+    }
+
+    /// The points in the cell's own order (outward from the cell in a
+    /// well-formed mesh).
+    pub fn oriented(self) -> impl ExactSizeIterator<Item = u32> + Clone + 'a {
+        (0..self.nodes.len()).map(move |i| self.at(i))
+    }
+}
+
 /// A read-only volume mesh.
 #[derive(Clone, Debug, Default)]
 pub struct Mesh {
     pub points: Vec<[f64; 3]>,
-    /// Faces of all volume cells; cell `c` owns faces
-    /// `cell_faces[c]..cell_faces[c + 1]` of `faces`.
-    pub faces: Polygons,
+    /// The distinct faces of the volume cells (`face:<u>`), each stored
+    /// once, as its owner lists it (outward from the owner in a
+    /// well-formed mesh); empty when there are no cells. A cell reads its
+    /// faces through [`Mesh::cell`].
+    pub distinct: Polygons,
+    /// Cell `c` has the cell faces `cell_faces[c]..cell_faces[c + 1]`
+    /// (indices into `cell_face_id` and `cell_face_flip`).
     pub cell_faces: Vec<u32>,
     pub cell_zone: Vec<u32>,
     pub cell_kind: Vec<CellKind>,
@@ -323,12 +365,14 @@ pub struct Mesh {
     pub unique_faces: usize,
     /// The distinct face (`face:<n>`) each cell face is, by cell-face index.
     pub cell_face_id: Vec<u32>,
+    /// Whether a cell face lists the points of its distinct face the
+    /// other way round (the neighbour's side of the face), by cell-face
+    /// index.
+    pub cell_face_flip: Vec<bool>,
     /// Owner and neighbour cell of each distinct face ([`NO_CELL`] for no
     /// neighbour: a boundary face). The owner is the first cell that uses it.
     pub face_owner: Vec<u32>,
     pub face_neighbour: Vec<u32>,
-    /// The cell-face index of each distinct face as its owner sees it.
-    pub face_first: Vec<u32>,
     /// The distinct face of each boundary polygon, and the boundary polygon
     /// of each distinct face ([`NO_CELL`] when there is none).
     pub boundary_face_id: Vec<u32>,
@@ -434,9 +478,34 @@ impl Mesh {
         self.cell_faces.len().saturating_sub(1)
     }
 
-    /// The faces of cell `c`.
-    pub fn cell(&self, c: usize) -> impl Iterator<Item = &[u32]> {
-        (self.cell_faces[c] as usize..self.cell_faces[c + 1] as usize).map(|f| self.faces.get(f))
+    /// The faces of cell `c`, in the order the cell lists them.
+    pub fn cell(&self, c: usize) -> impl Iterator<Item = CellFace<'_>> {
+        self.cell_face_range(c).map(|f| {
+            let id = self.cell_face_id[f];
+            CellFace {
+                id,
+                nodes: self.distinct.get(id as usize),
+                flip: self.cell_face_flip[f],
+            }
+        })
+    }
+
+    /// The faces of every cell as the cell lists them, cell by cell (each
+    /// interior face twice): the layout of a VTK polyhedron's `faces`.
+    pub fn cell_polygons(&self) -> Polygons {
+        let mut p = Polygons::new();
+        for c in 0..self.cell_count() {
+            for f in self.cell(c) {
+                p.push(f.oriented());
+            }
+        }
+        p
+    }
+
+    /// The point ids of all faces of cell `c`, each as often as its faces
+    /// use it.
+    pub fn cell_points(&self, c: usize) -> impl Iterator<Item = u32> + '_ {
+        self.cell(c).flat_map(|f| f.nodes.iter().copied())
     }
 
     /// The cell-face indices of cell `c`.
@@ -448,12 +517,12 @@ impl Mesh {
     /// it (outward from the owner), or the boundary polygon when the mesh
     /// has no cells.
     pub fn face_nodes(&self, u: usize) -> &[u32] {
-        match self.face_first.get(u) {
-            Some(&f) if f != NO_CELL => self.faces.get(f as usize),
-            _ => match self.face_boundary.get(u) {
-                Some(&b) if b != NO_CELL => self.boundary.get(b as usize),
-                _ => &[],
-            },
+        if u < self.distinct.len() {
+            return self.distinct.get(u);
+        }
+        match self.face_boundary.get(u) {
+            Some(&b) if b != NO_CELL => self.boundary.get(b as usize),
+            _ => &[],
         }
     }
 

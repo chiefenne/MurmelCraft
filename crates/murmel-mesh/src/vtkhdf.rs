@@ -383,6 +383,9 @@ fn join_boundary(patches: Vec<(usize, Vec<Field>)>, total: usize) -> Vec<Field> 
 #[derive(Default)]
 struct Builder {
     mesh: Mesh,
+    /// The faces of the volume cells as read (`Polygons::new()` once the
+    /// first grid starts).
+    polys: Polygons,
     zone_max: Option<u32>,
     /// The `zone` cell data of a single volume block.
     zone_values: Option<Vec<u32>>,
@@ -450,7 +453,7 @@ impl Builder {
             .extend(xyz.as_chunks::<3>().0.iter().copied());
         if self.mesh.cell_faces.is_empty() {
             self.mesh.cell_faces.push(0);
-            self.mesh.faces = Polygons::new();
+            self.polys = Polygons::new();
             self.mesh.boundary = Polygons::new();
         }
         // running starts of each partition in the concatenated arrays
@@ -545,16 +548,17 @@ impl Builder {
                         nodes.iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
                     let mut sizes = Vec::with_capacity(table.len());
                     for f in table {
-                        self.mesh.faces.push(f.iter().map(|&i| ids[i]));
+                        self.polys.push(f.iter().map(|&i| ids[i]));
                         sizes.push(f.len());
                     }
                     push_cell(
                         &mut self.mesh,
+                        self.polys.len(),
                         z,
                         CellKind::classify(sizes),
                         &mut self.zone_max,
                     );
-                    orient_last(&mut self.mesh);
+                    orient_last(&self.mesh, &mut self.polys);
                     zones_out.push(z);
                 } else if t == POLYHEDRON {
                     let (a, b) = (po.get(c), po.get(c + 1));
@@ -585,15 +589,16 @@ impl Builder {
                         let ids: Vec<u32> =
                             fc[fr].iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
                         sizes.push(ids.len());
-                        self.mesh.faces.push(ids);
+                        self.polys.push(ids);
                     }
                     push_cell(
                         &mut self.mesh,
+                        self.polys.len(),
                         z,
                         CellKind::classify(sizes),
                         &mut self.zone_max,
                     );
-                    orient_last(&mut self.mesh);
+                    orient_last(&self.mesh, &mut self.polys);
                     zones_out.push(z);
                 } else if matches!(t, TRIANGLE | POLYGON | QUAD) {
                     if nodes.len() < 3 {
@@ -741,7 +746,7 @@ impl Builder {
             })
             .collect();
         let _ = &self.zone_values;
-        boundary::link(mesh);
+        boundary::link(mesh, std::mem::take(&mut self.polys));
         if mesh.cell_count() == 0 && mesh.boundary.is_empty() {
             return Err(MeshError::new(
                 "MESH010",
@@ -758,12 +763,12 @@ impl Builder {
 /// face table has the base (0, 1, 2) pointing away from (3, 4, 5), and
 /// FoehnCraft writes the base pointing towards it. Turning by volume
 /// reads both, and any cell given inside out.
-fn orient_last(mesh: &mut Mesh) {
+fn orient_last(mesh: &Mesh, polys: &mut Polygons) {
     let c = mesh.cell_count() - 1;
     let range = mesh.cell_face_range(c);
     let mut v = 0.0;
     for f in range.clone() {
-        let face = mesh.faces.get(f);
+        let face = polys.get(f);
         let p0 = mesh.points[face[0] as usize];
         for k in 1..face.len().saturating_sub(1) {
             let (a, b) = (
@@ -776,11 +781,8 @@ fn orient_last(mesh: &mut Mesh) {
     }
     if v < 0.0 {
         for f in range {
-            let (s, e) = (
-                mesh.faces.start[f] as usize,
-                mesh.faces.start[f + 1] as usize,
-            );
-            mesh.faces.nodes[s..e].reverse();
+            let (s, e) = (polys.start[f] as usize, polys.start[f + 1] as usize);
+            polys.nodes[s..e].reverse();
         }
     }
 }
@@ -809,9 +811,9 @@ mod tests {
     fn volume(m: &Mesh, c: usize) -> f64 {
         let mut v = 0.0;
         for f in m.cell(c) {
-            let p0 = m.points[f[0] as usize];
+            let p0 = m.points[f.at(0) as usize];
             for k in 1..f.len() - 1 {
-                let (a, b) = (m.points[f[k] as usize], m.points[f[k + 1] as usize]);
+                let (a, b) = (m.points[f.at(k) as usize], m.points[f.at(k + 1) as usize]);
                 v += p0[0] * (a[1] * b[2] - a[2] * b[1]) - p0[1] * (a[0] * b[2] - a[2] * b[0])
                     + p0[2] * (a[0] * b[1] - a[1] * b[0]);
             }
@@ -895,7 +897,8 @@ mod tests {
         let (a, ra) = read_vtkhdf(&fixture("vtkhdf/box_chunked.vtkhdf")).unwrap();
         let (b, rb) = read_vtkhdf(&fixture("vtkhdf/box_latest.vtkhdf")).unwrap();
         assert_eq!(a.points, b.points);
-        assert_eq!(a.faces, b.faces);
+        assert_eq!(a.distinct, b.distinct);
+        assert_eq!(a.cell_face_flip, b.cell_face_flip);
         assert_eq!(ra.fields, rb.fields);
         assert_eq!((ra.step, ra.time), (Some(12), Some(0.25)));
         assert_eq!(a.cell_count(), 4);

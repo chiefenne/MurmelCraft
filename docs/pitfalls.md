@@ -139,8 +139,15 @@ problem took more than a few minutes to understand.
 
 - **`Polygons::default()` is not `Polygons::new()`.** The derived default
   has no leading 0 in `start`, so pushing into it shifts every polygon by
-  one. Build a `Mesh` with `faces: Polygons::new()` and
-  `boundary: Polygons::new()`.
+  one. Build a `Mesh` with `boundary: Polygons::new()`, and per-cell
+  faces for `boundary::link` with `Polygons::new()`.
+- **Each face is stored once** (`Mesh::distinct`, as its owner lists it).
+  `Mesh::cell(c)` yields `CellFace`s: `nodes` is the stored order, which
+  is the neighbour's face turned the other way. Code where the turn
+  matters (volumes, winding numbers, face normals for quality, sections)
+  reads `CellFace::oriented()` or `CellFace::at(i)`, which give the
+  cell's own order; code that only needs the points (bounds, kept cells,
+  centroids) reads `nodes` or `Mesh::cell_points`.
 
 ## Large meshes
 
