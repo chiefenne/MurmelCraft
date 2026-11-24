@@ -221,6 +221,8 @@ impl Session {
         self.display.views.clear();
         self.display.measurements.clear();
         self.display.probes.clear();
+        self.display.slices.clear();
+        self.display.isos.clear();
         // The field colouring stays when the new mesh has the field (the
         // next time step of the same case); else it falls back to solid.
         self.display.field_values = None;
@@ -240,7 +242,7 @@ impl Session {
         }
         ensure_quality(&mut self.display, &mesh);
         crate::field::ensure_field(&mut self.display, &mesh, &fields);
-        let surface = Surface::build(&mesh, &self.tokens, &self.display);
+        let surface = Surface::build_with(&mesh, Some(&fields), &self.tokens, &self.display);
         let files: Vec<(String, String)> = mesh
             .files
             .iter()
@@ -292,6 +294,8 @@ impl Session {
         self.display.views.clear();
         self.display.measurements.clear();
         self.display.probes.clear();
+        self.display.slices.clear();
+        self.display.isos.clear();
         self.display.field_values = None;
         self.surface_revision += 1;
     }
@@ -311,7 +315,7 @@ impl Session {
         if let Some(m) = &mut self.mesh {
             ensure_quality(&mut self.display, &m.mesh);
             crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
-            m.surface = Surface::build(&m.mesh, &self.tokens, &self.display);
+            m.surface = Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
         }
         self.surface_revision += 1;
     }

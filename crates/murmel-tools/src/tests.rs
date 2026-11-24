@@ -1797,6 +1797,206 @@ fn field_sessions_round_trip() {
     assert_eq!(u.display.color_by, murmel_engine::ColorBy::Solid);
 }
 
+/// Invariant (stage 2 of field results, the maintainer's cards of
+/// 2026-11-24): slice.set adds slices along an axis (normal towards the
+/// eye), moves them by offset, spreads a series through the mesh from a
+/// count alone or takes count and spacing, and refuses an unknown slice
+/// (SLICE001), a ninth slice (SLICE002) and a bad series (SLICE003);
+/// slice.rotate tilts the current slice about its pivot; iso.set takes
+/// the field shown and the middle of its range by default, refuses a
+/// mesh without fields (FIELD001), an unknown field (FIELD002), a ninth
+/// iso-surface (ISO002) and an unknown one (ISO001); display.mesh_look
+/// switches the faint outline; each is one undo step, and the clear
+/// tools remove one or all. A front end that called these with bad
+/// input would otherwise draw nothing and report success.
+#[test]
+fn slice_and_iso_tools() {
+    let mut s = session();
+    let e = call(
+        "mesh.open",
+        json!({"path": root().join("test-fixtures/channel/foehncraft.vtu")}),
+        &mut s,
+    );
+    assert!(e.ok());
+    // Slices work without fields (in the cell colours); iso-surfaces
+    // need them.
+    let e = call("slice.set", json!({"axis": "x"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["slices"].as_array().unwrap().len(), 1);
+    let e = call("iso.set", json!({"value": 1.0}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "FIELD001");
+
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    assert!(s.display.slices.is_empty(), "a new mesh starts without");
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    let before = s.journal.undo.len();
+    let e = call("slice.set", json!({"axis": "y"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let sl = &e.result["slices"][0];
+    assert_eq!(sl["id"], "slice:1");
+    assert_eq!(sl["normal"][0], 0.0);
+    assert_eq!(sl["normal"][1].as_f64().unwrap().abs(), 1.0);
+    assert_eq!(s.journal.undo.len(), before + 1, "one undo step");
+    let e = call("slice.set", json!({"offset": 0.01}), &mut s);
+    assert!((e.result["slices"][0]["offset"].as_f64().unwrap() - 0.01).abs() < 1e-9);
+    // A count alone spreads the series through the mesh.
+    let e = call("slice.set", json!({"count": 4}), &mut s);
+    let sl = &e.result["slices"][0];
+    assert_eq!(sl["count"], 4);
+    let height = (b.max[1] - b.min[1]) / 4.0;
+    assert!((sl["spacing"].as_f64().unwrap() - height).abs() < 1e-9);
+    let e = call("slice.set", json!({"count": 3, "spacing": 0.002}), &mut s);
+    assert_eq!(e.result["slices"][0]["spacing"], 0.002);
+    for (bad, code) in [
+        (json!({"slice": 5}), "SLICE001"),
+        (json!({"count": 0}), "SLICE003"),
+        (json!({"count": 65}), "SLICE003"),
+        (json!({"spacing": -1.0}), "SLICE003"),
+        (json!({"new": true, "slice": 1}), "TOOL002"),
+        (json!({"axis": "x", "normal": [1.0, 0.0, 0.0]}), "TOOL002"),
+        (json!({"normal": [0.0, 0.0, 0.0]}), "TOOL002"),
+    ] {
+        let e = call("slice.set", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, code, "{bad}");
+    }
+    for _ in 1..murmel_engine::extract::MAX_SLICES {
+        assert!(call("slice.set", json!({"new": true, "axis": "z"}), &mut s).ok());
+    }
+    let e = call("slice.set", json!({"new": true, "axis": "z"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SLICE002");
+    let e = call("slice.clear", json!({"slice": 2}), &mut s);
+    assert_eq!(
+        e.result["slices"].as_array().unwrap().len(),
+        murmel_engine::extract::MAX_SLICES - 1
+    );
+    // slice.rotate tilts the slice selected.
+    assert!(call("select.item", json!({"item": "slice:1"}), &mut s).ok());
+    let n0 = s.display.slices[0].normal;
+    let e = call(
+        "slice.rotate",
+        json!({"axis": [0.0, 0.0, 1.0], "deg": 90.0}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let n1 = s.display.slices[0].normal;
+    assert!((n0[1] - n1[0]).abs() < 1e-9 || (n0[1] + n1[0]).abs() < 1e-9);
+    assert!(n1[1].abs() < 1e-9, "{n1:?}");
+    let e = call("slice.clear", json!({"all": true}), &mut s);
+    assert!(e.result["slices"].as_array().unwrap().is_empty());
+
+    // Iso-surfaces: the field shown, the middle of its range.
+    let by = json!({"by": "field", "field": "pressure"});
+    let range = call("display.color_by", by, &mut s).result["field"]["range"].clone();
+    let e = call("iso.set", json!({}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let iso = &e.result["isos"][0];
+    assert_eq!(iso["id"], "iso:1");
+    assert_eq!(iso["field"], "pressure");
+    assert_eq!(iso["unit"], "Pa");
+    assert_eq!(iso["color"], "solid");
+    let mid = 0.5 * (range[0].as_f64().unwrap() + range[1].as_f64().unwrap());
+    assert!((iso["value"].as_f64().unwrap() - mid).abs() < 1e-9);
+    let e = call(
+        "iso.set",
+        json!({"new": true, "field": "velocity", "component": "x", "value": 1.5, "color": "field"}),
+        &mut s,
+    );
+    let iso = &e.result["isos"][1];
+    assert_eq!(iso["title"], "velocity_x");
+    assert_eq!(iso["color"], "field");
+    for (bad, code) in [
+        (json!({"iso": 9}), "ISO001"),
+        (json!({"field": "nope"}), "FIELD002"),
+        (json!({"field": "pressure", "component": "y"}), "FIELD003"),
+    ] {
+        let e = call("iso.set", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, code, "{bad}");
+    }
+    for _ in 2..murmel_engine::extract::MAX_ISOS {
+        assert!(call("iso.set", json!({"new": true}), &mut s).ok());
+    }
+    let e = call("iso.set", json!({"new": true}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "ISO002");
+    // The surface draws them, the mesh as its faint outline.
+    assert!(s.display.outline_mesh());
+    let e = call("display.mesh_look", json!({"look": "faces"}), &mut s);
+    assert_eq!(e.result["mesh_look"], "faces");
+    let e = call("journal.undo", json!({}), &mut s);
+    assert_eq!(e.result["undone"], "display.mesh_look");
+    assert!(s.display.outline_mesh());
+    // Properties of each.
+    let e = call("inspect.item", json!({"item": "iso:1"}), &mut s);
+    let keys: Vec<&str> = e.result["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["key"].as_str())
+        .collect();
+    assert!(
+        keys.contains(&"field") && keys.contains(&"value"),
+        "{keys:?}"
+    );
+    let e = call("iso.clear", json!({"iso": 1}), &mut s);
+    assert_eq!(e.result["isos"][0]["field"], "velocity");
+    let e = call("iso.clear", json!({"all": true}), &mut s);
+    assert!(e.result["isos"].as_array().unwrap().is_empty());
+    assert!(!s.display.outline_mesh());
+}
+
+/// Invariant (session format 1.5): slices (with their series),
+/// iso-surfaces (field, value, colour mode, own colour) and the mesh's
+/// look come back from a session file and draw the same surface; an
+/// iso-surface of a field the result does not have is skipped and
+/// reported. Without them in the file a saved result view would come
+/// back without its slices.
+#[test]
+fn extract_sessions_round_trip() {
+    let dir = std::env::temp_dir().join(format!("murmel-extract-session-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("extracts.murmel");
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let mut s = session();
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    let by = json!({"by": "field", "field": "velocity"});
+    assert!(call("display.color_by", by, &mut s).ok());
+    assert!(call("slice.set", json!({"axis": "x", "count": 3}), &mut s).ok());
+    let iso = json!({"field": "speed", "value": 1.2});
+    assert!(call("iso.set", iso, &mut s).ok());
+    let iso = json!({"new": true, "field": "k", "value": 0.05, "color": "field"});
+    assert!(call("iso.set", iso, &mut s).ok());
+    let colour = json!({"item": "iso:1", "color": "#123456"});
+    assert!(call("display.set_color", colour, &mut s).ok());
+    assert!(call("display.mesh_look", json!({"look": "faces"}), &mut s).ok());
+    let e = call("session.save", json!({"path": file}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("\"format_version\": \"1.5\""), "{text}");
+
+    let mut t = session();
+    let e = call("session.load", json!({"path": file}), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(t.display.slices, s.display.slices);
+    assert_eq!(t.display.isos, s.display.isos);
+    assert_eq!(t.display.mesh_look, s.display.mesh_look);
+    assert_eq!(t.display.colors, s.display.colors);
+    let (a, b) = (
+        &s.mesh.as_ref().unwrap().surface,
+        &t.mesh.as_ref().unwrap().surface,
+    );
+    assert_eq!(a.indices.len(), b.indices.len());
+    assert_eq!(a.field_range, b.field_range);
+
+    let text = text.replace("\"k\"", "\"tke\"");
+    std::fs::write(&file, text).unwrap();
+    let mut u = session();
+    let e = call("session.load", json!({"path": file}), &mut u);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["skipped"], json!(["field:tke"]));
+    assert_eq!(u.display.isos.len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Invariant: export.movie writes the frames its motion makes (a part
 /// turn, a clip sweep, a flight with holds) at the size asked, as PNG
 /// frames or an animated GIF, counts them in the progress, takes a

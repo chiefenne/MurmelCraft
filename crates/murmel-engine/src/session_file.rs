@@ -7,7 +7,8 @@
 //! hidden, isolated and selected items and the colours set on items, all
 //! by their tree ids), the clip planes (since 1.2), the saved views (named
 //! cameras, since format 1.1), the measurements and probes (since 1.3),
-//! the field shown and each field's style (since 1.4),
+//! the field shown and each field's style (since 1.4), the slices,
+//! iso-surfaces and the mesh's look beside them (since 1.5),
 //! the user's mesh colours and the view cube placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
 //! `settings.toml` (decided 2026-11-24).
@@ -25,6 +26,7 @@ use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Item, PickTarget, RenderMode, SavedView};
+use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, RangeMode};
 use crate::measure::{Measurement, Probe};
 use crate::quality::Metric;
@@ -32,7 +34,7 @@ use crate::session::Session;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.4";
+pub const SESSION_VERSION: &str = "1.5";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -81,6 +83,19 @@ pub struct DisplayState {
     /// How each field is drawn, by field name (1.4).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub field_styles: BTreeMap<String, FieldStyle>,
+    /// Slices and series of slices, in order (1.5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub slices: Vec<Slice>,
+    /// Iso-surfaces, in order (1.5).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub isos: Vec<Iso>,
+    /// What the mesh looks like while slices or iso-surfaces show (1.5).
+    #[serde(skip_serializing_if = "is_outline")]
+    pub mesh_look: MeshLook,
+}
+
+fn is_outline(l: &MeshLook) -> bool {
+    *l == MeshLook::Outline
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -205,6 +220,17 @@ impl SessionFile {
                 },
                 field: d.field.clone(),
                 field_styles: d.field_styles.clone(),
+                slices: if s.mesh.is_some() {
+                    d.slices.clone()
+                } else {
+                    Vec::new()
+                },
+                isos: if s.mesh.is_some() {
+                    d.isos.clone()
+                } else {
+                    Vec::new()
+                },
+                mesh_look: d.mesh_look,
             },
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
@@ -313,6 +339,40 @@ impl SessionFile {
                 )));
             }
         }
+        if f.display.slices.len() > crate::extract::MAX_SLICES
+            || f.display.isos.len() > crate::extract::MAX_ISOS
+        {
+            return Err(Refused(format!(
+                "at most {} slices and {} iso-surfaces",
+                crate::extract::MAX_SLICES,
+                crate::extract::MAX_ISOS
+            )));
+        }
+        for (k, sl) in f.display.slices.iter_mut().enumerate() {
+            let series_ok = (1..=crate::extract::MAX_SERIES).contains(&sl.count)
+                && sl.spacing.is_finite()
+                && sl.spacing >= 0.0
+                && (sl.count == 1 || sl.spacing > 0.0);
+            let normal = crate::clip::unit(sl.normal);
+            match normal {
+                Some(n) if sl.origin.iter().all(|v| v.is_finite()) && series_ok => sl.normal = n,
+                _ => {
+                    return Err(Refused(format!(
+                        "slice:{}: a finite origin, a non-zero normal, 1 to {} planes and a positive spacing between them",
+                        k + 1,
+                        crate::extract::MAX_SERIES
+                    )));
+                }
+            }
+        }
+        for (k, iso) in f.display.isos.iter().enumerate() {
+            if !iso.value.is_finite() || iso.field.name.is_empty() {
+                return Err(Refused(format!(
+                    "iso:{}: a field and a finite value",
+                    k + 1
+                )));
+            }
+        }
         if let Some(t) = f.display.threshold
             && !t.is_finite()
         {
@@ -393,6 +453,9 @@ impl Session {
         d.views.clear();
         d.measurements.clear();
         d.probes.clear();
+        d.slices.clear();
+        d.isos.clear();
+        d.mesh_look = s.mesh_look;
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
                 let i = Item::parse(id, &m.mesh);
@@ -445,6 +508,31 @@ impl Session {
                     missing.push(format!("field:{}", c.name));
                 }
                 known
+            });
+            d.slices = s.slices;
+            d.isos = s.isos;
+            // Iso-surfaces of fields this result does not have go, with
+            // their ids (the later ones move up).
+            for k in (0..d.isos.len()).rev() {
+                let name = d.isos[k].field.name.clone();
+                if m.fields.get(&name).is_none() {
+                    d.remove_iso(k);
+                    let id = format!("field:{name}");
+                    if !missing.contains(&id) {
+                        missing.push(id);
+                    }
+                }
+            }
+            let (ns, ni) = (d.slices.len(), d.isos.len());
+            d.selection.retain(|&i| match i {
+                Item::Slice(k) => (k as usize) < ns,
+                Item::Iso(k) => (k as usize) < ni,
+                _ => true,
+            });
+            d.colors.retain(|&i, _| match i {
+                Item::Iso(k) => (k as usize) < ni,
+                Item::Slice(_) => false,
+                _ => true,
             });
         }
         if self.display.color_by == ColorBy::Field && self.display.field.is_none() {

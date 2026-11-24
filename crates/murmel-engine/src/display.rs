@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
 use crate::clip::Clip;
+use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, FieldStyles, FieldValues};
 use crate::measure::{Measurement, Probe};
 use crate::quality::{Metric, Quality};
@@ -124,6 +125,11 @@ pub enum Item {
     Measure(u32),
     /// A probe, by its number (`probe:<n>`).
     Probe(u32),
+    /// A slice or a series of slices, by index into `Display::slices`;
+    /// its id counts from one (`slice:1`).
+    Slice(u32),
+    /// An iso-surface, by index into `Display::isos` (`iso:1`).
+    Iso(u32),
 }
 
 impl Item {
@@ -147,6 +153,8 @@ impl Item {
             Item::Clip(i) => format!("clip:{}", i + 1),
             Item::Measure(n) => format!("measure:{n}"),
             Item::Probe(n) => format!("probe:{n}"),
+            Item::Slice(i) => format!("slice:{}", i + 1),
+            Item::Iso(i) => format!("iso:{}", i + 1),
         }
     }
 
@@ -205,6 +213,16 @@ impl Item {
                 .ok()
                 .filter(|&n| n >= 1)
                 .map(Item::Probe),
+            "slice" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&n| n >= 1)
+                .map(|n| Item::Slice(n - 1)),
+            "iso" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&n| n >= 1)
+                .map(|n| Item::Iso(n - 1)),
             _ => None,
         }
     }
@@ -295,6 +313,13 @@ pub struct Display {
     /// The values of `field`, computed the first time colour mode field
     /// shows it (`Session::redraw`).
     pub field_values: Option<Arc<FieldValues>>,
+    /// Slices and series of slices (`slice.set`), in the order they were
+    /// added.
+    pub slices: Vec<Slice>,
+    /// Iso-surfaces (`iso.set`), in the order they were added.
+    pub isos: Vec<Iso>,
+    /// What the mesh looks like while slices or iso-surfaces show.
+    pub mesh_look: MeshLook,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -382,6 +407,16 @@ impl Display {
                         c.enabled = on;
                     }
                 }
+                (Item::Slice(k), Some(on)) => {
+                    if let Some(c) = self.slices.get_mut(k as usize) {
+                        c.enabled = on;
+                    }
+                }
+                (Item::Iso(k), Some(on)) => {
+                    if let Some(c) = self.isos.get_mut(k as usize) {
+                        c.enabled = on;
+                    }
+                }
                 (Item::Measure(n), Some(on)) => {
                     for m in self.measurements.iter_mut().filter(|m| m.n == n) {
                         m.visible = on;
@@ -406,7 +441,16 @@ impl Display {
         let kept: Vec<Item> = items
             .iter()
             .copied()
-            .filter(|i| !matches!(i, Item::Clip(_) | Item::Measure(_) | Item::Probe(_)))
+            .filter(|i| {
+                !matches!(
+                    i,
+                    Item::Clip(_)
+                        | Item::Measure(_)
+                        | Item::Probe(_)
+                        | Item::Slice(_)
+                        | Item::Iso(_)
+                )
+            })
             .collect();
         let items = kept.as_slice();
         match v {
@@ -642,6 +686,8 @@ impl Display {
     pub fn has(&self, item: Item) -> bool {
         match item {
             Item::Clip(k) => (k as usize) < self.clips.len(),
+            Item::Slice(k) => (k as usize) < self.slices.len(),
+            Item::Iso(k) => (k as usize) < self.isos.len(),
             Item::Measure(n) => self.measurement(n).is_some(),
             Item::Probe(n) => self.probe(n).is_some(),
             _ => true,
@@ -665,6 +711,118 @@ impl Display {
             }
         }
         Some(c)
+    }
+
+    /// Remove slice `k`, as [`Display::remove_clip`] does planes.
+    pub fn remove_slice(&mut self, k: usize) -> Option<Slice> {
+        if k >= self.slices.len() {
+            return None;
+        }
+        let c = self.slices.remove(k);
+        self.forget(
+            k as u32,
+            |i| match i {
+                Item::Slice(j) => Some(j),
+                _ => None,
+            },
+            Item::Slice,
+        );
+        Some(c)
+    }
+
+    /// Remove iso-surface `k`; its own colour goes with it.
+    pub fn remove_iso(&mut self, k: usize) -> Option<Iso> {
+        if k >= self.isos.len() {
+            return None;
+        }
+        let c = self.isos.remove(k);
+        let colors: Vec<(u32, Rgb)> = self
+            .colors
+            .iter()
+            .filter_map(|(i, &rgb)| match *i {
+                Item::Iso(j) if j as usize != k => Some((j, rgb)),
+                _ => None,
+            })
+            .collect();
+        self.colors.retain(|i, _| !matches!(i, Item::Iso(_)));
+        for (j, rgb) in colors {
+            let j = if j as usize > k { j - 1 } else { j };
+            self.colors.insert(Item::Iso(j), rgb);
+        }
+        self.forget(
+            k as u32,
+            |i| match i {
+                Item::Iso(j) => Some(j),
+                _ => None,
+            },
+            Item::Iso,
+        );
+        Some(c)
+    }
+
+    /// The selection forgets item `k` of the kind `index` reads, and the
+    /// items after it move up one (`make` names them again).
+    fn forget(&mut self, k: u32, index: impl Fn(Item) -> Option<u32>, make: fn(u32) -> Item) {
+        self.selection.retain(|&i| index(i) != Some(k));
+        for i in &mut self.selection {
+            if let Some(j) = index(*i)
+                && j > k
+            {
+                *i = make(j - 1);
+            }
+        }
+    }
+
+    /// The slice tools and the handle act on: the one selected last, else
+    /// the one added last.
+    pub fn current_slice(&self) -> Option<usize> {
+        self.selection
+            .iter()
+            .rev()
+            .find_map(|&i| match i {
+                Item::Slice(k) if (k as usize) < self.slices.len() => Some(k as usize),
+                _ => None,
+            })
+            .or_else(|| self.slices.len().checked_sub(1))
+    }
+
+    /// The iso-surface tools act on: the one selected last, else the one
+    /// added last.
+    pub fn current_iso(&self) -> Option<usize> {
+        self.selection
+            .iter()
+            .rev()
+            .find_map(|&i| match i {
+                Item::Iso(k) if (k as usize) < self.isos.len() => Some(k as usize),
+                _ => None,
+            })
+            .or_else(|| self.isos.len().checked_sub(1))
+    }
+
+    /// Whether a slice or an iso-surface is drawn.
+    pub fn extracts_shown(&self) -> bool {
+        self.slices.iter().any(|s| s.enabled) || self.isos.iter().any(|i| i.enabled)
+    }
+
+    /// Whether the mesh draws as its faint outline (slices or
+    /// iso-surfaces show, and the user did not ask for its faces).
+    pub fn outline_mesh(&self) -> bool {
+        self.mesh_look == MeshLook::Outline && self.extracts_shown()
+    }
+
+    /// Whether the mesh's own faces are drawn.
+    pub fn mesh_faces(&self) -> bool {
+        self.render_mode.faces() && !self.outline_mesh()
+    }
+
+    /// Whether the renderer draws faces (the mesh's, or slices and
+    /// iso-surfaces, which always show theirs) and edge lines.
+    pub fn draw_faces(&self) -> bool {
+        self.render_mode.faces() || self.extracts_shown()
+    }
+
+    pub fn draw_edges(&self) -> bool {
+        self.render_mode.edges() || self.outline_mesh()
     }
 
     /// Whether point `p` is kept by every clip plane that cuts.
@@ -705,6 +863,8 @@ impl Display {
             (ColorBy::Zone, Item::Zone(z)) => {
                 Some(set.unwrap_or_else(|| tokens.patch_color(z as usize)))
             }
+            // An iso-surface's solid colour, in every mode.
+            (_, Item::Iso(k)) => Some(crate::extract::iso_color(self, tokens, k as usize)),
             _ => None,
         }
     }
@@ -768,7 +928,9 @@ impl Display {
             Item::Kind(k) => owner.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
             Item::Cell(c) => owner == Some(c as usize),
             Item::Face(u) => mesh.boundary_face_id.get(f) == Some(&u),
-            Item::Clip(_) | Item::Measure(_) | Item::Probe(_) => false,
+            Item::Clip(_) | Item::Measure(_) | Item::Probe(_) | Item::Slice(_) | Item::Iso(_) => {
+                false
+            }
         }
     }
 
@@ -802,6 +964,20 @@ impl Display {
             Some(Item::Clip(i)) => {
                 for p in self.clips.get(i as usize)?.box_section(&mesh.bounds()) {
                     b.add(p);
+                }
+                return (!b.is_empty()).then_some(b);
+            }
+            // The sections of the box by every plane of the series.
+            Some(Item::Slice(i)) => {
+                let slice = self.slices.get(i as usize)?;
+                for origin in slice.plane_origins() {
+                    let plane = Clip {
+                        origin,
+                        ..slice.plane()
+                    };
+                    for p in plane.box_section(&mesh.bounds()) {
+                        b.add(p);
+                    }
                 }
                 return (!b.is_empty()).then_some(b);
             }

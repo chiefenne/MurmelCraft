@@ -152,6 +152,20 @@ tree-clip-tip = Click to make it the plane the toolbar and the handle move; doub
 tree-clip-remove = Remove this plane
 tree-clip-new = Add clip plane ({ $alt } + C)
 tree-clip-oblique = oblique
+tree-extracts = Slices and iso-surfaces
+tree-slice-label = Slice { $n }: { $normal }
+tree-slice-series = Slice { $n }: { $normal } · { $count } planes
+tree-slice-current = { $row }, moved by the handles
+tree-slice-tip = Click to make it the slice the handles move; double-click to fit it
+tree-slice-remove = Remove this slice
+tree-slice-new = Add slice ({ $alt } + S)
+tree-iso-label = Iso { $n }: { $field } = { $value }
+tree-iso-tip = Click to select it, then click the colour bar to move it; double-click to fit
+tree-iso-remove = Remove this iso-surface
+tree-iso-new = Add iso-surface ({ $alt } + I)
+tree-iso-new-tip = Add an iso-surface of the field shown at the middle of its range; a click on the colour bar places one at that value
+tree-mesh-faces = Show the mesh faces
+tree-mesh-faces-tip = Off draws the mesh as a faint outline, so the slices and iso-surfaces stand out
 tree-show = Show { $item }
 tree-hide = Hide { $item }
 tree-isolate = Isolate (I)
@@ -211,6 +225,8 @@ props-area-face = Face
 props-area-clip = Clip plane
 props-area-measure = Measurement
 props-area-probe = Probe
+props-area-slice = Slice
+props-area-iso = Iso-surface
 props-clip-name = { $n }
 props-more-selected = and { $count } more selected (Shift + click adds)
 props-copy = { $value } (click to copy)
@@ -281,6 +297,15 @@ prop-snap = Snapped to
 prop-inside = Inside the mesh
 prop-cell = Cell
 prop-distance_to_centroid = Distance to the centroid
+prop-count = Planes
+prop-current_slice = Current slice
+prop-current_iso = Current iso-surface
+prop-spacing = Spacing
+prop-field = Field
+prop-value = Value
+prop-color = Colour
+iso-color-solid = Solid
+iso-color-field = By the field shown
 
 projection-orthographic = Orthographic
 projection-perspective = Perspective
@@ -683,3 +708,31 @@ movie-done = Saved { $file }, { $n ->
     [one] 1 frame
    *[other] { $n } frames
 }
+
+## Slices and iso-surfaces (field results, stage 2)
+group-slice = Slices and iso-surfaces
+tool-slice-set = Slice
+tool-slice-rotate = Tilt the slice
+tool-slice-clear = Remove the slice
+tool-iso-set = Iso-surface
+tool-iso-clear = Remove the iso-surface
+tool-display-mesh-look = Mesh beside slices
+cmd-slice-x = Slice normal to X
+cmd-slice-y = Slice normal to Y
+cmd-slice-z = Slice normal to Z
+cmd-slice-new = Add a slice
+cmd-slice-view = Slice along the view direction
+cmd-slice-series = Slice: a series of 5 through the mesh
+cmd-slice-single = Slice: one plane instead of a series
+cmd-slice-toggle = Slice: show or hide
+cmd-slice-clear = Remove the slice
+cmd-slice-clear-all = Remove all slices
+cmd-iso-new = Add an iso-surface
+cmd-iso-solid = Iso-surface: solid colour
+cmd-iso-field = Iso-surface: coloured by the field shown
+cmd-iso-toggle = Iso-surface: show or hide
+cmd-iso-clear = Remove the iso-surface
+cmd-iso-clear-all = Remove all iso-surfaces
+cmd-mesh-look-outline = Mesh beside slices: faint outline
+cmd-mesh-look-faces = Mesh beside slices: faces
+field-bar-tip = Click to place an iso-surface at that value; with an iso-surface of this field selected, the click moves it

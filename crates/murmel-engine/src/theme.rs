@@ -98,6 +98,8 @@ pub struct FieldTokens {
     /// Contour lines, and how much of their colour they mix in.
     pub line: Rgb,
     pub line_mix: f32,
+    /// The mesh's faint outline while slices or iso-surfaces show.
+    pub outline: Rgb,
 }
 
 /// Colours of the patch roles.
@@ -403,6 +405,7 @@ impl Tokens {
                 "none" => &mut f.none,
                 "edge" => &mut f.edge,
                 "line" => &mut f.line,
+                "outline" => &mut f.outline,
                 _ => return Err(format!("unknown field colour {name}")),
             } = rgb;
         }

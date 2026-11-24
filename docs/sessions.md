@@ -62,6 +62,17 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   A field the result does not have is skipped as `field:<name>` and the
   colour falls back to solid. The values themselves are read from the
   result file again, never stored.
+- **Slices and iso-surfaces** (format 1.5) are `display.slices`
+  (`{"origin": [2, 1, 0.5], "normal": [1, 0, 0], "enabled": true}`, plus
+  `count` and `spacing` for a series of parallel planes centred on
+  `origin`), `display.isos` (`{"field": {"name": "speed", "component":
+  "magnitude"}, "value": 1.2, "enabled": true, "color": "solid"}`, with
+  `color` `solid` or `field`; an own colour is in `colors` as `iso:1`)
+  and `display.mesh_look` (`faces`; left out for the default, the faint
+  outline while slices or iso-surfaces show). At most 8 of each and 64
+  planes in a series. An iso-surface of a field the result does not have
+  is skipped as `field:<name>`. The geometry is computed again on
+  loading, never stored.
 - **Saved views** (format 1.1) are the named cameras of the model tree's
   "Saved views" (`views.save`, `views.go`, `views.rename`,
   `views.delete`), in the order they were saved. A 1.0 file has none and

@@ -23,6 +23,9 @@ mod tests {
             include_str!("agents.rs"),
             include_str!("export_dialog.rs"),
             include_str!("movie_dialog.rs"),
+            include_str!("field.rs"),
+            include_str!("extracts.rs"),
+            include_str!("clip_handle.rs"),
         ];
         for s in src {
             for part in s
@@ -70,32 +73,61 @@ mod tests {
         for v in ["valid", "no_evidence", "failed"] {
             assert!(t.has(&format!("validity-{v}")));
         }
-        for a in ["mesh", "zone", "kind", "patch", "cell", "face"] {
+        for a in [
+            "mesh", "zone", "kind", "patch", "cell", "face", "clip", "measure", "probe", "slice",
+            "iso",
+        ] {
             assert!(t.has(&format!("props-area-{a}")));
         }
-        // Every property row of every item of the channel has a label.
-        let mut s = murmel_engine::Session::new(murmel_engine::Tokens::builtin().unwrap());
-        s.config_dir = None;
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../test-fixtures/channel/foehncraft.vtu");
-        s.open(&path).unwrap();
-        let (Some(m), d) = (&s.mesh, &s.display) else {
-            unreachable!()
-        };
-        let items = std::iter::once(murmel_engine::Item::Mesh)
-            .chain(murmel_engine::display::all_items(&m.mesh))
-            .chain([
+        for c in murmel_engine::IsoColor::ALL {
+            assert!(t.has(&format!("iso-color-{}", c.key())));
+        }
+        // Every property row of every item of the channel mesh, and of
+        // its field results with a slice series and an iso-surface, has a
+        // label.
+        for file in ["channel/foehncraft.vtu", "vtkhdf/channel_fields.vtkhdf"] {
+            let mut s = murmel_engine::Session::new(murmel_engine::Tokens::builtin().unwrap());
+            s.config_dir = None;
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test-fixtures")
+                .join(file);
+            s.open(&path).unwrap();
+            let mut extra = vec![
+                murmel_engine::Item::Mesh,
                 murmel_engine::Item::Cell(0),
                 murmel_engine::Item::Face(0),
-                murmel_engine::Item::Face(m.mesh.boundary_face_id[0]),
-            ]);
-        for item in items {
-            for r in murmel_engine::inspect::rows(m, d, item) {
-                assert!(
-                    t.has(&format!("prop-{}", r.key)),
-                    "missing key prop-{}",
-                    r.key
-                );
+            ];
+            if file.ends_with(".vtkhdf") {
+                for (tool, input) in [
+                    (
+                        "slice.set",
+                        serde_json::json!({"new": true, "axis": "x", "count": 3}),
+                    ),
+                    (
+                        "iso.set",
+                        serde_json::json!({"new": true, "field": "pressure"}),
+                    ),
+                ] {
+                    let e = murmel_tools::call(tool, input, &mut s);
+                    assert!(e.ok(), "{tool}: {:?}", e.diagnostics);
+                }
+                extra.extend([murmel_engine::Item::Slice(0), murmel_engine::Item::Iso(0)]);
+            }
+            let (Some(m), d) = (&s.mesh, &s.display) else {
+                unreachable!()
+            };
+            extra.push(murmel_engine::Item::Face(m.mesh.boundary_face_id[0]));
+            let items = extra
+                .into_iter()
+                .chain(murmel_engine::display::all_items(&m.mesh));
+            for item in items {
+                for r in murmel_engine::inspect::rows(m, d, item) {
+                    assert!(
+                        t.has(&format!("prop-{}", r.key)),
+                        "missing key prop-{} ({file})",
+                        r.key
+                    );
+                }
             }
         }
     }

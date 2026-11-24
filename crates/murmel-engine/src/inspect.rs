@@ -16,7 +16,7 @@ pub struct Row {
     pub key: &'static str,
     pub value: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit: Option<&'static str>,
+    pub unit: Option<std::borrow::Cow<'static, str>>,
 }
 
 fn row(key: &'static str, value: impl Into<Value>) -> Row {
@@ -27,11 +27,15 @@ fn row(key: &'static str, value: impl Into<Value>) -> Row {
     }
 }
 
-fn unit(key: &'static str, value: impl Into<Value>, unit: &'static str) -> Row {
+fn unit(
+    key: &'static str,
+    value: impl Into<Value>,
+    unit: impl Into<std::borrow::Cow<'static, str>>,
+) -> Row {
     Row {
         key,
         value: value.into(),
-        unit: Some(unit),
+        unit: Some(unit.into()),
     }
 }
 
@@ -373,6 +377,49 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 unit("offset_max", round(range[1], 6), "m"),
                 row("current", display.current_clip() == Some(k as usize)),
             ]
+        }
+        Item::Slice(k) => {
+            let Some(c) = display.slices.get(k as usize) else {
+                return Vec::new();
+            };
+            let (offset, range) = c.plane().offset(&m.bounds());
+            let mut v = vec![
+                row("name", format!("{}", k + 1)),
+                row("enabled", c.enabled),
+                unit("origin", vec3(c.origin, 6), "m"),
+                row("normal", vec3(c.normal, 4)),
+                unit("offset", round(offset, 6), "m"),
+                unit("offset_min", round(range[0], 6), "m"),
+                unit("offset_max", round(range[1], 6), "m"),
+            ];
+            if c.count > 1 {
+                v.push(row("count", c.count));
+                v.push(unit("spacing", round(c.spacing, 6), "m"));
+            }
+            v.push(row(
+                "current_slice",
+                display.current_slice() == Some(k as usize),
+            ));
+            v
+        }
+        Item::Iso(k) => {
+            let Some(c) = display.isos.get(k as usize) else {
+                return Vec::new();
+            };
+            let f = open.fields.get(&c.field.name);
+            let vector = f.is_some_and(|f| f.is_vector());
+            let title = c.field.title(vector);
+            let mut v = vec![row("name", format!("{}", k + 1)), row("field", title)];
+            v.push(match f.and_then(|f| f.unit.clone()) {
+                Some(u) => unit("value", c.value, u),
+                None => row("value", c.value),
+            });
+            v.extend([
+                row("enabled", c.enabled),
+                row("color", c.color.key()),
+                row("current_iso", display.current_iso() == Some(k as usize)),
+            ]);
+            v
         }
         Item::Face(u) => face_rows(m, display, u as usize),
         Item::Measure(n) => display.measurement(n).map_or_else(Vec::new, measure_rows),
