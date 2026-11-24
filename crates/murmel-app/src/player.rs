@@ -33,6 +33,16 @@ pub(crate) struct StepsRangeJob {
     failed: Option<(String, String)>,
 }
 
+/// The next step of a playing series being read on a thread of its own
+/// ([`murmel_engine::Session::step_ahead`]): its fields file and the
+/// reading. The player shows it when it is read and its time has come,
+/// so a step that reads slower than the rate holds the step shown while
+/// the window stays free.
+pub(crate) struct Ahead {
+    path: PathBuf,
+    handle: JoinHandle<Result<murmel_engine::Loaded, murmel_mesh::MeshError>>,
+}
+
 /// What a painted button of the bar shows.
 #[derive(Clone, Copy)]
 enum Glyph {
@@ -192,19 +202,49 @@ impl MurmelApp {
     pub(crate) fn play_series(&mut self, ctx: &egui::Context) {
         let Some(r) = &self.session.series else {
             self.played_at = None;
+            self.ahead = None;
             return;
         };
         if !r.playback.playing {
             self.played_at = None;
+            self.ahead = None;
             return;
         }
         let every = 1.0 / r.playback.rate;
         let next = r.next_played();
+        // Read the next step's fields file ahead (when it has one other
+        // than the one shown, and two steps fit the memory budget).
+        let next_file = next
+            .and_then(|k| r.entries.get(k))
+            .and_then(|e| e.fields.clone())
+            .filter(|p| self.session.mesh.as_ref().is_none_or(|m| &m.path != p));
+        if let Some(p) = &next_file
+            && self.ahead.as_ref().is_none_or(|a| &a.path != p)
+        {
+            self.ahead = self.session.step_ahead(p).map(|a| Ahead {
+                path: p.clone(),
+                handle: std::thread::spawn(move || a.load()),
+            });
+        }
         let at = *self.played_at.get_or_insert(self.now);
         let wait = at + every - self.now;
         if wait > 0.0 {
             ctx.request_repaint_after(Duration::from_secs_f64(wait));
             return;
+        }
+        // Due: wait for the step being read, without holding the window.
+        if let Some(a) = &self.ahead
+            && next_file.as_ref() == Some(&a.path)
+        {
+            if !a.handle.is_finished() {
+                ctx.request_repaint_after(Duration::from_millis(15));
+                return;
+            }
+            if let Some(a) = self.ahead.take()
+                && let Ok(Ok(l)) = a.handle.join()
+            {
+                self.session.preloaded = Some(l);
+            }
         }
         match next {
             Some(k) => {
