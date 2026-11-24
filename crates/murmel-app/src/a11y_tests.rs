@@ -1386,3 +1386,103 @@ fn player_bar_steps_and_plays() {
     assert_eq!(seen[at + 1], "Player", "{seen:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Invariant: with a run's tables open the chart panel shows above the
+/// viewport's bottom with named controls and the statistics, F6 reaches
+/// it, choosing another chart in its combo box calls charts.show, and
+/// the palette's command hides it. Breaks if the panel lost its names,
+/// its controls stopped calling the chart tools, or the region left F6.
+#[test]
+fn chart_panel_shows_and_switches() {
+    let mut h = harness();
+    let run =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-fixtures/spray-run");
+    assert!(
+        h.state_mut()
+            .call("charts.open", serde_json::json!({"path": run}))
+            .is_some()
+    );
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "chart panel");
+    assert!(named(&h, "Liquid mass flow through the datums"));
+    assert!(shows(&h, "Spray"), "the statistics show");
+    assert!(shows(&h, "8.28 g"), "8.28 g left through the outlet");
+    assert!(
+        h.state_mut()
+            .call(
+                "charts.show",
+                serde_json::json!({"chart": "histogram", "datums": ["floor"]})
+            )
+            .is_some()
+    );
+    h.run_steps(3);
+    assert!(named(&h, "Datum"));
+    assert!(named(&h, "Droplet sizes through floor up to step 300"));
+    assert_eq!(problems(&h), Vec::<String>::new(), "histogram");
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        h.key_press(egui::Key::F6);
+        h.run_steps(2);
+        seen.push(focused_pane(&h).unwrap_or_default());
+    }
+    assert!(seen.iter().any(|p| p == "Charts"), "{seen:?}");
+    let hide = murmel_tools::commands::commands()
+        .into_iter()
+        .find(|c| c.id == "charts.show:toggle")
+        .unwrap();
+    let (tool, input) = hide.input(&h.state().session).unwrap();
+    h.state_mut().call(tool, input);
+    h.run_steps(3);
+    assert!(!h.state().session.charts.as_ref().unwrap().visible);
+    assert!(!named(&h, "Datum"));
+}
+
+/// The README picture of the chart panel (not a check): the window with
+/// a FoehnCraft spray run, its parcels, the player and the charts, drawn
+/// with wgpu. `MURMEL_README_RUN` names the run folder (FoehnCraft's
+/// `spray_datums` gallery case, tools/readme-spray/README.md) and
+/// `MURMEL_README_OUT` the PNG to write.
+#[test]
+#[ignore = "README picture: needs MURMEL_README_RUN and MURMEL_README_OUT and a GPU or lavapipe"]
+fn readme_chart_panel() {
+    let run = std::path::PathBuf::from(std::env::var("MURMEL_README_RUN").unwrap());
+    let out = std::path::PathBuf::from(std::env::var("MURMEL_README_OUT").unwrap());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1600.0, 1040.0))
+        .wgpu()
+        .build_eframe(|cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = None;
+            app.bridge_path = None;
+            app
+        });
+    h.run_steps(2);
+    let calls = [
+        (
+            "mesh.open",
+            serde_json::json!({"path": run.join("fields.vtkhdf")}),
+        ),
+        ("series.open", serde_json::json!({"path": run, "step": 150})),
+        ("slice.set", serde_json::json!({"axis": "z"})),
+        (
+            "display.color_by",
+            serde_json::json!({"by": "field", "field": "velocity"}),
+        ),
+        (
+            "parcels.set",
+            serde_json::json!({"color": "diameter", "map": "inferno", "scale": 2}),
+        ),
+        ("view.standard", serde_json::json!({"view": "top"})),
+        ("select.clear", serde_json::json!({})),
+        ("charts.show", serde_json::json!({"chart": "mass_flow"})),
+    ];
+    for (id, input) in calls {
+        let r = h.state_mut().call_envelope(id, input.clone());
+        assert!(r.ok(), "{id} {input}: {:?}", r.diagnostics);
+    }
+    h.state_mut().show_tree = false;
+    h.state_mut().show_props = false;
+    h.run_steps(6);
+    let img = h.render().unwrap();
+    img.save(&out).unwrap();
+}

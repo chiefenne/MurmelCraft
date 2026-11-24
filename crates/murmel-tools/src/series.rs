@@ -187,11 +187,16 @@ pub(crate) fn series_open(input: Value, s: &mut Session) -> Run {
         None => 0,
     };
     let keep = s.series.replace(r);
+    let opened = i.path.clone();
     if let Err(d) = go_to(s, k) {
         s.series = keep;
         return Err(d);
     }
-    done(s)
+    // The charts of the run's tables, when its folder has them (D268).
+    crate::charts::open_beside(s, &opened);
+    let mut out = done(s)?;
+    out["charts"] = crate::charts::charts_json(s);
+    Ok(out)
 }
 
 fn missing_step(r: &Series, st: u64) -> Diagnostic {

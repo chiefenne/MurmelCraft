@@ -384,6 +384,109 @@ impl Painter<'_> {
     }
 }
 
+/// Draw `chart` (D268) as a `width` × `height` RGBA8 picture (sRGB,
+/// straight alpha) at `scale` pixels per point, with its background, in
+/// `colors`: the same layout the window and the SVG export use
+/// ([`murmel_engine::chart::Chart::layout`]), text in Inter.
+pub fn chart_picture(
+    chart: &murmel_engine::chart::Chart,
+    width: u32,
+    height: u32,
+    scale: f32,
+    colors: &murmel_engine::chart::ChartColorsResolved,
+) -> Result<Vec<u8>, RenderError> {
+    use murmel_engine::chart::{Anchor, Prim};
+    let size_err = || {
+        RenderError::new(
+            "RENDER003",
+            format!("{width} x {height} is outside 1..{}", crate::MAX_SIDE),
+        )
+    };
+    if width == 0 || height == 0 || width > crate::MAX_SIDE || height > crate::MAX_SIDE {
+        return Err(size_err());
+    }
+    let w = u16::try_from(width).map_err(|_| size_err())?;
+    let h = u16::try_from(height).map_err(|_| size_err())?;
+    let font = FontRef::new(INTER)
+        .map_err(|e| RenderError::new("RENDER005", format!("Inter-Regular.ttf: {e}")))?;
+    let mut p = Painter {
+        ctx: RenderContext::new(w, h),
+        res: Resources::new(),
+        data: FontData::new(Blob::from(INTER.to_vec()), 0),
+        font,
+        scale: scale.max(0.05) as f64,
+    };
+    let (wp, hp) = (width as f64 / p.scale, height as f64 / p.scale);
+    let prims = {
+        let measure = |t: &str, pt: f64| p.text_width(t, pt as f32);
+        chart.layout(wp, hp, true, &measure)
+    };
+    for q in prims {
+        match q {
+            Prim::Rect { rect, ink } => p.rect(
+                rect[0],
+                rect[1],
+                rect[2],
+                rect[3],
+                paint(colors.of(ink), 1.0),
+            ),
+            Prim::Polyline { points, width, ink } => {
+                p.polyline(&points, width, paint(colors.of(ink), 1.0))
+            }
+            Prim::Text {
+                text,
+                at,
+                size,
+                anchor,
+                ink,
+            } => {
+                let tw = p.text_width(&text, size as f32);
+                let x = match anchor {
+                    Anchor::Start => at[0],
+                    Anchor::Middle => at[0] - tw / 2.0,
+                    Anchor::End => at[0] - tw,
+                };
+                p.text(&text, size as f32, x, at[1], paint(colors.of(ink), 1.0));
+            }
+        }
+    }
+    let mut rgba = vec![0u8; 4 * width as usize * height as usize];
+    let target = PixmapMut::new(w, h, &mut rgba)
+        .ok_or_else(|| RenderError::new("RENDER002", "chart buffer"))?;
+    p.ctx.render_with(
+        target,
+        &mut p.res,
+        RasterizerSettings {
+            render_mode: RenderMode::OptimizeQuality,
+            composite_mode: CompositeMode::SrcOver,
+            ..Default::default()
+        },
+    );
+    unpremultiply(&mut rgba);
+    Ok(rgba)
+}
+
+impl Painter<'_> {
+    fn polyline(&mut self, points: &[[f64; 2]], width: f64, color: AlphaColor<Srgb>) {
+        let s = self.scale;
+        let mut path = BezPath::new();
+        for (k, q) in points.iter().enumerate() {
+            if k == 0 {
+                path.move_to((q[0] * s, q[1] * s));
+            } else {
+                path.line_to((q[0] * s, q[1] * s));
+            }
+        }
+        self.ctx.set_stroke(
+            Stroke::new(width * s)
+                .with_caps(Cap::Round)
+                .with_join(vello_cpu::kurbo::Join::Round),
+        );
+        self.ctx.set_paint(color);
+        self.ctx.stroke_path(&path);
+    }
+}
+
 /// Straight to premultiplied alpha, in sRGB (vello_cpu's pixel format).
 fn premultiply(rgba: &mut [u8]) {
     for px in rgba.as_chunks_mut::<4>().0 {
