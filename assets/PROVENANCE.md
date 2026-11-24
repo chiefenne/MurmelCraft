@@ -17,3 +17,4 @@ no SolidCraft or FieldCraft asset, kit, theme or icon is used (clean room).
 | `colormaps.py` | ours | MIT | `python3 -I assets/colormaps.py` writes `colormaps.toml`; needs numpy and matplotlib at generation time only (nothing of matplotlib ships) |
 | `logo/murmelcraft-logo-source.png` | supplied by the maintainer (Andreas Ennemoser), 2026-11-23 | MurmelCraft logo, all rights with the maintainer; not under the MIT licence of the code | the image as supplied, 1254 x 1254 |
 | `logo/murmelcraft-256.png`, `logo/murmelcraft-128.png` | from the source above | as above | rounded square (1151 px, corner radius 278 px) cut out of the white page with a 4x supersampled mask, resized with Lanczos |
+| `readme/tour.webp`, `readme/tour/*.jpg` | ours: screenshots of the MurmelCraft window on a FoehnCraft result (MIT) for a KoflCraft mesh (MIT) of KoflCraft's Manifold fixture | MIT | `tools/readme-tour/make-tour.sh` (window captures at 2x, Pillow) |
