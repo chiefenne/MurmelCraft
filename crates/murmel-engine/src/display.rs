@@ -928,11 +928,14 @@ impl Display {
     /// The cells shown: not hidden (by zone, cell type or the mesh) and
     /// kept by every clip plane that cuts.
     pub fn shown_cells(&self, mesh: &Mesh) -> Vec<bool> {
-        let mut shown: Vec<bool> = (0..mesh.cell_count())
-            .map(|c| self.cell_visible(mesh, c))
-            .collect();
+        let mut shown: Vec<bool> = murmel_mesh::par::collect(mesh.cell_count(), 1 << 16, |r| {
+            r.map(|c| self.cell_visible(mesh, c)).collect()
+        });
         for clip in self.active_clips() {
-            let keeps: Vec<bool> = mesh.points.iter().map(|&p| clip.keeps(p)).collect();
+            let points = &mesh.points;
+            let keeps: Vec<bool> = murmel_mesh::par::collect(points.len(), 1 << 16, |r| {
+                points[r].iter().map(|&p| clip.keeps(p)).collect()
+            });
             for (s, k) in shown.iter_mut().zip(crate::clip::kept_cells(mesh, &keeps)) {
                 *s &= k;
             }
