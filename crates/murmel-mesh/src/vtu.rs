@@ -22,7 +22,7 @@ use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::field::{Field, Location, Results, group_vectors};
-use crate::{CellKind, Mesh, MeshError, Patch, PatchRole, Polygons, boundary, numbers};
+use crate::{Mesh, MeshError, Patch, PatchRole, Polygons, boundary, numbers};
 
 pub(crate) const POLYHEDRON: i64 = 42;
 pub(crate) const TETRA: i64 = 10;
@@ -1183,20 +1183,6 @@ fn assemble(h: &Header, arrays: &mut [Array]) -> Result<(Mesh, CellFaces, Vec<Sl
     Ok((mesh, polys, slots))
 }
 
-/// Close a cell whose faces end at cell face `faces`.
-pub(crate) fn push_cell(
-    mesh: &mut Mesh,
-    faces: usize,
-    zone: u32,
-    kind: CellKind,
-    zone_max: &mut Option<u32>,
-) {
-    mesh.cell_faces.push(faces as u32);
-    mesh.cell_zone.push(zone);
-    mesh.cell_kind.push(kind);
-    *zone_max = Some(zone_max.map_or(zone, |m| m.max(zone)));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1315,7 +1301,7 @@ mod tests {
     fn extracts_the_boundary_of_a_plain_volume_file() {
         let m = read_vtu_str(TET).unwrap();
         assert_eq!(m.cell_count(), 1);
-        assert_eq!(m.cell_kind, vec![CellKind::Tetrahedron]);
+        assert_eq!(m.cell_kind, vec![crate::CellKind::Tetrahedron]);
         assert_eq!(m.boundary.len(), 4);
         assert!(m.boundary_extracted);
         assert_eq!(m.boundary_owner, [0; 4]);

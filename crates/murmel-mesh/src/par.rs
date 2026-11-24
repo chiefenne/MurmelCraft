@@ -99,6 +99,28 @@ pub fn chunks_mut<T: Send>(data: &mut [T], min: usize, f: impl Fn(usize, &mut [T
     });
 }
 
+/// `f` for each of `items` on its own thread (one alone runs here),
+/// results in order.
+pub fn each<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    if items.len() <= 1 {
+        return items.into_iter().map(f).collect();
+    }
+    let f = &f;
+    std::thread::scope(|s| {
+        let handles: Vec<_> = items
+            .into_iter()
+            .map(|item| s.spawn(move || f(item)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| match h.join() {
+                Ok(r) => r,
+                Err(p) => std::panic::resume_unwind(p),
+            })
+            .collect()
+    })
+}
+
 /// `data` cut at `cuts` (increasing, the first 0 and the last
 /// `data.len()`) into consecutive pieces.
 pub fn split_mut<'a, T>(data: &'a mut [T], cuts: &[usize]) -> Vec<&'a mut [T]> {

@@ -333,27 +333,6 @@ impl Sink for Write<'_> {
     }
 }
 
-/// `f` for each of `items` on its own thread, results in order.
-fn each<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
-    if items.len() <= 1 {
-        return items.into_iter().map(f).collect();
-    }
-    let f = &f;
-    std::thread::scope(|s| {
-        let handles: Vec<_> = items
-            .into_iter()
-            .map(|item| s.spawn(move || f(item)))
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| match h.join() {
-                Ok(r) => r,
-                Err(p) => std::panic::resume_unwind(p),
-            })
-            .collect()
-    })
-}
-
 /// `data` cut where each range's piece starts (`at`, increasing from 0).
 fn pieces<T>(data: &mut [T], at: impl Iterator<Item = usize>) -> Vec<&mut [T]> {
     let len = data.len();
@@ -369,7 +348,7 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
     // offset of the cell before; the stream from the face offset of the
     // last polyhedron before, found range by range. A bad offset there
     // fails that earlier range first.
-    let last_face_end: Vec<Option<usize>> = each(ranges.clone(), |r| {
+    let last_face_end: Vec<Option<usize>> = par::each(ranges.clone(), |r| {
         r.rev()
             .find(|&c| input.types[c] == POLYHEDRON)
             .and_then(|c| input.face_offsets.get(c))
@@ -390,7 +369,7 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
     }
     let jobs: Vec<(Range<usize>, At)> = ranges.into_iter().zip(at).collect();
 
-    let counts = each(jobs.clone(), |(r, at)| {
+    let counts = par::each(jobs.clone(), |(r, at)| {
         let mut count = Count::default();
         walk(input, r, at, &mut count).map(|()| count)
     });
@@ -468,7 +447,7 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
         };
         writes.push((job, write));
     }
-    for written in each(writes, |((r, at), mut write)| {
+    for written in par::each(writes, |((r, at), mut write)| {
         walk(input, r, at, &mut write)
     }) {
         written?;
