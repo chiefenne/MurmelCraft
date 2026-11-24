@@ -940,8 +940,8 @@ more opens as an **overview** (the maintainer's cards of 2026-11-24:
 overview plus regions beyond the budget, 100 M cells on the iMac). What
 a whole read needs is estimated from the file's structure alone
 (`vtkhdf::size_of`): 1,500 bytes per cell plus 8 bytes per field
-value, the peak of the run measured above for the 1 M and 4 M blocked
-files with room to spare. Any other file opens whole, as before.
+value, about the peak of the run measured above for the 1 M and 4 M
+blocked files (1,475 to 1,540 bytes per cell). Any other file opens whole, as before.
 
 The overview reads no volume cells. It reads:
 
@@ -953,6 +953,11 @@ The overview reads no volume cells. It reads:
   (`OwnerCell`), read in runs of nearby rows, so it colours the
   boundary as the cell behind each face. Point fields are not shown
   (they are named in `fields_not_shown`).
+
+A field's colour range on an overview spans the whole volume, from the
+block ranges (`FieldSet::volume_range`), so the boundary is coloured on
+the scale a whole read would give; range mode "shown" still takes the
+values drawn.
 
 `mesh.open` takes `mode`: `fit` (the default, as above), `whole` or
 `overview`; a file without a block index refuses an overview with
@@ -976,5 +981,5 @@ its cells to the power 2/3, so the overview of a 100 M mesh of this
 shape (about 4.9 M boundary faces) should read in 2 to 3 s within about
 1 GB; its whole read would need some 150 GB.
 
-Not yet: the block ranges in the legend and the block boxes, the
-preview grid, and regions that read the blocks they touch.
+Not yet: the block boxes, the preview grid, and regions that read the
+blocks they touch.

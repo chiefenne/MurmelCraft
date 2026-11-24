@@ -259,6 +259,7 @@ prop-generator = Generator
 prop-validity = Evidence
 prop-validity_problems = Problems
 prop-cells = Cells
+prop-blocks = Blocks (overview)
 prop-faces_interior = Interior faces
 prop-faces_boundary = Boundary faces
 prop-vertices = Vertices

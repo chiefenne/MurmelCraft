@@ -659,7 +659,14 @@ pub fn load_checked(
     {
         crate::checked::remember(dir, path, b, FileHash::Blake3, d);
     }
-    let fields = FieldSet::new(results);
+    // An overview's fields span the volume's range, from the block
+    // ranges.
+    let ranges = overview.iter().flat_map(|o| {
+        o.fields
+            .iter()
+            .filter_map(|f| o.range(&f.name).map(|[a, b]| (f.name.clone(), (a, b))))
+    });
+    let fields = FieldSet::new(results).with_volume_ranges(ranges);
     // The evidence sits beside the mesh file: beside the .vtu, or in the
     // polyMesh folder among its files.
     let first = mesh
@@ -1815,11 +1822,14 @@ mod tests {
     /// Invariant: a blocked VTKHDF file whose whole read needs more than
     /// the memory budget opens as an overview (the boundary with the
     /// cell fields on it, the cells counted from the file, and the badge
-    /// checking those against the evidence); within the budget, or asked
+    /// checking those against the evidence, each cell field coloured
+    /// over the volume's range, the Properties counting the file's cells
+    /// and blocks); within the budget, or asked
     /// whole, it opens whole; a file without a block index opens whole
     /// whatever the budget and fails as an overview (BLOCK004). Breaks
     /// when the budget is ignored, the badge counts the overview's own
-    /// none of the cells (a red badge on a good mesh), or a plain file
+    /// none of the cells (a red badge on a good mesh), the colour range
+    /// is the boundary's alone, or a plain file
     /// is taken for blocked. The mesh tests read overviews but never
     /// decide when one is read.
     #[test]
@@ -1856,8 +1866,32 @@ mod tests {
         {
             let g = m.fields.results.get(&f.name).unwrap();
             assert_eq!(g.location, murmel_mesh::Location::Boundary, "{}", f.name);
+            // Its colour range is the volume's, from the block ranges.
+            let choice = crate::field::FieldChoice {
+                name: f.name.clone(),
+                component: Component::Magnitude,
+            };
+            let (lo, hi) = m.fields.values(&m.mesh, &choice).unwrap().range.unwrap();
+            let (wlo, whi) = FieldSet::new(results.clone())
+                .values(&whole, &choice)
+                .unwrap()
+                .range
+                .unwrap();
+            let near = |a: f64, b: f64| (a - b).abs() <= 1e-12 * (1.0 + b.abs());
+            assert!(
+                near(lo, wlo) && near(hi, whi),
+                "{}: {lo} {hi} {wlo} {whi}",
+                f.name
+            );
+            assert!(m.fields.volume_range(&f.name).is_some());
         }
         assert!(m.surface.bounds.is_some());
+        // Properties count the file's cells, in its blocks.
+        let m = s.mesh.as_ref().unwrap();
+        let rows = crate::inspect::rows(m, &s.display, crate::display::Item::Mesh);
+        let value = |k: &str| rows.iter().find(|r| r.key == k).map(|r| r.value.clone());
+        assert_eq!(value("cells"), Some(serde_json::json!(whole.cell_count())));
+        assert_eq!(value("blocks"), Some(serde_json::json!(ov.blocks.len())));
 
         // Asked whole, or within the budget, it reads the cells.
         let m = s.open_as(&path, s.fit_for(OpenMode::Whole)).unwrap();
