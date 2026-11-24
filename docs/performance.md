@@ -1115,3 +1115,48 @@ The iMac's 8 cores (16 threads) should take a larger share off. What is
 left: each block read reads the patches whole (0.15 s on this file,
 about 1.5 s on 100 M cells) where it could keep the overview's, and the
 face topology of the blocks read.
+
+## The preview grid of an overview (2026-11-24)
+
+The overview of a mesh beyond the memory budget is the surface, the
+block ranges and a preview grid (the maintainer's card 7 of 2026-11-24).
+`vtkhdf::read_preview(path, longest)` reads the preview grid: the
+volume's cell fields on a regular grid of `longest` cells along the
+longest side of the blocks' box (`PREVIEW_CELLS` = 128, the proposal's
+"about 128³"), the cells as near cubes as whole numbers allow, as a mesh
+of hexahedra, so what draws on a mesh read whole can draw on it.
+
+- Each grid cell shows the file cell its centre lies in: the cell whose
+  centroid is nearest the centre among the cells whose box holds it. In
+  a Voronoi mesh that is the cell holding the centre; elsewhere it is
+  that cell or one next to it. A centre in no cell's box is outside the
+  volume and has no grid cell.
+- The blocks are read on all threads, a block to a thread at a time,
+  and only their points and the point lists of their owned cells
+  (`Points`, `Offsets`, `Connectivity`); each grid cell keeps the
+  nearest centroid so far in one atomic word, the distance's bits above
+  the cell's row, so the blocks may finish in any order. Each cell field
+  and the zones are then read at the rows found, in runs of nearby rows.
+- A read in the background stops between batches of 64 blocks.
+
+Same machine, 4 threads, files in the page cache, two runs (the
+honeycomb fills its box, so every grid cell is inside: the most a grid
+of 128 can hold):
+
+| file | grid | grid cells | time | peak memory |
+|---|---|---:|---:|---:|
+| 1 M blocked, no fields | 128³ | 2,097,152 | 0.78 to 0.92 s | 0.76 to 0.86 GB |
+| 1 M blocked, 3 cell fields (5 values a cell) | 128³ | 2,097,152 | 1.09 to 1.14 s | 0.84 to 0.95 GB |
+| 4 M blocked, no fields | 128³ | 2,097,152 | 1.13 to 1.34 s | 0.86 GB |
+| 4 M blocked, no fields | 96³ | 884,736 | 0.78 s | 0.45 GB |
+| 4 M blocked, no fields | 64³ | 262,144 | 0.57 s | 0.22 GB |
+
+Most of the memory is the hexahedra of the grid: 162 bytes a grid cell
+once their faces are linked (339 MB for 128³), about twice that while
+they are linked. The sampling itself holds 8 bytes a grid cell and one
+block's points and point lists a thread. A domain that is not a cube
+fills fewer grid cells: a channel four times as long as it is wide has
+128 × 32 × 32. The sampling reads the points and point lists of every
+block (about a quarter of these files) and each cell field nearly
+whole, so on 100 M cells it reads tens of GB; it is meant to run once,
+in the background.

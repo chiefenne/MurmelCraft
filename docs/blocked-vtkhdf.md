@@ -217,6 +217,12 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   that no block read owns, with the patch faces their cells own. It
   needs `GlobalPointIds` (§ 3), and `GlobalCellIds` for the halo; a
   block number the file does not have is BLOCK005.
+- `vtkhdf::read_preview` reads the preview grid of the overview: each
+  cell field of the volume on a regular grid of about 128 cells along
+  the longest side of the blocks' box, a grid cell showing the cell its
+  centre lies in, from the points and point lists of the owned cells
+  and the fields at the rows found (docs/performance.md, "The preview
+  grid of an overview").
 - A box, sphere or slab region drawn on an overview reads, with
   `read_blocks`, the blocks whose `BlockBounds` it touches, with their
   halo (the engine's `blocks.rs`); beyond the memory budget it is

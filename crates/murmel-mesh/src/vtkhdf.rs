@@ -22,7 +22,7 @@
 //! join the cells by those ids, and `zone_names`, the patches' `role` and
 //! the strings of `/VTKHDF` are kept. [`read_overview`] reads the
 //! boundary and the block index alone, [`read_blocks`] the cells of some
-//! blocks.
+//! blocks, [`read_preview`] the cell fields on a coarse regular grid.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -35,11 +35,13 @@ use crate::{Mesh, MeshError, Patch, Polygons, boundary, par};
 
 mod cells;
 mod overview;
+mod preview;
 mod subset;
 
 pub use overview::{
     Block, OPEN_BYTES_PER_CELL, Overview, Size, VolumeField, read_overview, size_of,
 };
+pub use preview::{PREVIEW_CELLS, PreviewGrid, read_preview};
 pub use subset::{Subset, read_blocks};
 
 /// No mesh point yet for a global point id.
@@ -715,6 +717,26 @@ fn append(to: &mut Polygons, more: Polygons) {
     to.nodes.extend_from_slice(&more.nodes);
 }
 
+/// The names of the zones of cells whose highest zone is `zone_max`:
+/// the names the file gives, others `zone_<i>` (a single zone without a
+/// name is `cells`).
+fn zone_list(zone_max: Option<u32>, names: &BTreeMap<u32, String>) -> Vec<String> {
+    let zones = zone_max
+        .map_or(0, |m| m as usize + 1)
+        .max(names.keys().next_back().map_or(0, |&k| k as usize + 1));
+    (0..zones as u32)
+        .map(|i| {
+            names.get(&i).cloned().unwrap_or_else(|| {
+                if zones == 1 {
+                    "cells".into()
+                } else {
+                    format!("zone_{i}")
+                }
+            })
+        })
+        .collect()
+}
+
 /// Point `r` of `xyz` (rows of three).
 fn xyz_at(xyz: &Values, r: usize) -> [f64; 3] {
     [xyz.float(3 * r), xyz.float(3 * r + 1), xyz.float(3 * r + 2)]
@@ -1273,23 +1295,7 @@ impl Builder {
                 role: crate::PatchRole::Unspecified,
             });
         }
-        let zones = self.zone_max.map_or(0, |m| m as usize + 1).max(
-            self.zone_names
-                .keys()
-                .next_back()
-                .map_or(0, |&k| k as usize + 1),
-        );
-        mesh.zones = (0..zones as u32)
-            .map(|i| {
-                self.zone_names.get(&i).cloned().unwrap_or_else(|| {
-                    if zones == 1 {
-                        "cells".into()
-                    } else {
-                        format!("zone_{i}")
-                    }
-                })
-            })
-            .collect();
+        mesh.zones = zone_list(self.zone_max, &self.zone_names);
         let _ = &self.zone_values;
         let polys = std::mem::take(&mut self.polys);
         let least = std::mem::take(&mut self.least);
