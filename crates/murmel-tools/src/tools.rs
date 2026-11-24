@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
-use murmel_engine::settings::{Settings, save_navigation, save_settings};
+use murmel_engine::settings::{Agents, Settings, save_navigation, save_settings};
 use murmel_engine::{
     Clip, ClipMode, ColorBy, CubeSettings, Item, MeshColors, Metric, PickTarget, Placement,
     Projection, Quality, RenderMode, Rgb, ScreenAxis, Session, StandardView, Theme, Visibility,
@@ -874,6 +874,7 @@ fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> {
             theme: s.theme,
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
+            agents: Agents { enabled: s.agents },
             ..Settings::default()
         },
     )
@@ -904,6 +905,21 @@ fn settings_set_colors(mut input: Value, s: &mut Session) -> Run {
         .map_err(|e| Diagnostic::new("TOOL002", e))?;
     let path = save_session_settings(s)?;
     Ok(json!({"colors": s.colors, "files": [path]}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetAgents {
+    enabled: bool,
+}
+
+fn settings_set_agents(input: Value, s: &mut Session) -> Run {
+    let i: SetAgents = parse(input)?;
+    // Applied live first: the window opens or closes its socket on the
+    // next frame (crate murmel-tools, module live).
+    s.agents = i.enabled;
+    let path = save_session_settings(s)?;
+    Ok(json!({"agents": {"enabled": s.agents}, "files": [path]}))
 }
 
 #[derive(Deserialize)]
@@ -1016,6 +1032,7 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
         "colors": s.colors,
         "navigation": s.navigation,
         "view_cube": s.view_cube,
+        "agents": {"enabled": s.agents},
         "presets": PRESETS,
         "config_dir": s.config_dir,
     }))
@@ -1080,6 +1097,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("settings.set_theme", "settings are files, not undone"),
     ("settings.set_colors", "settings are files, not undone"),
     ("settings.set_view_cube", "settings are files, not undone"),
+    ("settings.set_agents", "settings are files, not undone"),
     ("settings.set_bindings", "settings are files, not undone"),
     ("journal.undo", "walks the journal"),
     ("journal.redo", "walks the journal"),
@@ -1653,7 +1671,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-settings-get",
-        summary: "The theme, the mesh colours, the navigation bindings, the view cube placement, the presets and the config folder.",
+        summary: "The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets and the config folder.",
         outputs: &[],
         reads: &[],
         input_schema: no_input,
@@ -1719,6 +1737,17 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: settings_set_view_cube,
+    },
+    Tool {
+        id: "settings.set_agents",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-set-agents",
+        summary: "Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || object(json!({"enabled": {"type": "boolean"}}), &["enabled"]),
+        run: settings_set_agents,
     },
     Tool {
         id: "settings.set_bindings",

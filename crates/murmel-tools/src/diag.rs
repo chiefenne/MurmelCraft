@@ -63,6 +63,28 @@ const OWN: &[Code] = &[
         fix: Some("Check the path; relative paths resolve from the first --write-root."),
     },
     Code {
+        code: "LIVE001",
+        severity: Severity::Error,
+        meaning: "No MurmelCraft window listens for agents (none is open, agents are switched off in its Settings, or the platform has no live bridge yet).",
+        fix: Some(
+            "Open MurmelCraft and switch on Settings > Agents > Let agents drive this window, or start the MCP server without --live for a headless session.",
+        ),
+    },
+    Code {
+        code: "LIVE002",
+        severity: Severity::Error,
+        meaning: "The window did not answer the call: the person stopped the agents, the window closed, or it took longer than two minutes.",
+        fix: Some("Check the window; the next call connects again."),
+    },
+    Code {
+        code: "LIVE003",
+        severity: Severity::Error,
+        meaning: "The window could not listen for agents: another window listens already, or the socket folder is not private.",
+        fix: Some(
+            "Close the other window, or make the socket folder private (chmod 700); MURMEL_LIVE_SOCKET names another socket.",
+        ),
+    },
+    Code {
         code: "SET001",
         severity: Severity::Error,
         meaning: "A settings file could not be written, or no config folder is known.",

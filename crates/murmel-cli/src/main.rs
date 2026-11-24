@@ -6,7 +6,7 @@
 //! murmel keys [--markdown]
 //! murmel call TOOL_ID [--input FILE|-|JSON]
 //! murmel run --script FILE
-//! murmel mcp --read-root DIR --write-root DIR
+//! murmel mcp --read-root DIR --write-root DIR [--live]
 //! murmel diag codes
 //! murmel info
 //! ```
@@ -26,6 +26,7 @@ const USAGE: &str = "Usage: murmel COMMAND
                                         in one session; stops at the first failure
   murmel mcp --root DIR                 the MCP server for agents on stdio, confined
                                         to DIR (or --read-root DIR --write-root DIR);
+                                        --live drives the open window instead;
                                         `murmel mcp --help` for more
   murmel diag codes                     the diagnostic codes
   murmel info                           version and platform

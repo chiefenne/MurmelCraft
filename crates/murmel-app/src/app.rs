@@ -70,6 +70,13 @@ pub struct MurmelApp {
     toggles_w: f32,
     /// The same for the buttons at the right of the title bar.
     title_buttons_w: f32,
+    /// The live bridge: where the window listens for agents (`None`: it
+    /// does not), the listener while agents are allowed, why it could not
+    /// start, and whether it was tried since agents were last allowed.
+    pub(crate) bridge_path: Option<PathBuf>,
+    pub(crate) bridge: Option<murmel_tools::live::Listener>,
+    pub(crate) bridge_problem: Option<Diagnostic>,
+    pub(crate) bridge_tried: bool,
 }
 
 /// A pause of the wheel this long (seconds) ends its undo step.
@@ -86,6 +93,7 @@ impl MurmelApp {
             session.theme = st.theme;
             session.navigation = nav;
             session.view_cube = st.view_cube;
+            session.agents = st.agents.enabled;
             let mut problems = problems;
             if let Err(e) = session.set_colors(st.colors) {
                 problems.push(format!("settings.toml colors: {e}"));
@@ -128,6 +136,10 @@ impl MurmelApp {
             focus: crate::focus::Focus::default(),
             toggles_w: 90.0,
             title_buttons_w: 110.0,
+            bridge_path: murmel_tools::live::socket_path(),
+            bridge: None,
+            bridge_problem: None,
+            bridge_tried: false,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -144,6 +156,12 @@ impl MurmelApp {
 
     /// Call a tool on the session; a failure goes to the status bar.
     pub(crate) fn call(&mut self, id: &str, input: Value) -> Option<Value> {
+        let e = self.call_envelope(id, input);
+        e.ok().then_some(e.result)
+    }
+
+    /// The same, with the whole envelope (for the agents' calls).
+    pub(crate) fn call_envelope(&mut self, id: &str, input: Value) -> murmel_tools::Envelope {
         let before = self.session.camera.clone();
         let e = murmel_tools::call(id, input, &mut self.session);
         // Jumps of the view fly there in 250 ms; drags and wheel steps
@@ -169,11 +187,10 @@ impl MurmelApp {
             if id == "mesh.open" {
                 self.error = None;
             }
-            Some(e.result)
         } else {
-            self.error = e.diagnostics.into_iter().next();
-            None
+            self.error = e.diagnostics.first().cloned();
         }
+        e
     }
 
     /// Group the calls of one mouse gesture (while a button is held) and
@@ -718,6 +735,7 @@ impl MurmelApp {
                         .small()
                         .color(secondary),
                 );
+                self.agents_badge(ui, &mut said);
                 if let Some(g) = &self.gpu {
                     ui.label(RichText::new(g.adapter.clone()).small().color(secondary));
                 }
@@ -866,6 +884,8 @@ impl MurmelApp {
                 ui.heading(self.i18n.tr("settings-view-cube"));
                 self.cube_menu(ui, false);
                 ui.add_space(8.0);
+                self.agents_settings(ui);
+                ui.add_space(8.0);
                 ui.heading(self.i18n.tr("settings-colors"));
                 ui.horizontal(|ui| {
                     let current = self.session.tokens.mesh.solid;
@@ -952,6 +972,7 @@ impl eframe::App for MurmelApp {
         self.focus.begin(&ctx);
         self.apply_theme(&ctx);
         self.group_steps(&ctx);
+        self.serve_agents(&ctx);
         self.keys(&ctx);
         let dropped: Option<PathBuf> = ctx.input(|i| {
             i.raw
