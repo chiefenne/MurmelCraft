@@ -78,6 +78,12 @@ pub fn read_vtu(path: &Path) -> Result<Mesh, MeshError> {
 /// of the file is never held whole (a 10 M cell ascii `.vtu` is about
 /// 12 GB), only the numbers it holds.
 pub fn read_vtu_results(path: &Path) -> Result<(Mesh, Results), MeshError> {
+    read_vtu_file(path, true)
+}
+
+/// As [`read_vtu_results`]; without `hash` no SHA-256 is taken
+/// (`Mesh::file_sha256` stays empty).
+pub(crate) fn read_vtu_file(path: &Path, hash: bool) -> Result<(Mesh, Results), MeshError> {
     if !path.is_file() {
         return Err(err(
             "MESH001",
@@ -90,29 +96,34 @@ pub fn read_vtu_results(path: &Path) -> Result<(Mesh, Results), MeshError> {
     crate::profile::check()?;
     let (parsed, digest) = std::thread::scope(|s| {
         let (to_parse, chunks) = sync_channel(2);
-        let (to_hash, hashed) = sync_channel(2);
-        let hash = s.spawn(move || sha256_of(hashed));
+        let (to_hash, hashed) = if hash {
+            let (tx, rx) = sync_channel(2);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+        let digest = hashed.map(|rx| s.spawn(move || sha256_of(rx)));
         s.spawn(move || read_ahead(file, to_parse, to_hash));
         // The parser drops its end of the chunks when it returns, which
         // stops the reader early after a failure or a cancel.
         let parsed = parse(Chunks::new(chunks), len);
-        (parsed, hash.join().unwrap_or_default())
+        (parsed, digest.map(|h| h.join().unwrap_or_default()))
     });
     let (mut mesh, polys, results) = parsed?;
     crate::profile::check()?;
     let _t = crate::profile::span("read.topology");
     boundary::link(&mut mesh, polys);
-    mesh.file_sha256 = vec![digest];
+    mesh.file_sha256 = digest.into_iter().collect();
     Ok((mesh, results))
 }
 
-/// Read `file` in chunks of [`CHUNK`] bytes, each to the hasher and then
-/// to the parser, until the end of the file or until the parser stops
-/// listening (it failed or was cancelled).
+/// Read `file` in chunks of [`CHUNK`] bytes, each to the hasher (if any)
+/// and then to the parser, until the end of the file or until the parser
+/// stops listening (it failed or was cancelled).
 fn read_ahead(
     mut file: File,
     parse: SyncSender<std::io::Result<Arc<Vec<u8>>>>,
-    hash: SyncSender<Arc<Vec<u8>>>,
+    hash: Option<SyncSender<Arc<Vec<u8>>>>,
 ) {
     loop {
         let mut buf = Vec::with_capacity(CHUNK);
@@ -120,7 +131,8 @@ fn read_ahead(
             Ok(0) => return,
             Ok(_) => {
                 let chunk = Arc::new(buf);
-                if hash.send(chunk.clone()).is_err() || parse.send(Ok(chunk)).is_err() {
+                let hashed = hash.as_ref().is_none_or(|h| h.send(chunk.clone()).is_ok());
+                if !hashed || parse.send(Ok(chunk)).is_err() {
                     return;
                 }
             }

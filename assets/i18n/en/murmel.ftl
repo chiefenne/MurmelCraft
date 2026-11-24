@@ -220,9 +220,11 @@ view-name-base = View
 validity-valid = Valid
 validity-no_evidence = No evidence
 validity-failed = Mismatch
+validity-checking = Checking
 validity-tip-valid = Matches the mesh-evidence.json KoflCraft wrote beside it
 validity-tip-no_evidence = No mesh-evidence.json beside the mesh
 validity-tip-failed = Does not match the mesh-evidence.json beside it:
+validity-tip-checking = Checking the files against the mesh-evidence.json beside them (SHA-256)
 
 props-title = Properties
 props-empty = Open a mesh to see its properties.
