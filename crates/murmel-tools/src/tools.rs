@@ -108,7 +108,8 @@ fn mesh_summary(s: &Session) -> Value {
             "vtu"
         },
         "fields": m.fields.names(),
-        "files": m.files.iter().map(|(n, d)| json!({"name": n, "sha256": d})).collect::<Vec<_>>(),
+        "hash": m.hash.key(),
+        "files": m.files.iter().map(|(n, d)| json!({"name": n, m.hash.key(): d})).collect::<Vec<_>>(),
         "summary": m.mesh.summary(),
         "metadata": m.mesh.metadata,
         "evidence": m.evidence,
@@ -1416,19 +1417,20 @@ fn session_load(input: Value, s: &mut Session) -> Run {
     let mut warnings = Vec::new();
     match (f.mesh_path(&i.path), &f.mesh) {
         (Some(p), Some(saved)) => {
-            // The open mesh is recognised by its digest.
-            s.wait_digest();
-            let open = s
-                .mesh
-                .as_ref()
-                .is_some_and(|m| m.digest == saved.sha256 && same_path(&m.path, &p));
+            // The open mesh is recognised by its digest, taken with the
+            // hash the session saved it with (SHA-256 before 1.15).
+            let saved = saved.digest();
+            let same = |s: &mut Session| match saved {
+                Some((hash, d)) => s.digest_as(hash).eq_ignore_ascii_case(d),
+                None => true,
+            };
+            let open = s.mesh.as_ref().is_some_and(|m| same_path(&m.path, &p)) && same(s);
             if !open {
                 s.open(&p).map_err(|e| {
                     Diagnostic::new(e.code, format!("the session's mesh: {}", e.message))
                 })?;
-                s.wait_digest();
             }
-            if s.mesh.as_ref().is_some_and(|m| m.digest != saved.sha256) {
+            if s.mesh.is_some() && !same(s) {
                 warnings.push(json!(Diagnostic::new(
                     "SESS003",
                     format!(
@@ -2380,7 +2382,7 @@ pub static TOOLS: &[Tool] = &[
         version: 4,
         action: Action::Read,
         label_key: "tool-mesh-open",
-        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). In the window the SHA-256 of the files is taken after the mesh opens: until it is, `validity` is `checking` and `digest` and the files' `sha256` are empty.",
+        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty.",
         outputs: &[],
         reads: &["path"],
         input_schema: || {
@@ -3483,7 +3485,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-session-save",
-        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement.",
+        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, its digest as `blake3`, or `sha256` when its evidence recorded SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement.",
         outputs: &["path"],
         reads: &[],
         input_schema: || {

@@ -60,8 +60,8 @@ pub fn read_vtkhdf(path: &Path) -> Result<(Mesh, Results), MeshError> {
     read_vtkhdf_with(path, true)
 }
 
-/// As [`read_vtkhdf`]; without `hash` no SHA-256 is taken
-/// (`Mesh::file_sha256` stays empty).
+/// As [`read_vtkhdf`]; without `hash` no BLAKE3 hash is taken
+/// (`Mesh::file_blake3` stays empty).
 pub(crate) fn read_vtkhdf_with(path: &Path, hash: bool) -> Result<(Mesh, Results), MeshError> {
     if !path.is_file() {
         return Err(MeshError::new(
@@ -76,13 +76,13 @@ pub(crate) fn read_vtkhdf_with(path: &Path, hash: bool) -> Result<(Mesh, Results
     let _t = crate::profile::span("read.vtkhdf");
     // Hash the file on another thread while it is read.
     let (read, digest) = std::thread::scope(|s| {
-        let digest = hash.then(|| s.spawn(|| crate::sha256_hex(h.bytes())));
+        let digest = hash.then(|| s.spawn(|| crate::FileHash::Blake3.of_bytes(h.bytes())));
         let read = read_h5(&h);
         (read, digest.map(|d| d.join().unwrap_or_default()))
     });
     let (mut mesh, results) = read?;
     mesh.files = vec![path.to_path_buf()];
-    mesh.file_sha256 = digest.into_iter().collect();
+    mesh.file_blake3 = digest.into_iter().collect();
     Ok((mesh, results))
 }
 

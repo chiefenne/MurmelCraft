@@ -24,6 +24,11 @@ pollster = "1.0"
 quick-xml = "0.42"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
+# File checks (the user's choice, 2026-11-24): CC0-1.0 OR Apache-2.0,
+# with rayon-core, crossbeam-deque/-epoch and constant_time_eq (MIT OR
+# Apache-2.0, CC0) for hashing on every core. SHA-256 stays
+# to check older evidence and sessions.
+blake3 = { version = "1.8", features = ["rayon"] }
 sha2 = "0.10"
 toml = "1.2"
 unic-langid = "0.9"

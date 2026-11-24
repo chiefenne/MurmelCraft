@@ -260,7 +260,7 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
     st.time("digest", r, || {
         files
             .iter()
-            .map(|f| murmel_engine::session::sha256(f).len())
+            .map(|f| murmel_engine::session::file_digest(murmel_mesh::FileHash::Blake3, f).len())
             .sum::<usize>()
     });
     let mut session = Session::new(tokens.clone());

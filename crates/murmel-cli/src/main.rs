@@ -49,8 +49,9 @@ Example: a headless screenshot of a KoflCraft mesh
   murmel call view.screenshot --input '{\"mesh\": \"foehncraft.vtu\", \"view\": \"iso\", \"path\": \"shot.png\"}'
 
 Settings are read from MURMEL_CONFIG_DIR or the platform's config folder. The
-SHA-256 of each mesh file hashed is remembered there (checked-files.json), so
-a file opened again unchanged is not hashed again.";
+digest (BLAKE3, or SHA-256 for older evidence) of each mesh file hashed is
+remembered there (checked-files.json), so a file opened again unchanged is
+not hashed again.";
 
 fn session() -> Result<Session, String> {
     let tokens = Tokens::builtin()?;
