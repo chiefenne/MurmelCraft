@@ -3130,6 +3130,7 @@ fn series_tools() {
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert_eq!(e.result["frames"], 6);
     assert_eq!(e.result["motion"]["steps"], 2);
+    assert_eq!(e.result["time"], true, "series movies show the time");
     assert_eq!(s.series.as_ref().unwrap().entry().step, 20);
     let e = call(
         "export.movie",
@@ -3753,5 +3754,60 @@ fn player_defaults() {
             .get(murmel_engine::defaults::Kind::Player, "rate"),
         Some(&json!(2.5))
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Invariant (the maintainer's card of 2026-11-24, "Time label,
+/// optional"): export.image with time draws "t = … s · step …" in a
+/// panel at the bottom right while a series is open, and nothing else
+/// changes; without a series time draws nothing. Times read short.
+/// Breaks if the label went missing from exports, or covered the legend
+/// or the triad.
+#[test]
+fn time_label_in_exports() {
+    assert_eq!(crate::series::time_text(0.25), "0.25");
+    assert_eq!(crate::series::time_text(2.0), "2");
+    assert_eq!(crate::series::time_text(0.000125), "0.000125");
+    assert_eq!(crate::series::time_text(2.5e-7), "2.5000e-7");
+    assert_eq!(crate::series::time_text(0.0), "0");
+    let mut s = session();
+    let dir = box_steps("time-label");
+    assert!(
+        call(
+            "series.open",
+            json!({ "path": dir.join("series.json") }),
+            &mut s
+        )
+        .ok()
+    );
+    let i18n = crate::export::i18n().unwrap();
+    assert_eq!(
+        crate::series::caption(&s, &i18n).as_deref(),
+        Some("t = 0.1 s · step 10")
+    );
+    let shot = |s: &mut Session, time: bool, name: &str| {
+        let path = dir.join(name);
+        let e = call(
+            "export.image",
+            json!({"path": path, "width": 320, "height": 200, "scale": 1.0, "time": time, "legend": false, "axes": false}),
+            s,
+        );
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        assert_eq!(e.result["time"], time);
+        let (w, _, rgba) = murmel_render::read_png(&path).unwrap();
+        (w, rgba)
+    };
+    let plain = shot(&mut s, false, "plain.png");
+    let timed = shot(&mut s, true, "timed.png");
+    let px = |(w, rgba): &(u32, Vec<u8>), x: u32, y: u32| {
+        let k = 4 * (y * w + x) as usize;
+        rgba[k..k + 4].to_vec()
+    };
+    let differs = |x0: u32, x1: u32, y0: u32, y1: u32| {
+        (x0..x1).any(|x| (y0..y1).any(|y| px(&plain, x, y) != px(&timed, x, y)))
+    };
+    assert!(differs(200, 304, 150, 184), "the label, bottom right");
+    assert!(!differs(0, 160, 0, 200), "the left half stays");
+    assert!(!differs(0, 320, 0, 120), "the top stays");
     let _ = std::fs::remove_dir_all(dir);
 }

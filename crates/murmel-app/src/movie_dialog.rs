@@ -48,6 +48,8 @@ pub struct MovieDialog {
     pub custom: [u32; 2],
     pub legend: bool,
     pub axes: bool,
+    /// The time and step of the open series, bottom right.
+    pub time: bool,
     pub transparent: bool,
     /// What the last movie did, shown in the window.
     pub last: Option<String>,
@@ -72,6 +74,7 @@ impl Default for MovieDialog {
             custom: [1920, 1080],
             legend: true,
             axes: true,
+            time: true,
             transparent: false,
             last: None,
             path: None,
@@ -88,6 +91,7 @@ impl MovieDialog {
             "fps": self.fps,
             "legend": self.legend,
             "axes": self.axes,
+            "time": self.time,
         });
         match self.motion {
             Motion::Orbit => {
@@ -448,6 +452,9 @@ impl MurmelApp {
                 ui.add_space(4.0);
                 ui.checkbox(&mut md.legend, self.i18n.tr("export-legend"));
                 ui.checkbox(&mut md.axes, self.i18n.tr("export-axes"));
+                if self.session.series.is_some() {
+                    ui.checkbox(&mut md.time, self.i18n.tr("export-time"));
+                }
                 ui.add_enabled(
                     md.format != Format::Mp4,
                     egui::Checkbox::new(&mut md.transparent, self.i18n.tr("export-transparent")),

@@ -615,6 +615,11 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "system"
       ]
     },
+    "time": {
+      "default": false,
+      "description": "Draw the time and step of the open time series (bottom right); nothing without a series",
+      "type": "boolean"
+    },
     "transparent": {
       "default": false,
       "description": "Leave the background out (alpha 0)",
@@ -732,6 +737,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "light",
         "system"
       ]
+    },
+    "time": {
+      "description": "Draw the time and step of the series' step shown, bottom right (default: on for motion series, else off; nothing without a series)",
+      "type": "boolean"
     },
     "to": {
       "description": "clip: the last offset (default: the end where the plane cuts everything); series: the last step (default: the series' last; before from plays backwards)",

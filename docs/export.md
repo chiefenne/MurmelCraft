@@ -26,6 +26,7 @@ series opened with `series.open`, the camera still.
 | `width`, `height` | the viewport times the scale | Pixels, up to 8192 a side. One side alone keeps the viewport's aspect. The camera frames the view by its height, so a wider picture shows more at the sides. |
 | `legend` | true | The colour legend, top left: the swatches of patches, roles, cell types or zones, or the colour bar of quality (later field values) with nice ticks (Heckbert, Graphics Gems 1990). |
 | `axes` | true | The axis triad, bottom left, X red, Y green, Z blue. |
+| `time` | false (`export.movie`: true for motion `series`) | The time and step of the open time series' step shown, bottom right in a panel like the legend's: `t = 0.25 s · step 50`, or `Step 50` when the run gives no time. Nothing without a series. The window's export windows show the box while a series is open, on by default. |
 | `transparent` | false | No background: alpha 0 where nothing is drawn; the silhouette's soft edge keeps the faces' colour. |
 | `line_width` | the scale (at least 1) | Edge width in pixels, 1 to 32. |
 | `dpi` | none | Resolution stored in the PNG (pHYs), so a 3000-pixel picture at 300 dpi prints 10 inches wide. |
@@ -49,8 +50,9 @@ murmel run --script shot.json
 ## `export.movie`
 
 Every frame is rendered as `export.image` renders a picture, with the same
-`width`, `height`, `scale`, `legend`, `axes`, `transparent`, `line_width`
-and `theme`. The camera, the clip planes and the theme go back as they
+`width`, `height`, `scale`, `legend`, `axes`, `time`, `transparent`,
+`line_width` and `theme`; `time` is on by default for motion `series`, so
+each frame names its step. The camera, the clip planes and the theme go back as they
 were; the movie is no undo step.
 
 | Field | Default | Meaning |

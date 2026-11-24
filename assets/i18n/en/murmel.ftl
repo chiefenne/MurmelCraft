@@ -826,6 +826,9 @@ export-dpi-screen = Screen (none stored)
 export-dpi-n = { $n } dpi
 export-legend = Colour legend
 export-axes = Axis triad
+export-time = Time and step
+export-caption-time = t = { $time } s · step { $step }
+export-caption-step = Step { $step }
 export-transparent = Transparent background
 export-save = Export…
 export-done = Saved { $file }, { $w } × { $h } pixels
