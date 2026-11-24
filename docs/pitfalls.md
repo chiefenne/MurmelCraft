@@ -142,6 +142,26 @@ problem took more than a few minutes to understand.
   one. Build a `Mesh` with `faces: Polygons::new()` and
   `boundary: Polygons::new()`.
 
+## Large meshes
+
+- **Measure first, with `murmel bench`** ([performance.md](performance.md)).
+  The binary `.vtu` was slower than the ascii one, and hashing the files a
+  second time cost as much as reading them; neither showed without the
+  numbers.
+- **A test of a parallel path runs it on several threads.** `par::ranges`
+  hands small inputs to one thread, so the test fixtures never split;
+  wrap the check in `par::with_threads(4, …)`, which splits any input.
+- **Pieces of a text are cut at a separator.** A piece cut inside a number
+  reads one number as two; `numbers::pieces` moves each cut forward to the
+  next separator, and base64 is cut at whole four-character groups.
+- **The window reads large meshes on their own thread** (`opening.rs`) and
+  opens the result through `mesh.open` from `Session::preloaded`. The
+  preloaded mesh is used only for the same path with its files unchanged,
+  and its surface only for the same display and tokens; anything else is
+  read or built again. Meshes under 32 MiB open at once, which keeps the
+  window tests synchronous; a test of the background path sets
+  `background_bytes` to 0 and holds the reader with `opening_gate`.
+
 ## Serde
 
 - **`flatten` and `deny_unknown_fields` do not combine.** A flattened

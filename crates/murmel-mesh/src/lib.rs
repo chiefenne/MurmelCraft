@@ -15,7 +15,11 @@ mod boundary;
 pub mod evidence;
 pub mod field;
 pub mod hdf5;
+mod numbers;
+pub mod par;
 pub mod polymesh;
+pub mod profile;
+pub mod synth;
 pub mod vtkhdf;
 mod vtu;
 
@@ -144,6 +148,11 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "MESH018",
         "The file is not a VTKHDF file, or its VTKHDF layout is broken (a block, dataset or count is missing or wrong).",
         "Open a .vtkhdf file written by FoehnCraft or VTK (VTKHDF 2.x, UnstructuredGrid or PartitionedDataSetCollection).",
+    ),
+    (
+        "MESH019",
+        "Opening the mesh was cancelled.",
+        "Open it again when you want it.",
     ),
     (
         "MESH015",
@@ -334,6 +343,21 @@ pub struct Mesh {
     /// The files the mesh was read from: the `.vtu`, or the files of an
     /// OpenFOAM `polyMesh` (empty when read from memory).
     pub files: Vec<PathBuf>,
+    /// The SHA-256 (hex) of each of `files`, taken by the reader from the
+    /// bytes it read (on another thread while it parses), so the file is
+    /// not read twice; empty when the reader did not take them.
+    pub file_sha256: Vec<String>,
+}
+
+/// SHA-256 of `bytes`, lowercase hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(64);
+    for b in Sha256::digest(bytes) {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 /// Counts and extent of a mesh, as `mesh.open` reports them.

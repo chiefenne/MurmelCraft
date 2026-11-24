@@ -39,7 +39,7 @@ pub use legend::Legend;
 pub use measure::{Anchor, MeasureKind, Measurement, Probe, SnapKind};
 pub use navigation::Navigation;
 pub use quality::{Metric, Quality};
-pub use session::{OpenMesh, Session, Validity};
+pub use session::{Loaded, OpenMesh, Session, Validity, load};
 pub use session_file::SessionFile;
 pub use surface::Surface;
 pub use theme::{MeshColors, Rgb, Theme, Tokens};

@@ -9,6 +9,8 @@
 //! murmel mcp --read-root DIR --write-root DIR [--live]
 //! murmel diag codes
 //! murmel info
+//! murmel bench make --cells N --out DIR [--formats vtu,polymesh-binary,…]
+//! murmel bench run MESH [--repeat N] [--no-render] [--size WxH] [--json]
 //! ```
 
 use std::io::Read;
@@ -30,6 +32,13 @@ const USAGE: &str = "Usage: murmel COMMAND
                                         `murmel mcp --help` for more
   murmel diag codes                     the diagnostic codes
   murmel info                           version and platform
+  murmel bench make --cells N --out DIR [--formats LIST]
+                                        write a synthetic polyhedral mesh of N cells
+                                        (formats vtu, vtu-binary, polymesh,
+                                        polymesh-binary; default all)
+  murmel bench run MESH [--repeat N] [--no-render] [--size WxH] [--json]
+                                        time reading, the surface, picking and
+                                        drawing of a mesh (docs/performance.md)
 
 Example: a headless screenshot of a KoflCraft mesh
   murmel call view.screenshot --input '{\"mesh\": \"foehncraft.vtu\", \"view\": \"iso\", \"path\": \"shot.png\"}'
@@ -119,6 +128,7 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         }
         ["info"] => murmel_tools::call("system.info", json!({}), &mut s),
         ["diag", "codes"] => murmel_tools::call("diag.codes", json!({}), &mut s),
+        ["bench", rest @ ..] => return bench(rest),
         ["call", id] => murmel_tools::call(id, json!({}), &mut s),
         ["call", id, "--input", input] => murmel_tools::call(id, read_input(Some(input))?, &mut s),
         ["run", "--script", file] => {
@@ -146,6 +156,57 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
     };
     print(&envelope.to_json());
     Ok(ExitCode::from(envelope.exit_code.clamp(0, 255) as u8))
+}
+
+/// `murmel bench make …` and `murmel bench run …`.
+fn bench(args: &[&str]) -> Result<ExitCode, String> {
+    let flag = |name: &str| args.iter().position(|a| *a == name);
+    let value = |name: &str| flag(name).and_then(|i| args.get(i + 1)).copied();
+    match args.first() {
+        Some(&"make") => {
+            let cells: usize = value("--cells")
+                .ok_or("bench make needs --cells N")?
+                .replace('_', "")
+                .parse()
+                .map_err(|_| "--cells takes a whole number")?;
+            let out = value("--out").ok_or("bench make needs --out DIR")?;
+            let formats: Vec<String> = match value("--formats") {
+                Some(f) => f.split(',').map(|s| s.trim().to_string()).collect(),
+                None => murmel_tools::bench::FORMATS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            };
+            let report = murmel_tools::bench::make(cells, std::path::Path::new(out), &formats)?;
+            print(&report);
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(&"run") => {
+            let mesh = args.get(1).ok_or("bench run needs a mesh path")?;
+            let mut opts = murmel_tools::bench::Options::default();
+            if let Some(r) = value("--repeat") {
+                opts.repeat = r.parse().map_err(|_| "--repeat takes a whole number")?;
+            }
+            if flag("--no-render").is_some() {
+                opts.render = false;
+            }
+            if let Some(s) = value("--size") {
+                let (w, h) = s.split_once('x').ok_or("--size takes WxH")?;
+                opts.size = [
+                    w.parse().map_err(|_| "--size takes WxH")?,
+                    h.parse().map_err(|_| "--size takes WxH")?,
+                ];
+            }
+            let report = murmel_tools::bench::run(std::path::Path::new(mesh), &opts)?;
+            if flag("--json").is_some() {
+                print(&report);
+            } else {
+                print!("{}", murmel_tools::bench::table(&report));
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        _ => Ok(usage_error("bench takes make or run")),
+    }
 }
 
 fn main() -> ExitCode {

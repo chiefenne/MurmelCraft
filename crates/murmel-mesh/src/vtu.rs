@@ -14,12 +14,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use base64::Engine as _;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::field::{Field, Location, Results, group_vectors};
-use crate::{CellKind, Mesh, MeshError, Patch, PatchRole, Polygons, boundary};
+use crate::{CellKind, Mesh, MeshError, Patch, PatchRole, Polygons, boundary, numbers};
 
 pub(crate) const POLYHEDRON: i64 = 42;
 pub(crate) const TETRA: i64 = 10;
@@ -71,21 +70,38 @@ pub fn read_vtu_results(path: &Path) -> Result<(Mesh, Results), MeshError> {
             format!("{} is not a readable file", path.display()),
         ));
     }
+    let io = crate::profile::span("read.file");
     let bytes = std::fs::read(path)
         .map_err(|e| err("MESH001", format!("cannot read {}: {e}", path.display())))?;
-    match std::str::from_utf8(&bytes) {
-        Ok(s) => read_vtu_str_results(s),
-        Err(_) => {
-            if contains(&bytes, b"<AppendedData") {
-                Err(err(
+    drop(io);
+    crate::profile::check()?;
+    // The SHA-256 of the file (the validity badge and session files need
+    // it) is taken on another thread while the text is parsed.
+    let (parsed, digest) = std::thread::scope(|s| {
+        let hash = s.spawn(|| {
+            let _t = crate::profile::span("read.sha256");
+            crate::sha256_hex(&bytes)
+        });
+        let parsed = match std::str::from_utf8(&bytes) {
+            Ok(text) => parse(text),
+            Err(_) => Err(if contains(&bytes, b"<AppendedData") {
+                err(
                     "MESH007",
                     "raw appended data is not supported; write ascii or binary (base64) arrays",
-                ))
+                )
             } else {
-                Err(err("MESH003", "the file is not UTF-8 XML"))
-            }
-        }
-    }
+                err("MESH003", "the file is not UTF-8 XML")
+            }),
+        };
+        (parsed, hash.join().unwrap_or_default())
+    });
+    drop(bytes);
+    let (mut mesh, results) = parsed?;
+    crate::profile::check()?;
+    let _t = crate::profile::span("read.topology");
+    boundary::link(&mut mesh);
+    mesh.file_sha256 = vec![digest];
+    Ok((mesh, results))
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
@@ -143,6 +159,15 @@ pub fn read_vtu_str(text: &str) -> Result<Mesh, MeshError> {
 
 /// Read a `.vtu` from its text, with its data arrays as fields.
 pub fn read_vtu_str_results(text: &str) -> Result<(Mesh, Results), MeshError> {
+    let (mut mesh, results) = parse(text)?;
+    boundary::link(&mut mesh);
+    Ok((mesh, results))
+}
+
+/// The mesh and fields of a `.vtu`'s text, before the face topology
+/// (`boundary::link`), so a caller can free the text first.
+fn parse(text: &str) -> Result<(Mesh, Results), MeshError> {
+    let xml = crate::profile::span("read.xml");
     let len = text.len();
     let mut reader = Reader::from_str(text);
     let mut section = Section::Other;
@@ -221,6 +246,7 @@ pub fn read_vtu_str_results(text: &str) -> Result<(Mesh, Results), MeshError> {
         return Err(err("MESH002", "no VTKFile element"));
     }
     let header = header.ok_or_else(|| err("MESH003", "no Piece element"))?;
+    drop(xml);
     let (mesh, slots) = assemble(&header, &arrays)?;
     let fields = data_fields(&header, &arrays, &slots, &mesh)?;
     Ok((
@@ -383,15 +409,16 @@ fn element_size(ty: &str) -> Option<usize> {
     })
 }
 
-/// The bytes of a binary (base64) array without its length header.
-fn binary_bytes(a: &RawArray<'_>, header64: bool) -> Result<Vec<u8>, MeshError> {
-    let cleaned: String = a.content.split_ascii_whitespace().collect();
+/// The decoded bytes of a binary (base64) array and the range of its
+/// data after the length header.
+fn binary_bytes(
+    a: &RawArray<'_>,
+    header64: bool,
+) -> Result<(Vec<u8>, std::ops::Range<usize>), MeshError> {
     let hl = if header64 { 8 } else { 4 };
-    // The header is encoded on its own or together with the data; try
-    // both layouts (VTK writes them together for uncompressed data).
-    let engine = base64::engine::general_purpose::STANDARD;
-    let all = engine
-        .decode(cleaned.as_bytes())
+    // VTK encodes the header together with the data for uncompressed
+    // arrays: one base64 run.
+    let all = numbers::base64(a.content)
         .map_err(|e| err("MESH005", format!("{}: bad base64: {e}", a.name)))?;
     if all.len() < hl {
         return Err(err("MESH005", format!("{}: binary data too short", a.name)));
@@ -409,45 +436,57 @@ fn binary_bytes(a: &RawArray<'_>, header64: bool) -> Result<Vec<u8>, MeshError> 
             ),
         ));
     }
-    Ok(all[hl..hl + nbytes].to_vec())
+    Ok((all, hl..hl + nbytes))
+}
+
+/// The binary values of `a` converted by the function its type selects.
+fn binary_values<T: Send>(
+    a: &RawArray<'_>,
+    header64: bool,
+    convert: impl Fn(&str) -> Option<fn(&[u8]) -> T>,
+) -> Result<Vec<T>, MeshError> {
+    let (bytes, range) = binary_bytes(a, header64)?;
+    let size =
+        element_size(&a.ty).ok_or_else(|| err("MESH005", format!("{}: type {}", a.name, a.ty)))?;
+    let data = &bytes[range];
+    if data.len() % size != 0 {
+        return Err(err("MESH005", format!("{}: ragged binary data", a.name)));
+    }
+    let f = convert(&a.ty).ok_or_else(|| err("MESH005", format!("{}: type {}", a.name, a.ty)))?;
+    Ok(numbers::le(data, size, f))
 }
 
 fn floats(a: &RawArray<'_>, header64: bool) -> Result<Vec<f64>, MeshError> {
     if a.format == "binary" {
-        let b = binary_bytes(a, header64)?;
-        let size = element_size(&a.ty)
-            .ok_or_else(|| err("MESH005", format!("{}: type {}", a.name, a.ty)))?;
-        if b.len() % size != 0 {
-            return Err(err("MESH005", format!("{}: ragged binary data", a.name)));
-        }
-        return Ok(b.chunks_exact(size).map(|c| decode_f64(&a.ty, c)).collect());
+        return binary_values(a, header64, f64_of);
     }
-    a.content
-        .split_ascii_whitespace()
-        .map(|t| {
-            t.parse::<f64>()
-                .map_err(|_| err("MESH005", format!("{}: \"{t}\" is not a number", a.name)))
-        })
-        .collect()
+    numbers::parse::<f64>(a.content.as_bytes(), &numbers::SPACE)
+        .map_err(|t| err("MESH005", format!("{}: \"{t}\" is not a number", a.name)))
 }
 
 fn ints(a: &RawArray<'_>, header64: bool) -> Result<Vec<i64>, MeshError> {
     if a.format == "binary" {
-        let b = binary_bytes(a, header64)?;
-        let size = element_size(&a.ty)
-            .ok_or_else(|| err("MESH005", format!("{}: type {}", a.name, a.ty)))?;
-        if b.len() % size != 0 {
-            return Err(err("MESH005", format!("{}: ragged binary data", a.name)));
-        }
-        return Ok(b.chunks_exact(size).map(|c| decode_i64(&a.ty, c)).collect());
+        return binary_values(a, header64, i64_of);
     }
-    a.content
-        .split_ascii_whitespace()
-        .map(|t| {
-            t.parse::<i64>()
-                .map_err(|_| err("MESH005", format!("{}: \"{t}\" is not an integer", a.name)))
-        })
-        .collect()
+    numbers::parse::<i64>(a.content.as_bytes(), &numbers::SPACE)
+        .map_err(|t| err("MESH005", format!("{}: \"{t}\" is not an integer", a.name)))
+}
+
+/// An array of point ids or counts (`connectivity`, `faces`): whole
+/// numbers from 0 to `u32::MAX`, kept in 4 bytes each instead of 8. A
+/// negative or larger value is out of range (`MESH006`), and in binary
+/// becomes `u32::MAX`, which no index check passes.
+fn ids(a: &RawArray<'_>, header64: bool) -> Result<Vec<u32>, MeshError> {
+    if a.format == "binary" {
+        return binary_values(a, header64, u32_of);
+    }
+    numbers::parse::<u32>(a.content.as_bytes(), &numbers::SPACE).map_err(|t| {
+        if <i64 as numbers::Number>::parse(t.as_bytes()).is_some() {
+            err("MESH006", format!("{}: {t} is out of range", a.name))
+        } else {
+            err("MESH005", format!("{}: \"{t}\" is not an integer", a.name))
+        }
+    })
 }
 
 fn le<const N: usize>(c: &[u8]) -> [u8; N] {
@@ -456,28 +495,57 @@ fn le<const N: usize>(c: &[u8]) -> [u8; N] {
     b
 }
 
-fn decode_f64(ty: &str, c: &[u8]) -> f64 {
-    match ty {
-        "Float32" => f32::from_le_bytes(le(c)) as f64,
-        "Float64" => f64::from_le_bytes(le(c)),
-        _ => decode_i64(ty, c) as f64,
-    }
+/// The converter of a binary type to `f64`.
+fn f64_of(ty: &str) -> Option<fn(&[u8]) -> f64> {
+    let f: fn(&[u8]) -> f64 = match ty {
+        "Float32" => |c| f64::from(f32::from_le_bytes(le(c))),
+        "Float64" => |c| f64::from_le_bytes(le(c)),
+        "Int8" => |c| f64::from(c[0] as i8),
+        "UInt8" | "String" | "Char" => |c| f64::from(c[0]),
+        "Int16" => |c| f64::from(i16::from_le_bytes(le(c))),
+        "UInt16" => |c| f64::from(u16::from_le_bytes(le(c))),
+        "Int32" => |c| f64::from(i32::from_le_bytes(le(c))),
+        "UInt32" => |c| f64::from(u32::from_le_bytes(le(c))),
+        "Int64" => |c| i64::from_le_bytes(le(c)) as f64,
+        "UInt64" => |c| u64::from_le_bytes(le(c)) as f64,
+        _ => return None,
+    };
+    Some(f)
 }
 
-fn decode_i64(ty: &str, c: &[u8]) -> i64 {
-    match ty {
-        "Int8" => i8::from_le_bytes(le(c)) as i64,
-        "UInt8" | "String" | "Char" => c[0] as i64,
-        "Int16" => i16::from_le_bytes(le(c)) as i64,
-        "UInt16" => u16::from_le_bytes(le(c)) as i64,
-        "Int32" => i32::from_le_bytes(le(c)) as i64,
-        "UInt32" => u32::from_le_bytes(le(c)) as i64,
-        "Int64" => i64::from_le_bytes(le(c)),
-        "UInt64" => u64::from_le_bytes(le(c)) as i64,
-        "Float32" => f32::from_le_bytes(le(c)) as i64,
-        "Float64" => f64::from_le_bytes(le(c)) as i64,
-        _ => 0,
-    }
+/// The converter of a binary type to `i64`.
+fn i64_of(ty: &str) -> Option<fn(&[u8]) -> i64> {
+    let f: fn(&[u8]) -> i64 = match ty {
+        "Int8" => |c| i64::from(c[0] as i8),
+        "UInt8" | "String" | "Char" => |c| i64::from(c[0]),
+        "Int16" => |c| i64::from(i16::from_le_bytes(le(c))),
+        "UInt16" => |c| i64::from(u16::from_le_bytes(le(c))),
+        "Int32" => |c| i64::from(i32::from_le_bytes(le(c))),
+        "UInt32" => |c| i64::from(u32::from_le_bytes(le(c))),
+        "Int64" => |c| i64::from_le_bytes(le(c)),
+        "UInt64" => |c| u64::from_le_bytes(le(c)) as i64,
+        "Float32" => |c| f32::from_le_bytes(le(c)) as i64,
+        "Float64" => |c| f64::from_le_bytes(le(c)) as i64,
+        _ => return None,
+    };
+    Some(f)
+}
+
+/// The converter of a binary type to a point id or count (`u32::MAX`
+/// when the value does not fit).
+fn u32_of(ty: &str) -> Option<fn(&[u8]) -> u32> {
+    let f: fn(&[u8]) -> u32 = match ty {
+        "Int8" => |c| u32::try_from(c[0] as i8).unwrap_or(u32::MAX),
+        "UInt8" => |c| u32::from(c[0]),
+        "Int16" => |c| u32::try_from(i16::from_le_bytes(le(c))).unwrap_or(u32::MAX),
+        "UInt16" => |c| u32::from(u16::from_le_bytes(le(c))),
+        "Int32" => |c| u32::try_from(i32::from_le_bytes(le(c))).unwrap_or(u32::MAX),
+        "UInt32" => |c| u32::from_le_bytes(le(c)),
+        "Int64" => |c| u32::try_from(i64::from_le_bytes(le(c))).unwrap_or(u32::MAX),
+        "UInt64" => |c| u32::try_from(u64::from_le_bytes(le(c))).unwrap_or(u32::MAX),
+        _ => return None,
+    };
+    Some(f)
 }
 
 /// A string array: bytes, each string ended by a zero byte.
@@ -511,14 +579,19 @@ fn id_table(entries: &[String]) -> BTreeMap<usize, String> {
     t
 }
 
-fn index(v: i64, bound: usize, what: &str) -> Result<u32, MeshError> {
-    if v < 0 || v as u64 >= bound as u64 || v > u32::MAX as i64 {
-        return Err(err(
+/// `MESH006` when a point id of `ids` is not below `points`.
+fn points_in_range(ids: &[u32], points: usize) -> Result<(), MeshError> {
+    match ids.iter().find(|&&v| v as usize >= points) {
+        Some(v) => Err(err(
             "MESH006",
-            format!("{what} {v} is out of range 0..{bound}"),
-        ));
+            format!("point {v} is out of range 0..{points}"),
+        )),
+        None => Ok(()),
     }
-    Ok(v as u32)
+}
+
+fn face_len(p: &Polygons, f: usize) -> usize {
+    (p.start[f + 1] - p.start[f]) as usize
 }
 
 fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), MeshError> {
@@ -533,6 +606,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
     if pts.components != 3 {
         return Err(err("MESH005", "Points must have 3 components"));
     }
+    let numbers = crate::profile::span("read.numbers");
     let xyz = floats(pts, hb)?;
     if xyz.len() != 3 * h.points {
         return Err(err(
@@ -546,7 +620,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
         find(arrays, Section::Cells, name)
             .ok_or_else(|| err("MESH003", format!("Cells has no {name} array")))
     };
-    let conn = ints(need("connectivity")?, hb)?;
+    let conn = ids(need("connectivity")?, hb)?;
     let offsets = ints(need("offsets")?, hb)?;
     let types = ints(need("types")?, hb)?;
     if offsets.len() != h.cells || types.len() != h.cells {
@@ -561,7 +635,7 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
         ));
     }
     let faces = match find(arrays, Section::Cells, "faces") {
-        Some(a) => ints(a, hb)?,
+        Some(a) => ids(a, hb)?,
         None => Vec::new(),
     };
     let face_offsets = match find(arrays, Section::Cells, "faceoffsets") {
@@ -582,6 +656,9 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
         None => None,
     };
 
+    drop(numbers);
+    crate::profile::check()?;
+    let _cells = crate::profile::span("read.cells");
     let np = mesh.points.len();
     mesh.faces = Polygons::new();
     mesh.cell_faces = vec![0];
@@ -625,25 +702,20 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
                 .ok_or_else(|| err("MESH009", format!("cell {c}: faceoffset {fo}")))?;
             let stream = &faces[face_pos..fend];
             face_pos = fend;
-            let nf = usize::try_from(stream[0])
-                .map_err(|_| err("MESH009", format!("cell {c}: face count")))?;
+            let nf = stream[0] as usize;
             let mut k = 1usize;
-            let mut sizes = Vec::with_capacity(nf.min(stream.len()));
+            let first = mesh.faces.len();
             for _ in 0..nf {
                 let n = stream
                     .get(k)
-                    .and_then(|&n| usize::try_from(n).ok())
+                    .map(|&n| n as usize)
                     .filter(|&n| n >= 3)
                     .ok_or_else(|| err("MESH009", format!("cell {c}: bad face size")))?;
-                let ids = stream
+                let face = stream
                     .get(k + 1..k + 1 + n)
                     .ok_or_else(|| err("MESH009", format!("cell {c}: face runs past its cell")))?;
-                let face: Vec<u32> = ids
-                    .iter()
-                    .map(|&v| index(v, np, "point"))
-                    .collect::<Result<_, _>>()?;
-                mesh.faces.push(face);
-                sizes.push(n);
+                points_in_range(face, np)?;
+                mesh.faces.push(face.iter().copied());
                 k += 1 + n;
             }
             if k != stream.len() {
@@ -652,7 +724,9 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
                     format!("cell {c}: {} values left after its faces", stream.len() - k),
                 ));
             }
-            push_cell(&mut mesh, reg, CellKind::classify(sizes), &mut zone_max);
+            let sizes = (first..mesh.faces.len()).map(|f| face_len(&mesh.faces, f));
+            let kind = CellKind::classify(sizes);
+            push_cell(&mut mesh, reg, kind, &mut zone_max);
             slots.push(Slot::Volume);
         } else if let Some(table) = table {
             let need = table
@@ -666,16 +740,12 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
                     format!("cell {c}: type {t} with {} points", nodes.len()),
                 ));
             }
-            let ids: Vec<u32> = nodes
-                .iter()
-                .map(|&v| index(v, np, "point"))
-                .collect::<Result<_, _>>()?;
-            let mut sizes = Vec::with_capacity(table.len());
+            points_in_range(nodes, np)?;
             for f in table {
-                mesh.faces.push(f.iter().map(|&i| ids[i]));
-                sizes.push(f.len());
+                mesh.faces.push(f.iter().map(|&i| nodes[i]));
             }
-            push_cell(&mut mesh, reg, CellKind::classify(sizes), &mut zone_max);
+            let kind = CellKind::classify(table.iter().map(|f| f.len()));
+            push_cell(&mut mesh, reg, kind, &mut zone_max);
             slots.push(Slot::Volume);
         } else if matches!(t, TRIANGLE | POLYGON | QUAD) {
             if nodes.len() < 3 {
@@ -684,11 +754,8 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
                     format!("cell {c}: polygon with {} points", nodes.len()),
                 ));
             }
-            let ids: Vec<u32> = nodes
-                .iter()
-                .map(|&v| index(v, np, "point"))
-                .collect::<Result<_, _>>()?;
-            mesh.boundary.push(ids);
+            points_in_range(nodes, np)?;
+            mesh.boundary.push(nodes.iter().copied());
             mesh.boundary_patch.push(reg);
             slots.push(Slot::Boundary);
             patch_max = Some(patch_max.map_or(reg, |m: u32| m.max(reg)));
@@ -749,7 +816,6 @@ fn assemble(h: &Header, arrays: &[RawArray<'_>]) -> Result<(Mesh, Vec<Slot>), Me
         }
     }
 
-    boundary::link(&mut mesh);
     if mesh.cell_count() == 0 && mesh.boundary.is_empty() {
         return Err(err("MESH010", "no volume cells and no boundary faces"));
     }
@@ -895,7 +961,7 @@ mod tests {
         let enc = |bytes: Vec<u8>| {
             let mut v = (bytes.len() as u32).to_le_bytes().to_vec();
             v.extend(bytes);
-            base64::engine::general_purpose::STANDARD.encode(v)
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, v)
         };
         let pts: Vec<u8> = [0.0f32, 0., 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.]
             .iter()

@@ -2449,6 +2449,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `MESH016` | error | The HDF5 structure of the file is broken: a signature, address or size does not fit the file. | Write the file again; it may be truncated. |
 | `MESH017` | error | The file uses an HDF5 feature the reader does not support (a chunk index, filter or storage kind). | Write the file with contiguous or chunked datasets and the deflate or shuffle filters, as FoehnCraft and VTK do. |
 | `MESH018` | error | The file is not a VTKHDF file, or its VTKHDF layout is broken (a block, dataset or count is missing or wrong). | Open a .vtkhdf file written by FoehnCraft or VTK (VTKHDF 2.x, UnstructuredGrid or PartitionedDataSetCollection). |
+| `MESH019` | error | Opening the mesh was cancelled. | Open it again when you want it. |
 | `MESH015` | error | The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces). | Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch. |
 | `RENDER001` | error | No GPU adapter was found (no driver, or no software renderer such as Mesa lavapipe). | Install a Vulkan, Metal or DirectX 12 driver; on a headless Linux machine install mesa-vulkan-drivers. |
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |

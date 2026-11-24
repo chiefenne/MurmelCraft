@@ -366,6 +366,11 @@ impl H5 {
         self.data.len()
     }
 
+    /// The bytes of the file.
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }

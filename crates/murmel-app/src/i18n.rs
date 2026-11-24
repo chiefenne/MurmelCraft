@@ -23,6 +23,7 @@ mod tests {
             include_str!("agents.rs"),
             include_str!("export_dialog.rs"),
             include_str!("movie_dialog.rs"),
+            include_str!("opening.rs"),
             include_str!("field.rs"),
             include_str!("extracts.rs"),
             include_str!("clip_handle.rs"),
