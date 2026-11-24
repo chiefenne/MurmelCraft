@@ -15,6 +15,7 @@ pub mod extract;
 mod fasthash;
 pub mod field;
 pub mod glyph;
+mod gradient;
 pub mod i18n;
 pub mod inspect;
 pub mod journal;

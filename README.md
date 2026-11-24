@@ -32,7 +32,8 @@ every change.
 - Opens FoehnCraft results (`fields.vtkhdf`, read by our own HDF5 reader)
   and the cell or point data of a `.vtu`, and colours the mesh by a field
   (`display.color_by` with `field`, `field.style`): flat (one colour per
-  cell), smooth (node values by inverse distance) or banded, contour lines
+  cell), smooth (node values rebuilt from the cells' gradients, so a
+  linear field stays exactly linear) or banded, contour lines
   on or off with their own count, nine colour maps (Rainbow
   Desaturated by default, the same as in FoehnCraft and KoflCraft,
   Inferno second, cool-warm for ranges symmetric about zero), each reversible, and a
@@ -43,7 +44,9 @@ every change.
   typed origin and normal), single or as a series with count and
   spacing, in the mesh's field style; iso-surfaces at one value each
   (typed, or clicked on the colour bar), solid or coloured by the field
-  shown, by marching tetrahedra. The mesh shows as a faint outline
+  shown, by marching tetrahedra, smooth: values between cells come from
+  least-squares cell gradients and the shading follows the field's
+  slope. The mesh shows as a faint outline
   meanwhile, its faces one click away.
 - Vector arrows (`arrows.set`, Alt + V): shaded 3D arrows of the velocity
   (or another vector field) on every slice, on an even grid of 40 across

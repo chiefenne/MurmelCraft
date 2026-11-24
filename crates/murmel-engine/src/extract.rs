@@ -19,16 +19,19 @@
 //!   tetrahedra: A. Doi and A. Koide, "An efficient method of
 //!   triangulating equi-valued surfaces by using tetrahedral cells",
 //!   IEICE Transactions E74(1), 1991). The centroid carries the cell's
-//!   own value (the solver's); an inner face's centre the two cells'
-//!   values interpolated linearly between their centroids (J. H.
-//!   Ferziger and M. Perić, "Computational Methods for Fluid Dynamics",
-//!   section 4.4, the usual face value of finite volumes), a boundary
-//!   face's centre the mean of its nodes; a node its node value
-//!   ([`crate::field`]). Tetrahedra have no ambiguous
+//!   own value (the solver's); an inner face's centre and a node what
+//!   the cells around predict from their gradients ([`crate::tets`],
+//!   [`crate::field`]), as does a boundary face's centre from its cell,
+//!   so a field linear in space gives an exactly flat surface. Tetrahedra
+//!   have no ambiguous
 //!   cases, and neighbouring cells share the face centres and edges where
 //!   points are made, so the surface closes across cells. A point's normal
-//!   is the area-weighted mean of its triangles' normals, each turned
-//!   towards growing values.
+//!   is the field's slope there, interpolated along its edge from the
+//!   cell gradients ([`crate::gradient`]: a node has its cells' by
+//!   inverse distance, a centroid and a face centre the mean of their
+//!   nodes'), so the shading is smooth across the facets; where the slope
+//!   is zero or disagrees with the facets, the area-weighted mean of its
+//!   triangles' normals. Both point towards growing values.
 //!
 //! Clip planes apply to both: crinkle planes through the cells shown,
 //! flat planes by clipping the polygons (Sutherland and Hodgman). While
@@ -879,6 +882,17 @@ fn level_set(
         Level::Field(v, _) => node_of(v, n),
         Level::Plane(p) => p.distance(mesh.points[n as usize]),
     };
+    // An iso-surface's normals follow the field's slope ([`crate::
+    // gradient`]) where it has one, so the shading is smooth across the
+    // facets; a slice's and a field's without gradients follow the
+    // facets.
+    let slope = match (level, fields) {
+        (Level::Field(v, _), Some(set)) if !v.grad.is_empty() => Some((v, set)),
+        _ => None,
+    };
+    let node_slope =
+        |n: u32| slope.map_or([0.0; 3], |(v, set)| set.node_gradient(mesh, &v.grad, n));
+    let mut slopes: Vec<[f64; 3]> = Vec::new();
     // A point of the surface on the segment between two tetrahedron
     // points, made once: (position, colour value).
     let mut made: HashMap<(Pt, Pt), u32> = HashMap::new();
@@ -911,6 +925,26 @@ fn level_set(
         };
         lo = lo.min(vc);
         hi = hi.max(vc);
+        // A face centre's value lies between its cells' and its nodes'
+        // ([`crate::tets::face_value`]), so the neighbours bound it too:
+        // a cell passed over here while a face centre crosses would
+        // leave a hole.
+        if let Level::Field(v, _) = level {
+            for f in mesh.cell(c) {
+                let u = f.id as usize;
+                if u >= mesh.face_owner.len() {
+                    continue;
+                }
+                let other = mesh.across(u, c as u32);
+                if other != NO_CELL
+                    && let Some(&x) = v.cell.get(other as usize)
+                    && x.is_finite()
+                {
+                    lo = lo.min(x);
+                    hi = hi.max(x);
+                }
+            }
+        }
         if !lo.is_finite() || !hi.is_finite() || lo == hi || iso < lo || iso > hi {
             continue;
         }
@@ -957,6 +991,27 @@ fn level_set(
                         chans.map(|ch| ch.map_or(f64::NAN, |cv| node_of(cv, b))),
                     ),
                 ];
+                // The slope at each, made only for a crossed edge's ends.
+                // The slope at each (made only for a crossed edge's ends):
+                // a node's from its cells, a centroid's and a face
+                // centre's the mean of their nodes', so one cell's
+                // gradient never creases the shading on its own.
+                let mean_slope = |ns: &mut dyn Iterator<Item = u32>| {
+                    let (mut k, mut g) = (0.0, [0.0; 3]);
+                    for n in ns {
+                        let s = node_slope(n);
+                        g = [g[0] + s[0], g[1] + s[1], g[2] + s[2]];
+                        k += 1.0;
+                    }
+                    if k > 0.0 { g.map(|x| x / k) } else { g }
+                };
+                let slope_at = |q: usize| match (slope, q) {
+                    (None, _) => [0.0; 3],
+                    (_, 0) => mean_slope(&mut mesh.cell_points(c)),
+                    (_, 1) => mean_slope(&mut f.nodes.iter().copied()),
+                    (_, 2) => node_slope(a),
+                    _ => node_slope(b),
+                };
                 if tet.iter().any(|t| !t.2.is_finite()) {
                     continue;
                 }
@@ -981,6 +1036,9 @@ fn level_set(
                             std::array::from_fn(|k| lerp(a[k], b[k], t)),
                         ));
                         normals.push([0.0; 3]);
+                        if slope.is_some() {
+                            slopes.push(lerp3(slope_at(lo), slope_at(hi), t));
+                        }
                         (points.len() - 1) as u32
                     })
                 };
@@ -1037,10 +1095,17 @@ fn level_set(
             cell,
             verts: t.map(|i| {
                 let (p, v) = points[i as usize];
+                // The slope where it is clear and agrees with the
+                // facets' side, else the facets' mean.
+                let facets = normals[i as usize];
+                let n = match slopes.get(i as usize) {
+                    Some(&g) if dot(g, g) > 0.0 && dot(g, facets) > 0.0 => g,
+                    _ => facets,
+                };
                 Vx {
                     p,
                     v: v[0],
-                    n: unit(normals[i as usize]),
+                    n: unit(n),
                     key: None,
                     w: [v[1], v[2], v[3]],
                 }
@@ -1350,14 +1415,215 @@ mod tests {
         slice_area(&sphere, ClipMode::Flat);
     }
 
+    /// A box of `n`³ hexahedra with its inner points moved by up to a
+    /// third of a cell (a fixed pattern), as a mesher's cells are
+    /// uneven; written as a `.vtu` and read back.
+    fn uneven_box(n: usize) -> Mesh {
+        let h = 1.0 / n as f64;
+        let id = |i: usize, j: usize, k: usize| (k * (n + 1) + j) * (n + 1) + i;
+        let mut pts = String::new();
+        for k in 0..=n {
+            for j in 0..=n {
+                for i in 0..=n {
+                    let inner = |q: usize| q > 0 && q < n;
+                    let jig = |s: usize| {
+                        let x = ((id(i, j, k) * 2654435761 + s * 40503) % 1000) as f64;
+                        (x / 1000.0 - 0.5) * 0.66 * h
+                    };
+                    let p = [(i, 0), (j, 1), (k, 2)]
+                        .map(|(q, s)| q as f64 * h + if inner(q) { jig(s) } else { 0.0 });
+                    pts.push_str(&format!("{} {} {} ", p[0], p[1], p[2]));
+                }
+            }
+        }
+        let (mut conn, mut offs, mut types) = (String::new(), String::new(), String::new());
+        let mut c = 0;
+        for k in 0..n {
+            for j in 0..n {
+                for i in 0..n {
+                    for (a, b, d) in [
+                        (0, 0, 0),
+                        (1, 0, 0),
+                        (1, 1, 0),
+                        (0, 1, 0),
+                        (0, 0, 1),
+                        (1, 0, 1),
+                        (1, 1, 1),
+                        (0, 1, 1),
+                    ] {
+                        conn.push_str(&format!("{} ", id(i + a, j + b, k + d)));
+                    }
+                    c += 8;
+                    offs.push_str(&format!("{c} "));
+                    types.push_str("12 ");
+                }
+            }
+        }
+        let xml = format!(
+            r#"<?xml version="1.0"?>
+<VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian">
+<UnstructuredGrid><Piece NumberOfPoints="{}" NumberOfCells="{}">
+<Points><DataArray type="Float64" NumberOfComponents="3" format="ascii">{pts}</DataArray></Points>
+<Cells>
+<DataArray type="Int64" Name="connectivity" format="ascii">{conn}</DataArray>
+<DataArray type="Int64" Name="offsets" format="ascii">{offs}</DataArray>
+<DataArray type="UInt8" Name="types" format="ascii">{types}</DataArray>
+</Cells></Piece></UnstructuredGrid></VTKFile>
+"#,
+            (n + 1).pow(3),
+            n.pow(3)
+        );
+        let dir = std::env::temp_dir().join(format!("murmel-uneven-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("uneven.vtu");
+        std::fs::write(&path, xml).unwrap();
+        let m = murmel_mesh::read(&path).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        m
+    }
+
+    /// Invariant: an iso-surface closes and never folds: the duct's speed
+    /// at 1.2 through the one large cell in its core leaves no hole
+    /// (every edge of it is shared by two triangles except on the
+    /// duct's sides), and no triangle faces against the normals of its
+    /// corners (the shading would draw it dark). Breaks when a cell whose
+    /// face centre crosses the value is passed over (its neighbour's
+    /// value bounds that centre, so the quick test must count it: holes
+    /// in the tube), or a boundary face's centre stops following its
+    /// cell (the core's inlet and outlet faces took the mean of their
+    /// rims, too low there, and capped the tube with folded triangles).
+    #[test]
+    fn iso_surface_closes_without_folds() {
+        let (m, set) = channel();
+        let b = m.bounds();
+        let mut d = by_field(&m, &set, "velocity");
+        d.isos.push(Iso {
+            field: FieldChoice {
+                name: "speed".into(),
+                component: Component::Magnitude,
+            },
+            value: 1.2,
+            enabled: true,
+            color: IsoColor::Solid,
+        });
+        let s = build(&m, &set, &d);
+        let mut seen = 0;
+        for (t, tri) in s.indices.as_chunks::<3>().0.iter().enumerate() {
+            if s.tri_face[t] != NO_CELL {
+                continue;
+            }
+            seen += 1;
+            let p = tri.map(|i| {
+                let q = s.positions[i as usize];
+                [0, 1, 2].map(|k| q[k] as f64 + s.origin[k])
+            });
+            let facet = unit(cross(sub(p[1], p[0]), sub(p[2], p[0])));
+            for &i in tri {
+                let n = unit(s.normals[i as usize].map(f64::from));
+                assert!(dot(facet, n) > 0.0, "a triangle at {:?} folds", p[0]);
+            }
+        }
+        assert!(seen > 100, "{seen} triangles");
+        let key = |p: [f64; 3]| p.map(|v| (v * 1e5).round() as i64);
+        let mut count: HashMap<([i64; 3], [i64; 3]), usize> = HashMap::new();
+        for t in extract_tris(&s) {
+            for j in 0..3 {
+                let (a, c) = (key(t[j]), key(t[(j + 1) % 3]));
+                *count.entry((a.min(c), a.max(c))).or_default() += 1;
+            }
+        }
+        let on_side = |p: [i64; 3]| {
+            let p = p.map(|v| v as f64 * 1e-5);
+            (0..3).any(|k| (p[k] - b.min[k]).abs() < 1e-4 || (p[k] - b.max[k]).abs() < 1e-4)
+        };
+        for ((a, c), n) in count {
+            assert!(
+                n == 2 || (on_side(a) && on_side(c)),
+                "a hole: an edge used {n} times at {a:?}"
+            );
+        }
+    }
+
+    /// Invariant: the iso-surface of a smooth round field (the distance
+    /// from a point off the middle, at the centroids of 20³ uneven
+    /// hexahedra; the sphere spans 12 cells) is smooth and round: its
+    /// vertex normals, which the shading shows, lie within 2° of the
+    /// true ones on average and 4° for 95 % of them, and its points
+    /// within 0.6 % of the radius, RMS. Measured: 1.0°, 2.2° and 0.43 %
+    /// with values rebuilt from cell gradients and normals from the
+    /// field's slope; the facets' own normals were about three times as
+    /// far off, and inverse distance weighting gave 9.2°, 18.9° and
+    /// 1.5 %, the waves that looked rough. Breaks when the values between
+    /// cells stop following the field's slope or the normals go back to
+    /// the facets.
+    #[test]
+    fn iso_surface_of_a_round_field_is_smooth() {
+        use murmel_mesh::field::{Field, Location, Results};
+        let m = uneven_box(20);
+        let c = [0.52, 0.47, 0.49];
+        let dist = |x: [f64; 3]| dot(sub(x, c), sub(x, c)).sqrt();
+        let values: Vec<f64> = (0..m.cell_count())
+            .map(|k| dist(crate::inspect::cell_centroid(&m, k)))
+            .collect();
+        let set = FieldSet::new(Results {
+            fields: vec![Field {
+                name: "r".into(),
+                unit: None,
+                location: Location::Cell,
+                components: 1,
+                values,
+            }],
+            ..Results::default()
+        });
+        let mut d = by_field(&m, &set, "r");
+        let radius = 0.3;
+        d.isos.push(Iso {
+            field: FieldChoice {
+                name: "r".into(),
+                component: Component::Magnitude,
+            },
+            value: radius,
+            enabled: true,
+            color: IsoColor::Solid,
+        });
+        let s = build(&m, &set, &d);
+        let (mut off, mut angles) = (Vec::new(), Vec::new());
+        for (t, tri) in s.indices.as_chunks::<3>().0.iter().enumerate() {
+            if s.tri_face[t] != NO_CELL {
+                continue;
+            }
+            for &i in tri {
+                let p = s.positions[i as usize];
+                let x = [0, 1, 2].map(|k| p[k] as f64 + s.origin[k]);
+                off.push(dist(x) / radius - 1.0);
+                let n = s.normals[i as usize].map(f64::from);
+                let along = dot(unit(sub(x, c)), unit(n)).abs().min(1.0);
+                angles.push(along.acos().to_degrees());
+            }
+        }
+        assert!(!off.is_empty());
+        let rms = (off.iter().map(|e| e * e).sum::<f64>() / off.len() as f64).sqrt();
+        angles.sort_by(f64::total_cmp);
+        let mean = angles.iter().sum::<f64>() / angles.len() as f64;
+        let p95 = angles[angles.len() * 95 / 100];
+        assert!(rms < 0.006, "RMS {rms}");
+        assert!(
+            mean < 2.0 && p95 < 4.0,
+            "normals off by {mean}° on average, {p95}° at 95 %"
+        );
+    }
+
     /// Invariant: the iso-surface of a field linear in x (the pressure,
-    /// 50 - 100 x/L at the cell centres) is a plane across the duct: its
-    /// points lie close to where the field crosses the value, its area is
-    /// the section's, its normals point to growing pressure (-x), and it
-    /// closes across cells: every edge of it is shared by two triangles
-    /// except on the duct's walls. Breaks when a tetrahedron case is
-    /// wrong (holes), points are made twice with different positions
-    /// (cracks), or the orientation is not turned to the gradient.
+    /// 50 - 100 x/L at the cell centres) is exactly the plane across the
+    /// duct where the field crosses the value: every point on it, its
+    /// area the section's (values rebuilt from cell gradients; inverse
+    /// distance weighting made it wave, 2.3 % more area), its normals
+    /// pointing to growing pressure (-x), and it closes across cells:
+    /// every edge of it is shared by two triangles except on the duct's
+    /// walls. Breaks when a tetrahedron case is wrong (holes), points are
+    /// made twice with different positions (cracks), the orientation is
+    /// not turned to the gradient, or the values between cells stop
+    /// following a linear field.
     #[test]
     fn iso_surface_of_a_linear_field() {
         let (m, set) = channel();
@@ -1379,15 +1645,12 @@ mod tests {
         let len = b.max[0] - b.min[0];
         let x = b.min[0] + 0.47 * len;
         assert!(
-            tris.iter().flatten().all(|p| (p[0] - x).abs() < 0.05 * len),
-            "points far from x = {x}"
+            tris.iter().flatten().all(|p| (p[0] - x).abs() < 1e-6 * len),
+            "points off the plane x = {x}"
         );
         let a: f64 = tris.iter().map(area).sum();
         let section = (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
-        // Node values by inverse distance are not exactly linear on the
-        // graded mesh, so the surface waves a little (2.7 % more area
-        // here); a hole or a doubled cell would be far more.
-        assert!((a - section).abs() < 0.05 * section, "{a} vs {section}");
+        assert!((a - section).abs() < 1e-6 * section, "{a} vs {section}");
         let first = s.indices.len() / 3 - tris.len();
         let nx: f64 = (first..s.indices.len() / 3)
             .map(|t| s.normals[s.indices[3 * t] as usize][0] as f64)

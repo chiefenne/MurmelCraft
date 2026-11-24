@@ -5,11 +5,13 @@
 //! ([`crate::stream`]), so all three show the same field.
 //!
 //! The centroid carries the cell's own value (the solver's); an inner
-//! face's centre the two cells' values interpolated linearly between
-//! their centroids (J. H. Ferziger and M. Perić, "Computational Methods
-//! for Fluid Dynamics", section 4.4, the usual face value of finite
-//! volumes), a boundary face's centre the mean of its nodes; a node its
-//! node value ([`crate::field`]).
+//! face's centre what the two cells predict there from their gradients
+//! ([`crate::gradient`]), the nearer cell weighted more (as the usual
+//! face value of finite volumes weights the two values: J. H. Ferziger
+//! and M. Perić, "Computational Methods for Fluid Dynamics", section
+//! 4.4); a boundary face's centre what its cell predicts there; a node
+//! its node value ([`crate::field`]). So a field linear in space is exactly linear
+//! on every tetrahedron, and its slices and iso-surfaces are exact.
 
 use murmel_mesh::{Mesh, NO_CELL};
 
@@ -46,9 +48,11 @@ pub(crate) fn centroid(mesh: &Mesh, fields: Option<&FieldSet>, c: usize) -> [f64
 }
 
 /// The value of `f` at the centre `fc` of distinct face `u` (points
-/// `face`): between the two cells' values by their centroids' distances
-/// to it, or for a boundary face (or a cell without a value) the mean of
-/// its nodes.
+/// `face`): what its cells predict there from their gradients, the two
+/// of an inner face weighted by their centroids' distances to it, kept
+/// within the cells' values and the face's node values; without
+/// gradients, the two cells' values so weighted; the mean of its nodes
+/// where no cell has a value (and a boundary face without gradients).
 pub(crate) fn face_value(
     mesh: &Mesh,
     fields: Option<&FieldSet>,
@@ -64,19 +68,56 @@ pub(crate) fn face_value(
     ) else {
         return nodes();
     };
-    if o == NO_CELL || n == NO_CELL {
-        return nodes();
-    }
-    let (vo, vn) = (cell_value(f, o as usize), cell_value(f, n as usize));
+    let value = |c: u32| {
+        if c == NO_CELL {
+            f64::NAN
+        } else {
+            cell_value(f, c as usize)
+        }
+    };
+    let (vo, vn) = (value(o), value(n));
     let dist = |c: u32| {
         let x = centroid(mesh, fields, c as usize);
         (0..3).map(|d| (x[d] - fc[d]).powi(2)).sum::<f64>().sqrt()
     };
-    let (d_o, d_n) = (dist(o), dist(n));
-    if !(vo.is_finite() && vn.is_finite()) || d_o + d_n <= 0.0 {
-        return nodes();
+    // What a cell predicts at the centre from its gradient.
+    let predict = |c: u32, v: f64| {
+        let g = f.grad.get(c as usize)?;
+        let r =
+            crate::gradient::predict(v, centroid(mesh, fields, c as usize), g.map(f64::from), fc);
+        r.is_finite().then_some(r)
+    };
+    // Within the cells' values and the face's node values, so no new
+    // extreme appears (a linear field's is the mean of its nodes').
+    let bound = |x: f64, cells: &[f64]| {
+        let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        let at_nodes = face.iter().map(|&k| node_value(f, k));
+        for v in cells.iter().copied().chain(at_nodes) {
+            if v.is_finite() {
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        if lo <= hi { x.clamp(lo, hi) } else { x }
+    };
+    match (vo.is_finite(), vn.is_finite()) {
+        (true, true) => {
+            let (d_o, d_n) = (dist(o), dist(n));
+            if d_o + d_n <= 0.0 {
+                return nodes();
+            }
+            match (predict(o, vo), predict(n, vn)) {
+                (Some(ro), Some(rn)) => bound((d_n * ro + d_o * rn) / (d_o + d_n), &[vo, vn]),
+                _ => (d_n * vo + d_o * vn) / (d_o + d_n),
+            }
+        }
+        // A boundary face (or a neighbour without a value): its one
+        // cell's prediction, so a large face's centre follows the cell
+        // and not only its rim.
+        (true, false) => predict(o, vo).map_or_else(nodes, |r| bound(r, &[vo])),
+        (false, true) => predict(n, vn).map_or_else(nodes, |r| bound(r, &[vn])),
+        (false, false) => nodes(),
     }
-    (d_n * vo + d_o * vn) / (d_o + d_n)
 }
 
 /// The barycentric coordinates of `p` in the tetrahedron `t`, or `None`

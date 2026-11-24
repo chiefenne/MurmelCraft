@@ -763,7 +763,10 @@ mod tests {
             panic!("no ramp")
         };
         assert_eq!((r.lo, r.hi), crate::field::widen(drawn));
-        assert!(r.hi <= whole.1 + 1e-9);
+        // Each component is kept within its cells' values, so a vector
+        // rebuilt between cells may peak a hair above the largest cell's
+        // magnitude (1e-5 here), never by more.
+        assert!(r.hi <= whole.1 * (1.0 + 1e-4), "{r:?} vs {whole:?}");
 
         // The mesh shows the same bar: none; solid arrows: none.
         s.display.arrows.as_mut().unwrap().in_plane = false;
