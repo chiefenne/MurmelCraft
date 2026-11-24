@@ -56,6 +56,7 @@ fn mods(m: egui::Modifiers) -> Mods {
 impl MurmelApp {
     pub(crate) fn viewport(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let rect = ui.max_rect();
+        self.viewport_rect = rect;
         let resp = ui.interact(
             rect,
             ui.scope_id().with("viewport"),
@@ -84,6 +85,11 @@ impl MurmelApp {
         let cam = self.shown_camera(ui.ctx());
         self.draw_mesh(ui, frame, rect, dark, &cam);
         self.overlays(ui, rect, dark, &cam);
+        let (hover_pos, alt) = ui.input(|i| (i.pointer.hover_pos(), i.modifiers.alt));
+        let pointer = hover_pos
+            .filter(|_| resp.hovered() && self.drag.is_none())
+            .map(|p| (p, alt));
+        self.measure_overlay(ui, rect, &cam, dark, pointer);
         if self.session.display.color_by == murmel_engine::ColorBy::Quality {
             self.quality_legend(ui, rect, dark);
         } else {
@@ -217,11 +223,22 @@ impl MurmelApp {
             self.orbit_pivot = None;
         }
         let plain = Mods { shift: false, ..m };
-        if resp.clicked_by(PointerButton::Primary)
-            && nav.click(Button::Primary, plain) == Some(Action::Pick)
-            && let Some(p) = resp.interact_pointer_pos()
-        {
-            self.call("select.pick", json!({"ndc": ndc(p, rect), "add": m.shift}));
+        let click = resp
+            .clicked_by(PointerButton::Primary)
+            .then(|| resp.interact_pointer_pos())
+            .flatten();
+        if let Some(p) = click {
+            // While measuring a click places a point (Alt: unsnapped);
+            // else a click on a measurement's label selects it, and
+            // elsewhere picks what is under it.
+            if self.measuring.is_some() {
+                self.measure_click(p, rect, m.alt);
+            } else if let Some(item) = self.measure_label_at(p) {
+                let id = self.session.mesh.as_ref().map(|o| item.id(&o.mesh));
+                self.call("select.item", json!({"item": id, "add": m.shift}));
+            } else if nav.click(Button::Primary, plain) == Some(Action::Pick) {
+                self.call("select.pick", json!({"ndc": ndc(p, rect), "add": m.shift}));
+            }
         }
         self.hover(ui, resp, rect, hover);
         if resp.double_clicked_by(PointerButton::Middle)
@@ -272,7 +289,10 @@ impl MurmelApp {
             "{:?}|{}",
             self.session.camera, self.session.surface_revision
         );
-        let Some(pos) = pos.filter(|_| resp.hovered() && self.drag.is_none()) else {
+        // While measuring the snap marker says what is under the pointer.
+        let Some(pos) =
+            pos.filter(|_| resp.hovered() && self.drag.is_none() && self.measuring.is_none())
+        else {
             self.hover = None;
             return;
         };
@@ -509,7 +529,7 @@ fn glam_dir(k: usize) -> [f64; 3] {
 }
 
 /// A screen point as normalised device coordinates (-1..1, y up).
-fn ndc(p: Pos2, rect: Rect) -> [f64; 2] {
+pub(crate) fn ndc(p: Pos2, rect: Rect) -> [f64; 2] {
     let x = (p.x - rect.left()) / rect.width().max(1.0) * 2.0 - 1.0;
     let y = 1.0 - (p.y - rect.top()) / rect.height().max(1.0) * 2.0;
     [x as f64, y as f64]

@@ -4,12 +4,14 @@
 use std::path::PathBuf;
 
 use murmel_engine::display::{SavedView, VIEW_NAME_MAX, all_items, view_name};
+use murmel_engine::measure::{self, SNAP_RADIUS_PX};
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::session_file::{SessionFile, absolute};
 use murmel_engine::settings::{Agents, Settings, save_navigation, save_settings};
 use murmel_engine::{
-    Clip, ClipMode, ColorBy, CubeSettings, Item, MeshColors, Metric, PickTarget, Placement,
-    Projection, Quality, RenderMode, Rgb, ScreenAxis, Session, StandardView, Theme, Visibility,
+    Anchor, Clip, ClipMode, ColorBy, CubeSettings, Item, MeasureKind, Measurement, MeshColors,
+    Metric, PickTarget, Placement, Probe, Projection, Quality, RenderMode, Rgb, ScreenAxis,
+    Session, SnapKind, StandardView, Theme, Visibility,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -674,6 +676,12 @@ fn display_set_color(input: Value, s: &mut Session) -> Run {
         return Err(Diagnostic::new(
             "VIEW002",
             "a clip plane has no colour; it cuts the mesh",
+        ));
+    }
+    if matches!(it, Item::Measure(_) | Item::Probe(_)) {
+        return Err(Diagnostic::new(
+            "VIEW002",
+            "measurements and probes take the measure colour of the theme",
         ));
     }
     match i.color {
@@ -1393,6 +1401,382 @@ fn session_load(input: Value, s: &mut Session) -> Run {
     }))
 }
 
+// ---- measuring and probing ---------------------------------------------
+
+/// A point given to a measuring tool: exactly one of a screen point
+/// (`ndc`, snapped), an anchor as `measure.snap` returned it (the window
+/// snaps while the pointer moves, so a later click keeps what it showed
+/// even after the view turned), typed coordinates, a node, the midpoint
+/// of two nodes, a face centre or a cell centre.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct AnchorInput {
+    ndc: Option<[f64; 2]>,
+    anchor: Option<Anchor>,
+    /// What `ndc` may snap to, in any order (they are tried in a fixed
+    /// priority); left out: all but cell centres.
+    snap: Option<Vec<SnapKind>>,
+    radius_px: Option<f64>,
+    point: Option<[f64; 3]>,
+    node: Option<u32>,
+    edge: Option<[u32; 2]>,
+    face: Option<u32>,
+    cell: Option<u32>,
+}
+
+fn anchor_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Exactly one of: ndc (a screen point, -1..1 with y up, snapped), anchor (as measure.snap returns it), point (typed x y z), node, edge (the midpoint of two nodes), face (a face centre), cell (a cell centre).",
+        "properties": {
+            "ndc": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "anchor": {
+                "type": "object",
+                "properties": {
+                    "point": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                    "snap": {"enum": ["node", "edge_midpoint", "face_centre", "cell_centre", "edge", "surface", "typed"]},
+                    "node": {"type": "integer", "minimum": 0},
+                    "edge": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "maxItems": 2},
+                    "face": {"type": "integer", "minimum": 0},
+                    "cell": {"type": "integer", "minimum": 0}
+                },
+                "required": ["point"],
+                "additionalProperties": false
+            },
+            "snap": {"type": "array", "items": {"enum": ["node", "edge_midpoint", "face_centre", "cell_centre", "edge", "surface"]}},
+            "radius_px": {"type": "number", "minimum": 0, "maximum": 200},
+            "point": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+            "node": {"type": "integer", "minimum": 0},
+            "edge": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "maxItems": 2},
+            "face": {"type": "integer", "minimum": 0},
+            "cell": {"type": "integer", "minimum": 0}
+        }
+    })
+}
+
+/// The anchor `i` names in the open mesh. `locate` finds the cell
+/// holding typed coordinates (for probes).
+fn anchor(s: &Session, i: AnchorInput, locate: bool) -> Result<Anchor, Diagnostic> {
+    let m = s
+        .mesh
+        .as_ref()
+        .ok_or_else(|| Diagnostic::new("VIEW001", "no mesh is open"))?;
+    let mesh = &m.mesh;
+    let given = [
+        i.ndc.is_some(),
+        i.anchor.is_some(),
+        i.point.is_some(),
+        i.node.is_some(),
+        i.edge.is_some(),
+        i.face.is_some(),
+        i.cell.is_some(),
+    ]
+    .iter()
+    .filter(|&&b| b)
+    .count();
+    if given != 1 {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "give exactly one of ndc, anchor, point, node, edge, face, cell",
+        ));
+    }
+    if (i.snap.is_some() || i.radius_px.is_some()) && i.ndc.is_none() {
+        return Err(Diagnostic::new("TOOL002", "snap and radius_px go with ndc"));
+    }
+    let none = |what: &str, n: String| {
+        Diagnostic::new("MEAS002", format!("the open mesh has no {what} {n}"))
+    };
+    if let Some(ndc) = i.ndc {
+        for v in ndc {
+            finite(v, "ndc")?;
+        }
+        let r = finite(i.radius_px.unwrap_or(SNAP_RADIUS_PX), "radius_px")?.clamp(0.0, 200.0);
+        let kinds = i.snap.unwrap_or_else(|| SnapKind::DEFAULT.to_vec());
+        return measure::snap(mesh, &m.surface, &s.camera, ndc, s.viewport, &kinds, r).ok_or_else(
+            || {
+                Diagnostic::new(
+                    "MEAS001",
+                    format!("nothing of the mesh to snap to under ndc {ndc:?}"),
+                )
+            },
+        );
+    }
+    if let Some(mut a) = i.anchor {
+        for v in a.point {
+            finite(v, "anchor point")?;
+        }
+        // References the mesh does not have are dropped; a probe's cell
+        // is found again.
+        let cells = mesh.cell_count();
+        a.node = a.node.filter(|&n| (n as usize) < mesh.points.len());
+        a.edge = a
+            .edge
+            .filter(|e| e.iter().all(|&n| (n as usize) < mesh.points.len()));
+        a.face = a.face.filter(|&u| !mesh.face_nodes(u as usize).is_empty());
+        a.cell = a.cell.filter(|&c| (c as usize) < cells);
+        if locate && a.cell.is_none() {
+            a.cell = measure::locate(mesh, a.point);
+        }
+        return Ok(a);
+    }
+    if let Some(p) = i.point {
+        for v in p {
+            finite(v, "point")?;
+        }
+        let mut a = Anchor::typed(p);
+        if locate {
+            a.cell = measure::locate(mesh, p);
+        }
+        return Ok(a);
+    }
+    if let Some(n) = i.node {
+        return Anchor::node(mesh, n).ok_or_else(|| none("node", n.to_string()));
+    }
+    if let Some([a, b]) = i.edge {
+        return Anchor::edge_midpoint(mesh, a, b)
+            .ok_or_else(|| none("nodes", format!("{a} and {b}")));
+    }
+    if let Some(u) = i.face {
+        return Anchor::face_centre(mesh, u).ok_or_else(|| none("face", u.to_string()));
+    }
+    let c = i.cell.unwrap_or_default();
+    Anchor::cell_centre(mesh, c).ok_or_else(|| none("cell", c.to_string()))
+}
+
+fn measure_json(m: &Measurement) -> Value {
+    json!({
+        "id": format!("measure:{}", m.n),
+        "kind": m.kind,
+        "name": m.name,
+        "value": m.value(),
+        "unit": match m.kind {
+            MeasureKind::Distance => "m",
+            MeasureKind::Angle => "°",
+        },
+        "delta": m.delta(),
+        "points": m.points,
+        "visible": m.visible,
+    })
+}
+
+fn probe_json(s: &Session, p: &Probe) -> Value {
+    json!({
+        "id": format!("probe:{}", p.n),
+        "name": p.name,
+        "at": p.at,
+        "visible": p.visible,
+        "rows": s.mesh.as_ref().map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &p.at)),
+    })
+}
+
+fn measures_json(s: &Session) -> Value {
+    json!({
+        "measurements": s.display.measurements.iter().map(measure_json).collect::<Vec<_>>(),
+        "probes": s.display.probes.iter().map(|p| probe_json(s, p)).collect::<Vec<_>>(),
+    })
+}
+
+/// A name for a measurement or a probe, as for saved views.
+fn measure_name(name: Option<String>) -> Result<Option<String>, Diagnostic> {
+    match name {
+        None => Ok(None),
+        Some(n) => view_name(&n).map(Some).ok_or_else(|| {
+            Diagnostic::new(
+                "MEAS003",
+                format!("name {n:?} is empty, longer than {VIEW_NAME_MAX} characters or holds control characters"),
+            )
+        }),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapInput {
+    ndc: [f64; 2],
+    snap: Option<Vec<SnapKind>>,
+    radius_px: Option<f64>,
+}
+
+fn measure_snap(input: Value, s: &mut Session) -> Run {
+    let i: SnapInput = parse(input)?;
+    need_mesh(s)?;
+    let a = anchor(
+        s,
+        AnchorInput {
+            ndc: Some(i.ndc),
+            snap: i.snap,
+            radius_px: i.radius_px,
+            ..AnchorInput::default()
+        },
+        false,
+    );
+    match a {
+        Ok(a) => Ok(json!({"anchor": a})),
+        Err(d) if d.code == "MEAS001" => Ok(json!({"anchor": null})),
+        Err(d) => Err(d),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeasureAdd {
+    kind: MeasureKind,
+    points: Vec<AnchorInput>,
+    name: Option<String>,
+}
+
+fn measure_add(input: Value, s: &mut Session) -> Run {
+    let i: MeasureAdd = parse(input)?;
+    need_mesh(s)?;
+    if i.points.len() != i.kind.points() {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            format!(
+                "a {} takes {} points, not {}",
+                i.kind.key(),
+                i.kind.points(),
+                i.points.len()
+            ),
+        ));
+    }
+    let name = measure_name(i.name)?;
+    let points = i
+        .points
+        .into_iter()
+        .map(|p| anchor(s, p, false))
+        .collect::<Result<Vec<_>, _>>()?;
+    let m = Measurement {
+        n: s.display.next_measure(),
+        kind: i.kind,
+        name,
+        points,
+        visible: true,
+    };
+    let out = measure_json(&m);
+    s.display.measurements.push(m);
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProbeAdd {
+    at: AnchorInput,
+    name: Option<String>,
+}
+
+fn probe_add(input: Value, s: &mut Session) -> Run {
+    let i: ProbeAdd = parse(input)?;
+    need_mesh(s)?;
+    let name = measure_name(i.name)?;
+    let p = Probe {
+        n: s.display.next_probe(),
+        name,
+        at: anchor(s, i.at, true)?,
+        visible: true,
+    };
+    let out = probe_json(s, &p);
+    s.display.probes.push(p);
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProbeAt {
+    at: AnchorInput,
+}
+
+fn probe_at(input: Value, s: &mut Session) -> Run {
+    let i: ProbeAt = parse(input)?;
+    need_mesh(s)?;
+    let at = anchor(s, i.at, true)?;
+    let rows = s
+        .mesh
+        .as_ref()
+        .map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &at));
+    Ok(json!({"at": at, "rows": rows}))
+}
+
+/// A measurement or probe of the open mesh named by `id`.
+fn measure_item(s: &Session, id: &str) -> Result<Item, Diagnostic> {
+    match item(s, id)? {
+        it @ (Item::Measure(_) | Item::Probe(_)) => Ok(it),
+        _ => Err(Diagnostic::new(
+            "VIEW002",
+            format!("{id} is not a measurement (measure:<n>) or a probe (probe:<n>)"),
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeasureRename {
+    item: String,
+    /// Null or left out goes back to "Distance n", "Angle n", "Probe n".
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn measure_rename(input: Value, s: &mut Session) -> Run {
+    let i: MeasureRename = parse(input)?;
+    let it = measure_item(s, &i.item)?;
+    let name = measure_name(i.name)?;
+    let d = &mut s.display;
+    match it {
+        Item::Measure(n) => {
+            for m in d.measurements.iter_mut().filter(|m| m.n == n) {
+                m.name.clone_from(&name);
+            }
+        }
+        Item::Probe(n) => {
+            for p in d.probes.iter_mut().filter(|p| p.n == n) {
+                p.name.clone_from(&name);
+            }
+        }
+        _ => {}
+    }
+    Ok(json!({"item": i.item, "name": name}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeasureRemove {
+    #[serde(default)]
+    items: Vec<String>,
+    #[serde(default)]
+    all: bool,
+}
+
+fn measure_remove(input: Value, s: &mut Session) -> Run {
+    let i: MeasureRemove = parse(input)?;
+    need_mesh(s)?;
+    if i.all == !i.items.is_empty() {
+        return Err(Diagnostic::new("TOOL002", "give either items or all: true"));
+    }
+    let items: Vec<Item> = if i.all {
+        let d = &s.display;
+        d.measurements
+            .iter()
+            .map(|m| Item::Measure(m.n))
+            .chain(d.probes.iter().map(|p| Item::Probe(p.n)))
+            .collect()
+    } else {
+        i.items
+            .iter()
+            .map(|id| measure_item(s, id))
+            .collect::<Result<_, _>>()?
+    };
+    let removed = s.display.remove_measures(&items);
+    let mut out = measures_json(s);
+    out["removed"] = json!(removed);
+    Ok(out)
+}
+
+fn measure_list(_: Value, s: &mut Session) -> Run {
+    need_mesh(s)?;
+    Ok(measures_json(s))
+}
+
 // ---- journal ------------------------------------------------------------
 
 /// The tools whose calls are steps of the journal: they change the camera
@@ -1419,6 +1803,10 @@ pub const JOURNALED: &[&str] = &[
     "clip.set",
     "clip.rotate",
     "clip.clear",
+    "measure.add",
+    "measure.rename",
+    "measure.remove",
+    "probe.add",
 ];
 
 /// Tools that make no step, and why.
@@ -1467,6 +1855,9 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("journal.list", READS_ONLY),
     ("session.save", "writes a file; the view stays as it is"),
     ("session.load", "a loaded session starts a new journal"),
+    ("measure.snap", READS_ONLY),
+    ("measure.list", READS_ONLY),
+    ("probe.at", READS_ONLY),
 ];
 
 /// The reason in `NOT_JOURNALED` of a tool that changes nothing: no file,
@@ -2169,7 +2560,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-settings-set-colors",
-        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs); reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
+        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -2184,6 +2575,10 @@ pub static TOOLS: &[Tool] = &[
                     "gizmo": {"type": "object", "additionalProperties": false, "properties": {
                         "dark": {"type": "object", "propertyNames": {"enum": ["slide", "tilt"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
                         "light": {"type": "object", "propertyNames": {"enum": ["slide", "tilt"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}}
+                    }},
+                    "measure": {"type": "object", "additionalProperties": false, "properties": {
+                        "dark": {"type": "object", "propertyNames": {"enum": ["line", "probe", "halo"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
+                        "light": {"type": "object", "propertyNames": {"enum": ["line", "probe", "halo"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}}
                     }},
                     "reset": {"type": "boolean"}
                 }),
@@ -2290,5 +2685,125 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: session_load,
+    },
+    Tool {
+        id: "measure.snap",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-measure-snap",
+        summary: "The point a click at a screen point would measure from: the face under it gives its nodes, edge midpoints, centre (and its cell's centre), projected to the screen; the first kind in the order node, edge_midpoint, face_centre, cell_centre, edge, surface with a candidate within radius_px (default 12) wins; snap lists the kinds allowed (default all but cell_centre). Null over empty space. Changes nothing.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            let a = anchor_schema();
+            object(
+                json!({
+                    "ndc": a["properties"]["ndc"],
+                    "snap": a["properties"]["snap"],
+                    "radius_px": a["properties"]["radius_px"],
+                }),
+                &["ndc"],
+            )
+        },
+        run: measure_snap,
+    },
+    Tool {
+        id: "measure.add",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-measure-add",
+        summary: "Measure in the open mesh and keep the result as a tree item measure:<n>: a distance between two points (with dx, dy, dz) or the angle at the second of three points (degrees). Each point is a screen point snapped as measure.snap does, typed coordinates, a node, the midpoint of two nodes, a face centre or a cell centre. Kept in session files; undo removes it.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "kind": {"enum": ["distance", "angle"]},
+                    "points": {"type": "array", "items": anchor_schema(), "minItems": 2, "maxItems": 3},
+                    "name": {"type": "string", "minLength": 1, "maxLength": VIEW_NAME_MAX},
+                }),
+                &["kind", "points"],
+            )
+        },
+        run: measure_add,
+    },
+    Tool {
+        id: "measure.rename",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-measure-rename",
+        summary: "Name a measurement or a probe (measure:<n>, probe:<n>); a null name goes back to \"Distance n\", \"Angle n\" or \"Probe n\".",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "item": {"type": "string"},
+                    "name": {"type": ["string", "null"], "minLength": 1, "maxLength": VIEW_NAME_MAX},
+                }),
+                &["item"],
+            )
+        },
+        run: measure_rename,
+    },
+    Tool {
+        id: "measure.remove",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-measure-remove",
+        summary: "Remove measurements and probes: the items named (measure:<n>, probe:<n>), or all of them. Undo brings them back.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "items": {"type": "array", "items": {"type": "string"}},
+                    "all": {"type": "boolean"},
+                }),
+                &[],
+            )
+        },
+        run: measure_remove,
+    },
+    Tool {
+        id: "measure.list",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-measure-list",
+        summary: "The measurements (value, unit, points and what they snapped to) and the probes (point, cell and what it reads) of the open mesh.",
+        outputs: &[],
+        reads: &[],
+        input_schema: no_input,
+        run: measure_list,
+    },
+    Tool {
+        id: "probe.add",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-probe-add",
+        summary: "Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness. The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "at": anchor_schema(),
+                    "name": {"type": "string", "minLength": 1, "maxLength": VIEW_NAME_MAX},
+                }),
+                &["at"],
+            )
+        },
+        run: probe_add,
+    },
+    Tool {
+        id: "probe.at",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-probe-at",
+        summary: "What a probe at a point would read, without keeping it: the point given as for measure.add, the cell holding it and that cell's values. Changes nothing.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || object(json!({"at": anchor_schema()}), &["at"]),
+        run: probe_at,
     },
 ];

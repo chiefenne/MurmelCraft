@@ -405,3 +405,85 @@ fn export_window_writes_a_picture() {
     assert_eq!(h.state().session.camera, camera);
     let _ = std::fs::remove_file(&out);
 }
+
+/// A click at `at` with `mods` held (no movement, so not a drag).
+fn click(h: &mut Harness<'_, MurmelApp>, at: egui::Pos2, mods: egui::Modifiers) {
+    let button = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: mods,
+    };
+    h.input_mut()
+        .events
+        .push(egui::Event::ModifiersChanged(mods));
+    h.input_mut().events.push(egui::Event::PointerMoved(at));
+    h.run_steps(2);
+    h.input_mut().events.push(button(true));
+    h.run();
+    h.input_mut().events.push(button(false));
+    h.input_mut()
+        .events
+        .push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(2);
+}
+
+/// Invariant (measuring, decided 2026-11-24): M starts the measure mode,
+/// two clicks on the mesh add one distance from snapped points (Alt
+/// takes the plain surface point), the label drawn for it selects it on
+/// a click, Esc stops the mode, and Shift + P with a click places a probe
+/// in the cell under the pointer. Breaks if a click in the mode picks
+/// instead of measuring, Esc clears the selection instead of stopping,
+/// or labels stop selecting; the tool tests never click.
+#[test]
+fn measure_mode_clicks() {
+    use murmel_engine::{Item, SnapKind};
+    let mut h = harness();
+    h.key_press(egui::Key::M);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().measuring.as_ref().map(|m| m.mode),
+        Some(crate::measure::Mode::Distance)
+    );
+    let c = h.state().viewport_rect.center();
+    click(&mut h, c, egui::Modifiers::NONE);
+    assert_eq!(h.state().measuring.as_ref().unwrap().points.len(), 1);
+    assert!(h.state().session.display.measurements.is_empty());
+    click(&mut h, c + egui::vec2(60.0, 25.0), egui::Modifiers::ALT);
+    let d = &h.state().session.display;
+    assert_eq!(d.measurements.len(), 1, "two clicks, one distance");
+    let pts = &d.measurements[0].points;
+    assert_ne!(pts[0].snap, SnapKind::Typed);
+    assert_eq!(pts[1].snap, SnapKind::Surface, "Alt: no snapping");
+    assert!(d.selection.is_empty(), "measuring clicks do not pick");
+    assert!(h.state().measuring.as_ref().unwrap().points.is_empty());
+
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().measuring.is_none(), "Esc stops measuring");
+    let label = h
+        .state()
+        .measure_labels
+        .iter()
+        .find(|l| l.item == Item::Measure(1))
+        .map(|l| l.rect.center())
+        .expect("the distance has a label");
+    click(&mut h, label, egui::Modifiers::NONE);
+    assert_eq!(h.state().session.display.selection, [Item::Measure(1)]);
+
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::P);
+    h.run_steps(2);
+    click(&mut h, c, egui::Modifiers::NONE);
+    let probes = &h.state().session.display.probes;
+    assert_eq!(probes.len(), 1);
+    assert!(probes[0].at.cell.is_some(), "the cell under the pointer");
+    let row = h.root().children_recursive().find_map(|n| {
+        n.accesskit_node()
+            .label()
+            .filter(|l| l.starts_with("Distance 1: ") && l.ends_with(" m"))
+    });
+    assert!(
+        row.is_some(),
+        "the tree row names the distance and its value"
+    );
+}

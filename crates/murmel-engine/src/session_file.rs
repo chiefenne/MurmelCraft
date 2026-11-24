@@ -5,8 +5,9 @@
 //! mesh by its path and SHA-256 and holds the camera, the display (colour
 //! mode, render mode, quality metric and threshold, pick target, the
 //! hidden, isolated and selected items and the colours set on items, all
-//! by their tree ids), the clip plane, the saved views (named cameras,
-//! since format 1.1), the user's mesh colours and the view cube placement. Loading puts all of it back; the colours and the
+//! by their tree ids), the clip planes (since 1.2), the saved views (named
+//! cameras, since format 1.1), the measurements and probes (since 1.3),
+//! the user's mesh colours and the view cube placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
 //! `settings.toml` (decided 2026-11-24).
 //!
@@ -23,12 +24,13 @@ use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Item, PickTarget, RenderMode, SavedView};
+use crate::measure::{Measurement, Probe};
 use crate::quality::Metric;
 use crate::session::Session;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.2";
+pub const SESSION_VERSION: &str = "1.3";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -65,6 +67,12 @@ pub struct DisplayState {
     /// The clip planes, in order (1.2).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub clips: Vec<Clip>,
+    /// Distances and angles, in order (1.3).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub measurements: Vec<Measurement>,
+    /// Probes, in order (1.3).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub probes: Vec<Probe>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -177,6 +185,16 @@ impl SessionFile {
                 } else {
                     Vec::new()
                 },
+                measurements: if s.mesh.is_some() {
+                    d.measurements.clone()
+                } else {
+                    Vec::new()
+                },
+                probes: if s.mesh.is_some() {
+                    d.probes.clone()
+                } else {
+                    Vec::new()
+                },
             },
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
@@ -239,6 +257,33 @@ impl SessionFile {
             }
             clip.normal = crate::clip::unit(clip.normal)
                 .ok_or_else(|| Refused("the clip normal must not be zero".into()))?;
+        }
+        let mut numbers = Vec::new();
+        for m in &f.display.measurements {
+            if let Some(why) = m.problem() {
+                return Err(Refused(format!("measure:{}: {why}", m.n)));
+            }
+            if m.n == 0 || numbers.contains(&m.n) {
+                return Err(Refused(format!(
+                    "measure:{} is numbered 0 or given twice",
+                    m.n
+                )));
+            }
+            numbers.push(m.n);
+        }
+        numbers.clear();
+        for p in &f.display.probes {
+            let name_ok = p
+                .name
+                .as_ref()
+                .is_none_or(|n| crate::display::view_name(n).as_deref() == Some(n.as_str()));
+            if !p.at.is_finite() || !name_ok || p.n == 0 || numbers.contains(&p.n) {
+                return Err(Refused(format!(
+                    "probe:{} needs finite coordinates, a number given once and a valid name",
+                    p.n
+                )));
+            }
+            numbers.push(p.n);
         }
         if let Some(t) = f.display.threshold
             && !t.is_finite()
@@ -318,6 +363,8 @@ impl Session {
         d.colors.clear();
         d.clips.clear();
         d.views.clear();
+        d.measurements.clear();
+        d.probes.clear();
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
                 let i = Item::parse(id, &m.mesh);
@@ -347,6 +394,20 @@ impl Session {
                 _ => true,
             });
             d.views = f.views;
+            d.measurements = s.measurements;
+            // A probe whose cell the mesh does not have (it changed since
+            // the session was saved) is located again.
+            d.probes = s.probes;
+            for p in &mut d.probes {
+                if p.at.cell.is_none_or(|c| c as usize >= m.mesh.cell_count()) {
+                    p.at.cell = crate::measure::locate(&m.mesh, p.at.point);
+                }
+            }
+            d.selection.retain(|&i| match i {
+                Item::Measure(n) => d.measurements.iter().any(|x| x.n == n),
+                Item::Probe(n) => d.probes.iter().any(|x| x.n == n),
+                _ => true,
+            });
         }
         self.journal.clear();
         self.redraw();

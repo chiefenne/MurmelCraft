@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::display::{Display, Item};
+use crate::measure::{Anchor, MeasureKind, Measurement};
 use crate::session::{OpenMesh, Validity};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -373,6 +374,19 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ]
         }
         Item::Face(u) => face_rows(m, display, u as usize),
+        Item::Measure(n) => display.measurement(n).map_or_else(Vec::new, measure_rows),
+        Item::Probe(n) => {
+            let Some(p) = display.probe(n) else {
+                return Vec::new();
+            };
+            let mut v = vec![row("id", format!("probe:{n}"))];
+            if let Some(name) = &p.name {
+                v.push(row("name", name.clone()));
+            }
+            v.extend(probe_rows(m, &p.at));
+            v.push(row("hidden", !p.visible));
+            v
+        }
         Item::Kind(k) => {
             let cells = m.cell_kind.iter().filter(|&&x| x == k).count();
             let faces = m
@@ -388,6 +402,81 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ]
         }
     }
+}
+
+/// The rows of a distance or an angle: its value, the vector between
+/// the points of a distance, and each point with what it snapped to.
+fn measure_rows(ms: &Measurement) -> Vec<Row> {
+    let mut v = vec![row("id", format!("measure:{}", ms.n))];
+    if let Some(name) = &ms.name {
+        v.push(row("name", name.clone()));
+    }
+    v.push(row("kind", ms.kind.key()));
+    let points: &[(&'static str, &'static str)] = match ms.kind {
+        MeasureKind::Distance => {
+            v.push(unit("distance", round(ms.value(), 9), "m"));
+            if let Some(d) = ms.delta() {
+                v.push(unit("delta", vec3(d, 9), "m"));
+            }
+            &[("point_a", "snap_a"), ("point_b", "snap_b")]
+        }
+        MeasureKind::Angle => {
+            v.push(unit("angle", round(ms.value(), 4), "°"));
+            &[
+                ("point_a", "snap_a"),
+                ("vertex", "snap_vertex"),
+                ("point_b", "snap_b"),
+            ]
+        }
+    };
+    for (a, (pk, sk)) in ms.points.iter().zip(points) {
+        v.push(unit(pk, vec3(a.point, 9), "m"));
+        v.push(row(sk, a.snap.key()));
+    }
+    v.push(row("hidden", !ms.visible));
+    v
+}
+
+/// What a probe at `at` reads: the point, what it snapped to, and the
+/// cell holding it (type, zone, centroid and the distance to it, volume,
+/// worst non-orthogonality and skewness); only the point outside the
+/// mesh.
+pub fn probe_rows(m: &Mesh, at: &Anchor) -> Vec<Row> {
+    let mut v = vec![
+        unit("point", vec3(at.point, 9), "m"),
+        row("snap", at.snap.key()),
+    ];
+    let Some(c) = at.cell.map(|c| c as usize).filter(|&c| c < m.cell_count()) else {
+        v.push(row("inside", false));
+        return v;
+    };
+    let centroid = cell_centroid(m, c);
+    let (no, skew) = cell_quality(m, c);
+    let zone = m
+        .cell_zone
+        .get(c)
+        .and_then(|&z| m.zones.get(z as usize))
+        .cloned()
+        .unwrap_or_default();
+    v.extend([
+        row("inside", true),
+        row("cell", format!("cell:{c}")),
+        row(
+            "type",
+            m.cell_kind.get(c).map_or("polyhedron", |k| k.name()),
+        ),
+        row("zone", zone),
+        unit("centroid", vec3(centroid, 9), "m"),
+        unit(
+            "distance_to_centroid",
+            round(norm(sub(at.point, centroid)), 9),
+            "m",
+        ),
+        unit("volume", cell_volume(m, c), "m³"),
+        unit("non_orthogonality_max", round(no, 2), "°"),
+        row("skewness_max", round(skew, 4)),
+    ]);
+    v
 }
 
 /// The worst non-orthogonality (degrees) and skewness over the faces of

@@ -71,6 +71,7 @@ pub const GROUPS: &[&str] = &[
     "window",
     "display",
     "clip",
+    "measure",
     "selection",
     "settings",
 ];
@@ -626,6 +627,58 @@ pub fn commands() -> Vec<Command> {
             s.mesh.as_ref().map(|_| json!({"action": "show_all"}))
         }),
     ));
+    // Measuring (UI spec addition, 2026-11-24): M and Shift + M start
+    // the window's measure mode, whose clicks end in measure.add; P is
+    // the Properties panel, so probes take Shift + P.
+    v.push(cmd(
+        "window.measure_distance",
+        "cmd-measure-distance",
+        "measure",
+        &["M"],
+        Window(Some("measure.add")),
+    ));
+    v.push(cmd(
+        "window.measure_angle",
+        "cmd-measure-angle",
+        "measure",
+        &["Shift+M"],
+        Window(Some("measure.add")),
+    ));
+    v.push(cmd(
+        "window.probe",
+        "cmd-probe",
+        "measure",
+        &["Shift+P"],
+        Window(Some("probe.add")),
+    ));
+    v.push(cmd(
+        "measure.remove:selected",
+        "cmd-measure-remove-selected",
+        "measure",
+        &["Delete", "Backspace"],
+        Dynamic("measure.remove", |s| {
+            let m = s.mesh.as_ref()?;
+            let ids: Vec<String> = s
+                .display
+                .selection
+                .iter()
+                .filter(|i| matches!(i, Item::Measure(_) | Item::Probe(_)))
+                .map(|i| i.id(&m.mesh))
+                .collect();
+            (!ids.is_empty()).then(|| json!({ "items": ids }))
+        }),
+    ));
+    v.push(cmd(
+        "measure.remove:all",
+        "cmd-measure-remove-all",
+        "measure",
+        &[],
+        Dynamic("measure.remove", |s| {
+            let d = &s.display;
+            (s.mesh.is_some() && !(d.measurements.is_empty() && d.probes.is_empty()))
+                .then(|| json!({"all": true}))
+        }),
+    ));
     v.push(cmd(
         "view.fit:selection",
         "cmd-fit-selection",
@@ -776,6 +829,22 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     (
         "inspect.quality",
         "the quality legend shows the range and the histogram",
+    ),
+    (
+        "measure.snap",
+        "needs a screen point: the measure mode asks while the pointer moves",
+    ),
+    (
+        "measure.list",
+        "the model tree lists measurements and probes",
+    ),
+    (
+        "measure.rename",
+        "needs a new name: the model tree renames (double-click or the context menu)",
+    ),
+    (
+        "probe.at",
+        "needs a point: a probe placed with Shift + P shows the same rows",
     ),
 ];
 
@@ -929,6 +998,13 @@ mod tests {
             for _ in 0..2 {
                 assert!(crate::call("clip.set", json!({"new": true}), s).ok());
             }
+            // A measurement (selected too) and a probe, so deleting the
+            // selected ones and then all of them applies.
+            let at = |n: u32| json!({ "node": n });
+            let d = json!({"kind": "distance", "points": [at(0), at(1)]});
+            assert!(crate::call("measure.add", d, s).ok());
+            assert!(crate::call("probe.add", json!({"at": {"cell": 0}}), s).ok());
+            assert!(crate::call("select.item", json!({"item": "measure:1", "add": true}), s).ok());
         };
         open(&mut s);
         for c in commands() {

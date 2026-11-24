@@ -15,7 +15,9 @@ use crate::style::{color, icon};
 /// The property rows of one item, as `inspect.item` returned them, kept
 /// until the surface or the selection changes.
 pub struct PropsCache {
-    pub key: (u64, Option<Item>),
+    /// The surface revision, the item shown and, for a measurement or a
+    /// probe, its state (they change without a new surface).
+    pub key: (u64, Option<Item>, String),
     pub item: String,
     pub rows: Vec<Value>,
 }
@@ -73,7 +75,12 @@ impl MurmelApp {
                         )),
                     })
                 }
-                Item::Mesh | Item::Cell(_) | Item::Face(_) | Item::Clip(_) => {}
+                Item::Mesh
+                | Item::Cell(_)
+                | Item::Face(_)
+                | Item::Clip(_)
+                | Item::Measure(_)
+                | Item::Probe(_) => {}
             }
         }
         patches.sort_by(|a, b| a.label.cmp(&b.label));
@@ -184,6 +191,9 @@ impl MurmelApp {
                     action = Some(a);
                 }
                 if let Some(a) = self.clip_row(ui, &p) {
+                    action = Some(a);
+                }
+                if let Some(a) = self.measure_section(ui, &p, &filter) {
                     action = Some(a);
                 }
             });
@@ -619,10 +629,14 @@ impl MurmelApp {
     /// Fetch the rows of the selection through `inspect.item` when the
     /// surface or the selection changed.
     fn refresh_props(&mut self) {
-        let key = (
-            self.session.surface_revision,
-            self.session.display.current(),
-        );
+        let d = &self.session.display;
+        let current = d.current();
+        let state = match current {
+            Some(Item::Measure(n)) => format!("{:?}", d.measurement(n)),
+            Some(Item::Probe(n)) => format!("{:?}", d.probe(n)),
+            _ => String::new(),
+        };
+        let key = (self.session.surface_revision, current, state);
         if self.session.mesh.is_none() {
             self.props = None;
             return;
@@ -659,6 +673,12 @@ impl MurmelApp {
                 } else if area == "clip" {
                     self.i18n
                         .tr_args("props-clip-name", &[("n", name.to_string().into())])
+                } else if area == "measure" || area == "probe" {
+                    self.session
+                        .mesh
+                        .as_ref()
+                        .and_then(|m| Item::parse(&c.item, &m.mesh))
+                        .map_or_else(|| name.to_string(), |i| self.measure_name(i))
                 } else {
                     name.to_string()
                 };
@@ -750,6 +770,8 @@ impl MurmelApp {
                 "role" => self.i18n.tr(&format!("role-{s}")),
                 "mode" => self.i18n.tr(&format!("clip-mode-{s}")),
                 "type" => self.i18n.tr(&format!("kind-{s}")),
+                "kind" => self.i18n.tr(&format!("measure-kind-{s}")),
+                "snap" | "snap_a" | "snap_b" | "snap_vertex" => self.i18n.tr(&format!("snap-{s}")),
                 "name"
                     if self
                         .props
