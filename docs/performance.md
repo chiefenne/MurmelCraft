@@ -364,3 +364,12 @@ fast enough.
 - `murmel bench run` reports `render.next.faces`, the frame without the
   edges, next to `render.next`, so the edges' share of a frame can be
   read on the Mac.
+
+polyMesh binary, iso view at 1280 x 720, same machine, Mesa llvmpipe (a
+software rasteriser: the Radeon's numbers will differ, the share less
+so), `murmel bench`:
+
+| | 1 M | 4 M |
+|---|---:|---:|
+| render.next, ms (with edges) | 473 | 513 |
+| render.next.faces, ms | 307 | 350 |
