@@ -1066,7 +1066,52 @@ read, the region's cells and the surface):
 
 `region.clear` back to the overview: 0.25 to 0.3 s (the overview's
 surface built again). The read is nine tenths of the time and reads the
-blocks one after the other, about 0.18 s each; reading them on all
-threads comes next. A box whose sides lie on the block borders touches
+blocks one after the other, about 0.18 s each; they are read on all
+threads since (see the next section). A box whose sides lie on the block borders touches
 the blocks on both sides (a box of 0.5 in the middle of this file
 touches all 62 blocks, as the Hilbert blocks are cubes of a quarter).
+
+## Reading a region's blocks on all threads (2026-11-24)
+
+The blocks of a region were read one after the other. They are read on
+all threads now (`murmel_mesh::vtkhdf::read_blocks`, `subset.rs`):
+
+- The points and the point ids of each block are read on threads of
+  their own, a block to a thread at a time.
+- The points shared by blocks are joined by their id in shards: each id
+  goes to a shard by a hash of it, each shard on a thread keeps the
+  first place an id is seen, and the points are numbered in the order
+  of their first place, so the numbering is the one read in a row. An id
+  beyond `u32` joins the way it did.
+- The cells of each block are read on threads of their own, the
+  threads shared between the blocks, and put together in block order.
+- Reading the whole file is untouched: the 14 files of the digest check
+  read bit for bit as before, on one thread and on four.
+
+4 M blocked file (62 blocks of 65,536 cells), file in the page cache:
+
+| blocks | read before | read now, 4 threads | read now, 1 thread |
+|---:|---:|---:|---:|
+| 1 | 0.18–0.20 s | 0.16–0.18 s | |
+| 14 | 2.6 s | 1.5 s | 3.1–3.3 s |
+| 33 | 6.1 s | 3.1–3.3 s | 7.9–9.3 s |
+
+Of the 33 blocks' 3.2 s, the join takes 0.69 s, the cells 1.05 s and the
+face topology 0.73 s. With one thread (`MURMEL_THREADS=1`) the read
+takes longer than it did before on four; the window and the tools use
+all threads.
+
+The regions of the last section, read and whole redraw, before and now
+(4 threads):
+
+| region | blocks | read now | redraw before | redraw now |
+|---|---:|---:|---:|---:|
+| box 0.1 at a corner | 1 | 0.14–0.16 s | 0.25 s | 0.18–0.22 s |
+| sphere, radius 0.15, in the middle | 14 | 1.33 s | 2.65 s | 1.65 s |
+| box 0.4 in the middle | 14 | 1.33–1.37 s | 2.86 s | 1.77–1.79 s |
+| slab 0.02 across x | 33 | 3.21–3.24 s | 7.03 s | 3.74–3.81 s |
+
+The iMac's 8 cores (16 threads) should take a larger share off. What is
+left: each block read reads the patches whole (0.15 s on this file,
+about 1.5 s on 100 M cells) where it could keep the overview's, and the
+face topology of the blocks read.

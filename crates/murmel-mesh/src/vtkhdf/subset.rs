@@ -768,8 +768,14 @@ mod tests {
         let ids: Vec<&Values> = values.iter().collect();
         for n in [1, 4] {
             let j = crate::par::with_threads(n, || join_blocks(&ids, &rows, 10)).unwrap();
-            assert_eq!(j.maps, vec![vec![10, 11, 12], vec![12, 13, 10, 14], vec![13, 15]]);
-            assert_eq!(j.firsts, vec![(0, 0), (0, 1), (0, 2), (1, 1), (1, 3), (2, 1)]);
+            assert_eq!(
+                j.maps,
+                vec![vec![10, 11, 12], vec![12, 13, 10, 14], vec![13, 15]]
+            );
+            assert_eq!(
+                j.firsts,
+                vec![(0, 0), (0, 1), (0, 2), (1, 1), (1, 3), (2, 1)]
+            );
             for (id, point) in [(5, 10), (7, 11), (9, 12), (2, 13), (11, 14), (13, 15)] {
                 let shard = &j.shards[super::super::shard_of(id, j.shards.len())];
                 assert_eq!(shard.get(&(id as u32)), Some(&point), "id {id} on {n}");
@@ -777,7 +783,11 @@ mod tests {
         }
         for bad in [-1, 1 << 33] {
             let v = Values::of_ints_in(&[1, bad, 2], 0..3);
-            assert!(join_blocks(&[&v], &[0..3], 0).is_none(), "{bad}");
+            let rows = 0..3;
+            assert!(
+                join_blocks(&[&v], std::slice::from_ref(&rows), 0).is_none(),
+                "{bad}"
+            );
         }
     }
 
