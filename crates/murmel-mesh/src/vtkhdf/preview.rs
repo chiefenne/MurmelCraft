@@ -42,6 +42,12 @@ const MOST_CELLS: usize = 256;
 /// Blocks read between two checks for Cancel: a few for each thread.
 const BATCH: usize = 64;
 
+/// The version of how the grid is sampled: a grid kept from an older one
+/// (the engine's preview cache) is sampled again. 1: the cell whose
+/// centroid is nearest the grid cell's centre among those whose box
+/// holds it (2026-11-24).
+pub const PREVIEW_VERSION: u32 = 1;
+
 /// Where the cells of the preview grid lie, and what each shows.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreviewGrid {
@@ -76,6 +82,25 @@ impl PreviewGrid {
             v / (nx * ny).max(1),
         ];
         [0, 1, 2].map(|k| self.axis(k).centre(at[k]))
+    }
+
+    /// The preview mesh of this grid: one hexahedron for each of its
+    /// `voxels`, as [`read_preview`] builds it (without zones). MESH006
+    /// for a grid that is not one: a side of no cells or more than 256,
+    /// a corner or cell size that is not finite, or voxels outside the
+    /// grid or not ascending.
+    pub fn mesh(&self) -> Result<Mesh, MeshError> {
+        let sides_ok = self.shape.iter().all(|&n| (1..=MOST_CELLS).contains(&n));
+        let axes_ok = (0..3)
+            .all(|k| self.origin[k].is_finite() && self.step[k].is_finite() && self.step[k] > 0.0);
+        let cells = self.shape.iter().product::<usize>();
+        let voxels_ok = self.voxels.windows(2).all(|w| w[0] < w[1])
+            && self.voxels.last().is_none_or(|&v| (v as usize) < cells)
+            && self.file_cells.len() == self.voxels.len();
+        if !(sides_ok && axes_ok && voxels_ok) {
+            return Err(MeshError::new("MESH006", "not a preview grid"));
+        }
+        Ok(hexahedra(&[0, 1, 2].map(|k| self.axis(k)), &self.voxels))
     }
 
     fn axis(&self, k: usize) -> Axis {
@@ -601,6 +626,55 @@ mod tests {
             .count();
         assert!(shared > 2 * inside, "{shared} faces between cells");
         assert_eq!(m.cell_count(), whole.cell_count());
+    }
+
+    /// Invariant: a grid gives back the mesh the reader built for it
+    /// (the same points, faces and links), so a grid kept elsewhere (the
+    /// engine's cache) draws as the one read; a grid that is not one is
+    /// refused, never indexed out of range. Breaks when `mesh` builds
+    /// other hexahedra than the reader, or trusts its voxels. No other
+    /// test builds a mesh from a grid alone.
+    #[test]
+    fn a_grid_gives_its_mesh_again() {
+        let (path, _) = blocked("honeycomb-again.vtkhdf", 5, 37);
+        let (mesh, _, grid) = read_preview(&path, 12).unwrap();
+        let again = grid.mesh().unwrap();
+        assert_eq!(again.points, mesh.points);
+        assert_eq!(again.cell_faces, mesh.cell_faces);
+        assert_eq!(again.cell_face_id, mesh.cell_face_id);
+        assert_eq!(again.face_owner, mesh.face_owner);
+        assert_eq!(again.face_neighbour, mesh.face_neighbour);
+        assert_eq!(again.cell_kind, mesh.cell_kind);
+        assert_eq!(again.boundary_owner, mesh.boundary_owner);
+        let n: usize = grid.shape.iter().product();
+        let broken = [
+            PreviewGrid {
+                shape: [0, 1, 1],
+                ..grid.clone()
+            },
+            PreviewGrid {
+                step: [f64::NAN, 1.0, 1.0],
+                ..grid.clone()
+            },
+            PreviewGrid {
+                voxels: vec![n as u32],
+                file_cells: vec![0],
+                ..grid.clone()
+            },
+            PreviewGrid {
+                voxels: vec![2, 1],
+                file_cells: vec![0, 0],
+                ..grid.clone()
+            },
+            PreviewGrid {
+                file_cells: Vec::new(),
+                ..grid.clone()
+            },
+        ];
+        for g in broken {
+            assert_eq!(g.mesh().unwrap_err().code, "MESH006");
+        }
+        let _ = std::fs::remove_file(path);
     }
 
     /// Invariant: a file without a block index has no preview grid

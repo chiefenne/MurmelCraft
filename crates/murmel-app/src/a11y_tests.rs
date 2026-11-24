@@ -1574,6 +1574,7 @@ fn regions_on_an_overview_in_the_window() {
             app.session.config_dir = Some(config);
             app.bridge_path = None;
             app.session.memory_budget = Some(1e-9);
+            app.session.cache_dir = None;
             app.open_path(open);
             app
         });
@@ -1659,6 +1660,7 @@ fn slices_on_an_overview_in_the_window() {
             app.session.config_dir = Some(config);
             app.bridge_path = None;
             app.session.memory_budget = Some(1e-9);
+            app.session.cache_dir = None;
             app.session.preview_cells = 16;
             app.open_path(open);
             app
@@ -1754,6 +1756,7 @@ fn block_boxes_in_the_window() {
             app.session.config_dir = Some(config);
             app.bridge_path = None;
             app.session.memory_budget = Some(1e-9);
+            app.session.cache_dir = None;
             app.open_path(open);
             app
         });
@@ -1840,6 +1843,7 @@ fn overview_in_the_window() {
             app.bridge_path = None;
             // A budget of a byte: the file needs more.
             app.session.memory_budget = Some(1e-9);
+            app.session.cache_dir = None;
             app.open_path(open);
             app
         });

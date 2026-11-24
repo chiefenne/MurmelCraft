@@ -914,6 +914,11 @@ pub struct Session {
     /// The cells of the preview grid along its longest side
     /// ([`murmel_mesh::vtkhdf::PREVIEW_CELLS`]; tests take fewer).
     pub preview_cells: usize,
+    /// Where what can be made again is kept (the preview grids,
+    /// [`crate::preview_cache`]); `None` keeps nothing. The window, the
+    /// command line and the MCP server set it to
+    /// [`crate::settings::cache_dir`].
+    pub cache_dir: Option<PathBuf>,
 }
 
 impl Session {
@@ -950,6 +955,7 @@ impl Session {
             preview_job: None,
             preview_problem: None,
             preview_cells: murmel_mesh::vtkhdf::PREVIEW_CELLS,
+            cache_dir: None,
         }
     }
 
@@ -1442,6 +1448,7 @@ impl Session {
                     m.path.clone(),
                     self.preview_cells,
                     crate::blocks::volume_ranges(o),
+                    self.cache_dir.clone(),
                 )
             }
         };
@@ -2678,6 +2685,71 @@ mod tests {
         assert_eq!(s.mesh.as_ref().unwrap().surface.block_boxes, n);
         s.close();
         assert!(s.display.block_boxes.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant: with a cache folder, the preview grid sampled for an
+    /// overview is kept, and the same file opened again unchanged takes
+    /// it from there (here a value altered in the kept file shows, so it
+    /// was not sampled again); without one nothing is kept. Breaks when
+    /// the session does not hand its cache folder to the read, or the
+    /// read samples again despite a kept grid. The cache's own tests do
+    /// not go through a session.
+    #[test]
+    fn an_overview_opened_again_takes_its_kept_preview() {
+        let (dir, path, whole, mut s) = overview_session("preview-keep");
+        let old = SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let cache = dir.join("cache");
+        s.cache_dir = Some(cache.clone());
+        s.preview_cells = 16;
+        let mid = whole.bounds().center();
+        slice_by_pressure(&mut s, mid);
+        let first = s.mesh.as_ref().unwrap().fields.preview().unwrap().clone();
+        let kept: Vec<PathBuf> = std::fs::read_dir(cache.join(crate::preview_cache::DIR))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        // the last value of the last field, altered in the kept file
+        let mut bytes = std::fs::read(&kept[0]).unwrap();
+        let n = bytes.len();
+        bytes[n - 8..].copy_from_slice(&12345.0f64.to_le_bytes());
+        std::fs::write(&kept[0], bytes).unwrap();
+
+        let mut t = Session::new(Tokens::builtin().unwrap());
+        t.config_dir = None;
+        t.cache_dir = Some(cache.clone());
+        t.preview_cells = 16;
+        t.open_as(&path, Fit::Overview).unwrap();
+        slice_by_pressure(&mut t, mid);
+        let again = t.mesh.as_ref().unwrap().fields.preview().unwrap().clone();
+        assert_eq!(again.grid, first.grid);
+        let last = |p: &crate::preview::Preview| {
+            p.fields
+                .fields()
+                .last()
+                .and_then(|f| f.values.last().copied())
+        };
+        assert_eq!(last(&again), Some(12345.0), "taken from the cache");
+        assert_ne!(last(&first), Some(12345.0));
+        assert!(t.mesh.as_ref().unwrap().surface.triangles() > 0);
+        // no cache folder: sampled, nothing kept
+        let mut u = Session::new(Tokens::builtin().unwrap());
+        u.config_dir = None;
+        u.preview_cells = 16;
+        u.open_as(&path, Fit::Overview).unwrap();
+        slice_by_pressure(&mut u, mid);
+        let p = u.mesh.as_ref().unwrap().fields.preview().unwrap().clone();
+        assert_eq!(last(&p), last(&first));
+        s.close();
+        t.close();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
