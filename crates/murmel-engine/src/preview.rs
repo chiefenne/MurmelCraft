@@ -66,6 +66,11 @@ pub fn read(
 /// zone holds. Their triangles name no cell, as the cells they come from
 /// are the grid's.
 pub(crate) fn append(s: &mut Surface, p: &Preview, tokens: &Tokens, display: &Display) {
+    // The block boxes alone draw nothing on the grid.
+    let cuts = display.slices.iter().any(|s| s.enabled) || display.isos.iter().any(|i| i.enabled);
+    if !cuts && !display.arrows_shown() {
+        return;
+    }
     let mut d = display.clone();
     d.field_values = None;
     crate::field::ensure_field(&mut d, &p.mesh, &p.fields);

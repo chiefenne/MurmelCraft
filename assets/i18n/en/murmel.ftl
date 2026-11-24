@@ -244,6 +244,7 @@ props-area-probe = Probe
 props-area-slice = Slice
 props-area-iso = Iso-surface
 props-area-arrows = Vector arrows
+props-area-blocks = Block boxes
 props-area-stream = Streamlines
 props-area-region = Region
 props-clip-name = { $n }
@@ -921,6 +922,12 @@ cmd-region-clear-all = Remove all regions
 tree-regions = Regions of interest
 tree-region-label = Region { $n }: { $shape } · { $cells } cells
 tree-region-tip = Only the cells of the enabled regions show, and slices, iso-surfaces and arrows are computed there. Click to select, double-click to fit, right-click to cut flat or remove.
+tree-blocks = Block boxes
+tree-blocks-count = { $read ->
+    [0] { $blocks }
+   *[other] { $read } of { $blocks } read
+}
+tree-blocks-tip = The box of each block of the file. The blocks your regions read stand out, so you see what a region will read. Click to select, right-click for their colour.
 tree-region-remove = Remove this region
 tree-region-cut-flat = Cut flat along the border
 tree-region-cut-whole = Whole cells at the border
@@ -1097,6 +1104,7 @@ default-field_style-range = Range
 default-view-render_mode = Render mode
 default-view-mesh_look = Mesh beside slices
 default-view-projection = Projection
+default-view-show_blocks = Block boxes of an overview
 default-reference-density = Reference density
 default-reference-pressure = Reference pressure
 default-reference-velocity = Reference velocity

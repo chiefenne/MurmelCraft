@@ -569,8 +569,10 @@ fn prepare(
     mut base: Display,
     mesh: &Mesh,
     fields: &FieldSet,
+    overview: Option<&Overview>,
     tokens: &Tokens,
 ) -> (Display, Surface) {
+    crate::block_boxes::ensure(&mut base, overview);
     crate::region::ensure(&mut base, mesh);
     ensure_quality(&mut base, mesh);
     crate::field::ensure_field(&mut base, mesh, fields);
@@ -804,7 +806,13 @@ impl Loaded {
     /// `display` and `tokens` (used if they are unchanged when it opens).
     pub fn prepare(&mut self, display: &Display, tokens: &Tokens) {
         let base = display_for_new_mesh(display, &self.fields);
-        let (display, surface) = prepare(base.clone(), &self.mesh, &self.fields, tokens);
+        let (display, surface) = prepare(
+            base.clone(),
+            &self.mesh,
+            &self.fields,
+            self.overview.as_ref(),
+            tokens,
+        );
         self.prepared = Some(Prepared {
             base,
             tokens: tokens.clone(),
@@ -1100,7 +1108,8 @@ impl Session {
             forget_cells(&mut base, &l.mesh);
         }
         keep_field(&mut base, &l.fields);
-        let (display, surface) = prepare(base, &l.mesh, &l.fields, &self.tokens);
+        let (display, surface) =
+            prepare(base, &l.mesh, &l.fields, l.overview.as_ref(), &self.tokens);
         self.display = display;
         self.surface_revision += 1;
         self.preview = None;
@@ -1142,7 +1151,7 @@ impl Session {
         let base = display_for_new_mesh(&self.display, &l.fields);
         let (display, surface) = match l.prepared.take() {
             Some(p) if p.base == base && p.tokens == self.tokens => (p.display, p.surface),
-            _ => prepare(base, &l.mesh, &l.fields, &self.tokens),
+            _ => prepare(base, &l.mesh, &l.fields, l.overview.as_ref(), &self.tokens),
         };
         self.display = display;
         if let Some(b) = &surface.bounds {
@@ -1193,6 +1202,7 @@ impl Session {
         self.display.field_values = None;
         self.display.regions.clear();
         self.display.region_cells = None;
+        self.display.block_boxes = None;
         self.display.parcels = None;
         self.display.parcel_data = None;
         self.series = None;
@@ -1219,6 +1229,7 @@ impl Session {
             self.surface_revision += 1;
             return;
         };
+        crate::block_boxes::ensure(&mut self.display, m.overview.as_deref());
         find_regions(&mut self.display, m);
         ensure_quality(&mut self.display, &m.mesh);
         crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
@@ -2551,6 +2562,122 @@ mod tests {
         assert!(Arc::ptr_eq(m.fields.preview().unwrap(), &p));
         assert!((area_of(&m.surface) - a).abs() < 1e-9 * a);
         s.close();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant: the eye of `blocks` on an overview draws the twelve
+    /// edges of each block's box in the lines that hide behind faces (the
+    /// mesh then draws as its faint outline), the blocks a region reads
+    /// in their own colour and last, the others in the item's colour; the
+    /// boxes stay while the region's blocks show, nothing is drawn on a
+    /// mesh read whole (the setting kept for the next overview), and they
+    /// go with the mesh. Breaks when the boxes draw while off, take the
+    /// mesh's faces from it in no way, miss a corner, colour the wrong
+    /// blocks as read or draw them under the others, or outlive the
+    /// overview. No other test draws the boxes.
+    #[test]
+    fn an_overview_draws_the_boxes_of_its_blocks() {
+        let (dir, path, whole, mut s) = overview_session("block-boxes");
+        let t = Tokens::builtin().unwrap();
+        let o = s.mesh.as_ref().unwrap().overview.clone().unwrap();
+        let n = o.blocks.iter().filter(|b| !b.bounds.is_empty()).count();
+        assert!(n > 2);
+        // off: listed, not drawn
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        assert_eq!(s.display.block_boxes.as_ref().unwrap().count(), n);
+        assert!(s.display.has(Item::Blocks));
+        assert_eq!(m.surface.block_boxes, 0);
+        assert!(m.surface.stream_positions.is_empty());
+        assert!(m.surface.triangles() > 0);
+        // on: every box, the mesh a faint outline
+        let blocks = [Item::Blocks];
+        s.display
+            .set_visibility(crate::display::Visibility::Show, &blocks, &whole);
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        let sf = &m.surface;
+        assert_eq!(sf.block_boxes, n);
+        assert_eq!(sf.stream_positions.len(), 24 * n);
+        assert_eq!(sf.stream_colors.len(), 24 * n);
+        assert_eq!(sf.triangles(), 0, "the mesh draws as its outline");
+        let plain = t.mesh.field.block.linear();
+        assert!(sf.stream_colors.iter().all(|&c| c == plain));
+        // each box's edges run along one axis between its corners
+        let corners = |k: usize| -> Vec<[f64; 3]> {
+            let b = o.blocks[k].bounds;
+            (0..8)
+                .map(|i| {
+                    std::array::from_fn(|a| {
+                        if i & (1 << a) == 0 {
+                            b.min[a]
+                        } else {
+                            b.max[a]
+                        }
+                    })
+                })
+                .collect()
+        };
+        let back =
+            |p: [f32; 3]| -> [f64; 3] { std::array::from_fn(|a| p[a] as f64 + sf.origin[a]) };
+        let drawn: Vec<usize> = (0..o.blocks.len())
+            .filter(|&k| !o.blocks[k].bounds.is_empty())
+            .collect();
+        for (j, &k) in drawn.iter().enumerate() {
+            let c = corners(k);
+            let mut seen = [false; 8];
+            for e in sf.stream_positions[24 * j..24 * (j + 1)].chunks(2) {
+                let (a, b) = (back(e[0]), back(e[1]));
+                let differ = (0..3).filter(|&x| (a[x] - b[x]).abs() > 1e-6).count();
+                assert_eq!(differ, 1, "an edge of box {k}");
+                for p in [a, b] {
+                    let i = c
+                        .iter()
+                        .position(|q| (0..3).all(|x| (p[x] - q[x]).abs() < 1e-5))
+                        .expect("a corner of the box");
+                    seen[i] = true;
+                }
+            }
+            assert!(seen.iter().all(|&x| x), "all corners of box {k}");
+        }
+        // a region: its blocks take their own colour, drawn last
+        s.display.regions.push(corner_box(&whole));
+        s.redraw();
+        let read = crate::blocks::wanted(&o, &s.display.regions);
+        assert!(!read.is_empty() && read.len() < n);
+        assert_eq!(s.display.block_boxes.as_ref().unwrap().read, read);
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.blocks.is_some(), "the region's blocks show");
+        let sf = &m.surface;
+        assert_eq!(sf.block_boxes, n);
+        let split = 24 * (n - read.len());
+        let hi = t.mesh.field.block_read.linear();
+        assert!(sf.stream_colors[..split].iter().all(|&c| c == plain));
+        assert!(sf.stream_colors[split..].iter().all(|&c| c == hi));
+        // the item's colour: the others take it
+        let violet = crate::theme::Rgb([0x70, 0x40, 0xC0]);
+        s.display.colors.insert(Item::Blocks, violet);
+        s.redraw();
+        let sf = &s.mesh.as_ref().unwrap().surface;
+        assert!(
+            sf.stream_colors[..split]
+                .iter()
+                .all(|&c| c == violet.linear())
+        );
+        assert!(sf.stream_colors[split..].iter().all(|&c| c == hi));
+        // a mesh read whole has none; the setting stays
+        s.display.regions.clear();
+        s.open_as(&path, Fit::Whole).unwrap();
+        s.redraw();
+        assert!(s.display.show_blocks);
+        assert!(s.display.block_boxes.is_none());
+        assert!(!s.display.has(Item::Blocks));
+        assert_eq!(s.mesh.as_ref().unwrap().surface.block_boxes, 0);
+        // the next overview shows them at once
+        s.open_as(&path, Fit::Overview).unwrap();
+        assert_eq!(s.mesh.as_ref().unwrap().surface.block_boxes, n);
+        s.close();
+        assert!(s.display.block_boxes.is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

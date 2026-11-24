@@ -96,11 +96,13 @@ pub struct Surface {
     /// colour range of arrows coloured by their magnitude, range mode
     /// shown).
     pub arrow_range: Option<(f64, f64)>,
-    /// Streamlines drawn as lines (line pairs, relative to `origin`) with
-    /// their linear colours: drawn in every render mode, hidden behind
-    /// faces.
+    /// Lines drawn in every render mode, hidden behind faces (line
+    /// pairs, relative to `origin`), with their linear colours: the
+    /// streamlines, then the boxes of an overview's blocks.
     pub stream_positions: Vec<[f32; 3]>,
     pub stream_colors: Vec<[f32; 3]>,
+    /// The boxes of an overview's blocks drawn ([`crate::block_boxes`]).
+    pub block_boxes: usize,
     /// Spray parcels drawn, and whether more passed the filters than
     /// were drawn ([`crate::parcel::MAX_DRAWN`]).
     pub parcels: usize,
@@ -949,6 +951,7 @@ impl Surface {
                 }
             }
             crate::parcel::append(&mut s, mesh, tokens, display);
+            crate::block_boxes::append(&mut s, tokens, display);
         }
         s.outline_color = sel.linear();
         for (a, b) in outline(mesh, display) {
@@ -1563,6 +1566,7 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         | Item::Iso(_)
         | Item::Arrows
         | Item::Parcels
+        | Item::Blocks
         | Item::Region(_)
         | Item::Stream(_) => false,
     })
