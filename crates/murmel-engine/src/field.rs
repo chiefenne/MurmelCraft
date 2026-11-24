@@ -430,6 +430,8 @@ pub struct FieldSet {
     topology: OnceLock<Arc<Topology>>,
     /// The cells' centroids on a bucket grid (streamline seeds).
     grid: OnceLock<Arc<crate::stream::CellGrid>>,
+    /// The cells in bins, for slices and iso-surfaces ([`crate::bins`]).
+    bins: OnceLock<Arc<crate::bins::CellBins>>,
     /// Values made once per field and component (colour mode field and
     /// every iso-surface ask for them again on each redraw).
     cache: ValueCache,
@@ -454,6 +456,7 @@ impl FieldSet {
             results,
             topology: OnceLock::new(),
             grid: OnceLock::new(),
+            bins: OnceLock::new(),
             cache: ValueCache::default(),
             derived: Vec::new(),
             volume_ranges: HashMap::new(),
@@ -612,6 +615,9 @@ impl FieldSet {
     pub(crate) fn share_topology(&self, from: &FieldSet) {
         if let Some(t) = from.topology.get() {
             let _ = self.topology.set(t.clone());
+        }
+        if let Some(b) = from.bins.get() {
+            let _ = self.bins.set(b.clone());
         }
     }
 
@@ -853,6 +859,20 @@ impl FieldSet {
             Location::Boundary => mesh.boundary.len(),
         };
         f.len() == n && f.values.len() == n * f.components.max(1)
+    }
+
+    /// The cells of `mesh` in bins ([`crate::bins`]), made once.
+    pub(crate) fn bins(&self, mesh: &Mesh) -> &crate::bins::CellBins {
+        self.bins.get_or_init(|| {
+            let _phase = murmel_mesh::profile::span("field.bins");
+            let t = self.topology(mesh);
+            Arc::new(crate::bins::CellBins::build(mesh, |c| t.nodes_of(c)))
+        })
+    }
+
+    /// The nodes of cell `c`, each once.
+    pub(crate) fn cell_nodes_of(&self, mesh: &Mesh, c: usize) -> &[u32] {
+        self.topology(mesh).nodes_of(c)
     }
 
     fn topology(&self, mesh: &Mesh) -> &Topology {
@@ -1433,6 +1453,7 @@ impl FieldSet {
             grad: grad.into_iter().map(|g| g.map(|x| x as f32)).collect(),
             range,
             origin,
+            spans: Default::default(),
         })
     }
 }
@@ -1460,6 +1481,10 @@ pub struct FieldValues {
     pub range: Option<(f64, f64)>,
     /// Values reach the GPU relative to this.
     pub origin: f64,
+    /// The smallest and largest value the iso-surface test meets in each
+    /// bin of cells ([`crate::bins`]), made the first time an
+    /// iso-surface of these values is drawn.
+    pub(crate) spans: crate::bins::Kept<crate::bins::Spans>,
 }
 
 impl FieldValues {

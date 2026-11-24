@@ -1224,3 +1224,48 @@ on them, 1 M honeycomb (1,005,039 cells), polyMesh binary, 4 threads,
 
 At 10 M cells each of these is about ten times longer: seconds for one
 step of a slice drag. What follows takes them down one at a time.
+
+## Slices and iso-surfaces on all threads, near the cells they cross (2026-11-24)
+
+A slice or an iso-surface tested every cell shown, on one thread, before
+cutting the few it crosses; a slice's outlines did it again with the
+distance of every node to the plane.
+
+- **The cells in bins** (`bins.rs`): each cell goes to the bin of a
+  regular grid holding the mean of its nodes, about 8 cells to a bin,
+  made once per mesh (46 ms at 1 M cells). A bin keeps the sphere about
+  its centre that holds every node of its cells. A plane farther from a
+  bin's centre than that crosses none of its cells, so a slice tests
+  only the cells of the bins it passes (a few per cent of the mesh). For
+  an iso-surface each bin keeps, per field, the smallest and largest
+  value the test of its cells can meet (made the first time an
+  iso-surface of that field is drawn), so a new iso value tests only the
+  bins whose span holds it.
+- **The crossed cells are cut on all threads**, in runs of cells; each
+  run names the points it makes by the segment of the tetrahedron they
+  lie on. The runs are joined in cell order: a point two runs made is
+  the first run's, and each triangle's side and normal are found from
+  the points kept, as one thread did. A point on a segment from a
+  cell's centroid lies in that cell alone and is not looked up.
+- The outlines of the cells' sections are found on all threads, only
+  for the cells near the plane, with each node's distance worked out
+  where it is needed.
+- What is drawn is the same, bit for bit, as before, for any number of
+  threads (a test compares one thread testing every cell with five
+  threads and the bins).
+
+1 M honeycomb, polyMesh binary, 4 threads, `--no-render`; in brackets
+before:
+
+| Stage (ms) | now (was) | inside |
+|---|---:|---|
+| slice.set | 340 (1,008) | bins made 46, section 135, outlines 52 |
+| slice.step | 416 (1,059) | cells tested 6 (650 with the section), section 145, outlines 51 |
+| iso.set | 1,330 (2,876) | iso-surface 912 (cut 289, join 444) |
+| iso.step | 972 (2,909) | iso-surface 530 (cut 231, join 231) |
+| slice.step.arrows | 505 (1,270) | section 220, outlines 47 |
+
+What is left in a slice step is the mesh's own surface, built again
+with it (about 220 ms), and joining the iso-surface's runs on one
+thread. Those come next, with the field's node values (`field.color`,
+`arrows.set`).
