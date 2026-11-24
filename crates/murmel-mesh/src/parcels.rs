@@ -101,7 +101,11 @@ pub fn read_parcels(path: &Path) -> Result<Parcels, MeshError> {
     let h = H5::open(path)?;
     let mut p = read_parcels_h5(&h)?;
     p.path = path.to_path_buf();
-    p.blake3 = crate::FileHash::Blake3.of_bytes(h.bytes());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    p.blake3 = crate::FileHash::Blake3
+        .of_file(path, &stop)
+        .map_err(|e| MeshError::new("MESH001", format!("cannot read {}: {e}", path.display())))?
+        .unwrap_or_default();
     Ok(p)
 }
 

@@ -18,14 +18,22 @@
 //! fractal heaps, other filters (szip, nbit, scale-offset), virtual
 //! datasets and external files.
 //!
-//! The whole file is held in memory. Every address and size is checked
-//! against the file before it is used, so a broken file gives `MESH016`
-//! and never a panic or an allocation larger than the file allows.
+//! A file opened by its path is not held in memory: [`H5::open`] reads
+//! the file's structure (superblock, object headers, groups, attributes,
+//! chunk indices) in pages until every object of it is found, and the
+//! data of a dataset is read from the file when it is asked for
+//! (positional reads, on all threads for large datasets). A file given
+//! as bytes ([`H5::from_bytes`]) is read from memory. Every address and
+//! size is checked against the file before it is used, so a broken file
+//! gives `MESH016` and never a panic or an allocation larger than the
+//! file allows.
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::fs::File;
 use std::io::Read as _;
 use std::ops::Range;
+use std::sync::Mutex;
 
 use crate::MeshError;
 
@@ -37,6 +45,10 @@ const MAX_VISITS: usize = 1 << 20;
 
 fn broken(message: impl Into<String>) -> MeshError {
     MeshError::new("MESH016", message)
+}
+
+fn not_hdf5() -> MeshError {
+    MeshError::new("MESH018", "the file is not an HDF5 file")
 }
 
 fn unsupported(message: impl Into<String>) -> MeshError {
@@ -52,22 +64,43 @@ fn log2_exact(n: u64) -> Option<u32> {
     n.is_power_of_two().then(|| n.trailing_zeros())
 }
 
-/// A read position in the file.
+/// A read position in the file: position `at + p` of the file, in a run
+/// of its bytes `d` that starts at position `at`.
 #[derive(Clone)]
 struct Cur<'a> {
     d: &'a [u8],
     p: usize,
+    at: usize,
     o: usize,
     l: usize,
+    /// Where to note the position after `d` when a read runs past it and
+    /// the file goes on there unread (while the file is being opened).
+    holes: Option<&'a Mutex<Vec<usize>>>,
 }
 
 impl<'a> Cur<'a> {
+    /// The position in the file.
+    fn pos(&self) -> usize {
+        self.at + self.p
+    }
+
+    /// Whether `n` bytes can be read here; notes the hole when not.
+    fn has(&self, n: usize) -> bool {
+        let ok = self.p.checked_add(n).is_some_and(|e| e <= self.d.len());
+        if !ok && let Some(h) = self.holes {
+            note(h, self.at + self.d.len());
+        }
+        ok
+    }
+
     fn bytes(&mut self, n: usize) -> Result<&'a [u8], MeshError> {
-        let end = self
-            .p
-            .checked_add(n)
-            .filter(|&e| e <= self.d.len())
-            .ok_or_else(|| broken(format!("read of {n} bytes at {} runs past the end", self.p)))?;
+        if !self.has(n) {
+            return Err(broken(format!(
+                "read of {n} bytes at {} runs past the end",
+                self.pos()
+            )));
+        }
+        let end = self.p + n;
         let s = &self.d[self.p..end];
         self.p = end;
         Ok(s)
@@ -129,11 +162,90 @@ impl<'a> Cur<'a> {
 
 /// An open HDF5 file.
 pub struct H5 {
-    data: Vec<u8>,
+    /// The runs of the file's bytes read so far, by position, in order
+    /// and apart: the whole file for [`H5::from_bytes`], its structure
+    /// for [`H5::open`].
+    parts: Vec<Part>,
+    /// The file, for data outside `parts`.
+    file: Option<File>,
+    len: usize,
     o: usize,
     l: usize,
     base: u64,
     root: u64,
+    /// Positions a parse needed outside `parts` (while opening).
+    holes: Mutex<Vec<usize>>,
+    /// The bytes read first, and at least at each hole.
+    page: usize,
+}
+
+/// A run of the file's bytes from position `at`.
+struct Part {
+    at: usize,
+    bytes: Vec<u8>,
+}
+
+impl Part {
+    fn end(&self) -> usize {
+        self.at + self.bytes.len()
+    }
+}
+
+/// Note a position a parse needed and did not find.
+fn note(holes: &Mutex<Vec<usize>>, pos: usize) {
+    if let Ok(mut h) = holes.lock()
+        && h.len() < MAX_HOLES
+    {
+        h.push(pos);
+    }
+}
+
+/// The bytes the file reads first, and then at least at each hole: most
+/// writers keep a file's structure together, and a page holds many of
+/// its pieces.
+const PAGE: usize = 1 << 16;
+/// Holes noted in one round of opening; more are found in the next.
+const MAX_HOLES: usize = 1 << 12;
+/// Rounds of opening: each finds the pieces of the structure that the
+/// pieces found before point to.
+const MAX_ROUNDS: usize = 64;
+/// Bytes of data read in one piece by one thread.
+const READ_PIECE: usize = 1 << 23;
+
+/// Fill `buf` from position `pos` of `f`.
+#[cfg(unix)]
+fn read_exact_at(f: &File, buf: &mut [u8], pos: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(f, buf, pos)
+}
+
+/// Fill `buf` from position `pos` of `f`.
+#[cfg(windows)]
+fn read_exact_at(f: &File, mut buf: &mut [u8], mut pos: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match f.seek_read(buf, pos) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => {
+                buf = &mut buf[n..];
+                pos += n as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// Fill `buf` from position `pos` of `f`.
+#[cfg(not(any(unix, windows)))]
+fn read_exact_at(_: &File, _: &mut [u8], _: u64) -> std::io::Result<()> {
+    Err(std::io::Error::other(
+        "positional reads are not supported here",
+    ))
+}
+
+fn cannot_read(e: std::io::Error) -> MeshError {
+    MeshError::new("MESH001", format!("cannot read the file: {e}"))
 }
 
 /// A datatype the reader converts.
@@ -242,6 +354,16 @@ enum Layout {
         dims: Vec<u64>,
         index: ChunkIndex,
     },
+}
+
+/// A chunk of a chunked dataset.
+struct Chunk {
+    /// Its offsets in elements.
+    off: Vec<u64>,
+    addr: u64,
+    /// Its size in the file (filtered).
+    size: u64,
+    mask: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -426,12 +548,70 @@ impl H5 {
             }
             s = if s == 0 { 512 } else { s * 2 };
         }
-        let at = at.ok_or_else(|| MeshError::new("MESH018", "the file is not an HDF5 file"))?;
+        let at = at.ok_or_else(not_hdf5)?;
+        let len = data.len();
+        H5::with(vec![Part { at: 0, bytes: data }], None, len, at)
+    }
+
+    /// Open the HDF5 file at `path`: its structure is read now, the data
+    /// of its datasets when they are read.
+    pub fn open(path: &std::path::Path) -> Result<H5, MeshError> {
+        H5::open_paged(path, PAGE)
+    }
+
+    /// [`H5::open`], reading the structure in pages of `page` bytes.
+    fn open_paged(path: &std::path::Path, page: usize) -> Result<H5, MeshError> {
+        let cannot = |e: std::io::Error| {
+            MeshError::new("MESH001", format!("cannot read {}: {e}", path.display()))
+        };
+        let file = File::open(path).map_err(cannot)?;
+        let len = file
+            .metadata()
+            .map_err(cannot)
+            .and_then(|m| usize::try_from(m.len()).map_err(|_| not_hdf5()))?;
+        // The superblock is at 0, 512, 1024, 2048, …
+        let mut s = 0usize;
+        let at = loop {
+            if s + 8 > len {
+                return Err(not_hdf5());
+            }
+            let mut sig = [0u8; 8];
+            read_exact_at(&file, &mut sig, s as u64).map_err(cannot)?;
+            if &sig == SIGNATURE {
+                break s;
+            }
+            s = if s == 0 { 512 } else { s * 2 };
+        };
+        let mut parts = Vec::new();
+        for start in [0, at] {
+            let end = (start + page.max(4096)).min(len);
+            let mut bytes = vec![0; end - start];
+            read_exact_at(&file, &mut bytes, start as u64).map_err(cannot)?;
+            parts.push(Part { at: start, bytes });
+            if at < end {
+                break;
+            }
+        }
+        let mut h = H5::with(parts, Some(file), len, at)?;
+        h.page = page.max(1);
+        h.load_structure();
+        Ok(h)
+    }
+
+    /// The file whose superblock is at `at`, with the `parts` read so far
+    /// (they hold the superblock).
+    fn with(parts: Vec<Part>, file: Option<File>, len: usize, at: usize) -> Result<H5, MeshError> {
+        let part = parts
+            .iter()
+            .find(|p| p.at <= at && at < p.end())
+            .ok_or_else(not_hdf5)?;
         let mut c = Cur {
-            d: &data,
-            p: at + 8,
+            d: &part.bytes,
+            p: at - part.at + 8,
+            at: part.at,
             o: 8,
             l: 8,
+            holes: None,
         };
         let version = c.u8()?;
         let (o, l, base, root);
@@ -476,64 +656,276 @@ impl H5 {
             v => return Err(unsupported(format!("HDF5 superblock version {v}"))),
         }
         Ok(H5 {
-            data,
+            parts,
+            file,
+            len,
             o,
             l,
             base,
             root,
+            holes: Mutex::new(Vec::new()),
+            page: PAGE,
         })
     }
 
-    pub fn open(path: &std::path::Path) -> Result<H5, MeshError> {
-        let data = std::fs::read(path).map_err(|e| {
-            MeshError::new("MESH001", format!("cannot read {}: {e}", path.display()))
-        })?;
-        H5::from_bytes(data)
-    }
-
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    /// The bytes of the file.
-    pub fn bytes(&self) -> &[u8] {
-        &self.data
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
-    fn cur(&self, addr: u64) -> Result<Cur<'_>, MeshError> {
-        let p = self
-            .base
-            .checked_add(addr)
-            .and_then(|a| usize::try_from(a).ok())
-            .filter(|&a| a <= self.data.len())
-            .ok_or_else(|| broken(format!("address {addr} is outside the file")))?;
-        Ok(Cur {
-            d: &self.data,
-            p,
-            o: self.o,
-            l: self.l,
-        })
-    }
-
-    /// A cursor over a message's data.
-    fn msg_cur(&self, r: &Range<usize>) -> Cur<'_> {
-        Cur {
-            d: &self.data[..r.end],
-            p: r.start,
-            o: self.o,
-            l: self.l,
+    /// Read the file's structure: walk every object from the root, note
+    /// what the walk needed and had not read, read it (a page at least,
+    /// or twice the run it continues), and walk again until nothing is
+    /// missing. A file whose structure is broken keeps what was found;
+    /// its broken objects fail when they are read.
+    fn load_structure(&mut self) {
+        for _ in 0..MAX_ROUNDS {
+            self.walk();
+            let mut holes = std::mem::take(self.holes.get_mut().unwrap_or_else(|e| e.into_inner()));
+            if holes.is_empty() {
+                return;
+            }
+            holes.sort_unstable();
+            holes.dedup();
+            for pos in holes {
+                if self.read_part(pos).is_err() {
+                    return;
+                }
+            }
         }
     }
 
-    /// The bytes at `addr`, `n` long.
+    /// Read the bytes from `pos`: a page, or as many as the run that
+    /// ends there, joined with the runs it meets.
+    fn read_part(&mut self, pos: usize) -> std::io::Result<()> {
+        if pos >= self.len || self.parts.iter().any(|p| p.at <= pos && pos < p.end()) {
+            return Ok(());
+        }
+        let grow = self
+            .parts
+            .iter()
+            .find(|p| p.end() == pos)
+            .map_or(self.page, |p| p.bytes.len().max(self.page));
+        let mut start = pos - pos % self.page;
+        let mut end = (pos + grow).min(self.len);
+        // join the runs this one meets or touches
+        let (meet, keep): (Vec<Part>, Vec<Part>) = std::mem::take(&mut self.parts)
+            .into_iter()
+            .partition(|p| p.at <= end && start <= p.end());
+        for p in &meet {
+            start = start.min(p.at);
+            end = end.max(p.end());
+        }
+        self.parts = keep;
+        let mut bytes = vec![0; end - start];
+        let read = match &self.file {
+            Some(f) => read_exact_at(f, &mut bytes, start as u64),
+            None => Err(std::io::Error::other("no file")),
+        };
+        if read.is_err() {
+            // keep what was read before
+            self.parts.extend(meet);
+            self.parts.sort_by_key(|p| p.at);
+            return read;
+        }
+        self.parts.push(Part { at: start, bytes });
+        self.parts.sort_by_key(|p| p.at);
+        Ok(())
+    }
+
+    /// Walk every object reachable from the root, as the readers will:
+    /// headers, links, attributes, dataset descriptions and chunk
+    /// indices, and the strings of variable-length string datasets. A
+    /// part that fails is passed over.
+    fn walk(&self) {
+        let mut seen = HashSet::new();
+        let mut stack = vec![self.root];
+        while let Some(addr) = stack.pop() {
+            if !seen.insert(addr) || seen.len() > MAX_VISITS {
+                continue;
+            }
+            let Ok(obj) = self.object(addr) else {
+                continue;
+            };
+            let _ = self.attrs(&obj);
+            if self.is_group(&obj) {
+                if let Ok(links) = self.links(&obj) {
+                    stack.extend(links.into_iter().filter_map(|l| match l.target {
+                        Target::Hard(a) => Some(a),
+                        _ => None,
+                    }));
+                }
+            } else if let Ok(ds) = self.dataset(&obj) {
+                if let Layout::Chunked { dims, index } = &ds.layout {
+                    let _ = self.chunk_list(&ds, dims, index);
+                }
+                if ds.dtype == Dtype::VarString {
+                    let _ = self.read_strings(&ds);
+                }
+            }
+        }
+    }
+
+    /// The length of the file in bytes.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The run holding positions `start..end`.
+    fn part(&self, start: usize, end: usize) -> Option<&Part> {
+        let i = self.parts.partition_point(|p| p.end() <= start);
+        self.parts
+            .get(i)
+            .filter(|p| p.at <= start && end <= p.end())
+            .or_else(|| {
+                // an empty read at a run's end
+                (start == end)
+                    .then(|| self.parts.iter().find(|p| p.end() == start))
+                    .flatten()
+            })
+    }
+
+    /// Note a hole at `pos` while the file is opened.
+    fn hole(&self, pos: usize) {
+        if self.file.is_some() {
+            note(&self.holes, pos);
+        }
+    }
+
+    /// The first position of `start..end` that no run holds.
+    fn first_missing(&self, start: usize) -> usize {
+        match self.parts.iter().find(|p| p.at <= start && start < p.end()) {
+            Some(p) => p.end(),
+            None => start,
+        }
+    }
+
+    /// A cursor at the position of `addr`, over the run that holds it.
+    fn cur(&self, addr: u64) -> Result<Cur<'_>, MeshError> {
+        let pos = self
+            .base
+            .checked_add(addr)
+            .and_then(|a| usize::try_from(a).ok())
+            .filter(|&a| a <= self.len)
+            .ok_or_else(|| broken(format!("address {addr} is outside the file")))?;
+        let Some(part) = self.part(pos, pos) else {
+            self.hole(pos);
+            return Err(broken(format!(
+                "address {addr} is not in the structure read from the file"
+            )));
+        };
+        let open = self.file.is_some() && part.end() < self.len;
+        Ok(Cur {
+            d: &part.bytes,
+            p: pos - part.at,
+            at: part.at,
+            o: self.o,
+            l: self.l,
+            holes: open.then_some(&self.holes),
+        })
+    }
+
+    /// A cursor over positions `start..end` of the file.
+    fn cur_in(&self, start: usize, end: usize) -> Result<Cur<'_>, MeshError> {
+        if start > end || end > self.len {
+            return Err(broken("a piece of the structure runs past the end"));
+        }
+        let Some(part) = self.part(start, end) else {
+            self.hole(self.first_missing(start));
+            return Err(broken(
+                "a piece of the structure is not in what was read from the file",
+            ));
+        };
+        Ok(Cur {
+            d: &part.bytes[..end - part.at],
+            p: start - part.at,
+            at: part.at,
+            o: self.o,
+            l: self.l,
+            holes: None,
+        })
+    }
+
+    /// A cursor over bytes that are not where they lie in the file.
+    fn local<'a>(&self, d: &'a [u8]) -> Cur<'a> {
+        Cur {
+            d,
+            p: 0,
+            at: 0,
+            o: self.o,
+            l: self.l,
+            holes: None,
+        }
+    }
+
+    /// A cursor over a message's data (empty if it was not read).
+    fn msg_cur(&self, r: &Range<usize>) -> Cur<'_> {
+        self.cur_in(r.start, r.end)
+            .unwrap_or_else(|_| self.local(&[]))
+    }
+
+    /// A message's bytes (empty if they were not read).
+    fn msg_bytes(&self, r: &Range<usize>) -> &[u8] {
+        self.part(r.start, r.end)
+            .map_or(&[], |p| &p.bytes[r.start - p.at..r.end - p.at])
+    }
+
+    /// The bytes of the structure at `addr`, `n` long.
     fn slice(&self, addr: u64, n: u64) -> Result<&[u8], MeshError> {
         let n = usize::try_from(n).map_err(|_| broken("size too large"))?;
-        let mut c = self.cur(addr)?;
-        c.bytes(n)
+        let start = self
+            .base
+            .checked_add(addr)
+            .and_then(|a| usize::try_from(a).ok())
+            .ok_or_else(|| broken(format!("address {addr} is outside the file")))?;
+        let end = start
+            .checked_add(n)
+            .ok_or_else(|| broken("size too large"))?;
+        let c = self.cur_in(start, end)?;
+        Ok(&c.d[c.p..])
+    }
+
+    /// The data at `addr`, `n` bytes: where it lies when it was read with
+    /// the structure, else read from the file (large pieces on all
+    /// threads).
+    fn data(&self, addr: u64, n: u64) -> Result<Cow<'_, [u8]>, MeshError> {
+        let start = self
+            .base
+            .checked_add(addr)
+            .and_then(|a| usize::try_from(a).ok());
+        let end = start
+            .zip(usize::try_from(n).ok())
+            .and_then(|(s, n)| s.checked_add(n));
+        let (Some(start), Some(end)) = (start, end) else {
+            return Err(broken("data runs past the end of the file"));
+        };
+        if end > self.len {
+            return Err(broken(format!(
+                "{n} bytes of data at {addr} run past the end of the file"
+            )));
+        }
+        if let Some(p) = self.part(start, end) {
+            return Ok(Cow::Borrowed(&p.bytes[start - p.at..end - p.at]));
+        }
+        let Some(f) = &self.file else {
+            return Err(broken("data outside the file"));
+        };
+        let mut bytes = vec![0u8; end - start];
+        let ranges = crate::par::ranges(bytes.len(), READ_PIECE);
+        let cuts: Vec<usize> = ranges
+            .iter()
+            .map(|r| r.start)
+            .chain([bytes.len()])
+            .collect();
+        let pieces: Vec<_> = ranges
+            .into_iter()
+            .zip(crate::par::split_mut(&mut bytes, &cuts))
+            .collect();
+        for read in crate::par::each(pieces, |(r, piece)| {
+            read_exact_at(f, piece, (start + r.start) as u64)
+        }) {
+            read.map_err(cannot_read)?;
+        }
+        Ok(Cow::Owned(bytes))
     }
 
     pub fn root(&self) -> Result<Object, MeshError> {
@@ -544,6 +936,9 @@ impl H5 {
     pub fn object(&self, addr: u64) -> Result<Object, MeshError> {
         let mut c = self.cur(addr)?;
         let mut msgs = Vec::new();
+        if !c.has(4) {
+            return Err(broken(format!("object header at {addr} runs past the end")));
+        }
         if c.d.get(c.p..c.p + 4) == Some(b"OHDR") {
             self.header_v2(&mut c, &mut msgs)?;
         } else {
@@ -553,7 +948,7 @@ impl H5 {
     }
 
     fn header_v1(&self, c: &mut Cur<'_>, msgs: &mut Vec<Msg>) -> Result<(), MeshError> {
-        let start = c.p;
+        let start = c.pos();
         let version = c.u8()?;
         if version != 1 {
             return Err(broken(format!(
@@ -565,7 +960,7 @@ impl H5 {
         c.skip(4)?; // reference count
         let size = c.u32()? as usize;
         c.skip(4)?; // alignment to 8 bytes
-        let mut blocks = vec![(c.p, size)];
+        let mut blocks = vec![(c.pos(), size)];
         let mut seen = HashSet::new();
         let mut count = 0usize;
         while let Some((p, size)) = blocks.pop() {
@@ -574,19 +969,14 @@ impl H5 {
             }
             let end = p
                 .checked_add(size)
-                .filter(|&e| e <= self.data.len())
+                .filter(|&e| e <= self.len)
                 .ok_or_else(|| broken("object header runs past the end"))?;
-            let mut m = Cur {
-                d: &self.data[..end],
-                p,
-                o: self.o,
-                l: self.l,
-            };
-            while m.p + 8 <= end && count < total {
+            let mut m = self.cur_in(p, end)?;
+            while m.p + 8 <= m.d.len() && count < total {
                 let ty = m.u16()?;
                 let len = m.u16()? as usize;
                 m.skip(4)?; // flags and reserved
-                let at = m.p;
+                let at = m.pos();
                 m.skip(len)?;
                 count += 1;
                 if ty == 0x10 {
@@ -595,7 +985,7 @@ impl H5 {
                         .addr()?
                         .ok_or_else(|| broken("continuation without address"))?;
                     let n = k.len()?;
-                    let a = self.cur(a)?.p;
+                    let a = self.cur(a)?.pos();
                     blocks.push((
                         a,
                         usize::try_from(n).map_err(|_| broken("continuation size"))?,
@@ -626,7 +1016,7 @@ impl H5 {
         }
         let size = c.uint(1 << (flags & 3))? as usize;
         let order = flags & 0x04 != 0;
-        let mut blocks = vec![(c.p, size)];
+        let mut blocks = vec![(c.pos(), size)];
         let mut seen = HashSet::new();
         while let Some((p, size)) = blocks.pop() {
             if !seen.insert(p) || seen.len() > MAX_VISITS {
@@ -634,23 +1024,18 @@ impl H5 {
             }
             let end = p
                 .checked_add(size)
-                .filter(|&e| e <= self.data.len())
+                .filter(|&e| e <= self.len)
                 .ok_or_else(|| broken("object header runs past the end"))?;
-            let mut m = Cur {
-                d: &self.data[..end],
-                p,
-                o: self.o,
-                l: self.l,
-            };
+            let mut m = self.cur_in(p, end)?;
             let head = if order { 6 } else { 4 };
-            while m.p + head <= end {
+            while m.p + head <= m.d.len() {
                 let ty = m.u8()? as u16;
                 let len = m.u16()? as usize;
                 m.skip(1)?; // flags
                 if order {
                     m.skip(2)?;
                 }
-                let at = m.p;
+                let at = m.pos();
                 m.skip(len)?;
                 if ty == 0x10 {
                     let mut k = self.msg_cur(&(at..at + len));
@@ -661,7 +1046,7 @@ impl H5 {
                     let mut b = self.cur(a)?;
                     b.sig(b"OCHK")?;
                     // signature before, checksum after the messages
-                    blocks.push((b.p, n.saturating_sub(8)));
+                    blocks.push((b.pos(), n.saturating_sub(8)));
                 } else if ty != 0 {
                     msgs.push(Msg {
                         ty,
@@ -697,7 +1082,7 @@ impl H5 {
             }
         }
         for m in obj.msgs.iter().filter(|m| m.ty == 0x06) {
-            out.push(self.link_msg(&self.data[m.data.clone()])?);
+            out.push(self.link_msg(self.msg_bytes(&m.data))?);
         }
         if let Some(r) = self.first(obj, 0x02) {
             let mut c = self.msg_cur(&r);
@@ -726,12 +1111,7 @@ impl H5 {
     }
 
     fn link_msg(&self, d: &[u8]) -> Result<Link, MeshError> {
-        let mut c = Cur {
-            d,
-            p: 0,
-            o: self.o,
-            l: self.l,
-        };
+        let mut c = self.local(d);
         let version = c.u8()?;
         if version != 1 {
             return Err(broken(format!("link message version {version}")));
@@ -861,7 +1241,7 @@ impl H5 {
     pub fn attrs(&self, obj: &Object) -> Result<Vec<(String, Value)>, MeshError> {
         let mut out = Vec::new();
         for m in obj.msgs.iter().filter(|m| m.ty == 0x0C) {
-            if let Some(a) = self.attr_msg(&self.data[m.data.clone()])? {
+            if let Some(a) = self.attr_msg(self.msg_bytes(&m.data))? {
                 out.push(a);
             }
         }
@@ -900,12 +1280,7 @@ impl H5 {
     }
 
     fn attr_msg(&self, d: &[u8]) -> Result<Option<(String, Value)>, MeshError> {
-        let mut c = Cur {
-            d,
-            p: 0,
-            o: self.o,
-            l: self.l,
-        };
+        let mut c = self.local(d);
         let version = c.u8()?;
         let flags = c.u8()?;
         let name_size = c.u16()? as usize;
@@ -967,12 +1342,7 @@ impl H5 {
                 )
             }
             Dtype::VarString => {
-                let mut c = Cur {
-                    d: raw,
-                    p: 0,
-                    o: self.o,
-                    l: self.l,
-                };
+                let mut c = self.local(raw);
                 let mut v = Vec::with_capacity(n.min(1024));
                 for _ in 0..n {
                     let len = c.u32()? as u64;
@@ -1004,10 +1374,14 @@ impl H5 {
         let start = c.p - 8 - self.l;
         let end = start
             .checked_add(size)
-            .filter(|&e| e <= self.data.len())
+            .filter(|&e| c.at + e <= self.len)
             .ok_or_else(|| broken("global heap runs past the end"))?;
+        if !c.has(end - c.p) {
+            return Err(broken("global heap runs past what was read"));
+        }
         let mut c = Cur {
-            d: &self.data[..end],
+            d: &c.d[..end],
+            holes: None,
             ..c
         };
         while c.p + 8 + self.l <= end {
@@ -1075,7 +1449,7 @@ impl H5 {
                     0 => {
                         c.skip(4 * nd)?;
                         let size = c.u32()? as usize;
-                        let at = c.p;
+                        let at = c.pos();
                         c.skip(size)?;
                         Ok(Layout::Compact(at..at + size))
                     }
@@ -1105,7 +1479,7 @@ impl H5 {
                 match class {
                     0 => {
                         let size = c.u16()? as usize;
-                        let at = c.p;
+                        let at = c.pos();
                         c.skip(size)?;
                         Ok(Layout::Compact(at..at + size))
                     }
@@ -1206,13 +1580,13 @@ impl H5 {
             .checked_mul(elem as u64)
             .ok_or_else(|| broken("dataset size overflows"))?;
         // Compressed chunks may expand: allow deflate's largest ratio.
-        let limit = (self.data.len() as u64).saturating_mul(1100).max(1 << 20);
+        let limit = (self.len as u64).saturating_mul(1100).max(1 << 20);
         if total > limit {
             return Err(MeshError::new(
                 "MESH004",
                 format!(
                     "a dataset of {total} bytes cannot come from a file of {} bytes",
-                    self.data.len()
+                    self.len
                 ),
             ));
         }
@@ -1220,8 +1594,8 @@ impl H5 {
         match &ds.layout {
             Layout::Compact(r) => {
                 let b = self
-                    .data
-                    .get(r.clone())
+                    .part(r.start, r.end)
+                    .map(|p| &p.bytes[r.start - p.at..r.end - p.at])
                     .ok_or_else(|| broken("compact data outside the file"))?;
                 if b.len() < total {
                     return Err(broken("compact data too short"));
@@ -1234,7 +1608,7 @@ impl H5 {
                     if *size < total as u64 {
                         return Err(broken("contiguous data shorter than its dataspace"));
                     }
-                    Ok(Cow::Borrowed(self.slice(*a, total as u64)?))
+                    self.data(*a, total as u64)
                 }
             },
             Layout::Chunked { dims, index } => {
@@ -1243,26 +1617,21 @@ impl H5 {
         }
     }
 
-    fn chunked(
+    /// The chunks of a chunked dataset: where each lies, its size in the
+    /// file, its offsets in elements and its filter mask. Reads only the
+    /// chunk index, not the chunks.
+    fn chunk_list(
         &self,
         ds: &Dataset,
         cdims: &[u64],
         index: &ChunkIndex,
-        elem: usize,
-        total: usize,
-    ) -> Result<Vec<u8>, MeshError> {
+    ) -> Result<Vec<Chunk>, MeshError> {
         let rank = ds.dims.len();
         if cdims.len() != rank || cdims.contains(&0) {
             return Err(broken("chunk rank differs from the dataspace"));
         }
-        let chunk_elems: u64 = cdims.iter().product();
-        let chunk_bytes = usize::try_from(chunk_elems * elem as u64)
-            .ok()
-            .filter(|&b| b as u64 <= (self.data.len() as u64).saturating_mul(1100).max(1 << 20))
-            .ok_or_else(|| broken("chunk too large"))?;
-        let mut out = vec![0u8; total];
-        // chunk offsets (in elements) and raw chunk bytes with filter mask
-        let mut chunks: Vec<(Vec<u64>, Vec<u8>, u32)> = Vec::new();
+        let chunk_bytes = self.chunk_bytes(ds, cdims)?;
+        let mut chunks: Vec<Chunk> = Vec::new();
         let grid: Vec<u64> = ds
             .dims
             .iter()
@@ -1281,7 +1650,7 @@ impl H5 {
             ChunkIndex::BTree1(None)
             | ChunkIndex::Single { addr: None, .. }
             | ChunkIndex::Implicit(None)
-            | ChunkIndex::FixedArray(None) => return Ok(out),
+            | ChunkIndex::FixedArray(None) => {}
             ChunkIndex::BTree1(Some(root)) => {
                 let mut stack = vec![*root];
                 let mut visits = 0usize;
@@ -1311,7 +1680,12 @@ impl H5 {
                         if level > 0 {
                             stack.push(child);
                         } else {
-                            chunks.push((off, self.slice(child, size)?.to_vec(), mask));
+                            chunks.push(Chunk {
+                                off,
+                                addr: child,
+                                size,
+                                mask,
+                            });
                         }
                     }
                 }
@@ -1321,18 +1695,25 @@ impl H5 {
                 filtered_size,
                 mask,
             } => {
-                let size = filtered_size.unwrap_or(chunk_bytes as u64);
-                chunks.push((vec![0; rank], self.slice(*a, size)?.to_vec(), *mask));
+                chunks.push(Chunk {
+                    off: vec![0; rank],
+                    addr: *a,
+                    size: filtered_size.unwrap_or(chunk_bytes as u64),
+                    mask: *mask,
+                });
             }
             ChunkIndex::Implicit(Some(a)) => {
                 let n: u64 = grid.iter().product();
+                if n.saturating_mul(chunk_bytes as u64) > self.len as u64 {
+                    return Err(broken("implicit chunks run past the end"));
+                }
                 for i in 0..n {
-                    let at = a + i * chunk_bytes as u64;
-                    chunks.push((
-                        offsets_of(i),
-                        self.slice(at, chunk_bytes as u64)?.to_vec(),
-                        0,
-                    ));
+                    chunks.push(Chunk {
+                        off: offsets_of(i),
+                        addr: a + i * chunk_bytes as u64,
+                        size: chunk_bytes as u64,
+                        mask: 0,
+                    });
                 }
             }
             ChunkIndex::FixedArray(Some(a)) => {
@@ -1347,7 +1728,9 @@ impl H5 {
                 if page_bits < 64 && max > (1u64 << page_bits) {
                     return Err(unsupported("paged fixed-array chunk index"));
                 }
-                let Some(block) = block else { return Ok(out) };
+                let Some(block) = block else {
+                    return Ok(chunks);
+                };
                 let mut b = self.cur(block)?;
                 b.sig(b"FADB")?;
                 b.skip(2)?;
@@ -1365,17 +1748,46 @@ impl H5 {
                     };
                     b.p = at + entry;
                     if let Some(addr) = addr {
-                        chunks.push((offsets_of(i), self.slice(addr, size)?.to_vec(), mask));
+                        chunks.push(Chunk {
+                            off: offsets_of(i),
+                            addr,
+                            size,
+                            mask,
+                        });
                     }
                 }
             }
         }
-        for (off, raw, mask) in chunks {
-            let bytes = self.unfilter(&ds.filters, raw, mask, chunk_bytes)?;
+        Ok(chunks)
+    }
+
+    /// The bytes of one whole chunk of `ds`.
+    fn chunk_bytes(&self, ds: &Dataset, cdims: &[u64]) -> Result<usize, MeshError> {
+        let chunk_elems: u64 = cdims.iter().product();
+        usize::try_from(chunk_elems.saturating_mul(ds.dtype.size() as u64))
+            .ok()
+            .filter(|&b| b as u64 <= (self.len as u64).saturating_mul(1100).max(1 << 20))
+            .ok_or_else(|| broken("chunk too large"))
+    }
+
+    fn chunked(
+        &self,
+        ds: &Dataset,
+        cdims: &[u64],
+        index: &ChunkIndex,
+        elem: usize,
+        total: usize,
+    ) -> Result<Vec<u8>, MeshError> {
+        let chunks = self.chunk_list(ds, cdims, index)?;
+        let chunk_bytes = self.chunk_bytes(ds, cdims)?;
+        let mut out = vec![0u8; total];
+        for chunk in chunks {
+            let raw = self.data(chunk.addr, chunk.size)?.into_owned();
+            let bytes = self.unfilter(&ds.filters, raw, chunk.mask, chunk_bytes)?;
             if bytes.len() < chunk_bytes {
                 return Err(broken("chunk shorter than its dimensions"));
             }
-            place(&mut out, &bytes, &ds.dims, cdims, &off, elem);
+            place(&mut out, &bytes, &ds.dims, cdims, &chunk.off, elem);
         }
         Ok(out)
     }
@@ -1516,10 +1928,8 @@ impl H5 {
         match (first >> 4) & 3 {
             0 => {
                 let mut c = Cur {
-                    d: id,
                     p: 1,
-                    o: self.o,
-                    l: self.l,
+                    ..self.local(id)
                 };
                 let off = c.uint(h.off_bytes)?;
                 let rest = id
@@ -2145,6 +2555,172 @@ mod tests {
             }
         }
         assert!(Values::new(Cow::Borrowed(&raw[..]), &Dtype::VarString).is_none());
+    }
+
+    /// Every link, attribute, dataset description and value of a file,
+    /// in a form to compare.
+    fn everything(h: &H5) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut stack = vec![("/".to_string(), h.root().unwrap())];
+        while let Some((path, obj)) = stack.pop() {
+            out.push(format!("{path} attrs {:?}", h.attrs(&obj)));
+            if h.is_group(&obj) {
+                for l in h.links(&obj).unwrap() {
+                    out.push(format!("{path} link {} {:?}", l.name, l.target));
+                    if matches!(l.target, Target::Hard(_))
+                        && let Ok(Some(c)) = h.child(&obj, &l.name)
+                    {
+                        stack.push((format!("{path}{}/", l.name), c));
+                    }
+                }
+            } else {
+                let ds = h.dataset(&obj);
+                out.push(format!(
+                    "{path} {:?}",
+                    ds.as_ref().map(|d| (&d.dtype, &d.dims))
+                ));
+                if let Ok(ds) = ds {
+                    let floats = h
+                        .read_f64(&ds)
+                        .map(|v| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>());
+                    out.push(format!(
+                        "{path} {floats:?} {:?} {:?}",
+                        h.read_i64(&ds),
+                        h.read_strings(&ds)
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// The HDF5 files of the fixtures.
+    fn fixture_files() -> Vec<std::path::PathBuf> {
+        let root =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-fixtures/vtkhdf");
+        let mut out = Vec::new();
+        let mut dirs = vec![root];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "vtkhdf") {
+                    out.push(p);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Invariant: a file opened by its path, which reads its structure in
+    /// pages and its data from the file, gives every link, attribute,
+    /// dataset description and value that the same file read whole gives:
+    /// for every fixture (both superblock families, dense and compact
+    /// links and attributes, compact, contiguous and chunked layouts,
+    /// variable-length strings), with pages of 64 KiB and with pages so
+    /// small that every piece of the structure is found over many rounds
+    /// and runs are joined. Breaks when a position is taken from the
+    /// wrong run, a piece of the structure is not walked when opening
+    /// (it is then missing when read), or runs are joined wrongly. The
+    /// other tests read the files either way, never both.
+    #[test]
+    fn opening_a_path_reads_what_the_bytes_read() {
+        let files = fixture_files();
+        assert!(files.len() >= 5);
+        for path in files {
+            let whole = everything(&H5::from_bytes(std::fs::read(&path).unwrap()).unwrap());
+            for page in [PAGE, 512] {
+                let h = H5::open_paged(&path, page).unwrap();
+                assert_eq!(
+                    everything(&h),
+                    whole,
+                    "{} in pages of {page}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// Invariant: a file opened by its path holds only its structure, a
+    /// few pages, not its data: a dataset of 8 MiB is read from the file
+    /// when it is asked for, on several threads in pieces, and gives the
+    /// values written. Breaks when the opening reads the data (the reader
+    /// would hold the file again) or the pieces land at the wrong place.
+    #[test]
+    fn opening_a_path_leaves_the_data_in_the_file() {
+        use crate::h5write::{H5Writer, Link};
+        let dir = std::env::temp_dir().join(format!("murmel-hdf5-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.h5");
+        let values: Vec<f64> = (0..1 << 20).map(|i| i as f64 * 0.5 - 3.0).collect();
+        let mut w = H5Writer::create(&path).unwrap();
+        let big = w.dataset(&[values.len() as u64], &values).unwrap();
+        let root = w.group(&[Link::Hard("big".into(), big)], &[]).unwrap();
+        w.finish(root).unwrap();
+        let h = H5::open(&path).unwrap();
+        let held: usize = h.parts.iter().map(|p| p.bytes.len()).sum();
+        assert!(held <= 3 * PAGE, "{held} bytes held of {}", h.len());
+        let ds = h.dataset(&h.path("/big").unwrap()).unwrap();
+        let raw = crate::par::with_threads(4, || h.raw_in_place(&ds)).unwrap();
+        assert!(matches!(raw, Cow::Owned(_)));
+        let got = crate::par::with_threads(4, || h.read_f64(&ds)).unwrap();
+        assert_eq!(got, values);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Invariant: broken files opened by their path give a diagnostic and
+    /// never panic, as broken bytes do (`broken_files_never_panic`): a
+    /// walk of the structure that meets a broken piece keeps what it
+    /// found. Breaks when opening fails on a hole it should read, or
+    /// trusts a size it read. Opening by path has its own code (pages,
+    /// rounds, positional reads) that the bytes test does not reach.
+    #[test]
+    fn broken_files_opened_by_path_never_panic() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/vtkhdf/box_latest.vtkhdf");
+        let bytes = std::fs::read(p).unwrap();
+        let dir = std::env::temp_dir().join(format!("murmel-hdf5-broken-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("broken.h5");
+        let walk = |b: &[u8]| {
+            std::fs::write(&path, b).unwrap();
+            if let Ok(h) = H5::open_paged(&path, 512) {
+                if let Ok(root) = h.root() {
+                    let _ = h.attrs(&root);
+                }
+                if let Ok(o) = h.path("/VTKHDF/internal/CellData")
+                    && let Ok(links) = h.links(&o)
+                {
+                    for l in links {
+                        if let Ok(Some(c)) = h.child(&o, &l.name)
+                            && let Ok(ds) = h.dataset(&c)
+                        {
+                            let _ = h.read_f64(&ds);
+                        }
+                    }
+                }
+            }
+        };
+        for cut in (0..bytes.len()).step_by(1997) {
+            walk(&bytes[..cut]);
+        }
+        let mut seed = 0x9E3779B97F4A7C15u64;
+        for _ in 0..100 {
+            let mut b = bytes.clone();
+            for _ in 0..8 {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let i = (seed % b.len() as u64) as usize;
+                b[i] = (seed >> 32) as u8;
+            }
+            walk(&b);
+        }
+        std::fs::write(&path, b"not hdf5").unwrap();
+        assert_eq!(H5::open(&path).err().map(|e| e.code), Some("MESH018"));
+        std::fs::remove_file(&path).ok();
     }
 
     /// Invariant: the shuffle filter puts byte b of element i back from
