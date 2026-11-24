@@ -129,11 +129,12 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Field range: symmetric about zero | `field.style` `{"range":"symmetric"}` |
 | palette | Field range: fix as shown now | `field.style` `{"range":"fixed"}` |
 | palette | Colour map: automatic | `field.style` `{"map":"auto"}` |
-| palette | Viridis | `field.style` `{"map":"viridis"}` |
+| palette | Rainbow desaturated | `field.style` `{"map":"rainbow_desaturated"}` |
+| palette | Inferno | `field.style` `{"map":"inferno"}` |
 | palette | Cool to warm | `field.style` `{"map":"cool_warm"}` |
+| palette | Viridis | `field.style` `{"map":"viridis"}` |
 | palette | Plasma | `field.style` `{"map":"plasma"}` |
 | palette | Magma | `field.style` `{"map":"magma"}` |
-| palette | Inferno | `field.style` `{"map":"inferno"}` |
 | palette | Turbo | `field.style` `{"map":"turbo"}` |
 | palette | Rainbow (jet) | `field.style` `{"map":"rainbow"}` |
 | palette | Grey | `field.style` `{"map":"grey"}` |
