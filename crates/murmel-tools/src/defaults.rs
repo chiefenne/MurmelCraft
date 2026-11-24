@@ -115,6 +115,10 @@ pub(crate) fn settings_set_default(input: Value, s: &mut Session) -> Run {
                     .clone()
                     .or_else(|| s.display.field.as_ref().map(|c| c.name.clone()))
                     .and_then(|name| serde_json::to_value(s.display.style_of(&name)).ok()),
+                Kind::Player => s
+                    .series
+                    .as_ref()
+                    .and_then(|r| serde_json::to_value(r.playback).ok()),
                 _ => None,
             };
             (kind, current)

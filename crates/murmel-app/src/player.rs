@@ -222,6 +222,21 @@ impl MurmelApp {
         }
     }
 
+    /// The menu entries that keep the player's `key` (rate or loop) as
+    /// the one series newly opened start with.
+    fn player_default_entries(
+        &self,
+        ui: &mut Ui,
+        key: &'static str,
+    ) -> Option<(&'static str, Value)> {
+        self.kind_default_entries(
+            ui,
+            murmel_engine::defaults::Kind::Player,
+            key,
+            json!({"kind": "player", "keys": [key]}),
+        )
+    }
+
     /// The player bar, while a series is open.
     pub(crate) fn player_bar(&mut self, ui: &mut Ui) {
         let Some(r) = self.session.series.clone() else {
@@ -336,14 +351,23 @@ impl MurmelApp {
                 if drag.changed() {
                     calls.push(("series.play", json!({"rate": rate})));
                 }
+                // Right-click: keep the speed as your default.
+                drag.context_menu(|ui| {
+                    if let Some(a) = self.player_default_entries(ui, "rate") {
+                        calls.push(a);
+                    }
+                });
                 ui.label(RichText::new(&label_text).small().color(secondary));
                 let mut looping = r.playback.looping;
-                if ui
-                    .checkbox(&mut looping, self.i18n.tr("player-loop"))
-                    .changed()
-                {
+                let check = ui.checkbox(&mut looping, self.i18n.tr("player-loop"));
+                if check.changed() {
                     calls.push(("series.play", json!({"loop": looping})));
                 }
+                check.context_menu(|ui| {
+                    if let Some(a) = self.player_default_entries(ui, "loop") {
+                        calls.push(a);
+                    }
+                });
             });
         });
         for (id, input) in calls {

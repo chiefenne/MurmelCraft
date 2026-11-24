@@ -3707,3 +3707,51 @@ fn range_over_the_steps() {
     assert_eq!(s.field_style().range, murmel_engine::RangeMode::Steps);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Invariant: the player's speed and loop can be your defaults
+/// (settings.set_default kind player, from the values or from the open
+/// series): a series opened later starts with them, paused; a rate out
+/// of 0.1 to 60 is refused. Breaks if series.open went back to 4 steps
+/// a second and looping whatever was saved.
+#[test]
+fn player_defaults() {
+    let mut s = session();
+    let dir = box_steps("player-defaults");
+    s.config_dir = Some(dir.join("config"));
+    let e = call(
+        "settings.set_default",
+        json!({"kind": "player", "values": {"rate": 100.0}}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "SET003");
+    let e = call(
+        "settings.set_default",
+        json!({"kind": "player", "values": {"rate": 12.0, "loop": false}}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(
+        call(
+            "series.open",
+            json!({ "path": dir.join("series.json") }),
+            &mut s
+        )
+        .ok()
+    );
+    let p = s.series.as_ref().unwrap().playback;
+    assert_eq!((p.rate, p.looping, p.playing), (12.0, false, false));
+    // Kept from the open series: the rate now.
+    assert!(call("series.play", json!({"rate": 2.5}), &mut s).ok());
+    let e = call(
+        "settings.set_default",
+        json!({"kind": "player", "keys": ["rate"]}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(
+        s.defaults
+            .get(murmel_engine::defaults::Kind::Player, "rate"),
+        Some(&json!(2.5))
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

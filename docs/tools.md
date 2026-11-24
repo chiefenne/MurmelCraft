@@ -2850,7 +2850,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "view",
         "reference",
         "parcels",
-        "rotation"
+        "rotation",
+        "player"
       ]
     },
     "values": {
@@ -2883,7 +2884,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "view",
         "reference",
         "parcels",
-        "rotation"
+        "rotation",
+        "player"
       ]
     }
   },
