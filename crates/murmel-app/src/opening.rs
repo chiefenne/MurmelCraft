@@ -191,7 +191,9 @@ impl MurmelApp {
             | "read.vtkhdf" => self.i18n.tr("loading-phase-numbers"),
             "read.cells" => self.i18n.tr("loading-phase-cells"),
             "read.topology" => self.i18n.tr("loading-phase-topology"),
-            "open.surface" => self.i18n.tr("loading-phase-surface"),
+            p if p == "open.surface" || p.starts_with("surface.") => {
+                self.i18n.tr("loading-phase-surface")
+            }
             _ => self.i18n.tr("loading-phase-file"),
         };
         let file = o
