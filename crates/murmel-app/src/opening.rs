@@ -83,6 +83,10 @@ impl MurmelApp {
         let display = self.session.display.clone();
         let tokens = self.session.tokens.clone();
         let from = path.clone();
+        // A mesh opens before its files are hashed (the session hashes
+        // them afterwards); a session file needs the digest at once, to
+        // tell whether its mesh changed, so its mesh is hashed here.
+        let hash = matches!(then, Then::Session(_)) || !self.session.hash_after_open;
         #[cfg(test)]
         let gate = self.opening_gate.take();
         let handle = std::thread::spawn(move || {
@@ -91,7 +95,7 @@ impl MurmelApp {
                 let _ = g.recv();
             }
             profile::watch(watched, || {
-                let mut l = murmel_engine::load(&from)?;
+                let mut l = murmel_engine::load_with(&from, hash)?;
                 profile::check()?;
                 l.prepare(&display, &tokens);
                 Ok(l)
@@ -141,6 +145,28 @@ impl MurmelApp {
         }
     }
 
+    /// Show the badge the digests of the open mesh's files decide once
+    /// they are taken; keep looking while they are.
+    pub(crate) fn poll_digest(&mut self, ctx: &egui::Context) {
+        if self.session.poll_digest() {
+            ctx.request_repaint();
+        } else if self.session.hashing.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+    }
+
+    /// Follow the clip preview: start the builds it needs and draw the
+    /// exact cut once it is in place.
+    pub(crate) fn poll_surface(&mut self, ctx: &egui::Context) {
+        let before = self.session.surface_revision;
+        if self.session.poll_surface() {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
+        if self.session.surface_revision != before {
+            ctx.request_repaint();
+        }
+    }
+
     /// Open the mesh, or load the session file, on this thread.
     pub(crate) fn open_now(&mut self, then: Then) {
         match then {
@@ -177,7 +203,9 @@ impl MurmelApp {
             | "read.vtkhdf" => self.i18n.tr("loading-phase-numbers"),
             "read.cells" => self.i18n.tr("loading-phase-cells"),
             "read.topology" => self.i18n.tr("loading-phase-topology"),
-            "open.surface" => self.i18n.tr("loading-phase-surface"),
+            p if p == "open.surface" || p.starts_with("surface.") => {
+                self.i18n.tr("loading-phase-surface")
+            }
             _ => self.i18n.tr("loading-phase-file"),
         };
         let file = o

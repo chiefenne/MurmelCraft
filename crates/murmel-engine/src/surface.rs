@@ -7,7 +7,8 @@
 //! zone or cell type, or the clip plane, lays them open; they take the
 //! cell's colour), and with a flat clip the section of every cell the
 //! plane crosses. So hiding the prism layers shows the polyhedral core,
-//! and a crinkle clip shows the cells themselves.
+//! and a crinkle clip shows the cells themselves. A region that cuts flat
+//! clips the cells it cuts to its borders in the same way.
 //!
 //! Each polygon is a fan about its node average (exact for the
 //! star-shaped faces KoflCraft writes, including merged faces, and for
@@ -18,11 +19,14 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use crate::fasthash::{FastMap, FastSet, set_with_capacity};
+
 use murmel_mesh::{Bounds, Mesh, NO_CELL};
 
-use crate::clip::{Clip, ClipMode};
+use crate::clip::ClipMode;
 use crate::display::{Display, Item, RenderMode};
 use crate::field::FieldSet;
+use crate::region::{Bound, NOT_CUT, RegionCells};
 
 /// Feature edges (render mode 4) bend by more than this angle between
 /// their two faces (UI spec, Display).
@@ -33,6 +37,9 @@ use crate::theme::{Rgb, Tokens};
 /// clip or a hidden item), and of a section.
 const GROUP_OPEN: u32 = u32::MAX - 1;
 const GROUP_SECTION: u32 = u32::MAX - 2;
+
+/// Triangles per pick box ([`Surface::tri_boxes`]).
+pub const PICK_RUN: usize = 128;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Surface {
@@ -66,6 +73,11 @@ pub struct Surface {
     /// [`NO_CELL`] for a section). Picking reads these.
     pub tri_cell: Vec<u32>,
     pub tri_face: Vec<u32>,
+    /// The box (smallest and largest corner, relative to `origin`) of
+    /// each run of [`PICK_RUN`] triangles in `indices`, so a pick tests
+    /// only the runs its ray passes through ([`crate::pick`]). Triangles
+    /// come in face order, so a run covers a small patch of the surface.
+    pub tri_boxes: Vec<[[f32; 3]; 2]>,
     /// Edge line vertices, two per edge, with their linear colour.
     pub edge_positions: Vec<[f32; 3]>,
     pub edge_colors: Vec<[f32; 3]>,
@@ -100,11 +112,56 @@ struct Poly {
     group: u32,
 }
 
-/// A clip plane that cuts, with the side and distance of every node.
-struct Plane<'a> {
-    clip: &'a Clip,
-    keep: Vec<bool>,
-    dist: Vec<f64>,
+/// A border that cuts: a clip plane, with the side and distance of every
+/// node, or a border of a region cutting flat, whose distances are found
+/// as needed (it cuts only the cells along it).
+struct Plane {
+    bound: Bound,
+    /// Whether a clip plane cuts flat (region borders always do).
+    flat: bool,
+    nodes: Option<(Vec<bool>, Vec<f64>)>,
+}
+
+/// The planes of a [`Cutter`] and the sides of the mesh nodes, without
+/// the cut points it numbers as it finds them: shared by threads.
+#[derive(Clone, Copy)]
+struct Sides<'a> {
+    points: &'a [[f64; 3]],
+    planes: &'a [Plane],
+    flat: &'a [usize],
+    regions: Option<&'a (&'a RegionCells, Vec<std::ops::Range<usize>>)>,
+}
+
+impl<'a> Sides<'a> {
+    /// The planes that slice cell `c` (`NO_CELL`: the clip planes only),
+    /// in order.
+    fn flat_of(self, c: u32) -> impl Iterator<Item = usize> + 'a {
+        let region = self.regions.and_then(|(rc, ranges)| {
+            let k = *rc.cut_by.as_ref()?.get(c as usize)?;
+            (k != NOT_CUT).then(|| ranges[k as usize].clone())
+        });
+        self.flat
+            .iter()
+            .copied()
+            .chain(region.into_iter().flatten())
+    }
+
+    /// Whether plane `p` keeps node `i` (a node on the plane counts as
+    /// kept).
+    fn keeps_node(self, p: usize, i: u32) -> bool {
+        let plane = &self.planes[p];
+        match &plane.nodes {
+            Some((keep, _)) => keep[i as usize],
+            None => plane.bound.distance(self.points[i as usize]) <= 0.0,
+        }
+    }
+
+    /// Whether a plane that slices cell `c` cuts away a node of it: the
+    /// cells with a section.
+    fn crosses(self, mesh: &Mesh, c: usize) -> bool {
+        self.flat_of(c as u32)
+            .any(|p| mesh.cell_points(c).any(|i| !self.keeps_node(p, i)))
+    }
 }
 
 /// The cut points found so far: where each is, which plane made it, and
@@ -113,52 +170,112 @@ struct Plane<'a> {
 struct Cuts {
     pos: Vec<[f64; 3]>,
     plane: Vec<usize>,
-    ids: HashMap<(usize, V, V), u32>,
+    ids: FastMap<(usize, V, V), u32>,
     /// The edge each cut point lies on and where along it (0 at the
     /// first corner), so values interpolate like positions.
     along: Vec<(V, V, f64)>,
 }
 
-/// The clip planes that cut. A point where plane `p` crosses the edge
-/// between corners `a` and `b` is named by `(p, a, b)`, so the cuts of
-/// neighbouring faces and cells meet at the same named points and the
-/// sections close. Flat planes slice in the order they were added, each
-/// one the polygons the ones before it left, so a corner where two planes
-/// meet a face has one name too.
+/// The clip planes that cut, and the borders of regions that cut flat.
+/// A point where plane `p` crosses the edge between corners `a` and `b`
+/// is named by `(p, a, b)`, so the cuts of neighbouring faces and cells
+/// meet at the same named points and the sections close. Flat planes
+/// slice in the order they were added, each one the polygons the ones
+/// before it left, so a corner where two planes meet a face has one name
+/// too; a cell a region cuts is then sliced by that region's borders.
 struct Cutter<'a> {
     points: &'a [[f64; 3]],
-    planes: Vec<Plane<'a>>,
-    /// The flat planes, by index into `planes`, in order.
+    planes: Vec<Plane>,
+    /// The clip planes are `planes[..clips]`.
+    clips: usize,
+    /// The flat clip planes, by index into `planes`, in order.
     flat: Vec<usize>,
+    /// Which region cuts each cell, and each region's borders, by index
+    /// into `planes`.
+    regions: Option<(&'a RegionCells, Vec<std::ops::Range<usize>>)>,
     cuts: RefCell<Cuts>,
 }
 
 impl<'a> Cutter<'a> {
     /// The planes of `display` that cut, or `None` when none does.
     fn new(mesh: &'a Mesh, display: &'a Display) -> Option<Cutter<'a>> {
-        let planes: Vec<Plane<'a>> = display
+        let mut planes: Vec<Plane> = display
             .active_clips()
             .map(|clip| {
-                let dist: Vec<f64> = mesh.points.iter().map(|&p| clip.distance(p)).collect();
+                let points = &mesh.points;
+                let mut dist = vec![0.0; points.len()];
+                murmel_mesh::par::chunks_mut(&mut dist, 1 << 16, |at, part| {
+                    for (d, &p) in part.iter_mut().zip(&points[at..]) {
+                        *d = clip.distance(p);
+                    }
+                });
+                let mut keeps = vec![false; points.len()];
+                murmel_mesh::par::chunks_mut(&mut keeps, 1 << 16, |at, part| {
+                    for (k, &d) in part.iter_mut().zip(&dist[at..]) {
+                        *k = d <= 0.0;
+                    }
+                });
                 Plane {
-                    clip,
-                    keep: dist.iter().map(|&d| d <= 0.0).collect(),
-                    dist,
+                    bound: Bound::from(clip),
+                    flat: clip.mode == ClipMode::Flat,
+                    nodes: Some((keeps, dist)),
                 }
             })
             .collect();
+        let clips = planes.len();
+        let flat = (0..clips).filter(|&p| planes[p].flat).collect();
+        let regions = display
+            .region_cells
+            .as_deref()
+            .filter(|rc| rc.cuts_flat() && rc.regions == display.regions)
+            .map(|rc| {
+                let ranges = rc
+                    .borders
+                    .iter()
+                    .map(|bs| {
+                        let start = planes.len();
+                        planes.extend(bs.iter().map(|&bound| Plane {
+                            bound,
+                            flat: true,
+                            nodes: None,
+                        }));
+                        start..planes.len()
+                    })
+                    .collect();
+                (rc, ranges)
+            });
         if planes.is_empty() {
             return None;
         }
-        let flat = (0..planes.len())
-            .filter(|&p| planes[p].clip.mode == ClipMode::Flat)
-            .collect();
         Some(Cutter {
             points: &mesh.points,
             planes,
+            clips,
             flat,
+            regions,
             cuts: RefCell::default(),
         })
+    }
+
+    /// Whether anything cuts flat.
+    fn slices(&self) -> bool {
+        !self.flat.is_empty() || self.regions.is_some()
+    }
+
+    /// The planes that slice cell `c` (`NO_CELL`: the clip planes only),
+    /// in order.
+    fn flat_of(&self, c: u32) -> impl Iterator<Item = usize> + '_ {
+        self.sides().flat_of(c)
+    }
+
+    /// What the cutter knows before it cuts anything, for the threads.
+    fn sides(&self) -> Sides<'_> {
+        Sides {
+            points: self.points,
+            planes: &self.planes,
+            flat: &self.flat,
+            regions: self.regions.as_ref(),
+        }
     }
 
     fn pos(&self, v: V) -> [f64; 3] {
@@ -169,26 +286,30 @@ impl<'a> Cutter<'a> {
     }
 
     fn dist(&self, p: usize, v: V) -> f64 {
-        match v {
-            V::Node(i) => self.planes[p].dist[i as usize],
-            V::Cut(_) => self.planes[p].clip.distance(self.pos(v)),
+        let plane = &self.planes[p];
+        match (v, &plane.nodes) {
+            (V::Node(i), Some((_, dist))) => dist[i as usize],
+            _ => plane.bound.distance(self.pos(v)),
         }
     }
 
     /// Whether plane `p` keeps corner `v` (a point on the plane counts as
     /// kept, and so does every cut point the plane made).
     fn keeps(&self, p: usize, v: V) -> bool {
-        match v {
-            V::Node(i) => self.planes[p].keep[i as usize],
-            V::Cut(k) => self.cuts.borrow().plane[k as usize] == p || self.dist(p, v) <= 0.0,
+        match (v, &self.planes[p].nodes) {
+            (V::Node(i), Some((keep, _))) => keep[i as usize],
+            (V::Node(_), None) => self.dist(p, v) <= 0.0,
+            (V::Cut(k), _) => self.cuts.borrow().plane[k as usize] == p || self.dist(p, v) <= 0.0,
         }
     }
 
-    /// Whether every plane keeps a node of `face`.
+    /// Whether every clip plane keeps a node of `face`.
     fn keeps_some(&self, face: &[u32]) -> bool {
-        self.planes
-            .iter()
-            .all(|pl| face.iter().any(|&i| pl.keep[i as usize]))
+        self.planes[..self.clips].iter().all(|pl| {
+            pl.nodes
+                .as_ref()
+                .is_none_or(|(keep, _)| face.iter().any(|&i| keep[i as usize]))
+        })
     }
 
     /// The point where plane `p` crosses the edge from `a` to `b`.
@@ -245,12 +366,17 @@ impl<'a> Cutter<'a> {
         out
     }
 
-    /// The part of `poly` every flat plane keeps, cut in their order.
-    fn clip_flat(&self, verts: Vec<V>) -> Vec<V> {
+    /// The part of `poly`, a polygon of cell `cell`, that every plane
+    /// slicing that cell keeps, cut in their order.
+    fn clip_flat(&self, cell: u32, verts: Vec<V>) -> Vec<V> {
         let mut v = verts;
-        for &p in &self.flat {
+        for p in self.flat_of(cell) {
             if v.len() < 3 {
                 break;
+            }
+            // Most polygons lie wholly on the kept side: left as they are.
+            if v.iter().all(|&x| self.keeps(p, x)) {
+                continue;
             }
             v = self.clip_poly(p, &v);
         }
@@ -318,18 +444,15 @@ impl<'a> Cutter<'a> {
     /// polygons the next one cuts (convex clipping of a polyhedron by
     /// half-spaces, one plane at a time).
     fn sections(&self, mesh: &Mesh, c: usize) -> Vec<Vec<V>> {
-        let crossed = |p: usize| {
-            mesh.cell_points(c)
-                .any(|i| !self.planes[p].keep[i as usize])
-        };
-        if !self.flat.iter().any(|&p| crossed(p)) {
+        if !self.sides().crosses(mesh, c) {
             return Vec::new();
         }
+        let planes: Vec<usize> = self.flat_of(c as u32).collect();
         let mut set: Vec<(Vec<V>, bool)> = mesh
             .cell(c)
             .map(|f| (f.oriented().map(V::Node).collect(), false))
             .collect();
-        for &p in &self.flat {
+        for p in planes {
             let polys: Vec<Vec<V>> = set.iter().map(|(v, _)| v.clone()).collect();
             if !polys.iter().flatten().any(|&v| !self.keeps(p, v)) {
                 continue;
@@ -381,10 +504,13 @@ impl Surface {
             bounds: (!bounds.is_empty()).then_some(bounds),
             ..Surface::default()
         };
+        let phase = murmel_mesh::profile::span("surface.polygons");
         let cutter = Cutter::new(mesh, display);
         let shown = display.shown_cells(mesh);
         s.cells = shown.iter().filter(|&&v| v).count();
         let polys = polygons(mesh, tokens, display, &shown, cutter.as_ref());
+        drop(phase);
+        let phase = murmel_mesh::profile::span("surface.points");
 
         let pos = |v: V| -> [f64; 3] {
             let p = match (v, &cutter) {
@@ -409,8 +535,6 @@ impl Surface {
         order.sort_unstable();
         s.faces = polys.iter().filter(|p| p.boundary != NO_CELL).count();
         s.open_faces = polys.len() - s.faces;
-        let mut vb = Bounds::empty();
-        let mut seen: HashSet<(V, V)> = HashSet::new();
         let pts: Vec<Vec<[f64; 3]>> = polys
             .iter()
             .map(|p| p.verts.iter().map(|&v| pos(v)).collect())
@@ -426,11 +550,11 @@ impl Surface {
         let extras = display.extracts_shown() || display.arrows_shown();
         let mesh_triangles = !(extras && !display.mesh_faces());
         let features = (display.render_mode == RenderMode::FeatureEdges || faint).then(|| {
+            let runs = murmel_mesh::par::ranges(polys.len(), 1 << 12);
             feature_edges(
-                polys
-                    .iter()
-                    .zip(&normals)
-                    .map(|(p, n)| (p.verts.as_slice(), p.group, *n)),
+                &polys,
+                &normals,
+                &runs,
                 FEATURE_ANGLE_DEG.to_radians().cos(),
             )
         });
@@ -454,146 +578,184 @@ impl Surface {
                 .collect(),
             None => Vec::new(),
         };
-        let mut drawn = Bounds1::default();
+        drop(phase);
+        let phase = murmel_mesh::profile::span("surface.buffers");
         // Lines alone are drawn in the face colour; over faces, darker.
         let lines_only = !display.render_mode.faces();
-        for (unselected, _, i) in order {
-            let poly = &polys[i];
-            let rgb = poly.color;
-            // The polygon's flat value and its corners' values, when it
-            // has them all.
-            let valued = field.and_then(|f| {
-                let corners = &corner_values[i];
-                if !corners.iter().all(|x| x.is_finite()) {
-                    return None;
-                }
-                let mut flat = f.flat(poly.cell, poly.boundary);
-                if !flat.is_finite() {
-                    // A face of no cell (a surface mesh) with a point
-                    // field: the mean of its corners.
-                    flat = corners.iter().sum::<f64>() / corners.len().max(1) as f64;
-                }
-                flat.is_finite().then_some((flat, corners))
-            });
-            if let Some((flat, corners)) = valued
-                && mesh_triangles
-            {
-                drawn.add(flat);
-                corners.iter().for_each(|&x| drawn.add(x));
-            }
-            let sel_mix = if unselected { 0.0 } else { mix };
-            let (color, ec) = if faint {
-                let ec = if unselected {
-                    tokens.mesh.field.outline
-                } else {
-                    sel
-                };
-                (rgb.linear(), ec.linear())
-            } else if field.is_some() {
-                let face = if valued.is_some() {
-                    rgb
-                } else {
-                    tokens.mesh.field.none
-                };
-                let face = if unselected {
-                    face
-                } else {
-                    Rgb(std::array::from_fn(|k| {
-                        (face.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
-                    }))
-                };
-                let edge = if !unselected {
-                    sel
-                } else if lines_only {
-                    tokens.mesh.field.none
-                } else {
-                    tokens.mesh.field.edge
-                };
-                (face.linear(), edge.linear())
-            } else if unselected {
-                (
-                    rgb.linear(),
-                    if lines_only {
-                        rgb.linear()
+        // The colours of each polygon in draw order, and its flat value
+        // when it has a value at every corner.
+        let looks: Vec<Look> = murmel_mesh::par::collect(order.len(), 1 << 12, |r| {
+            r.map(|o| {
+                let (unselected, _, i) = order[o];
+                let poly = &polys[i];
+                let rgb = poly.color;
+                let flat = field.and_then(|f| {
+                    let corners = &corner_values[i];
+                    if !corners.iter().all(|x| x.is_finite()) {
+                        return None;
+                    }
+                    let mut flat = f.flat(poly.cell, poly.boundary);
+                    if !flat.is_finite() {
+                        // A face of no cell (a surface mesh) with a point
+                        // field: the mean of its corners.
+                        flat = corners.iter().sum::<f64>() / corners.len().max(1) as f64;
+                    }
+                    flat.is_finite().then_some(flat)
+                });
+                let sel_mix = if unselected { 0.0 } else { mix };
+                let (color, edge) = if faint {
+                    let ec = if unselected {
+                        tokens.mesh.field.outline
                     } else {
-                        Rgb(rgb.0.map(|v| (v as f32 * darken).round() as u8)).linear()
+                        sel
+                    };
+                    (rgb.linear(), ec.linear())
+                } else if field.is_some() {
+                    let face = if flat.is_some() {
+                        rgb
+                    } else {
+                        tokens.mesh.field.none
+                    };
+                    let face = if unselected {
+                        face
+                    } else {
+                        Rgb(std::array::from_fn(|k| {
+                            (face.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
+                        }))
+                    };
+                    let edge = if !unselected {
+                        sel
+                    } else if lines_only {
+                        tokens.mesh.field.none
+                    } else {
+                        tokens.mesh.field.edge
+                    };
+                    (face.linear(), edge.linear())
+                } else if unselected {
+                    (
+                        rgb.linear(),
+                        if lines_only {
+                            rgb.linear()
+                        } else {
+                            Rgb(rgb.0.map(|v| (v as f32 * darken).round() as u8)).linear()
+                        },
+                    )
+                } else {
+                    let m = Rgb(std::array::from_fn(|k| {
+                        (rgb.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
+                    }));
+                    (m.linear(), sel.linear())
+                };
+                Look {
+                    color,
+                    edge,
+                    sel_mix,
+                    flat,
+                }
+            })
+            .collect()
+        });
+        // Where each polygon's vertices and indices start: a triangle is
+        // drawn as is, a larger polygon as a fan about its centre.
+        let (mut vstart, mut istart) = (vec![0usize], vec![0usize]);
+        vstart.reserve(order.len());
+        istart.reserve(order.len());
+        let (mut nv, mut ni) = (0, 0);
+        for &(_, _, i) in &order {
+            let k = polys[i].verts.len();
+            if mesh_triangles {
+                nv += if k == 3 { 3 } else { k + 1 };
+                ni += if k == 3 { 3 } else { 3 * k };
+            }
+            vstart.push(nv);
+            istart.push(ni);
+        }
+        s.positions = vec![[0.0; 3]; nv];
+        s.normals = vec![[0.0; 3]; nv];
+        s.colors = vec![[0.0; 3]; nv];
+        s.values = vec![[0.0; 4]; nv];
+        s.indices = vec![0; ni];
+        s.tri_cell = vec![0; ni / 3];
+        s.tri_face = vec![0; ni / 3];
+        let ranges = murmel_mesh::par::ranges(order.len(), 1 << 12);
+        let cuts = |at: &[usize], per: usize| -> Vec<usize> {
+            ranges
+                .iter()
+                .map(|r| at[r.start] / per)
+                .chain([at[order.len()] / per])
+                .collect()
+        };
+        let (vcuts, icuts, tcuts) = (cuts(&vstart, 1), cuts(&istart, 1), cuts(&istart, 3));
+        let mut outs = Vec::with_capacity(ranges.len());
+        let mut positions = murmel_mesh::par::split_mut(&mut s.positions, &vcuts).into_iter();
+        let mut normals_out = murmel_mesh::par::split_mut(&mut s.normals, &vcuts).into_iter();
+        let mut colors = murmel_mesh::par::split_mut(&mut s.colors, &vcuts).into_iter();
+        let mut values = murmel_mesh::par::split_mut(&mut s.values, &vcuts).into_iter();
+        let mut indices = murmel_mesh::par::split_mut(&mut s.indices, &icuts).into_iter();
+        let mut tri_cell = murmel_mesh::par::split_mut(&mut s.tri_cell, &tcuts).into_iter();
+        let mut tri_face = murmel_mesh::par::split_mut(&mut s.tri_face, &tcuts).into_iter();
+        for r in &ranges {
+            if let (Some(p), Some(n), Some(c), Some(v), Some(x), Some(tc), Some(tf)) = (
+                positions.next(),
+                normals_out.next(),
+                colors.next(),
+                values.next(),
+                indices.next(),
+                tri_cell.next(),
+                tri_face.next(),
+            ) {
+                outs.push((
+                    r.clone(),
+                    Out {
+                        positions: p,
+                        normals: n,
+                        colors: c,
+                        values: v,
+                        indices: x,
+                        tri_cell: tc,
+                        tri_face: tf,
                     },
-                )
-            } else {
-                let m = Rgb(std::array::from_fn(|k| {
-                    (rgb.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
-                }));
-                (m.linear(), sel.linear())
-            };
-            let pts = &pts[i];
-            for p in pts {
-                vb.add([p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]]);
-            }
-            let n = normals[i];
-            let base = s.positions.len() as u32;
-            let origin_v = s.value_origin;
-            let value = |node: f64| -> [f32; 4] {
-                match valued {
-                    Some((flat, _)) => [
-                        (flat - origin_v) as f32,
-                        (node - origin_v) as f32,
-                        sel_mix,
-                        1.0,
-                    ],
-                    None => [0.0, 0.0, 0.0, 0.0],
-                }
-            };
-            let corner =
-                |j: usize| -> f64 { valued.map_or(0.0, |(_, c)| c.get(j).copied().unwrap_or(0.0)) };
-            let push = |s: &mut Surface, p: [f64; 3], v: [f32; 4]| {
-                s.positions.push(p.map(|v| v as f32));
-                s.normals.push(n);
-                s.colors.push(color);
-                s.values.push(v);
-            };
-            let tris_before = s.indices.len() / 3;
-            if !mesh_triangles {
-                // Edges only.
-            } else if pts.len() == 3 {
-                for (j, &p) in pts.iter().enumerate() {
-                    push(&mut s, p, value(corner(j)));
-                }
-                s.indices.extend([base, base + 1, base + 2]);
-            } else {
-                let k = pts.len() as f64;
-                let c = [0, 1, 2].map(|d| pts.iter().map(|p| p[d]).sum::<f64>() / k);
-                let mean = (0..pts.len()).map(corner).sum::<f64>() / k;
-                push(&mut s, c, value(mean));
-                for (j, &p) in pts.iter().enumerate() {
-                    push(&mut s, p, value(corner(j)));
-                }
-                let m = pts.len() as u32;
-                for i in 0..m {
-                    s.indices
-                        .extend([base, base + 1 + i, base + 1 + (i + 1) % m]);
-                }
-            }
-            let tris = s.indices.len() / 3 - tris_before;
-            s.tri_cell.extend(std::iter::repeat_n(poly.cell, tris));
-            s.tri_face.extend(std::iter::repeat_n(poly.face, tris));
-            let vs = &poly.verts;
-            for j in 0..vs.len() {
-                let (a, b) = (vs[j], vs[(j + 1) % vs.len()]);
-                let key = (a.min(b), a.max(b));
-                if a == b || features.as_ref().is_some_and(|fe| !fe.contains(&key)) {
-                    continue;
-                }
-                if seen.insert(key) {
-                    s.edge_positions.push(pts[j].map(|v| v as f32));
-                    s.edge_positions
-                        .push(pts[(j + 1) % vs.len()].map(|v| v as f32));
-                    s.edge_colors.push(ec);
-                    s.edge_colors.push(ec);
-                }
+                ));
             }
         }
+        let fill = Fill {
+            order: &order,
+            polys: &polys,
+            pts: &pts,
+            normals: &normals,
+            corner_values: &corner_values,
+            looks: &looks,
+            vstart: &vstart,
+            istart: &istart,
+            origin,
+            value_origin: s.value_origin,
+            mesh_triangles,
+        };
+        let parts = on_threads(outs, |(r, mut out)| fill.chunk(r, &mut out));
+        // The edges, each once: an edge two polygons share takes the
+        // colour of the first in draw order.
+        let lines = Lines {
+            order: &order,
+            polys: &polys,
+            pts: &pts,
+            looks: &looks,
+            features: features.as_ref(),
+        };
+        let edges = lines.draw(&ranges);
+        (s.edge_positions, s.edge_colors) = edges;
+        let mut vb = Bounds::empty();
+        let mut drawn = Bounds1::default();
+        for (b, d) in parts {
+            if !b.is_empty() {
+                vb.add(b.min);
+                vb.add(b.max);
+            }
+            drawn.merge(&d);
+        }
+        drop(phase);
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
         s.field_range = drawn.range();
+        let _phase = murmel_mesh::profile::span("surface.extras");
         if extras {
             crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
         }
@@ -604,8 +766,37 @@ impl Surface {
                 s.outline.push([0, 1, 2].map(|k| (p[k] - origin[k]) as f32));
             }
         }
+        drop(_phase);
+        let _phase = murmel_mesh::profile::span("surface.boxes");
+        s.tri_boxes = tri_boxes(&s.positions, &s.indices);
         s
     }
+}
+
+/// The box of each run of [`PICK_RUN`] triangles, runs split over the
+/// threads.
+fn tri_boxes(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[[f32; 3]; 2]> {
+    let tris = indices.as_chunks::<3>().0;
+    let runs = tris.len().div_ceil(PICK_RUN);
+    murmel_mesh::par::collect(runs, 1 << 10, |r| {
+        r.map(|k| {
+            let mut lo = [f32::INFINITY; 3];
+            let mut hi = [f32::NEG_INFINITY; 3];
+            let end = ((k + 1) * PICK_RUN).min(tris.len());
+            for tri in &tris[k * PICK_RUN..end] {
+                for &i in tri {
+                    if let Some(p) = positions.get(i as usize) {
+                        for d in 0..3 {
+                            lo[d] = lo[d].min(p[d]);
+                            hi[d] = hi[d].max(p[d]);
+                        }
+                    }
+                }
+            }
+            [lo, hi]
+        })
+        .collect()
+    })
 }
 
 /// The smallest and largest of the values added.
@@ -625,6 +816,263 @@ impl Bounds1 {
     fn range(&self) -> Option<(f64, f64)> {
         self.0
     }
+
+    fn merge(&mut self, other: &Bounds1) {
+        if let Some((a, b)) = other.0 {
+            self.add(a);
+            self.add(b);
+        }
+    }
+}
+
+/// The colours of a polygon (its faces and its edges), the share of the
+/// selection colour mixed into its values, and its flat value when it
+/// has a value at every corner.
+struct Look {
+    color: [f32; 3],
+    edge: [f32; 3],
+    sel_mix: f32,
+    flat: Option<f64>,
+}
+
+/// The part of the triangle buffers one run of polygons fills.
+struct Out<'a> {
+    positions: &'a mut [[f32; 3]],
+    normals: &'a mut [[f32; 3]],
+    colors: &'a mut [[f32; 3]],
+    values: &'a mut [[f32; 4]],
+    indices: &'a mut [u32],
+    tri_cell: &'a mut [u32],
+    tri_face: &'a mut [u32],
+}
+
+/// What filling the triangle buffers reads: the polygons in draw order
+/// (`order`), their corners relative to the origin, normals, corner
+/// values and looks, and where each one's vertices and indices start.
+struct Fill<'a> {
+    order: &'a [(bool, u32, usize)],
+    polys: &'a [Poly],
+    pts: &'a [Vec<[f64; 3]>],
+    normals: &'a [[f32; 3]],
+    corner_values: &'a [Vec<f64>],
+    looks: &'a [Look],
+    vstart: &'a [usize],
+    istart: &'a [usize],
+    origin: [f64; 3],
+    value_origin: f64,
+    mesh_triangles: bool,
+}
+
+impl Fill<'_> {
+    /// Fill `out` with the polygons `run` (positions in draw order) and
+    /// give the bounds of their corners and of the field values drawn.
+    fn chunk(&self, run: std::ops::Range<usize>, out: &mut Out<'_>) -> (Bounds, Bounds1) {
+        let (v0, i0) = (self.vstart[run.start], self.istart[run.start]);
+        let mut vb = Bounds::empty();
+        let mut drawn = Bounds1::default();
+        let o3 = self.origin;
+        for o in run {
+            let (_, _, i) = self.order[o];
+            let (poly, pts, look) = (&self.polys[i], &self.pts[i], &self.looks[o]);
+            for p in pts {
+                vb.add([p[0] + o3[0], p[1] + o3[1], p[2] + o3[2]]);
+            }
+            if !self.mesh_triangles {
+                // Edges only.
+                continue;
+            }
+            let corners = look.flat.map(|_| self.corner_values[i].as_slice());
+            if let (Some(flat), Some(c)) = (look.flat, corners) {
+                drawn.add(flat);
+                c.iter().for_each(|&x| drawn.add(x));
+            }
+            let origin_v = self.value_origin;
+            let value = |node: f64| -> [f32; 4] {
+                match look.flat {
+                    Some(flat) => [
+                        (flat - origin_v) as f32,
+                        (node - origin_v) as f32,
+                        look.sel_mix,
+                        1.0,
+                    ],
+                    None => [0.0, 0.0, 0.0, 0.0],
+                }
+            };
+            let corner =
+                |j: usize| -> f64 { corners.map_or(0.0, |c| c.get(j).copied().unwrap_or(0.0)) };
+            let n = self.normals[i];
+            let (lv, li) = (self.vstart[o] - v0, self.istart[o] - i0);
+            let mut put = |slot: usize, p: [f64; 3], v: [f32; 4]| {
+                out.positions[lv + slot] = p.map(|x| x as f32);
+                out.normals[lv + slot] = n;
+                out.colors[lv + slot] = look.color;
+                out.values[lv + slot] = v;
+            };
+            let base = self.vstart[o] as u32;
+            let tris = if pts.len() == 3 {
+                for (j, &p) in pts.iter().enumerate() {
+                    put(j, p, value(corner(j)));
+                }
+                out.indices[li..li + 3].copy_from_slice(&[base, base + 1, base + 2]);
+                1
+            } else {
+                let k = pts.len() as f64;
+                let c = [0, 1, 2].map(|d| pts.iter().map(|p| p[d]).sum::<f64>() / k);
+                let mean = (0..pts.len()).map(corner).sum::<f64>() / k;
+                put(0, c, value(mean));
+                for (j, &p) in pts.iter().enumerate() {
+                    put(1 + j, p, value(corner(j)));
+                }
+                let m = pts.len() as u32;
+                for t in 0..m {
+                    let at = li + 3 * t as usize;
+                    out.indices[at..at + 3].copy_from_slice(&[
+                        base,
+                        base + 1 + t,
+                        base + 1 + (t + 1) % m,
+                    ]);
+                }
+                pts.len()
+            };
+            let lt = li / 3;
+            out.tri_cell[lt..lt + tris].fill(poly.cell);
+            out.tri_face[lt..lt + tris].fill(poly.face);
+        }
+        (vb, drawn)
+    }
+}
+
+/// Run `f` on each of `items`, each on a thread of its own (the first on
+/// this one), and give the results in order.
+fn on_threads<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    let f = &f;
+    std::thread::scope(|sc| {
+        let mut items = items.into_iter();
+        let here = items.next();
+        let others: Vec<_> = items.map(|t| sc.spawn(move || f(t))).collect();
+        let mut out = Vec::with_capacity(others.len() + 1);
+        out.extend(here.map(f));
+        for h in others {
+            match h.join() {
+                Ok(r) => out.push(r),
+                Err(p) => std::panic::resume_unwind(p),
+            }
+        }
+        out
+    })
+}
+
+/// What drawing the edges reads: the polygons in draw order, their
+/// corners and looks, and the feature edges when only those are drawn.
+struct Lines<'a> {
+    order: &'a [(bool, u32, usize)],
+    polys: &'a [Poly],
+    pts: &'a [Vec<[f64; 3]>],
+    looks: &'a [Look],
+    features: Option<&'a Features>,
+}
+
+impl Lines<'_> {
+    /// The edge from corner `j` of the polygon at `o` in draw order, its
+    /// ends in increasing order.
+    fn key(&self, o: usize, j: usize) -> (V, V) {
+        let vs = &self.polys[self.order[o].2].verts;
+        let (a, b) = (vs[j], vs[(j + 1) % vs.len()]);
+        (a.min(b), a.max(b))
+    }
+
+    /// The edge lines, two vertices per edge, each edge once, in the
+    /// colour of the first polygon in draw order that has it, in the
+    /// order of their first polygons. The polygons are split into `runs`
+    /// (in draw order) and the edges into as many shards by their
+    /// smaller end, so finding the first of each edge is split over the
+    /// threads too: each shard walks its edges in draw order, run by run.
+    fn draw(&self, runs: &[std::ops::Range<usize>]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        let shards = runs.len().max(1);
+        let shard = |k: (V, V)| shard_of(k, shards);
+        // The edges of each run that are drawn at all, by shard, as the
+        // polygon (its place in draw order) and the corner they start at.
+        let by_run: Vec<Vec<Vec<(u32, u32)>>> = on_threads(runs.to_vec(), |r| {
+            let mut out = vec![Vec::new(); shards];
+            for o in r {
+                let vs = &self.polys[self.order[o].2].verts;
+                for j in 0..vs.len() {
+                    let key = self.key(o, j);
+                    if key.0 == key.1 || self.features.is_some_and(|fe| !fe.contains(&key)) {
+                        continue;
+                    }
+                    out[shard(key)].push((o as u32, j as u32));
+                }
+            }
+            out
+        });
+        // The first of each edge in draw order, shard by shard.
+        let firsts: Vec<Vec<(u32, u32)>> = on_threads((0..shards).collect(), |k| {
+            let n: usize = by_run.iter().map(|r| r[k].len()).sum();
+            let mut seen: FastSet<(V, V)> = set_with_capacity(n / 2 + 16);
+            let mut first = Vec::with_capacity(n / 2 + 16);
+            for run in &by_run {
+                for &(o, j) in &run[k] {
+                    if seen.insert(self.key(o as usize, j as usize)) {
+                        first.push((o, j));
+                    }
+                }
+            }
+            first
+        });
+        drop(by_run);
+        // Mark them per polygon corner, then write the lines run by run.
+        let mut corner_at = Vec::with_capacity(self.order.len() + 1);
+        corner_at.push(0usize);
+        for &(_, _, i) in self.order {
+            let last = corner_at.last().copied().unwrap_or(0);
+            corner_at.push(last + self.polys[i].verts.len());
+        }
+        let mut drawn = vec![false; corner_at.last().copied().unwrap_or(0)];
+        for (o, j) in firsts.into_iter().flatten() {
+            drawn[corner_at[o as usize] + j as usize] = true;
+        }
+        let counts: Vec<usize> = runs
+            .iter()
+            .map(|r| {
+                drawn[corner_at[r.start]..corner_at[r.end]]
+                    .iter()
+                    .filter(|&&d| d)
+                    .count()
+            })
+            .collect();
+        let total: usize = counts.iter().sum();
+        let mut cuts = vec![0usize];
+        for c in &counts {
+            let last = cuts.last().copied().unwrap_or(0);
+            cuts.push(last + 2 * c);
+        }
+        let mut positions = vec![[0.0f32; 3]; 2 * total];
+        let mut colors = vec![[0.0f32; 3]; 2 * total];
+        let pieces = murmel_mesh::par::split_mut(&mut positions, &cuts)
+            .into_iter()
+            .zip(murmel_mesh::par::split_mut(&mut colors, &cuts));
+        let work: Vec<_> = runs.iter().cloned().zip(pieces).collect();
+        let (drawn, corner_at) = (&drawn, &corner_at);
+        on_threads(work, |(r, (pos, col))| {
+            let mut at = 0;
+            for o in r {
+                let (_, _, i) = self.order[o];
+                let (pts, ec) = (&self.pts[i], self.looks[o].edge);
+                let n = pts.len();
+                for j in 0..n {
+                    if drawn[corner_at[o] + j] {
+                        pos[at] = pts[j].map(|v| v as f32);
+                        pos[at + 1] = pts[(j + 1) % n].map(|v| v as f32);
+                        col[at] = ec;
+                        col[at + 1] = ec;
+                        at += 2;
+                    }
+                }
+            }
+        });
+        (positions, colors)
+    }
 }
 
 /// The polygons to draw, before the selection orders them.
@@ -635,11 +1083,11 @@ fn polygons(
     shown: &[bool],
     cutter: Option<&Cutter<'_>>,
 ) -> Vec<Poly> {
-    let flat = cutter.filter(|c| !c.flat.is_empty());
+    let flat = cutter.filter(|c| c.slices());
     let mut polys: Vec<Poly> = Vec::new();
     let mut add = |verts: Vec<V>, cell: u32, face: u32, boundary: u32, color: Rgb, group: u32| {
         let verts = match flat {
-            Some(c) => c.clip_flat(verts),
+            Some(c) => c.clip_flat(cell, verts),
             None => verts,
         };
         if verts.len() >= 3 {
@@ -674,21 +1122,33 @@ fn polygons(
             patch(b),
         );
     }
-    for u in 0..mesh.face_owner.len().min(mesh.face_neighbour.len()) {
+    // The faces between cells, and the boundary faces of the cells: on
+    // all threads, in face order, unless something cuts flat (the cut
+    // points are numbered as they are found, on one thread).
+    let regions_cut = flat
+        .and_then(|c| c.regions.as_ref())
+        .and_then(|(rc, _)| rc.cut_by.as_deref());
+    let slicing = flat.is_some();
+    let cut_by = |c: u32| {
+        regions_cut
+            .and_then(|k| k.get(c as usize).copied())
+            .unwrap_or(NOT_CUT)
+    };
+    let between = |u: usize, add: &mut dyn FnMut(Vec<V>, u32, u32, u32, Rgb, u32)| {
         let (o, n) = (mesh.face_owner[u], mesh.face_neighbour[u]);
         if o == NO_CELL {
-            continue;
+            return;
         }
         let so = shown[o as usize];
         if n == NO_CELL {
             if !so {
-                continue;
+                return;
             }
             match mesh.face_boundary.get(u).copied() {
                 Some(b) if b != NO_CELL => {
                     let b = b as usize;
                     if !display.face_visible(mesh, b) {
-                        continue;
+                        return;
                     }
                     add(
                         nodes(mesh.boundary.get(b)),
@@ -708,11 +1168,30 @@ fn polygons(
                     GROUP_OPEN,
                 ),
             }
-            continue;
+            return;
         }
         let sn = shown[n as usize];
-        if so == sn {
-            continue;
+        if so && sn {
+            // Two cells cut differently (one by a flat region, the other
+            // whole or by another region): each side draws the face as
+            // its own clip keeps it, so where one side is cut away the
+            // other's face closes the surface (the rest lies inside).
+            if slicing && cut_by(o) != cut_by(n) {
+                for c in [o, n] {
+                    add(
+                        nodes(mesh.face_nodes(u)),
+                        c,
+                        u as u32,
+                        NO_CELL,
+                        display.cell_color(mesh, tokens, c as usize),
+                        GROUP_OPEN,
+                    );
+                }
+            }
+            return;
+        }
+        if !so && !sn {
+            return;
         }
         let c = if so { o } else { n };
         add(
@@ -723,6 +1202,34 @@ fn polygons(
             display.cell_color(mesh, tokens, c as usize),
             GROUP_OPEN,
         );
+    };
+    let faces = mesh.face_owner.len().min(mesh.face_neighbour.len());
+    if slicing {
+        for u in 0..faces {
+            between(u, &mut add);
+        }
+    } else {
+        let found = murmel_mesh::par::collect(faces, 1 << 14, |r| {
+            let mut out = Vec::new();
+            let mut keep = |verts: Vec<V>, cell, face, boundary, color, group| {
+                if verts.len() >= 3 {
+                    out.push(Poly {
+                        verts,
+                        cell,
+                        face,
+                        boundary,
+                        color,
+                        group,
+                    });
+                }
+            };
+            for u in r {
+                between(u, &mut keep);
+            }
+            out
+        });
+        let mut add_all = |p: Poly| add(p.verts, p.cell, p.face, p.boundary, p.color, p.group);
+        found.into_iter().for_each(&mut add_all);
     }
     // Faces isolated on their own (I on picked faces), unless a cell
     // shown beside them already draws them.
@@ -761,7 +1268,13 @@ fn polygons(
         }
     }
     if let Some(cutter) = flat {
-        for (c, &on) in shown.iter().enumerate() {
+        // The cells a plane crosses, found on all threads: a thin layer
+        // of the cells shown.
+        let sides = cutter.sides();
+        let crossed: Vec<bool> = murmel_mesh::par::collect(shown.len(), 1 << 12, |r| {
+            r.map(|c| shown[c] && sides.crosses(mesh, c)).collect()
+        });
+        for (c, &on) in crossed.iter().enumerate() {
             if !on {
                 continue;
             }
@@ -802,7 +1315,8 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         | Item::Probe(_)
         | Item::Slice(_)
         | Item::Iso(_)
-        | Item::Arrows => false,
+        | Item::Arrows
+        | Item::Region(_) => false,
     })
 }
 
@@ -842,45 +1356,92 @@ fn outline(mesh: &Mesh, display: &Display) -> Vec<(u32, u32)> {
     out
 }
 
-/// The feature edges among `polys` (corners, feature group, normal): an
-/// edge whose two faces meet at a crease (the cosine of the angle between
-/// their normals below `cos_max`), whose faces lie in different groups
+/// The shard of edge `key` among `shards`, by its smaller end, so each
+/// thread can take the edges of one shard.
+fn shard_of(key: (V, V), shards: usize) -> usize {
+    let id = match key.0 {
+        V::Node(i) => u64::from(i),
+        V::Cut(i) => u64::from(i) | 1 << 32,
+    };
+    let mixed = id.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32;
+    ((mixed * shards as u64) >> 32) as usize
+}
+
+/// How the faces seen so far meet at an edge: the normal and group of
+/// the first, how many there are, and whether a later one makes a crease
+/// or a border of groups with the first.
+struct Seen {
+    normal: [f32; 3],
+    group: u32,
+    count: u32,
+    feature: bool,
+}
+
+/// The feature edges of a surface, in shards by [`shard_of`].
+struct Features {
+    shards: Vec<FastMap<(V, V), Seen>>,
+}
+
+impl Features {
+    fn contains(&self, key: &(V, V)) -> bool {
+        self.shards[shard_of(*key, self.shards.len())]
+            .get(key)
+            .is_some_and(|e| e.feature || e.count == 1)
+    }
+}
+
+/// The feature edges among `polys` (with their `normals`): an edge whose
+/// two faces meet at a crease (the cosine of the angle between their
+/// normals below `cos_max`), whose faces lie in different groups
 /// (patches, open faces, sections), or that has only one face drawn (an
 /// open border, also where hidden items were cut away). The normals'
 /// orientation is not trusted, so a crease is judged on the absolute
-/// cosine.
-fn feature_edges<'a>(
-    polys: impl Iterator<Item = (&'a [V], u32, [f32; 3])>,
+/// cosine. Each later face is judged against the first, in the order of
+/// `polys`; the polygons are split into `runs` and the edges into as many
+/// shards, each walked in that order on a thread of its own.
+fn feature_edges(
+    polys: &[Poly],
+    normals: &[[f32; 3]],
+    runs: &[std::ops::Range<usize>],
     cos_max: f64,
-) -> HashSet<(V, V)> {
-    struct Seen {
-        normal: [f32; 3],
-        group: u32,
-        count: u32,
-        feature: bool,
-    }
-    let mut edges: HashMap<(V, V), Seen> = HashMap::new();
-    for (face, group, n) in polys {
-        for i in 0..face.len() {
-            let (a, b) = (face[i], face[(i + 1) % face.len()]);
-            let e = edges.entry((a.min(b), a.max(b))).or_insert(Seen {
-                normal: n,
-                group,
-                count: 0,
-                feature: false,
-            });
-            if e.count > 0 {
-                let dot: f32 = (0..3).map(|k| e.normal[k] * n[k]).sum();
-                e.feature |= e.group != group || (dot.abs() as f64) < cos_max;
+) -> Features {
+    let shards = runs.len().max(1);
+    let by_run: Vec<Vec<Vec<(u32, u32)>>> = on_threads(runs.to_vec(), |r| {
+        let mut out = vec![Vec::new(); shards];
+        for i in r {
+            let face = &polys[i].verts;
+            for j in 0..face.len() {
+                let (a, b) = (face[j], face[(j + 1) % face.len()]);
+                out[shard_of((a.min(b), a.max(b)), shards)].push((i as u32, j as u32));
             }
-            e.count += 1;
         }
-    }
-    edges
-        .into_iter()
-        .filter(|(_, e)| e.feature || e.count == 1)
-        .map(|(k, _)| k)
-        .collect()
+        out
+    });
+    let shards = on_threads((0..shards).collect(), |k| {
+        let n: usize = by_run.iter().map(|r| r[k].len()).sum();
+        let mut edges: FastMap<(V, V), Seen> = FastMap::default();
+        edges.reserve(n / 2 + 16);
+        for run in &by_run {
+            for &(i, j) in &run[k] {
+                let (i, j) = (i as usize, j as usize);
+                let (face, group, n) = (&polys[i].verts, polys[i].group, normals[i]);
+                let (a, b) = (face[j], face[(j + 1) % face.len()]);
+                let e = edges.entry((a.min(b), a.max(b))).or_insert(Seen {
+                    normal: n,
+                    group,
+                    count: 0,
+                    feature: false,
+                });
+                if e.count > 0 {
+                    let dot: f32 = (0..3).map(|k| e.normal[k] * n[k]).sum();
+                    e.feature |= e.group != group || (dot.abs() as f64) < cos_max;
+                }
+                e.count += 1;
+            }
+        }
+        edges
+    });
+    Features { shards }
 }
 
 /// The unit normal of a polygon by Newell's method.
@@ -1007,6 +1568,148 @@ mod tests {
         uses
     }
 
+    /// The mean of cell `c`'s points.
+    fn cell_mean(mesh: &Mesh, c: usize) -> [f64; 3] {
+        let pts: Vec<[f64; 3]> = mesh
+            .cell_points(c)
+            .map(|i| mesh.points[i as usize])
+            .collect();
+        [0, 1, 2].map(|k| pts.iter().map(|p| p[k]).sum::<f64>() / pts.len() as f64)
+    }
+
+    /// A display of the channel with `regions` (their cells found).
+    fn with_regions(mesh: &Mesh, regions: Vec<crate::Region>, clips: Vec<Clip>) -> Display {
+        let mut d = Display {
+            regions,
+            clips,
+            ..Display::default()
+        };
+        crate::region::ensure(&mut d, mesh);
+        d
+    }
+
+    /// Invariant (large-mesh stage 1b, the maintainer's card 6): a box,
+    /// a slab or a sphere region cutting flat draws a closed surface,
+    /// every edge shared by exactly two polygons, and nothing outside
+    /// the shape: a box's and a slab's corners lie inside every face's
+    /// half-space, a sphere's within the sphere (a cut point on an edge
+    /// is inside, the distance being convex). A slab thinner than the
+    /// channel's cells still draws its cells' sections. Breaks when a
+    /// cell's cut does not close, when a polygon escapes its region's
+    /// clip, or when a thin slab draws nothing.
+    #[test]
+    fn flat_regions_are_closed_and_stay_inside() {
+        use crate::region::{Region, Shape};
+        let m = channel();
+        let b = m.bounds();
+        // Inside the fluid (the channel's middle is its obstacle).
+        let c = cell_mean(&m, m.cell_count() / 3);
+        let r = 0.3 * b.radius();
+        let thin = 1e-3 * b.radius();
+        let flat = |shape: Shape| Region {
+            cut: ClipMode::Flat,
+            ..Region::new(shape)
+        };
+        for shape in [
+            Shape::default_box(&b),
+            Shape::Box {
+                center: c,
+                size: [r, r, 0.5 * thin],
+            },
+            Shape::Sphere {
+                center: c,
+                radius: r,
+            },
+            Shape::Slab {
+                origin: c,
+                normal: [0.6, 0.0, 0.8],
+                thickness: 0.5 * r,
+            },
+            Shape::Slab {
+                origin: c,
+                normal: [0.0, 1.0, 0.0],
+                thickness: thin,
+            },
+        ] {
+            let d = with_regions(&m, vec![flat(shape.clone())], Vec::new());
+            let t = Tokens::builtin().unwrap();
+            let shown = d.shown_cells(&m);
+            let cutter = Cutter::new(&m, &d).expect("a flat region cuts");
+            let polys = polygons(&m, &t, &d, &shown, Some(&cutter));
+            assert!(
+                polys.iter().any(|p| p.group == GROUP_SECTION),
+                "{shape:?} draws sections"
+            );
+            let borders = shape.borders();
+            let tol = 1e-9 * b.radius();
+            for p in &polys {
+                for &v in &p.verts {
+                    let at = cutter.pos(v);
+                    for bd in &borders {
+                        assert!(bd.distance(at) <= tol, "{shape:?}: {at:?} outside");
+                    }
+                }
+            }
+            let uses = edge_uses(&m, &d);
+            let open: Vec<_> = uses.iter().filter(|(_, n)| **n != 2).take(3).collect();
+            assert!(open.is_empty(), "{shape:?}: {open:?}");
+        }
+    }
+
+    /// Invariant: regions cutting differently side by side still draw a
+    /// closed surface: a flat box beside a whole-cell sphere, two flat
+    /// regions overlapping, and a flat region under a flat clip plane;
+    /// every edge is used an even number of times (each way of cutting
+    /// closes its own cells, and the face between two cells cut
+    /// differently is drawn by both). Breaks when the face between a
+    /// clipped cell and a whole one is left out, which opens a hole into
+    /// the whole cell.
+    #[test]
+    fn mixed_regions_are_closed() {
+        use crate::region::{Region, Shape};
+        let m = channel();
+        let b = m.bounds();
+        let c = cell_mean(&m, m.cell_count() / 3);
+        let r = 0.3 * b.radius();
+        let flat = |shape: Shape| Region {
+            cut: ClipMode::Flat,
+            ..Region::new(shape)
+        };
+        let sphere = Shape::Sphere {
+            center: [c[0] + 0.5 * r, c[1], c[2]],
+            radius: r,
+        };
+        let cases = [
+            (
+                "flat box, whole sphere",
+                vec![flat(Shape::default_box(&b)), Region::new(sphere.clone())],
+                Vec::new(),
+            ),
+            (
+                "flat box, flat sphere",
+                vec![flat(Shape::default_box(&b)), flat(sphere.clone())],
+                Vec::new(),
+            ),
+            (
+                "flat sphere, flat clip",
+                vec![flat(sphere.clone())],
+                vec![Clip {
+                    origin: c,
+                    normal: [0.0, 1.0, 0.0],
+                    mode: ClipMode::Flat,
+                    enabled: true,
+                }],
+            ),
+        ];
+        for (name, regions, clips) in cases {
+            let d = with_regions(&m, regions, clips);
+            let uses = edge_uses(&m, &d);
+            assert!(!uses.is_empty(), "{name}");
+            let odd: Vec<_> = uses.iter().filter(|(_, n)| **n % 2 != 0).take(3).collect();
+            assert!(odd.is_empty(), "{name}: {odd:?}");
+        }
+    }
+
     /// Invariant: what the viewport draws is a closed surface, every edge
     /// shared by exactly two polygons, for the whole channel, with the
     /// prism layers hidden (the core's faces laid open), and with a
@@ -1103,6 +1806,66 @@ mod tests {
                 .take(3)
                 .collect();
             assert!(bad.is_empty(), "{name}: {bad:?}");
+        }
+    }
+
+    /// Invariant: the buffers are the same however many threads fill
+    /// them (each fills a run of polygons in draw order at the place the
+    /// counts before it give; the edges are drawn once, in draw order;
+    /// a feature edge is judged against its first face in polygon order,
+    /// shard by shard), for faces with edges, a cut, a section, lines
+    /// only, feature edges and a selection, on a mesh that is all creases
+    /// and one that is mostly flat. Breaks when a run starts at the wrong
+    /// place or the edges or faces are taken in another order.
+    #[test]
+    fn threads_give_the_same_surface() {
+        // The honeycomb's boundary is all creases; the channel's flat
+        // sides are not, so its feature edges are a few of its edges.
+        for m in [murmel_mesh::synth::honeycomb(6), channel()] {
+            same_surface_on_threads(&m);
+        }
+    }
+
+    fn same_surface_on_threads(m: &Mesh) {
+        let t = Tokens::builtin().unwrap();
+        let wire = Display {
+            render_mode: RenderMode::Wireframe,
+            ..Display::default()
+        };
+        let feature = Display {
+            render_mode: RenderMode::FeatureEdges,
+            ..Display::default()
+        };
+        let mut sel = Display::default();
+        sel.selection.extend([Item::Cell(7), Item::Cell(70)]);
+        let key = |s: &Surface| {
+            (
+                s.positions.clone(),
+                s.normals.clone(),
+                s.colors.clone(),
+                s.values.clone(),
+                s.indices.clone(),
+                s.tri_cell.clone(),
+                s.tri_face.clone(),
+                (s.edge_positions.clone(), s.edge_colors.clone()),
+                s.visible_bounds.map(|b| (b.min, b.max)),
+                s.field_range,
+            )
+        };
+        for (name, d) in [
+            ("all", Display::default()),
+            ("crinkle", clip_y(m, ClipMode::Crinkle)),
+            ("flat", clip_y(m, ClipMode::Flat)),
+            ("wireframe", wire),
+            ("feature edges", feature),
+            ("selection", sel),
+        ] {
+            let one = murmel_mesh::par::with_threads(1, || key(&Surface::build(m, &t, &d)));
+            assert!(!one.0.is_empty(), "{name}");
+            for n in [2, 3, 7] {
+                let many = murmel_mesh::par::with_threads(n, || key(&Surface::build(m, &t, &d)));
+                assert!(one == many, "{name}: {n} threads");
+            }
         }
     }
 

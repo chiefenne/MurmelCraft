@@ -26,6 +26,7 @@ mod vtu;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use serde::Serialize;
 
@@ -391,14 +392,24 @@ pub struct Mesh {
     /// bytes it read (on another thread while it parses), so the file is
     /// not read twice; empty when the reader did not take them.
     pub file_sha256: Vec<String>,
+    /// The counts [`Mesh::summary`] returns, taken the first time they
+    /// are asked for: the model tree and the legend ask on every frame,
+    /// and counting millions of cells each time held frames back. A mesh
+    /// is not changed once read, so they stay true.
+    summary: OnceLock<Summary>,
 }
 
 /// SHA-256 of `bytes`, lowercase hex.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
+    hex(&Sha256::digest(bytes))
+}
+
+/// `bytes` as lowercase hex.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
-    let mut out = String::with_capacity(64);
-    for b in Sha256::digest(bytes) {
+    let mut out = String::with_capacity(2 * bytes.len());
+    for b in bytes {
         let _ = write!(out, "{b:02x}");
     }
     out
@@ -542,11 +553,33 @@ impl Mesh {
                 p.role = PatchRole::parse(role);
             }
         }
+        // The counts list each patch's role.
+        self.summary.take();
+    }
+
+    /// The bytes of the model's arrays (points, faces, cells, topology),
+    /// as `murmel bench` reports the mesh model and region estimates
+    /// scale it.
+    pub fn model_bytes(&self) -> usize {
+        self.points.len() * 24
+            + (self.distinct.start.len() + self.distinct.nodes.len()) * 4
+            + (self.boundary.start.len() + self.boundary.nodes.len()) * 4
+            + (self.cell_faces.len() + self.cell_zone.len()) * 4
+            + self.cell_kind.len() * std::mem::size_of::<CellKind>()
+            + (self.boundary_patch.len() + self.boundary_owner.len()) * 4
+            + (self.cell_face_id.len() + self.face_owner.len() + self.face_neighbour.len()) * 4
+            + self.cell_face_flip.len()
+            + (self.boundary_face_id.len() + self.face_boundary.len()) * 4
     }
 
     /// The bounds of the points the boundary uses (all points when there
     /// is no boundary).
     pub fn bounds(&self) -> Bounds {
+        self.summary().bounds
+    }
+
+    /// [`Mesh::bounds`], measured now.
+    fn measure_bounds(&self) -> Bounds {
         let mut b = Bounds::empty();
         if self.boundary.is_empty() {
             for &p in &self.points {
@@ -560,11 +593,23 @@ impl Mesh {
         b
     }
 
-    pub fn summary(&self) -> Summary {
-        let mut kinds: BTreeMap<&'static str, usize> = BTreeMap::new();
-        for k in &self.cell_kind {
-            *kinds.entry(k.name()).or_default() += 1;
+    /// Counts and extent, as `mesh.open` reports them; taken the first
+    /// time and kept.
+    pub fn summary(&self) -> &Summary {
+        self.summary.get_or_init(|| self.count())
+    }
+
+    /// The counts of [`Mesh::summary`], taken now.
+    fn count(&self) -> Summary {
+        let mut by_kind = [0usize; CellKind::ALL.len()];
+        for &k in &self.cell_kind {
+            by_kind[k as usize] += 1;
         }
+        let kinds: BTreeMap<&'static str, usize> = CellKind::ALL
+            .into_iter()
+            .filter(|&k| by_kind[k as usize] > 0)
+            .map(|k| (k.name(), by_kind[k as usize]))
+            .collect();
         let mut zone_cells = vec![0usize; self.zones.len()];
         for &z in &self.cell_zone {
             if let Some(n) = zone_cells.get_mut(z as usize) {
@@ -601,7 +646,7 @@ impl Mesh {
                     faces,
                 })
                 .collect(),
-            bounds: self.bounds(),
+            bounds: self.measure_bounds(),
             boundary_extracted: self.boundary_extracted,
         }
     }
@@ -618,23 +663,121 @@ pub fn read(path: &Path) -> Result<Mesh, MeshError> {
 /// (FoehnCraft's `fields.vtkhdf`), the data arrays of a `.vtu`, or an
 /// OpenFOAM mesh (no fields yet).
 pub fn read_results(path: &Path) -> Result<(Mesh, field::Results), MeshError> {
+    read_results_with(path, true)
+}
+
+/// As [`read_results`]. With `hash` false the readers do not take the
+/// SHA-256 of the files beside the parsing and leave
+/// [`Mesh::file_sha256`] empty: the window opens a mesh first and hashes
+/// its files afterwards ([`sha256_file`]), since hashing a large file can
+/// take longer than reading it.
+pub fn read_results_with(path: &Path, hash: bool) -> Result<(Mesh, field::Results), MeshError> {
     if path.is_file() && vtkhdf::is_vtkhdf(path) {
-        return vtkhdf::read_vtkhdf(path);
+        return vtkhdf::read_vtkhdf_with(path, hash);
     }
     let vtu = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("vtu"));
     if !vtu && polymesh::is_openfoam(path) {
-        return read_polymesh(path).map(|m| (m, field::Results::default()));
+        return polymesh::read_polymesh_with(path, hash).map(|m| (m, field::Results::default()));
     }
-    let (mut mesh, results) = vtu::read_vtu_results(path)?;
+    let (mut mesh, results) = vtu::read_vtu_file(path, hash)?;
     mesh.files = vec![path.to_path_buf()];
     Ok((mesh, results))
+}
+
+/// SHA-256 (hex) of the file at `path`, read in pieces so that a file of
+/// many gigabytes is never held whole. `None` when `stop` was set
+/// before the end (checked between pieces).
+pub fn sha256_file(
+    path: &Path,
+    stop: &std::sync::atomic::AtomicBool,
+) -> std::io::Result<Option<String>> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read as _;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 8 << 20];
+    loop {
+        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let n = match f.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        h.update(&buf[..n]);
+    }
+    Ok(Some(hex(&h.finalize())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Invariant: the counts are taken once and agree with the cells,
+    /// zones and patches. Breaks if the cache is dropped (the tree would
+    /// count millions of cells every frame again) or a kind with no
+    /// cells is listed.
+    #[test]
+    fn summary_is_counted_once() {
+        let m = synth::honeycomb(4);
+        let s = m.summary();
+        assert!(std::ptr::eq(s, m.summary()));
+        assert_eq!(s.cells, m.cell_count());
+        assert_eq!(s.cell_kinds.values().sum::<usize>(), m.cell_count());
+        assert!(s.cell_kinds.values().all(|&n| n > 0));
+        assert_eq!(
+            s.zones.iter().map(|z| z.cells).sum::<usize>(),
+            m.cell_count()
+        );
+        assert_eq!(
+            s.patches.iter().map(|p| p.faces).sum::<usize>(),
+            m.boundary.len()
+        );
+        assert_eq!(*s, m.count());
+        assert_eq!(m.bounds(), m.measure_bounds());
+        let mut m = m;
+        let roles = |m: &Mesh| {
+            m.summary()
+                .patches
+                .iter()
+                .map(|p| p.role)
+                .collect::<Vec<_>>()
+        };
+        let before = roles(&m);
+        let name = m.patches[0].name.clone();
+        assert_ne!(before[0], PatchRole::Symmetry);
+        let text = serde_json::json!({
+            "format": evidence::FORMAT,
+            "summary": {"patches": [{"name": name, "role": "symmetry"}]},
+        })
+        .to_string();
+        let e = Evidence::parse(&text).unwrap();
+        m.apply_evidence_roles(&e);
+        assert_eq!(roles(&m)[0], PatchRole::Symmetry);
+        assert_eq!(roles(&m)[1..], before[1..]);
+    }
+
+    /// Invariant: a file hashed in pieces has the SHA-256 of its bytes
+    /// hashed at once (a file longer than one piece), and a set `stop`
+    /// ends the hashing without a digest. A piece lost or hashed twice
+    /// would change the digest the validity badge compares.
+    #[test]
+    fn sha256_of_a_file_in_pieces() {
+        let path = std::env::temp_dir().join(format!("murmel-sha-{}", std::process::id()));
+        let bytes: Vec<u8> = (0..(9u32 << 20) + 7).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &bytes).unwrap();
+        let go = std::sync::atomic::AtomicBool::new(false);
+        let d = sha256_file(&path, &go).unwrap();
+        assert_eq!(d.as_deref(), Some(sha256_hex(&bytes).as_str()));
+        let stop = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(sha256_file(&path, &stop).unwrap(), None);
+        let _ = std::fs::remove_file(&path);
+        assert!(sha256_file(&path, &go).is_err());
+    }
 
     /// Invariant: the spec's face-count rules class KoflCraft's prism
     /// layers (polyhedra with prism topology) as prisms. A change that

@@ -71,21 +71,24 @@ mod tests {
         for r in murmel_mesh::PatchRole::ALL {
             assert!(t.has(&format!("role-{}", r.name())));
         }
-        for v in ["valid", "no_evidence", "failed"] {
+        for v in ["valid", "no_evidence", "failed", "checking"] {
             assert!(t.has(&format!("validity-{v}")));
         }
         for a in [
             "mesh", "zone", "kind", "patch", "cell", "face", "clip", "measure", "probe", "slice",
-            "iso",
+            "iso", "region",
         ] {
             assert!(t.has(&format!("props-area-{a}")));
         }
         for c in murmel_engine::IsoColor::ALL {
             assert!(t.has(&format!("iso-color-{}", c.key())));
         }
-        // Every property row of every item of the channel mesh, and of
-        // its field results with a slice series and an iso-surface, has a
-        // label.
+        for k in murmel_engine::region::Shape::KINDS {
+            assert!(t.has(&format!("region-shape-{k}")));
+        }
+        // Every property row of every item of the channel mesh, of a
+        // region of every shape, and of its field results with a slice
+        // series and an iso-surface, has a label.
         for file in ["channel/foehncraft.vtu", "vtkhdf/channel_fields.vtkhdf"] {
             let mut s = murmel_engine::Session::new(murmel_engine::Tokens::builtin().unwrap());
             s.config_dir = None;
@@ -98,6 +101,25 @@ mod tests {
                 murmel_engine::Item::Cell(0),
                 murmel_engine::Item::Face(0),
             ];
+            let (zone, patch) = {
+                let m = &s.mesh.as_ref().unwrap().mesh;
+                (m.zones.first().cloned(), m.patches[0].name.clone())
+            };
+            let mut shapes = vec![
+                serde_json::json!({"new": true, "shape": "box"}),
+                serde_json::json!({"new": true, "shape": "sphere"}),
+                serde_json::json!({"new": true, "shape": "slab"}),
+                serde_json::json!({"new": true, "shape": "patch", "patch": patch, "layers": 2}),
+                serde_json::json!({"new": true, "shape": "cells", "cells": [0], "rings": 1}),
+            ];
+            if let Some(z) = zone {
+                shapes.push(serde_json::json!({"new": true, "shape": "zone", "zone": z}));
+            }
+            for (k, input) in shapes.into_iter().enumerate() {
+                let e = murmel_tools::call("region.set", input, &mut s);
+                assert!(e.ok(), "region.set: {:?}", e.diagnostics);
+                extra.push(murmel_engine::Item::Region(k as u32));
+            }
             if file.ends_with(".vtkhdf") {
                 for (tool, input) in [
                     (

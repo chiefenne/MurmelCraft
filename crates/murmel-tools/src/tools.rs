@@ -551,6 +551,7 @@ pub(crate) fn display_json(s: &Session) -> Value {
         "isos": (0..d.isos.len()).map(|k| crate::extract::iso_json(s, k)).collect::<Vec<_>>(),
         "mesh_look": d.mesh_look,
         "arrows": crate::extract::arrows_json(s),
+        "regions": crate::region::regions_json(s),
     })
 }
 
@@ -1377,6 +1378,8 @@ struct SessionPath {
 
 fn session_save(input: Value, s: &mut Session) -> Run {
     let i: SessionPath = parse(input)?;
+    // The file names the mesh by its digest.
+    s.wait_digest();
     let f = SessionFile::of(s, &i.path);
     std::fs::write(&i.path, f.to_json())
         .map_err(|e| Diagnostic::new("SESS002", format!("{}: {e}", i.path.display())))?;
@@ -1400,6 +1403,8 @@ fn session_load(input: Value, s: &mut Session) -> Run {
     let mut warnings = Vec::new();
     match (f.mesh_path(&i.path), &f.mesh) {
         (Some(p), Some(saved)) => {
+            // The open mesh is recognised by its digest.
+            s.wait_digest();
             let open = s
                 .mesh
                 .as_ref()
@@ -1408,6 +1413,7 @@ fn session_load(input: Value, s: &mut Session) -> Run {
                 s.open(&p).map_err(|e| {
                     Diagnostic::new(e.code, format!("the session's mesh: {}", e.message))
                 })?;
+                s.wait_digest();
             }
             if s.mesh.as_ref().is_some_and(|m| m.digest != saved.sha256) {
                 warnings.push(json!(Diagnostic::new(
@@ -2126,6 +2132,8 @@ pub const JOURNALED: &[&str] = &[
     "iso.clear",
     "arrows.set",
     "arrows.clear",
+    "region.set",
+    "region.clear",
     "display.mesh_look",
     "display.set_color",
     "display.visibility",
@@ -2192,6 +2200,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("measure.snap", READS_ONLY),
     ("measure.list", READS_ONLY),
     ("probe.at", READS_ONLY),
+    ("region.list", READS_ONLY),
 ];
 
 /// The reason in `NOT_JOURNALED` of a tool that changes nothing: no file,
@@ -2291,10 +2300,10 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "mesh.open",
-        version: 3,
+        version: 4,
         action: Action::Read,
         label_key: "tool-mesh-open",
-        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip).",
+        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). In the window the SHA-256 of the files is taken after the mesh opens: until it is, `validity` is `checking` and `digest` and the files' `sha256` are empty.",
         outputs: &[],
         reads: &["path"],
         input_schema: || {
@@ -2841,6 +2850,39 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::extract::arrows_clear_schema,
         run: crate::extract::arrows_clear,
+    },
+    Tool {
+        id: "region.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-region-set",
+        summary: "Add or change a region of interest (region: its number, region:1 is the first; left out: the current region, the one selected last or else added last; new: add one, up to 16). While a region is enabled, only the cells of the enabled regions show and slices, iso-surfaces, arrows and quality are computed only there; several enabled regions show their union. shape: box (center, size: full lengths along x, y, z; a new one is half the mesh's box), sphere (center, radius), slab (the cells between two planes thickness apart, the middle one through origin with normal), zone (zone: a cell zone's name), patch (patch: its name, layers: the cells along it and layers - 1 rings further in, 1 to 64), cells (cells: ids, left out: the cells picked now; rings: rings of face neighbours added, 0 to 64). A cell belongs to a box, sphere or slab when its bounding box touches the shape, so the shape is fully covered (also when it is thinner than a cell) and the border shows whole cells. cut: crinkle (the default, whole cells) or flat (box, sphere and slab only: the border cells are clipped to the shape and closed by their sections, as a flat clip plane cuts; a box's and a slab's cut is exact, a sphere's follows it to within a cell, and a sphere with no mesh node inside shows whole cells, with a note; a cell a whole-cell region takes stays whole, and where flat regions overlap a cell is cut by the one its centre lies deepest in). Changing shape replaces the region's shape; fields of another shape are refused. enabled false keeps the region but shows the whole mesh. The result lists each region with the cells it takes, its halo (the cells around it a mesh read in pieces also loads) and the size of that part of the mesh model.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::region::region_set_schema,
+        run: crate::region::region_set,
+    },
+    Tool {
+        id: "region.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-region-clear",
+        summary: "Remove a region (region: its number; left out: the current region), or all of them (all); the regions after it move up one. With no region enabled the whole mesh shows.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::region::region_clear_schema,
+        run: crate::region::region_clear,
+    },
+    Tool {
+        id: "region.list",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-region-list",
+        summary: "The regions of interest: each with its shape, whether it is enabled, and what it takes (cells, halo cells, points and the size of that part of the mesh model in MiB); shown is what the enabled regions take together (null while none is enabled and the whole mesh shows).",
+        outputs: &[],
+        reads: &[],
+        input_schema: no_input,
+        run: crate::region::region_list,
     },
     Tool {
         id: "display.mesh_look",

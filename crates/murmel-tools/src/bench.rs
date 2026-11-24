@@ -3,8 +3,9 @@
 //!
 //! `make` writes the synthetic honeycomb of `murmel_mesh::synth` in the
 //! formats the viewer reads; `run` opens a mesh and times reading,
-//! hashing, the surface of several displays, cell quality, picking and
-//! the first and a later offscreen frame, and reports the peak memory.
+//! hashing, opening as the window does (the files hashed afterwards), the
+//! surface of several displays, cell quality, picking and the first and a
+//! later offscreen frame, and reports the peak memory.
 //! The report is JSON (`murmelcraft.bench`), so runs can be compared.
 
 use std::path::{Path, PathBuf};
@@ -203,15 +204,7 @@ fn phases() -> Value {
 
 /// The bytes of the mesh's arrays.
 pub fn mesh_bytes(m: &Mesh) -> usize {
-    m.points.len() * 24
-        + (m.distinct.start.len() + m.distinct.nodes.len()) * 4
-        + (m.boundary.start.len() + m.boundary.nodes.len()) * 4
-        + (m.cell_faces.len() + m.cell_zone.len()) * 4
-        + m.cell_kind.len() * std::mem::size_of::<murmel_mesh::CellKind>()
-        + (m.boundary_patch.len() + m.boundary_owner.len()) * 4
-        + (m.cell_face_id.len() + m.face_owner.len() + m.face_neighbour.len()) * 4
-        + m.cell_face_flip.len()
-        + (m.boundary_face_id.len() + m.face_boundary.len()) * 4
+    m.model_bytes()
 }
 
 /// The bytes of a surface's arrays (CPU side).
@@ -220,6 +213,7 @@ pub fn surface_bytes(s: &Surface) -> usize {
         + s.indices.len() * 4
         + (s.tri_cell.len() + s.tri_face.len()) * 4
         + s.edge_positions.len() * 24
+        + s.tri_boxes.len() * 24
         + s.outline.len() * 12
 }
 
@@ -244,9 +238,11 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             murmel_mesh::read_results(path)
         })
         .map_err(|e| e.to_string())?;
+    // Reading is the first stage: the peak so far is the reader's.
     st.note(json!({
         "file_bytes": mesh.files.iter().map(|f| bytes_of(f)).sum::<u64>(),
         "phases": phases(),
+        "peak_rss_mib": peak_rss_mib(),
     }));
     let files: Vec<PathBuf> = mesh.files.clone();
     st.time("digest", r, || {
@@ -257,16 +253,25 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
     });
     let mut session = Session::new(tokens.clone());
     session.config_dir = None;
+    // As the window opens: the files are hashed after the mesh opens, and
+    // the wait for the digest from then on is a stage of its own.
+    session.hash_after_open = true;
     st.time("open", r, || {
         murmel_mesh::profile::record(true);
         session.open(path).map(|_| ())
     })
     .map_err(|e| e.to_string())?;
     st.note(json!({ "phases": phases() }));
+    st.time("open.digest", 1, || session.wait_digest());
 
     let d0 = Display::default();
-    let s = st.time("surface", r, || Surface::build(&mesh, &tokens, &d0));
-    st.note(surface_note(&s));
+    let s = st.time("surface", r, || {
+        murmel_mesh::profile::record(true);
+        Surface::build(&mesh, &tokens, &d0)
+    });
+    let mut note = surface_note(&s);
+    note["phases"] = phases();
+    st.note(note);
     let b = mesh.bounds();
     let clip = |mode| Display {
         clips: vec![Clip {
@@ -302,10 +307,55 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             },
         ),
     ] {
-        let s = st.time(name, r, || Surface::build(&mesh, &tokens, &d));
-        st.note(surface_note(&s));
+        let s = st.time(name, r, || {
+            murmel_mesh::profile::record(true);
+            Surface::build(&mesh, &tokens, &d)
+        });
+        let mut note = surface_note(&s);
+        note["phases"] = phases();
+        st.note(note);
     }
     st.time("quality", r, || Quality::compute(&mesh));
+    // What the model tree and the legend ask of the mesh on every frame
+    // (counts, the items to list), after the first frame.
+    let tree_frame = || mesh.summary().cells + murmel_engine::display::all_items(&mesh).len();
+    tree_frame();
+    st.time("tree.frame", r.max(5), tree_frame);
+
+    // The clip drag as the window does it: each step moves the plane and
+    // returns at once (the renderer cuts on the GPU); the exact crinkle
+    // cut is built on a thread of its own once the plane rests. As
+    // before, a step that builds the cut before it returns.
+    let along = |f: f64| Clip {
+        origin: [
+            b.min[0] + f * (b.max[0] - b.min[0]),
+            b.center()[1],
+            b.center()[2],
+        ],
+        normal: [1.0, 0.0, 0.0],
+        mode: ClipMode::Crinkle,
+        enabled: true,
+    };
+    session.display.clips = vec![along(0.5)];
+    session.redraw();
+    session.defer_clips = true;
+    let mut f = 0.5;
+    st.time("clip.step", r.max(5), || {
+        f += 0.01;
+        session.display.clips = vec![along(f)];
+        session.redraw();
+    });
+    st.time("clip.exact", 1, || {
+        while session.poll_surface() {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    });
+    session.defer_clips = false;
+    st.time("clip.step.built", r, || {
+        f -= 0.01;
+        session.display.clips = vec![along(f)];
+        session.redraw();
+    });
 
     let mut cam = Camera::default();
     cam.set_standard(StandardView::ISO);
@@ -332,6 +382,15 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             let first = st.time("render.first", 1, || o.shoot(&session, &shoot));
             let first = first.map(|s| s.adapter)?;
             st.time("render.next", r, || o.shoot(&session, &shoot).map(|_| ()))?;
+            // The same frame without the edges, as the window draws it
+            // while the view moves when frames with edges are slow.
+            let mode = session.display.render_mode;
+            session.display.render_mode = RenderMode::Shaded;
+            let faces = st.time("render.next.faces", r, || {
+                o.shoot(&session, &shoot).map(|_| ())
+            });
+            session.display.render_mode = mode;
+            faces?;
             Ok::<String, murmel_render::RenderError>(first)
         })
         .and_then(|x| x);

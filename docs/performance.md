@@ -30,18 +30,24 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 |---|---|
 | `read` | the reader: file to mesh model, face topology included |
 | `digest` | SHA-256 of the mesh files (the validity badge needs it) |
-| `open` | `mesh.open` as the window does it: read, digest, evidence, first surface |
-| `surface` | the surface of the default display (boundary faces) |
+| `open` | `mesh.open` as the window does it: read, evidence, first surface (the files are hashed afterwards) |
+| `open.digest` | the wait, after `open`, until the SHA-256 of the files is in place (the validity badge) |
+| `surface` | the surface of the default display (boundary faces), with its phases: `surface.polygons` (which faces to draw), `surface.points` (corners and normals), `surface.buffers` (vertices, triangles, edges), `surface.extras` (slices, iso-surfaces, arrows) |
 | `surface.crinkle`, `surface.flat` | the surface with one clip plane through the centre |
 | `surface.hidden_zone` | one zone hidden, so the faces between zones lie open |
 | `surface.cell_type` | colour by cell type |
 | `surface.feature_edges` | render mode 4 (feature edges found on the surface) |
 | `quality` | the cell quality metrics (colour by quality) |
+| `tree.frame` | what the model tree and the legend ask of the mesh on each frame (counts, items), median of 5 |
+| `clip.step` | one step of a clip drag as the window does it (the plane moves, the GPU cuts), median of 5 |
+| `clip.exact` | from the last step until the exact crinkle cut is in place (built on its own thread once the plane rests) |
+| `clip.step.built` | one step that builds the exact cut before it returns (the command line, agents; every step before the preview) |
 | `pick.9` | nine picks over the iso view (the hover tooltip, a click, snapping) |
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
+| `render.next.faces` | a later frame without the edges (the window while the view moves, when frames with edges are slow) |
 
-and reports the peak resident memory (Linux only) and the size of the mesh
-model. `render.*` on a machine without a GPU runs on Mesa's software
+and reports the peak resident memory (Linux only; the `read` stage also
+reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
 rasteriser and says nothing about a real GPU; run it on the Mac for those.
 
 ## Baseline (2026-11-24, before any optimisation)
@@ -171,3 +177,295 @@ into cells.
 At 10 M cells the model takes about 4.7 GB instead of 6.5 GB. The ascii
 `.vtu` still peaks at about six times its model: the whole text is in
 memory while it is parsed (5 GB at 4 M cells, 12 GB at 10 M).
+
+## Streaming the `.vtu` (2026-11-24)
+
+The `.vtu` reader no longer holds the file's text. One thread reads the
+file ahead in chunks of 32 MiB, a second takes its SHA-256, and the parser
+takes each array as it streams past: the XML markup goes through the XML
+parser, and the text of each array is parsed in parallel, chunk by chunk,
+straight into the type its use needs (a number or base64 group cut by the
+end of a chunk waits for the next). Arrays the reader does not use are
+passed over. The points are grouped by three as soon as they are read, and
+when the cells are polyhedra and polygons only (as KoflCraft writes them),
+the faces' points are written over the face stream they come from instead
+of being copied.
+
+Same machine and meshes as above, `--no-render`; the reading stage.
+
+| | 1 M: vtu (1.18 GB) | 4 M: vtu (4.99 GB) |
+|---|---:|---:|
+| peak memory while reading, MiB (was) | 1,056 (2,228) | 3,954 (9,154) |
+| read, ms (was) | 2,226 (2,648) | 10,001 (11,630) |
+| open, ms (was) | 2,692 (2,895) | 10,181 (11,518) |
+| peak of the whole benchmark, MiB (was) | 1,712 (2,776) | 6,737 (11,049) |
+
+The phases at 4 M cells: streaming 7,267 ms (the SHA-256 beside it,
+7,145 ms), cells 683 ms (was 1,019, the faces are no longer copied),
+topology 2,030 ms.
+
+What it shows:
+
+- Reading now peaks at about twice the mesh model (4.0 GB for a 1.9 GB
+  model at 4 M cells), not five times. At 10 M cells that is about 10 GB
+  (estimated from the 4 M numbers), well inside the iMac's 32 GB.
+- **The SHA-256 sets the pace now.** The arrays parse as fast as the file
+  streams in, and the stream ends when the hash does. This machine hashes
+  with the CPU's SHA instructions (1.1 GB/s); the iMac's Core i9 (2019)
+  has none, and the portable code hashes 0.38 GB/s here. On the iMac the
+  hash of a 10 M cell ascii file (12 GB) would take longer than the
+  parsing, roughly 15 to 30 s (estimate). Taking it after the mesh is
+  open is the next step for opening speed.
+
+## Hashing after the mesh opens (2026-11-24)
+
+The maintainer's choice: the window opens a mesh as soon as it is read and
+takes the SHA-256 of its files afterwards, on a thread of its own
+(`Session::hash_after_open`). The validity badge says *Checking* until the
+digest is in place, then turns green, amber or red as before; counts the
+evidence contradicts turn it red at once. The command line and agents on
+a headless session still hash while reading, so `mesh.open` returns the
+digest there.
+
+`open` is the time until the mesh shows; `open.digest` the time from
+then until the badge is final. Same machine and meshes, `--no-render`.
+The second pair of columns is a build with the portable SHA-256
+(`sha2`'s `force-soft`), as on a CPU without SHA instructions such as
+the iMac's Core i9.
+
+| | 1 M: vtu | 4 M: vtu | 1 M: vtu, portable SHA | 4 M: vtu, portable SHA |
+|---|---:|---:|---:|---:|
+| open, ms (was) | 2,311 (2,692) | 9,596 (10,181) | 2,503 (4,021) | 9,350 (16,583) |
+| open.digest, ms | 371 | 2,676 | 2,798 | 12,566 |
+
+Without SHA instructions opening was bound by the hash (13 s of the
+16.6 s at 4 M cells); now the mesh shows in 9.4 s and the badge follows
+12.6 s later. With the instructions, the parsing sets the pace either
+way. A 10 M cell ascii `.vtu` on the iMac should show in about the time
+its parsing takes, with the badge some 15 to 30 s later (estimate).
+
+## Quality and surface on all threads (2026-11-24)
+
+- **Cell quality** (colour by quality) was one loop on one thread that
+  collected the points of every face into a new list, about five times
+  per face. Now the centroid and volume of each cell, and the values of
+  each distinct face, are computed on all threads (`murmel_mesh::par`),
+  and the face and cell geometry helpers walk a face's points without
+  collecting them. Faces go in blocks of 2^20; each block gives its
+  values to the cells in face order, so the result is the same for any
+  number of threads (a test compares 1, 2, 3, 5 and 8 threads and blocks
+  of 7 faces).
+- **Surface.** Filling the buffers was three quarters of a surface build,
+  and most of that was the set of edges already drawn, hashed with the
+  standard library's SipHash. The edge sets now use FxHash (the
+  multiply-rotate word hash of Firefox and rustc), and the buffers are
+  sized before they are filled. The bench reports the build's phases.
+
+polyMesh binary, same machine (4 threads). "was" is main at 204e509.
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| quality | 528 (2,118) | 2,050 (8,001) |
+| surface | 200 (443) | 562 (994) |
+| surface.crinkle | 245 (374) | 808 (1,245) |
+| surface.flat | 312 (458) | 1,081 (1,337) |
+| surface.hidden_zone | 162 (259) | 508 (699) |
+| surface.cell_type | 205 (433) | 691 (924) |
+| surface.feature_edges | 361 (756) | 1,189 (1,790) |
+
+At 4 M cells the default surface now spends about 110 ms choosing faces,
+60 ms on corners and normals and 340 ms filling buffers, 200 ms of it on
+the edge set. With 8 cores (the iMac) quality should take well under a
+second at 4 M cells (estimate). Picking (30 ms a pick at 4 M cells) and
+the clip modes' cutting are next.
+
+## Nothing per frame walks the mesh; picking with boxes (2026-11-24)
+
+- **Model tree and legend.** Each frame they asked the mesh for its
+  counts (`Mesh::summary`: cells by kind, zone and patch, and the bounds)
+  and for its items (`all_items`, which looked through every cell for
+  each cell type). At 4 M cells that was 49 ms a frame, so the window
+  could not draw faster than about 20 frames a second while the tree
+  showed. The counts and bounds are now taken once and kept in the mesh;
+  the items come from the counts.
+- **Picking** walked every triangle of the surface (Möller and
+  Trumbore) for each pick, and the measure tool snaps with a pick on
+  every pointer move. The surface now keeps a box around each run of 128
+  triangles (`Surface::tri_boxes`, filled on all threads at the end of a
+  build, 12 ms at 4 M cells); the ray is tested against the boxes first
+  (slab test, Kay and Kajiya 1986) and only against the triangles of the
+  boxes it passes through nearer than the best hit so far. The hit is the
+  same as before (a test compares both over a grid of rays, views and
+  clip modes). The triangles come in face order, so a run covers a small
+  patch of the surface; a hierarchy over the boxes (a BVH) would help
+  further only if picks again show up in a frame.
+
+polyMesh binary, same machine (4 threads). "was" is main at 6e49af0.
+
+| | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| tree.frame, ms per frame | 0.0 (10.2) | 0.0 (49.3) |
+| pick.9, ms for nine picks | 1.1 (72.3) | 2.5 (330.6) |
+| surface.boxes, ms (new) | 7 | 12 |
+
+## Clip drag: the GPU cuts first, the exact cut follows (2026-11-24)
+
+The maintainer's choice for the clip drag: an instant preview, with the
+exact cut following. Every step of a drag (the handle's arrow or arcs,
+the toolbar slider, Alt and the arrow keys) used to build the whole
+surface before the next frame: 1.1 s a step at 4 M cells.
+
+- The window sets `Session::defer_clips`. A change of the display that
+  only moves or turns clip planes leaves the surface as it is and starts
+  a `ClipPreview`: the renderer draws the surface built without the
+  moving planes and cuts it in the shader (`View::clip_planes`, a
+  fragment on the cut-away side is discarded), so the cut follows the
+  pointer at once. The cut faces show hollow (the inside of the far
+  walls) until the exact cut is in place.
+- The surface without the moving planes is built on a thread of its own
+  when the drag starts; until it is there, the surface cut at the old
+  place is cut again by the shader. Once the planes rest for 120 ms the
+  exact cut is built on another thread and put in place when it is done,
+  if the planes have not moved since (else the next one starts).
+- The open mesh and its fields are shared (`Arc`), so the builds need no
+  copy. Tools call `Session::settle` before they run (the clip tools
+  excepted), so a screenshot, an export, a pick or an agent's call sees
+  the exact cut; the command line and agents on a headless session never
+  defer.
+
+polyMesh binary, crinkle cut, same machine (4 threads), `murmel bench`:
+
+| | 1 M | 4 M |
+|---|---:|---:|
+| clip.step, ms (was clip.step.built) | 0.0 (289) | 0.0 (1,104) |
+| clip.exact, ms after the last step | 453 | 1,165 |
+
+## Orbit: the edges hide only when a frame is slow (2026-11-24)
+
+The maintainer's choice for moving the view on a large mesh: hide the
+edges while the view moves, and only when a frame takes longer than 33
+ms; nothing else is simplified, and nothing changes on a mesh that draws
+fast enough.
+
+- The window times the frames it draws with edges while the camera moves
+  (an orbit, a pan, a zoom, a roll, a flight to a view): start to start,
+  with the next frame asked for at once, so the gap is the frame's own
+  cost (the GPU holds a frame back until it has drawn the ones before).
+  Gaps after an idle pause are not timed.
+- Once the median of the last three gaps is over 1/30 s (35 ms with the
+  timer's jitter, so a frame that keeps 30 a second, two refreshes of a
+  60 Hz screen, is within it), the edges are left out while the view
+  moves and come back 150 ms after it rests. The verdict holds for the
+  surface and the viewport's size it was timed on; a new surface (a
+  clip, a colour, a field) or a new size is timed again.
+- Edges drawn without the mesh's faces (wireframe, feature edges, the
+  mesh as an outline) never hide: they are all there is to see.
+  Pictures, movies and agents' screenshots always draw the edges.
+- `murmel bench run` reports `render.next.faces`, the frame without the
+  edges, next to `render.next`, so the edges' share of a frame can be
+  read on the Mac.
+
+polyMesh binary, iso view at 1280 x 720, same machine, Mesa llvmpipe (a
+software rasteriser: the Radeon's numbers will differ, the share less
+so), `murmel bench`:
+
+| | 1 M | 4 M |
+|---|---:|---:|
+| render.next, ms (with edges) | 473 | 513 |
+| render.next.faces, ms | 307 | 350 |
+
+## Surface buffers on all threads (2026-11-24)
+
+Filling the buffers was most of a surface build: every display change
+(a colour, a hidden zone, a selection, the exact cut after a clip drag)
+waited for it.
+
+- The colours of each polygon are worked out on all threads first, and
+  the place of each polygon's vertices and indices is counted before
+  anything is written. Each thread then fills its run of polygons, in
+  draw order, at the place the counts give: the buffers are the same,
+  bit for bit, as before and for any number of threads.
+- The edges are found on all threads too. Each edge goes to a shard by
+  its smaller end; each shard walks its edges in draw order and keeps
+  the first of each, so an edge keeps the colour of the first polygon
+  that has it (the selection's, when selected), as before. The kept
+  edges are then written run by run.
+- The sRGB to linear conversion of the colours is a table of the 256
+  values instead of a power per channel.
+- `murmel bench` reports the phases of every surface stage.
+
+polyMesh binary, same machine (4 threads), `--repeat 3`, old and new run
+one after the other:
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| surface | 106 (241) | 305 (586) |
+| surface.buffers (phase) | 39 (172) | 100 (460) |
+| surface.crinkle | 175 (268) | 701 (811) |
+| surface.flat | 300 (362) | 1,195 (1,362) |
+| surface.hidden_zone | 97 (145) | 355 (469) |
+| surface.cell_type | 108 (193) | 341 (531) |
+| surface.feature_edges | 232 (306) | 653 (848) |
+| clip.exact | 352 (443) | 929 (1,277) |
+
+What is left at 4 M cells: choosing and cutting the polygons is now
+most of a clipped surface (500 ms of the crinkle cut, 980 ms of the
+flat one, on one thread), and the feature edges spend 315 ms finding
+creases. Those are next.
+
+## Clipped surfaces on all threads (2026-11-24)
+
+With the buffers on all threads, choosing and cutting the polygons was
+most of a clipped surface, on one thread: the distance of every node
+to the plane, the cells the clip keeps, the faces between cells, and
+for a flat cut the cells the plane crosses.
+
+- The distances to each clip plane and the cells it keeps are found on
+  all threads (`Cutter::new`, `Display::shown_cells`, `kept_cells`).
+- The faces between cells are walked on all threads, in face order,
+  unless something cuts flat: the cut points of a flat cut are numbered
+  as they are found, so that walk stays on one thread.
+- A flat cut finds the cells the plane crosses on all threads first
+  (`Sides::crosses`, a thin layer of the cells) and builds the sections
+  of those only, instead of testing every cell on one thread. Polygons
+  the plane keeps whole are no longer copied through the clipper.
+- The buffers are the same, bit for bit, as before.
+
+polyMesh binary, same machine (4 threads), `--repeat 3`, old (main at
+e8bc81d) and new run one after the other; in brackets the polygon
+phase:
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| surface.crinkle | 108 (211) | 417 (733) |
+| — polygons | 58 (134) | 223 (547) |
+| surface.flat | 170 (353) | 659 (1,292) |
+| — polygons | 126 (296) | 503 (1,147) |
+| surface.hidden_zone | 75 (110) | 276 (330) |
+| clip.step.built | 118 (226) | 447 (702) |
+| clip.exact | 275 (366) | 859 (1,116) |
+
+A clip step built at once (the command line, agents) now takes 0.45 s
+at 4 M cells, and the exact cut after a drag follows in 0.86 s. Left
+in a flat cut: the sections of the crossed cells and the faces they
+clip, on one thread (cut points are named as found), about 0.3 s at 4 M.
+
+## Feature edges on all threads (2026-11-24)
+
+Finding the feature edges (render mode 4, and the faint outline of the
+mesh while slices or iso-surfaces show) walked every polygon edge into
+one map on one thread: 316 ms of a 650 ms surface at 4 M cells.
+
+- The edges go to shards by their smaller end (as the drawn edges do),
+  and each shard is walked on a thread of its own, in polygon order, so
+  each later face is judged against the same first face as before. The
+  shards stay as they are (`Features`) and the drawn edges look an edge
+  up in its shard; no set is built from them.
+
+Same machine (4 threads), `--repeat 3`, main at e8bc81d against this
+branch; in brackets the points phase, where the feature edges are found:
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| surface.feature_edges | 147 (237) | 442 (651) |
+| — points phase | 38 (127) | 93 (316) |

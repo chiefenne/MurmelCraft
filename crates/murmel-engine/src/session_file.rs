@@ -9,8 +9,9 @@
 //! cameras, since format 1.1), the measurements and probes (since 1.3),
 //! the field shown and each field's style (since 1.4), the slices,
 //! iso-surfaces and the mesh's look beside them (since 1.5), the
-//! vector arrows (since 1.6),
-//! the user's mesh colours and the view cube placement. Loading puts all of it back; the colours and the
+//! vector arrows (since 1.6), the regions of interest (since 1.7; their
+//! flat cut since 1.8), the user's mesh colours and the view cube
+//! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
 //! `settings.toml` (decided 2026-11-24).
 //!
@@ -32,11 +33,12 @@ use crate::field::{FieldChoice, FieldStyle, RangeMode};
 use crate::glyph::Arrows;
 use crate::measure::{Measurement, Probe};
 use crate::quality::Metric;
+use crate::region::Region;
 use crate::session::Session;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.6";
+pub const SESSION_VERSION: &str = "1.8";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -97,6 +99,9 @@ pub struct DisplayState {
     /// The vector arrows (1.6).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arrows: Option<Arrows>,
+    /// Regions of interest, in order (1.7).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<Region>,
 }
 
 fn is_outline(l: &MeshLook) -> bool {
@@ -240,6 +245,11 @@ impl SessionFile {
                     d.arrows.clone()
                 } else {
                     None
+                },
+                regions: if s.mesh.is_some() {
+                    d.regions.clone()
+                } else {
+                    Vec::new()
                 },
             },
             colors: s.colors.clone(),
@@ -395,6 +405,22 @@ impl SessionFile {
                 crate::glyph::MAX_SCALE
             )));
         }
+        if f.display.regions.len() > crate::region::MAX_REGIONS {
+            return Err(Refused(format!(
+                "at most {} regions",
+                crate::region::MAX_REGIONS
+            )));
+        }
+        for (k, r) in f.display.regions.iter_mut().enumerate() {
+            if let crate::region::Shape::Slab { normal, .. } = &mut r.shape
+                && let Some(n) = crate::clip::unit(*normal)
+            {
+                *normal = n;
+            }
+            if let Some(why) = r.problem_alone() {
+                return Err(Refused(format!("region:{}: {why}", k + 1)));
+            }
+        }
         if let Some(t) = f.display.threshold
             && !t.is_finite()
         {
@@ -478,6 +504,7 @@ impl Session {
         d.slices.clear();
         d.isos.clear();
         d.arrows = None;
+        d.regions.clear();
         d.mesh_look = s.mesh_look;
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
@@ -562,6 +589,21 @@ impl Session {
                 d.selection.retain(|&i| i != Item::Arrows);
                 d.colors.remove(&Item::Arrows);
             }
+            // Regions of a zone or patch this mesh does not have, or of
+            // cells beyond its count, go, with their ids.
+            d.regions = s.regions;
+            for k in (0..d.regions.len()).rev() {
+                if d.regions[k].shape.problem(&m.mesh).is_some() {
+                    d.remove_region(k);
+                    missing.push(format!("region:{}", k + 1));
+                }
+            }
+            let nr = d.regions.len();
+            d.selection.retain(|&i| match i {
+                Item::Region(k) => (k as usize) < nr,
+                _ => true,
+            });
+            d.colors.retain(|&i, _| !matches!(i, Item::Region(_)));
             let (ns, ni) = (d.slices.len(), d.isos.len());
             d.selection.retain(|&i| match i {
                 Item::Slice(k) => (k as usize) < ns,

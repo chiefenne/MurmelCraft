@@ -13,6 +13,7 @@ mod clip_handle;
 mod color_edit;
 mod commands;
 mod cube;
+mod edges;
 mod export_dialog;
 mod extracts;
 mod field;
@@ -23,6 +24,7 @@ mod movie_dialog;
 mod opening;
 mod panels;
 mod quality;
+mod regions;
 mod style;
 mod viewport;
 

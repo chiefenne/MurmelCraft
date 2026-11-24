@@ -80,6 +80,17 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   colour is in `colors` as `arrows`). Arrows of a field the result does
   not have, or of a scalar, are skipped as `field:<name>`. The arrows are
   computed again on loading, never stored.
+- **Regions of interest** (format 1.7) are `display.regions`, in the
+  order they were added (`region:1` is the first): `{"shape": {"kind":
+  "box", "center": [2, 1, 0.5], "size": [1, 1, 1]}, "enabled": true}`.
+  The kinds are `box` (`center`, `size`), `sphere` (`center`, `radius`),
+  `slab` (`origin`, unit `normal`, `thickness`), `zone` (`zone`, a cell
+  zone's name), `patch` (`patch`, `layers` from 1 to 64) and `cells`
+  (`cells`, ids, and `rings` from 0 to 64). `"cut": "flat"` (format
+  1.8; left out for whole cells) clips a box, sphere or slab region's
+  border cells to the shape. At most 16. A region whose
+  zone, patch or cells the mesh lacks is skipped as `region:<n>`. The
+  cells a region takes are found again on loading, never stored.
 - **Saved views** (format 1.1) are the named cameras of the model tree's
   "Saved views" (`views.save`, `views.go`, `views.rename`,
   `views.delete`), in the order they were saved. A 1.0 file has none and

@@ -85,7 +85,8 @@ impl MurmelApp {
                 | Item::Probe(_)
                 | Item::Slice(_)
                 | Item::Iso(_)
-                | Item::Arrows => {}
+                | Item::Arrows
+                | Item::Region(_) => {}
             }
         }
         patches.sort_by(|a, b| a.label.cmp(&b.label));
@@ -140,6 +141,7 @@ impl MurmelApp {
             Validity::Valid => (p.status_ok, "validity-tip-valid"),
             Validity::NoEvidence => (p.status_warn, "validity-tip-no_evidence"),
             Validity::Failed(_) => (p.status_error, "validity-tip-failed"),
+            Validity::Checking => (p.text_secondary, "validity-tip-checking"),
         };
         let mut badge_tip = self.i18n.tr(badge_key);
         if let Validity::Failed(why) = &m.validity {
@@ -199,6 +201,9 @@ impl MurmelApp {
                     action = Some(a);
                 }
                 if let Some(a) = self.extract_section(ui, &p) {
+                    action = Some(a);
+                }
+                if let Some(a) = self.region_section(ui, &p) {
                     action = Some(a);
                 }
                 if let Some(a) = self.measure_section(ui, &p, &filter) {
@@ -679,7 +684,7 @@ impl MurmelApp {
             Some((area, name)) => {
                 let name = if area == "kind" {
                     self.i18n.tr(&format!("kind-{name}"))
-                } else if area == "clip" || area == "slice" || area == "iso" {
+                } else if area == "clip" || area == "slice" || area == "iso" || area == "region" {
                     self.i18n
                         .tr_args("props-clip-name", &[("n", name.to_string().into())])
                 } else if area == "measure" || area == "probe" {
@@ -852,7 +857,8 @@ impl MurmelApp {
             Value::String(s) => match key {
                 "validity" => self.i18n.tr(&format!("validity-{s}")),
                 "role" => self.i18n.tr(&format!("role-{s}")),
-                "mode" => self.i18n.tr(&format!("clip-mode-{s}")),
+                "mode" | "shown_as" => self.i18n.tr(&format!("clip-mode-{s}")),
+                "shape" => self.i18n.tr(&format!("region-shape-{s}")),
                 "type" => self.i18n.tr(&format!("kind-{s}")),
                 "kind" => self.i18n.tr(&format!("measure-kind-{s}")),
                 "color" => self.i18n.tr(&format!("iso-color-{s}")),

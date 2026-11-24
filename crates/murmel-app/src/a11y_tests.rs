@@ -780,9 +780,13 @@ fn hold(h: &mut Harness<'_, MurmelApp>) -> std::sync::mpsc::Sender<()> {
 /// opens through `mesh.open` (a session file through `session.load`),
 /// Cancel and Esc drop what was read and leave the open mesh as it was,
 /// and a mesh that cannot be read reports its code in the status bar.
-/// Breaks when the window opens on its own thread without taking the
-/// result, when Cancel opens the mesh anyway, or when an error of the
-/// reader is lost; the other window tests open small meshes at once.
+/// The mesh opens before its files are hashed (the badge is checking) and
+/// the badge turns green once the window has taken the digest; a session
+/// file's mesh is hashed with the read, so the session loads with its
+/// digest. Breaks when the window opens on its own thread without taking
+/// the result, when Cancel opens the mesh anyway, when an error of the
+/// reader is lost, or when the window never takes the digest; the other
+/// window tests open small meshes at once.
 #[test]
 fn large_meshes_open_in_the_background() {
     let cancel = "Cancel. Stop opening this mesh (Esc)";
@@ -809,10 +813,19 @@ fn large_meshes_open_in_the_background() {
     assert!(issues.is_empty(), "{issues:#?}");
     go.send(()).unwrap();
     opened(&mut h);
-    let digest = match &h.state().session.mesh {
-        Some(m) => m.digest.clone(),
+    let path = match &h.state().session.mesh {
+        Some(m) => m.path.clone(),
         None => panic!("the channel did not open: {:?}", h.state().error),
     };
+    let start = std::time::Instant::now();
+    while h.state().session.hashing.is_some() {
+        assert!(start.elapsed().as_secs() < 60, "the digest never came");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    let m = h.state().session.mesh.as_ref().unwrap();
+    assert_eq!(m.digest.len(), 64, "the window took the digest");
+    assert_eq!(m.validity, murmel_engine::Validity::Valid);
     assert!(h.state().session.preloaded.is_none());
     assert!(h.state().error.is_none());
     assert!(!named(&h, cancel));
@@ -825,8 +838,8 @@ fn large_meshes_open_in_the_background() {
     h.run_steps(1);
     go.send(()).unwrap();
     opened(&mut h);
-    let open = h.state().session.mesh.as_ref().map(|m| m.digest.clone());
-    assert_eq!(open.as_ref(), Some(&digest), "Cancel kept the channel");
+    let open = h.state().session.mesh.as_ref().map(|m| m.path.clone());
+    assert_eq!(open.as_ref(), Some(&path), "Cancel kept the channel");
     assert!(h.state().error.is_none());
 
     let go = hold(&mut h);
@@ -836,8 +849,8 @@ fn large_meshes_open_in_the_background() {
     h.run_steps(1);
     go.send(()).unwrap();
     opened(&mut h);
-    let open = h.state().session.mesh.as_ref().map(|m| m.digest.clone());
-    assert_eq!(open.as_ref(), Some(&digest), "Esc kept the channel");
+    let open = h.state().session.mesh.as_ref().map(|m| m.path.clone());
+    assert_eq!(open.as_ref(), Some(&path), "Esc kept the channel");
 
     // A session file's mesh is read first, then the session loads.
     let dir = std::env::temp_dir().join(format!("murmel-bg-{}", std::process::id()));
@@ -858,7 +871,13 @@ fn large_meshes_open_in_the_background() {
     );
     go.send(()).unwrap();
     opened(&mut h);
-    assert!(h.state().session.mesh.is_some());
+    let m = h.state().session.mesh.as_ref().unwrap();
+    assert_eq!(
+        m.digest.len(),
+        64,
+        "a session's mesh is hashed with the read"
+    );
+    assert!(h.state().session.hashing.is_none());
     assert_eq!(h.state().session_path.as_ref(), Some(&file));
     let _ = std::fs::remove_dir_all(&dir);
 
@@ -866,4 +885,63 @@ fn large_meshes_open_in_the_background() {
         .open_path(channel().with_file_name("missing.vtu"));
     opened(&mut h);
     assert_eq!(h.state().error.as_ref().map(|e| e.code), Some("MESH001"));
+}
+
+/// Invariant (large-mesh post-processing, stage 1, the maintainer's cards
+/// of 2026-11-24): the tree's "Add a box region" adds a box region that
+/// shows only the cells it takes, named in the tree with its shape and
+/// its cell count; a click on the row selects it so the Properties panel
+/// shows the region; its context menu cuts it flat; its eye turns it off
+/// and every cell shows again; every control keeps a clean name. Breaks if the region section loses
+/// its buttons, the row its name, or the eye stops reaching region.set.
+#[test]
+fn regions_in_the_window() {
+    let mut h = harness();
+    let all = {
+        let s = &h.state().session;
+        s.display.visible_counts(&s.mesh.as_ref().unwrap().mesh).0
+    };
+    h.get_by_label("Add a box region (Alt + R)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.display.regions.len(), 1);
+    let shown = {
+        let s = &h.state().session;
+        s.display.visible_counts(&s.mesh.as_ref().unwrap().mesh).0
+    };
+    assert!(0 < shown && shown < all, "{shown} of {all} cells show");
+    let label = h.state().region_label(0);
+    assert!(label.starts_with("Region 1: box · "), "{label}");
+    assert!(named(&h, &label), "region row");
+    assert_eq!(problems(&h), Vec::<String>::new(), "a region");
+
+    h.get_by_label(&label).click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.selection,
+        [murmel_engine::Item::Region(0)]
+    );
+    assert_eq!(problems(&h), Vec::<String>::new(), "region properties");
+
+    // The context menu cuts it flat; the row says so.
+    h.get_by_label(&label).click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Cut flat along the border").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.regions[0].cut,
+        murmel_engine::ClipMode::Flat
+    );
+    let label = h.state().region_label(0);
+    assert!(label.starts_with("Region 1: box, cut flat · "), "{label}");
+    assert!(named(&h, &label), "flat region row");
+    assert_eq!(problems(&h), Vec::<String>::new(), "a flat region");
+
+    h.get_by_label(&format!("Hide {label}")).click();
+    h.run_steps(3);
+    assert!(!h.state().session.display.regions[0].enabled);
+    let back = {
+        let s = &h.state().session;
+        s.display.visible_counts(&s.mesh.as_ref().unwrap().mesh).0
+    };
+    assert_eq!(back, all, "no region on, every cell shows");
 }

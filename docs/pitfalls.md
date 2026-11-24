@@ -168,6 +168,53 @@ problem took more than a few minutes to understand.
   read or built again. Meshes under 32 MiB open at once, which keeps the
   window tests synchronous; a test of the background path sets
   `background_bytes` to 0 and holds the reader with `opening_gate`.
+- **The `.vtu` reader streams; it never holds the file's text.** Each
+  array is parsed as it streams past, into the type its use needs, and
+  `vtu::kind_of` decides which arrays are parsed at all: an array it does
+  not name is passed over unread. A new array the reader uses goes into
+  `kind_of` first. A chunk can end anywhere (inside a number, a base64
+  group, a tag), so a change to the streaming path is tested with the
+  file handed over a few bytes at a time (`streams_in_any_pieces`).
+- **The window hashes a mesh after it opens** (`Session::hash_after_open`):
+  until the SHA-256 is taken on its own thread, `OpenMesh::digest` and the
+  files' digests are empty and the badge is `Validity::Checking`. A tool
+  that needs the digest (`session.save` writes it, `session.load` compares
+  it) calls `Session::wait_digest` first. The command line and agents on a
+  headless session hash while reading, as before, so `mesh.open` returns
+  the digest. A window test that tells meshes apart compares paths, not
+  digests.
+- **Nothing per frame walks the mesh.** The model tree and the legend ask
+  for `Mesh::summary` and `all_items` on every frame; the counts and the
+  bounds are taken the first time and kept in the mesh (a `OnceLock`), as
+  a mesh is not changed once read. A method that changes a read mesh
+  resets them (`apply_evidence_roles` does); changing the public fields of
+  a mesh after asking for its summary leaves stale counts. A frame that
+  needs a count over the cells takes it from the summary or the surface
+  (`Surface::cells`), never from a loop of its own.
+- **The window defers clip cuts** (`Session::defer_clips`): after a tool
+  moves a clip plane, `OpenMesh::surface` is still the old cut until the
+  preview ends (`Session::poll_surface`), and the renderer draws
+  `Session::drawn`, not `surface`. Code that reads the surface outside a
+  tool calls `Session::settle` first (tools do it for you, except
+  `clip.set` and `clip.rotate`, which keep a drag going). A window test
+  that moves a plane and then looks at the surface settles too.
+- **The window may leave the edges out while the view moves**
+  (`edges::MovingEdges`, when frames with edges took over 33 ms). The
+  viewport's render key holds the edges, so a frame at rest draws them
+  again; a window test that looks at a frame while the camera moves on a
+  slow machine may see none. Offscreen pictures always draw them.
+- **The surface's buffers are filled on all threads** (`Fill::chunk`,
+  `Lines::draw` in `surface.rs`). Each run of polygons writes at the
+  place the counts before it give, so a change to how a polygon is
+  triangulated changes the counts (`vstart`, `istart`) with it, or the
+  runs overlap. The edges keep the first polygon's colour in draw order
+  however many threads there are; `threads_give_the_same_surface`
+  checks both.
+- **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
+  of `PICK_RUN` triangles and is filled at the end of `build_with`; code
+  that adds triangles to a surface adds them before that (as the slices,
+  iso-surfaces and arrows do), or picking falls back to walking every
+  triangle (the box count no longer matches).
 
 ## Serde
 

@@ -8,6 +8,7 @@ description = "Mesh model and readers of MurmelCraft: KoflCraft's foehncraft.vtu
 [dependencies]
 base64.workspace = true
 flate2.workspace = true
+memchr.workspace = true
 quick-xml.workspace = true
 serde.workspace = true
 serde_json.workspace = true

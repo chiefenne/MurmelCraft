@@ -115,6 +115,26 @@ const OWN: &[Code] = &[
         ),
     },
     Code {
+        code: "REGION001",
+        severity: Severity::Error,
+        meaning: "No region of interest has this number.",
+        fix: Some("Regions count from 1 (region:1); region.list names them."),
+    },
+    Code {
+        code: "REGION002",
+        severity: Severity::Error,
+        meaning: "The region's shape is broken (a size, radius or thickness that is not positive, a zero normal, too many rings) or names a zone, patch or cell the mesh does not have.",
+        fix: Some(
+            "mesh.info lists the zones and patches; cells count from 0 to the cell count minus one; sizes must be positive.",
+        ),
+    },
+    Code {
+        code: "REGION003",
+        severity: Severity::Error,
+        meaning: "The display has the most regions it holds (16).",
+        fix: Some("Remove a region with region.clear, or change one with region.set."),
+    },
+    Code {
         code: "ARROW002",
         severity: Severity::Error,
         meaning: "The arrows' density is outside 4 to 200, or their scale is not above 0 and up to 100.",

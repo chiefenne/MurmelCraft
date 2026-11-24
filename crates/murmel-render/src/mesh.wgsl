@@ -26,7 +26,24 @@ struct Globals {
     field_mode: vec4<f32>,
     contour: vec4<f32>,
     selection: vec4<f32>,
+    // The clip planes of a preview (the window's clip drag), relative to
+    // the surface's origin: xyz the normal, w the offset; a point p is cut
+    // away where dot(n, p) + w > 0. clip_count.x of them are in use.
+    clip_planes: array<vec4<f32>, 8>,
+    clip_count: vec4<f32>,
 };
+
+// Whether a preview plane cuts the point away.
+fn cut_away(p: vec3<f32>) -> bool {
+    let n = u32(g.clip_count.x);
+    for (var i = 0u; i < n; i = i + 1u) {
+        let c = g.clip_planes[i];
+        if (dot(c.xyz, p) + c.w > 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 @group(0) @binding(0) var<uniform> g: Globals;
 @group(0) @binding(1) var lut: texture_2d<f32>;
@@ -73,6 +90,9 @@ fn fs_face(f: FaceOut) -> @location(0) vec4<f32> {
     let lines = g.field.w;
     let x = tn * (lines + 1.0);
     let w = fwidth(x);
+    if (cut_away(f.world)) {
+        discard;
+    }
     var color = f.color;
     if (g.field_mode.x > 0.5 && f.value.w > 0.5) {
         var t = tn;
@@ -109,6 +129,7 @@ struct LineIn {
 struct LineOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec3<f32>,
+    @location(1) world: vec3<f32>,
 };
 
 @vertex
@@ -116,6 +137,7 @@ fn vs_line(v: LineIn) -> LineOut {
     var o: LineOut;
     o.clip = g.view_proj * vec4<f32>(v.pos, 1.0);
     o.color = v.color;
+    o.world = v.pos;
     return o;
 }
 
@@ -139,6 +161,7 @@ fn vs_wide(v: WideIn, @builtin(vertex_index) i: u32) -> LineOut {
     var b = g.view_proj * vec4<f32>(v.p1, 1.0);
     var o: LineOut;
     o.color = v.c0;
+    o.world = v.p0;
     if (a.z < 0.0 && b.z < 0.0) {
         // Wholly behind the camera: a degenerate triangle.
         o.clip = vec4<f32>(0.0, 0.0, -1.0, 1.0);
@@ -165,6 +188,7 @@ fn vs_wide(v: WideIn, @builtin(vertex_index) i: u32) -> LineOut {
     if (end > 0.5) {
         c = b;
         o.color = v.c1;
+        o.world = v.p1;
     }
     let off = (n * sides[i] + d * (end * 2.0 - 1.0)) * half_width / half_size;
     o.clip = vec4<f32>(c.xy + off * c.w, c.z, c.w);
@@ -173,6 +197,9 @@ fn vs_wide(v: WideIn, @builtin(vertex_index) i: u32) -> LineOut {
 
 @fragment
 fn fs_line(f: LineOut) -> @location(0) vec4<f32> {
+    if (cut_away(f.world)) {
+        discard;
+    }
     return vec4<f32>(f.color, 1.0);
 }
 

@@ -21,6 +21,7 @@ mod extract;
 pub mod live;
 mod markdown;
 pub mod movie;
+mod region;
 mod tools;
 
 use std::time::Instant;
@@ -158,6 +159,12 @@ pub fn call(id: &str, input: Value, session: &mut Session) -> Envelope {
         return Envelope::failed(id, 0, Diagnostic::new("TOOL001", format!("no tool {id}")));
     };
     let start = Instant::now();
+    // A clip preview (the window's clip drag) ends with the exact cut
+    // before any other tool reads or draws the surface; moving a plane
+    // again keeps it going.
+    if !matches!(tool.id, "clip.set" | "clip.rotate") {
+        session.settle();
+    }
     let input = if input.is_null() { json!({}) } else { input };
     // A call that changes the camera or the display is a step of the
     // journal (undo and redo).

@@ -134,7 +134,13 @@ struct Globals {
     field_mode: [f32; 4],
     contour: [f32; 4],
     selection: [f32; 4],
+    clip_planes: [[f32; 4]; MAX_PREVIEW_PLANES],
+    clip_count: [f32; 4],
 }
+
+/// Clip planes a frame can cut with on the GPU (`View::clip_planes`; the
+/// display has at most eight).
+pub const MAX_PREVIEW_PLANES: usize = 8;
 
 /// Width of the contour lines in pixels.
 const LINE_PX: f32 = 1.5;
@@ -164,6 +170,11 @@ pub struct View<'a> {
     /// Physical pixels per logical pixel, so contour lines keep their
     /// width on a HiDPI screen.
     pub scale: f32,
+    /// Planes that cut the surface on the GPU (`[n, d]` relative to the
+    /// surface's origin; a point `p` is cut away where `n · p + d > 0`):
+    /// the window's clip preview while the exact cut is built
+    /// ([`murmel_engine::Session::drawn`]); empty otherwise.
+    pub clip_planes: &'a [[f32; 4]],
 }
 
 struct Targets {
@@ -641,6 +652,15 @@ impl MeshRenderer {
             }),
             contour: f.map_or([0.0; 4], |p| f32x3(p.line_color)),
             selection: f.map_or([0.0; 4], |p| f32x3(p.selection)),
+            clip_planes: std::array::from_fn(|i| {
+                view.clip_planes.get(i).copied().unwrap_or([0.0; 4])
+            }),
+            clip_count: [
+                view.clip_planes.len().min(MAX_PREVIEW_PLANES) as f32,
+                0.0,
+                0.0,
+                0.0,
+            ],
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&g));
         let Some(t) = &self.targets else { return };
@@ -884,12 +904,19 @@ impl Offscreen<'_> {
         let dark = session.theme.is_dark(None);
         let p = session.tokens.palette(dark);
         let field = session.field_paint();
+        // What the window shows: during a clip preview, the surface cut on
+        // the GPU (tools settle it first, so their pictures are exact).
+        let drawn = session.drawn();
+        let (surface, revision, planes) = match &drawn {
+            Some((s, r, p)) => (Some(*s), *r, p.as_slice()),
+            None => (None, session.surface_revision, &[][..]),
+        };
         self.renderer.render(
             &self.gpu.device,
             &self.gpu.queue,
             &View {
-                surface: session.mesh.as_ref().map(|m| &m.surface),
-                revision: session.surface_revision,
+                surface,
+                revision,
                 camera: &session.camera,
                 size: [width, height],
                 bg_top: p.viewport_top.linear(),
@@ -901,6 +928,7 @@ impl Offscreen<'_> {
                 field: field.as_ref(),
                 // Contour lines widen with the edges of a scaled export.
                 scale: shoot.line_width,
+                clip_planes: planes,
             },
         );
         let mut rgba = self.renderer.read_rgba(&self.gpu.device, &self.gpu.queue)?;

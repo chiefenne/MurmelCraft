@@ -289,10 +289,15 @@ impl MurmelApp {
             "{:?}|{}",
             self.session.camera, self.session.surface_revision
         );
-        // While measuring the snap marker says what is under the pointer.
-        let Some(pos) =
-            pos.filter(|_| resp.hovered() && self.drag.is_none() && self.measuring.is_none())
-        else {
+        // While measuring the snap marker says what is under the pointer;
+        // while a clip preview waits for its exact cut, nothing is asked
+        // (a tool would wait for the cut).
+        let Some(pos) = pos.filter(|_| {
+            resp.hovered()
+                && self.drag.is_none()
+                && self.measuring.is_none()
+                && self.session.preview.is_none()
+        }) else {
             self.hover = None;
             return;
         };
@@ -396,27 +401,51 @@ impl MurmelApp {
         // The field's range, map and style are uniforms: a change of them
         // draws again without a new surface.
         let field = self.session.field_paint();
+        // During a clip drag: the surface without the moving planes, cut
+        // by them on the GPU, until the exact cut is in place.
+        let drawn = self.session.drawn();
+        let (surface, revision, planes) = match &drawn {
+            Some((s, r, p)) => (Some(*s), *r, p.as_slice()),
+            None => (None, self.session.surface_revision, &[][..]),
+        };
+        // While the view moves the edges are left out if frames with
+        // them are slow (the maintainer's card: over 33 ms).
+        let display = &self.session.display;
+        let gap = ui.input(|i| i.unstable_dt) as f64;
+        let hideable = display.draw_edges() && display.mesh_faces();
+        let moving = self
+            .moving_edges
+            .frame(self.now, gap, cam, (revision, px), hideable);
+        match moving.repaint {
+            Some(s) if s <= 0.0 => ui.ctx().request_repaint(),
+            Some(s) => ui
+                .ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(s)),
+            None => {}
+        }
+        let edges = display.draw_edges() && !moving.hide;
         let key = format!(
-            "{cam:?}|{}|{px:?}|{dark}|{:?}|{field:?}",
-            self.session.surface_revision, self.session.display.render_mode
+            "{cam:?}|{revision}|{planes:?}|{px:?}|{dark}|{:?}|{edges}|{field:?}",
+            display.render_mode
         );
         if g.last.as_deref() != Some(key.as_str()) {
             g.renderer.render(
                 &rs.device,
                 &rs.queue,
                 &View {
-                    surface: self.session.mesh.as_ref().map(|m| &m.surface),
-                    revision: self.session.surface_revision,
+                    surface,
+                    revision,
                     camera: cam,
                     size: px,
                     bg_top: p.viewport_top.linear(),
                     bg_bottom: p.viewport_bottom.linear(),
                     faces: self.session.display.draw_faces(),
-                    edges: self.session.display.draw_edges(),
+                    edges,
                     line_width: 1.0,
                     transparent: false,
                     field: field.as_ref(),
                     scale: ppp,
+                    clip_planes: planes,
                 },
             );
             if let Some(view) = g.renderer.egui_view() {

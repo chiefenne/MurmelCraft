@@ -88,7 +88,7 @@ impl MurmelApp {
     }
 
     /// An eye button that turns a row's item on or off.
-    fn eye(
+    pub(crate) fn eye(
         &self,
         ui: &mut Ui,
         on: bool,

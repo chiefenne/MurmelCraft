@@ -68,6 +68,8 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Alt + S` | Add a slice | `slice.set` (input from the session) |
 | `Alt + I` | Add an iso-surface | `iso.set` (input from the session) |
 | `Alt + V` | Vector arrows: show or hide | `arrows.set` (input from the session) |
+| `Alt + R` | Region: show or hide (adds a box if there is none) | `region.set` (input from the session) |
+| `Alt + Shift + R` | Region: cut flat along its border, or whole cells | `region.set` (input from the session) |
 | `H` | Hide the selection | `display.visibility` (input from the session) |
 | `I` | Isolate the selection | `display.visibility` (input from the session) |
 | `Alt + H` | Show all | `display.visibility` (input from the session) |
@@ -170,6 +172,14 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Remove the vector arrows | `arrows.clear` (input from the session) |
 | palette | Mesh beside slices: faint outline | `display.mesh_look` `{"look":"outline"}` |
 | palette | Mesh beside slices: faces | `display.mesh_look` `{"look":"faces"}` |
+| palette | Region: add a box | `region.set` (input from the session) |
+| palette | Region: add a sphere | `region.set` (input from the session) |
+| palette | Region: add a slab between two planes | `region.set` (input from the session) |
+| palette | Region: the selected cells and one ring around them | `region.set` (input from the session) |
+| palette | Region: the selected cell zone | `region.set` (input from the session) |
+| palette | Region: three cell layers along the selected patch | `region.set` (input from the session) |
+| palette | Remove the region | `region.clear` (input from the session) |
+| palette | Remove all regions | `region.clear` (input from the session) |
 | palette | Delete all measurements and probes | `measure.remove` (input from the session) |
 | palette | Fit the selection | `view.fit` (input from the session) |
 | palette | Click picks cells | `select.filter` `{"target":"cell"}` |
