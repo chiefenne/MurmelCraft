@@ -27,6 +27,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `views.list` | 1 | read | The saved views of the open mesh, in the order they were saved, with their cameras. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
 | `export.image` | 1 | write-files | Export the view as a PNG at path for reports and posters: the viewport's size times scale (or width and height in pixels), lines, legend and text grown with the scale so the picture looks like the window, the colour legend (top left) and the axis triad (bottom left) each optional, the background transparent if asked, the resolution (dpi) stored for print. |
+| `export.movie` | 1 | write-files | Export a movie at path (.mp4, .gif, or a folder of PNG frames) with the look of export.image (size, scale, legend, axes, lines): the camera turning about its target (orbit; a whole turn loops), a clip plane sweeping through the mesh (clip), or a flight through saved views that eases into each and holds there (views). MP4 is H.264 made by the ffmpeg installed on the machine (EXPORT002 without one); GIF and PNG are written by MurmelCraft. The view stays as it was. |
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
 | `display.color_by` | 2 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
@@ -581,6 +582,143 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   },
   "required": [
     "path"
+  ],
+  "type": "object"
+}
+```
+
+### `export.movie`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axes": {
+      "default": true,
+      "description": "Draw the axis triad (bottom left)",
+      "type": "boolean"
+    },
+    "degrees": {
+      "default": 360,
+      "description": "orbit: the angle to turn; a whole turn loops without a stutter",
+      "maximum": 3600,
+      "minimum": -3600,
+      "type": "number"
+    },
+    "format": {
+      "description": "Default: from the path (.mp4, .gif), else PNG frames. MP4 needs ffmpeg installed (brew install ffmpeg)",
+      "enum": [
+        "mp4",
+        "gif",
+        "png"
+      ]
+    },
+    "fps": {
+      "default": 30,
+      "description": "Frames a second (a GIF plays at most 50)",
+      "maximum": 60,
+      "minimum": 1,
+      "type": "number"
+    },
+    "from": {
+      "description": "clip: the first offset along the plane's normal from the centre of the mesh's bounds (default: the end where the plane cuts nothing)",
+      "type": "number"
+    },
+    "height": {
+      "description": "Pixels, as in export.image",
+      "maximum": 8192,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "hold": {
+      "default": 0.5,
+      "description": "views: seconds the camera stays at each view",
+      "maximum": 60.0,
+      "minimum": 0,
+      "type": "number"
+    },
+    "legend": {
+      "default": true,
+      "description": "Draw the colour legend (top left)",
+      "type": "boolean"
+    },
+    "line_width": {
+      "description": "Edge width in pixels (default: the scale)",
+      "maximum": 32,
+      "minimum": 1,
+      "type": "number"
+    },
+    "motion": {
+      "description": "orbit: the camera turns about the vertical axis through its target; clip: a clip plane sweeps through the mesh; views: the camera flies through saved views, easing into each",
+      "enum": [
+        "orbit",
+        "clip",
+        "views"
+      ]
+    },
+    "path": {
+      "description": "The movie to write: a .mp4 or .gif file, or a folder for PNG frames (frame-00001.png, …)",
+      "type": "string"
+    },
+    "plane": {
+      "description": "clip: the plane to sweep, counted from 1 (default: the current one)",
+      "minimum": 1,
+      "type": "integer"
+    },
+    "scale": {
+      "description": "Pixels per point of the window, as in export.image",
+      "maximum": 8.0,
+      "minimum": 0.25,
+      "type": "number"
+    },
+    "seconds": {
+      "default": 6.0,
+      "description": "orbit and clip: the length of the movie",
+      "exclusiveMinimum": 0,
+      "maximum": 1200.0,
+      "type": "number"
+    },
+    "theme": {
+      "enum": [
+        "dark",
+        "light",
+        "system"
+      ]
+    },
+    "to": {
+      "description": "clip: the last offset (default: the end where the plane cuts everything)",
+      "type": "number"
+    },
+    "transparent": {
+      "default": false,
+      "description": "Leave the background out (GIF and PNG frames only)",
+      "type": "boolean"
+    },
+    "travel": {
+      "default": 2.0,
+      "description": "views: seconds of each flight from one view to the next",
+      "exclusiveMinimum": 0,
+      "maximum": 60.0,
+      "type": "number"
+    },
+    "views": {
+      "description": "views: the saved views to fly through, in order (default: all, in the order they were saved)",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 2,
+      "type": "array"
+    },
+    "width": {
+      "description": "Pixels, as in export.image (an MP4 makes odd sides even)",
+      "maximum": 8192,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "path",
+    "motion"
   ],
   "type": "object"
 }
@@ -1914,7 +2052,13 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `LIVE003` | error | The window could not listen for agents: another window listens already, or the socket folder is not private. | Close the other window, or make the socket folder private (chmod 700); MURMEL_LIVE_SOCKET names another socket. |
 | `SET001` | error | A settings file could not be written, or no config folder is known. | Set MURMEL_CONFIG_DIR to a writable folder. |
 | `SET002` | error | The navigation bindings bind one input to two actions. | Give each gesture, button and modifier combination one action. |
-| `EXPORT001` | error | An export setting is out of range (scale, line width, dpi). | Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000. |
+| `EXPORT001` | error | An export setting is out of range (scale, line width, dpi). | Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000; a movie 1 to 60 frames a second and at most 36000 frames, an MP4 without transparency. |
+| `EXPORT002` | error | An MP4 needs ffmpeg, and none was found (MURMEL_FFMPEG, PATH, /opt/homebrew/bin, /usr/local/bin). | Install ffmpeg (macOS: brew install ffmpeg), set MURMEL_FFMPEG to its path, or write a GIF or PNG frames. |
+| `EXPORT003` | error | ffmpeg could not be started or failed while writing the MP4; the message ends with what it said. | Check the path and the free space; try another ffmpeg with MURMEL_FFMPEG. |
+| `EXPORT004` | error | A movie file or a frame could not be written. | Check that the folder exists and is writable, and the free space. |
+| `EXPORT005` | error | The movie has nothing to move: no clip plane to sweep, fewer than two saved views, or a view name that is not saved. | Add a clip plane (clip.set) or save views (views.save); views.list names them. |
+| `EXPORT006` | error | The movie was cancelled; a half-written MP4 or GIF is removed, PNG frames written stay. |  |
+| `EXPORT007` | error | The window is making a movie already; it makes one at a time. | Wait for the movie, or cancel it in the Export movie window. |
 | `MEAS001` | error | Nothing of the mesh lies under the screen point, so there is no point to measure from. | Point at a face of the mesh, or give typed coordinates (point), a node, a face or a cell. |
 | `MEAS002` | error | The open mesh has no node, face or cell with this number. | mesh.info gives the counts; numbers start at 0. |
 | `MEAS003` | error | The name of a measurement or probe is empty, longer than 64 characters or holds control characters. |  |

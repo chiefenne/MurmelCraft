@@ -351,6 +351,7 @@ tool-view-standard = Standard view
 tool-view-rotate = Rotate about a screen axis
 tool-view-screenshot = Screenshot
 tool-export-image = Export image
+tool-export-movie = Export movie
 tool-display-color-by = Colour by
 tool-display-threshold = Quality threshold
 tool-inspect-quality = Quality statistics
@@ -429,6 +430,7 @@ cmd-open-folder = Open OpenFOAM case folder…
 cmd-close = Close mesh
 cmd-screenshot = Save a screenshot…
 cmd-export-image = Export image…
+cmd-export-movie = Export movie…
 cmd-session-save = Save session
 cmd-session-save-as = Save session as…
 cmd-session-load = Load session…
@@ -584,3 +586,35 @@ tree-row-faces = { $item }, { $count } faces
 tree-row-hidden = { $row }, hidden
 tree-swatch = Colour of { $item }
 prop-row-name = { $label }: { $value }
+movie-title = Export movie
+movie-file-title = Export movie
+movie-motion = Motion
+movie-motion-orbit = Turn around
+movie-motion-clip = Sweep a clip plane
+movie-motion-views = Fly through saved views
+movie-degrees = Angle
+movie-seconds = Length
+movie-plane = Plane
+movie-plane-n = Plane { $n }
+movie-no-plane = Add a clip plane first
+movie-views = Views
+movie-views-n = { $n } saved views, in their order
+movie-no-views = Save two views or more first
+movie-hold = Hold at each view
+movie-travel = Flight to the next
+movie-fps = Frame rate
+movie-fps-n = { $n } frames a second
+movie-format = Format
+movie-format-mp4 = MP4 (H.264, needs ffmpeg)
+movie-format-gif = GIF
+movie-format-png = PNG frames in a folder
+movie-frames = { $n ->
+    [one] 1 frame
+   *[other] { $n } frames
+}, { $w } × { $h } pixels
+movie-progress = Frame { $k } of { $n }
+movie-cancel = Cancel
+movie-done = Saved { $file }, { $n ->
+    [one] 1 frame
+   *[other] { $n } frames
+}

@@ -9,6 +9,7 @@ description = "Tool registry of MurmelCraft: every viewer action as a tool share
 murmel-engine.workspace = true
 murmel-mesh.workspace = true
 murmel-render.workspace = true
+gif.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

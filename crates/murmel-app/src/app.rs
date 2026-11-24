@@ -80,6 +80,10 @@ pub struct MurmelApp {
     pub(crate) color_edit: Option<crate::color_edit::ColorEdit>,
     /// The export window and its settings (File, "Export image…").
     pub(crate) export: crate::export_dialog::ExportDialog,
+    /// The movie window and its settings (File, "Export movie…").
+    pub(crate) movie: crate::movie_dialog::MovieDialog,
+    /// The movie being made on its own thread, if one is.
+    pub(crate) movie_job: Option<crate::movie_dialog::MovieJob>,
     /// Keyboard focus: F6 regions, the focus ring, the arrow keys.
     pub(crate) focus: crate::focus::Focus,
     /// The width of the panel toggles at the right of the toolbar, as
@@ -171,6 +175,8 @@ impl MurmelApp {
             rotation_plane: None,
             color_edit: None,
             export: Default::default(),
+            movie: Default::default(),
+            movie_job: None,
             focus: crate::focus::Focus::default(),
             toggles_w: 90.0,
             title_buttons_w: 110.0,
@@ -1186,6 +1192,8 @@ impl eframe::App for MurmelApp {
         self.palette_window(&ctx);
         self.color_window(&ctx);
         self.export_window(&ctx);
+        self.poll_movie(&ctx);
+        self.movie_window(&ctx);
         crate::focus::ring(&ctx, &self.focus, color(p.accent));
         self.focus.end(&ctx);
     }

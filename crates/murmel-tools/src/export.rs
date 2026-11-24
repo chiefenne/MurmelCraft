@@ -84,6 +84,20 @@ pub fn picture_size(
     Ok((w, h, sc))
 }
 
+/// The width of edges in pixels: as given, else the scale (lines never
+/// get thinner than one pixel).
+pub fn line_width(given: Option<f64>, scale: f64) -> Result<f64, Diagnostic> {
+    let w = given.unwrap_or(scale.max(1.0));
+    if (1.0..=32.0).contains(&w) {
+        Ok(w)
+    } else {
+        Err(Diagnostic::new(
+            "EXPORT001",
+            format!("line width {w} is outside 1 to 32 pixels"),
+        ))
+    }
+}
+
 /// What an exported picture shows over the mesh, and how.
 pub struct Look {
     pub width: u32,
@@ -133,14 +147,7 @@ pub fn export_image(input: Value, s: &mut Session) -> Run {
     let i: ExportImage = parse(input)?;
     need_mesh(s)?;
     let (width, height, scale) = picture_size(s.viewport, i.width, i.height, i.scale)?;
-    // Lines never get thinner than one pixel.
-    let line_width = i.line_width.unwrap_or(scale.max(1.0));
-    if !(1.0..=32.0).contains(&line_width) {
-        return Err(Diagnostic::new(
-            "EXPORT001",
-            format!("line width {line_width} is outside 1 to 32 pixels"),
-        ));
-    }
+    let line_width = line_width(i.line_width, scale)?;
     if let Some(d) = i.dpi
         && !(1.0..=10_000.0).contains(&d)
     {

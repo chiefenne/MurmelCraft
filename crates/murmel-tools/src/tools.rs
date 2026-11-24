@@ -146,7 +146,7 @@ struct SetCamera {
     viewport: Option<[f64; 2]>,
 }
 
-fn finite(v: f64, name: &str) -> Result<f64, Diagnostic> {
+pub(crate) fn finite(v: f64, name: &str) -> Result<f64, Diagnostic> {
     if v.is_finite() {
         Ok(v)
     } else {
@@ -920,7 +920,7 @@ struct ClipSet {
 }
 
 /// The index of plane `n` (counted from 1), or of the current plane.
-fn plane_index(s: &Session, n: Option<u32>) -> Result<Option<usize>, Diagnostic> {
+pub(crate) fn plane_index(s: &Session, n: Option<u32>) -> Result<Option<usize>, Diagnostic> {
     match n {
         None => Ok(s.display.current_clip()),
         Some(n) if n >= 1 && (n as usize) <= s.display.clips.len() => Ok(Some(n as usize - 1)),
@@ -1825,6 +1825,10 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ),
     ("export.image", "writes a file; the view stays as it is"),
     (
+        "export.movie",
+        "writes files; the camera and the clip planes go back as they were",
+    ),
+    (
         "select.item",
         "the selection is not undone, as in CAD tools",
     ),
@@ -2220,6 +2224,17 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::export::export_image_schema,
         run: crate::export::export_image,
+    },
+    Tool {
+        id: "export.movie",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-export-movie",
+        summary: "Export a movie at path (.mp4, .gif, or a folder of PNG frames) with the look of export.image (size, scale, legend, axes, lines): the camera turning about its target (orbit; a whole turn loops), a clip plane sweeping through the mesh (clip), or a flight through saved views that eases into each and holds there (views). MP4 is H.264 made by the ffmpeg installed on the machine (EXPORT002 without one); GIF and PNG are written by MurmelCraft. The view stays as it was.",
+        outputs: &["path"],
+        reads: &[],
+        input_schema: crate::movie::export_movie_schema,
+        run: crate::movie::export_movie,
     },
     Tool {
         id: "display.render_mode",
