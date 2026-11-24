@@ -44,6 +44,7 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `clip.step.built` | one step that builds the exact cut before it returns (the command line, agents; every step before the preview) |
 | `pick.9` | nine picks over the iso view (the hover tooltip, a click, snapping) |
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
+| `render.next.faces` | a later frame without the edges (the window while the view moves, when frames with edges are slow) |
 
 and reports the peak resident memory (Linux only; the `read` stage also
 reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
@@ -338,3 +339,37 @@ polyMesh binary, crinkle cut, same machine (4 threads), `murmel bench`:
 |---|---:|---:|
 | clip.step, ms (was clip.step.built) | 0.0 (289) | 0.0 (1,104) |
 | clip.exact, ms after the last step | 453 | 1,165 |
+
+## Orbit: the edges hide only when a frame is slow (2026-11-24)
+
+The maintainer's choice for moving the view on a large mesh: hide the
+edges while the view moves, and only when a frame takes longer than 33
+ms; nothing else is simplified, and nothing changes on a mesh that draws
+fast enough.
+
+- The window times the frames it draws with edges while the camera moves
+  (an orbit, a pan, a zoom, a roll, a flight to a view): start to start,
+  with the next frame asked for at once, so the gap is the frame's own
+  cost (the GPU holds a frame back until it has drawn the ones before).
+  Gaps after an idle pause are not timed.
+- Once the median of the last three gaps is over 1/30 s (35 ms with the
+  timer's jitter, so a frame that keeps 30 a second, two refreshes of a
+  60 Hz screen, is within it), the edges are left out while the view
+  moves and come back 150 ms after it rests. The verdict holds for the
+  surface and the viewport's size it was timed on; a new surface (a
+  clip, a colour, a field) or a new size is timed again.
+- Edges drawn without the mesh's faces (wireframe, feature edges, the
+  mesh as an outline) never hide: they are all there is to see.
+  Pictures, movies and agents' screenshots always draw the edges.
+- `murmel bench run` reports `render.next.faces`, the frame without the
+  edges, next to `render.next`, so the edges' share of a frame can be
+  read on the Mac.
+
+polyMesh binary, iso view at 1280 x 720, same machine, Mesa llvmpipe (a
+software rasteriser: the Radeon's numbers will differ, the share less
+so), `murmel bench`:
+
+| | 1 M | 4 M |
+|---|---:|---:|
+| render.next, ms (with edges) | 473 | 513 |
+| render.next.faces, ms | 307 | 350 |

@@ -46,6 +46,9 @@ pub struct MurmelApp {
     pub(crate) flight: Option<(murmel_engine::Camera, f64)>,
     /// The time of the frame, for flights started by a tool call.
     pub(crate) now: f64,
+    /// The edges hidden while the view moves when frames with them are
+    /// slow.
+    pub(crate) moving_edges: crate::edges::MovingEdges,
     /// The rotate row under the view cube: axis and degrees.
     pub(crate) rotate_axis: murmel_engine::ScreenAxis,
     pub(crate) rotate_deg: f64,
@@ -172,6 +175,7 @@ impl MurmelApp {
             shortcuts_open: false,
             flight: None,
             now: 0.0,
+            moving_edges: Default::default(),
             rotate_axis: murmel_engine::ScreenAxis::Z,
             rotate_deg: 90.0,
             threshold_edit: None,

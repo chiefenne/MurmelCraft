@@ -377,6 +377,15 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             let first = st.time("render.first", 1, || o.shoot(&session, &shoot));
             let first = first.map(|s| s.adapter)?;
             st.time("render.next", r, || o.shoot(&session, &shoot).map(|_| ()))?;
+            // The same frame without the edges, as the window draws it
+            // while the view moves when frames with edges are slow.
+            let mode = session.display.render_mode;
+            session.display.render_mode = RenderMode::Shaded;
+            let faces = st.time("render.next.faces", r, || {
+                o.shoot(&session, &shoot).map(|_| ())
+            });
+            session.display.render_mode = mode;
+            faces?;
             Ok::<String, murmel_render::RenderError>(first)
         })
         .and_then(|x| x);

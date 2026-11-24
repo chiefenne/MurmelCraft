@@ -408,9 +408,25 @@ impl MurmelApp {
             Some((s, r, p)) => (Some(*s), *r, p.as_slice()),
             None => (None, self.session.surface_revision, &[][..]),
         };
+        // While the view moves the edges are left out if frames with
+        // them are slow (the maintainer's card: over 33 ms).
+        let display = &self.session.display;
+        let gap = ui.input(|i| i.unstable_dt) as f64;
+        let hideable = display.draw_edges() && display.mesh_faces();
+        let moving = self
+            .moving_edges
+            .frame(self.now, gap, cam, (revision, px), hideable);
+        match moving.repaint {
+            Some(s) if s <= 0.0 => ui.ctx().request_repaint(),
+            Some(s) => ui
+                .ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(s)),
+            None => {}
+        }
+        let edges = display.draw_edges() && !moving.hide;
         let key = format!(
-            "{cam:?}|{revision}|{planes:?}|{px:?}|{dark}|{:?}|{field:?}",
-            self.session.display.render_mode
+            "{cam:?}|{revision}|{planes:?}|{px:?}|{dark}|{:?}|{edges}|{field:?}",
+            display.render_mode
         );
         if g.last.as_deref() != Some(key.as_str()) {
             g.renderer.render(
@@ -424,7 +440,7 @@ impl MurmelApp {
                     bg_top: p.viewport_top.linear(),
                     bg_bottom: p.viewport_bottom.linear(),
                     faces: self.session.display.draw_faces(),
-                    edges: self.session.display.draw_edges(),
+                    edges,
                     line_width: 1.0,
                     transparent: false,
                     field: field.as_ref(),
