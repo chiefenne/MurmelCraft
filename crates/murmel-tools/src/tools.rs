@@ -887,6 +887,7 @@ fn inspect_item(input: Value, s: &mut Session) -> Run {
     Ok(json!({
         "item": it.id(&m.mesh),
         "rows": murmel_engine::inspect::rows(m, &s.display, it),
+        "fields": murmel_engine::inspect::field_values(m, &s.display, it),
     }))
 }
 
@@ -1594,7 +1595,16 @@ fn probe_json(s: &Session, p: &Probe) -> Value {
         "at": p.at,
         "visible": p.visible,
         "rows": s.mesh.as_ref().map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &p.at)),
+        "fields": probe_fields(s, &p.at),
     })
+}
+
+/// The field values at an anchor inside a cell (none outside the mesh).
+fn probe_fields(s: &Session, at: &Anchor) -> Vec<field::FieldValue> {
+    match (&s.mesh, at.cell) {
+        (Some(m), Some(c)) => m.fields.point_values(&m.mesh, c as usize, at.point),
+        _ => Vec::new(),
+    }
 }
 
 fn measures_json(s: &Session) -> Value {
@@ -1721,7 +1731,8 @@ fn probe_at(input: Value, s: &mut Session) -> Run {
         .mesh
         .as_ref()
         .map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &at));
-    Ok(json!({"at": at, "rows": rows}))
+    let fields = probe_fields(s, &at);
+    Ok(json!({"at": at, "rows": rows, "fields": fields}))
 }
 
 /// A measurement or probe of the open mesh named by `id`.
@@ -2790,7 +2801,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-inspect-item",
-        summary: "The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel.",
+        summary: "The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel; with results, the field values of a cell, a boundary face (its boundary values and its cell's) or a probe (interpolated at its point).",
         outputs: &[],
         reads: &[],
         input_schema: || object(json!({"item": {"type": "string"}}), &[]),
@@ -3093,7 +3104,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-probe-add",
-        summary: "Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness. The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it.",
+        summary: "Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (inverse distance weighted from the cell's nodes). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it.",
         outputs: &[],
         reads: &[],
         input_schema: || {

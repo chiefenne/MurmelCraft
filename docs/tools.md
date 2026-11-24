@@ -42,7 +42,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `inspect.at` | 1 | read | What lies under a screen point ndc (-1..1, y up), without selecting: the point, the cell with its type and zone, the face with its patch and role (null when nothing is there). The hover tooltip and the cursor coordinates use it. |
 | `inspect.quality` | 1 | read | Statistics of a cell quality metric over all cells (the current one when left out): min, max, mean and a histogram of bins equal-width bins (default 20); with above, the number of cells at or above that value. |
 | `select.clear` | 1 | read | Clear the selection. |
-| `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
+| `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel; with results, the field values of a cell, a boundary face (its boundary values and its cell's) or a probe (interpolated at its point). |
 | `journal.undo` | 1 | read | Undo the last step of the camera or the display (a call of a journalled tool, or one group of calls such as a mouse drag); the selection stays. undone is the tool of the step, null when there was none. |
 | `journal.redo` | 1 | read | Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none. |
 | `journal.group` | 1 | read | Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps). |
@@ -60,7 +60,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `measure.rename` | 1 | read | Name a measurement or a probe (measure:<n>, probe:<n>); a null name goes back to "Distance n", "Angle n" or "Probe n". |
 | `measure.remove` | 1 | read | Remove measurements and probes: the items named (measure:<n>, probe:<n>), or all of them. Undo brings them back. |
 | `measure.list` | 1 | read | The measurements (value, unit, points and what they snapped to) and the probes (point, cell and what it reads) of the open mesh. |
-| `probe.add` | 1 | read | Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness. The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it. |
+| `probe.add` | 1 | read | Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (inverse distance weighted from the cell's nodes). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it. |
 | `probe.at` | 1 | read | What a probe at a point would read, without keeping it: the point given as for measure.add, the cell holding it and that cell's values. Changes nothing. |
 
 ## Inputs

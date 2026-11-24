@@ -468,6 +468,64 @@ impl FieldSet {
         out
     }
 
+    /// Every field's value at `point` in cell `cell`, in file order:
+    /// each component the inverse distance weighted mean of the cell's
+    /// node values (point fields' own, cell fields' interpolated), as a
+    /// probe reads them. Boundary fields are left out.
+    pub fn point_values(&self, mesh: &Mesh, cell: usize, point: [f64; 3]) -> Vec<FieldValue> {
+        if cell >= mesh.cell_count() {
+            return Vec::new();
+        }
+        let t = self.topology(mesh);
+        let nodes = t.nodes_of(cell);
+        let centres: Vec<[f64; 3]> = nodes.iter().map(|&n| mesh.points[n as usize]).collect();
+        let ids: Vec<u32> = (0..nodes.len() as u32).collect();
+        let mut out = Vec::new();
+        for f in &self.results.fields {
+            if f.location == Location::Boundary || !Self::fits(f, mesh) {
+                continue;
+            }
+            let comps = components(f);
+            let twin = self.boundary_twin(mesh, f);
+            let at: Vec<Vec<f64>> = nodes
+                .iter()
+                .map(|&n| self.node_components(mesh, f, &comps, twin.as_deref(), n as usize))
+                .collect();
+            let value: Vec<f64> = (0..comps.len())
+                .map(|j| {
+                    let vals: Vec<f64> = at.iter().map(|v| v[j]).collect();
+                    idw(point, &ids, &centres, &vals)
+                })
+                .collect();
+            if value.iter().all(|v| v.is_finite()) {
+                out.push(FieldValue {
+                    name: f.name.clone(),
+                    unit: f.unit.clone(),
+                    location: f.location,
+                    value,
+                });
+            }
+        }
+        out
+    }
+
+    /// Every boundary field's value on boundary face `b`, in file order.
+    pub fn face_values(&self, mesh: &Mesh, b: usize) -> Vec<FieldValue> {
+        self.results
+            .fields
+            .iter()
+            .filter(|f| f.location == Location::Boundary && Self::fits(f, mesh))
+            .filter_map(|f| {
+                Some(FieldValue {
+                    name: f.name.clone(),
+                    unit: f.unit.clone(),
+                    location: f.location,
+                    value: f.value(b)?.to_vec(),
+                })
+            })
+            .collect()
+    }
+
     /// The node value of each component of field `f` at point `p`.
     fn node_components(&self, mesh: &Mesh, f: &Field, comps: &[Vec<f64>], boundary: Option<&[Vec<f64>]>, p: usize) -> Vec<f64> {
         let t = self.topology(mesh);

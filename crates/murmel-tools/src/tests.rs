@@ -1599,6 +1599,32 @@ fn field_tools() {
     let e = call("field.style", json!({"reset": true}), &mut s);
     assert_eq!(e.result["style"]["mode"], "smooth");
     assert_eq!(e.result["range"], whole);
+    // Properties and probes read the fields: a cell its own values, a
+    // probe the values interpolated at its point (same names, in file
+    // order; the boundary-only y+ only on a boundary face).
+    let e = call("inspect.item", json!({"item": "cell:3"}), &mut s);
+    let names: Vec<&str> = e.result["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["name"].as_str())
+        .collect();
+    assert_eq!(names, ["velocity", "speed", "pressure", "k", "omega", "nu_t"]);
+    let e = call("probe.at", json!({"at": {"cell": 3}}), &mut s);
+    assert_eq!(e.result["fields"].as_array().unwrap().len(), 6);
+    assert_eq!(e.result["fields"][0]["value"].as_array().unwrap().len(), 3);
+    let m = s.mesh.as_ref().unwrap();
+    let wall = m.mesh.boundary_face_id[0];
+    let e = call("inspect.item", json!({"item": format!("face:{wall}")}), &mut s);
+    assert!(
+        e.result["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "y_plus" && f["location"] == "boundary"),
+        "{}",
+        e.result["fields"]
+    );
 }
 
 /// Invariant (session format 1.4): the field shown, its component and
