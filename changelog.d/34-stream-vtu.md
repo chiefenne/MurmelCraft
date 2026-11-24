@@ -1,1 +1,3 @@
-- The `.vtu` reader streams the file instead of holding its text: reading a 4 M cell ascii `.vtu` peaks at 4.0 GB instead of 9.2 GB and is a little faster; `murmel bench` reports the reading peak.
+### Changed
+
+- The `.vtu` reader streams the file instead of holding its text: reading a 4 M cell ascii `.vtu` peaks at 4.0 GB instead of 9.2 GB and is a little faster. `murmel bench` reports the peak memory of reading.
