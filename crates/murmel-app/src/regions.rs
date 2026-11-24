@@ -32,6 +32,12 @@ impl MurmelApp {
             ),
             s => self.i18n.tr(&format!("region-shape-{}", s.kind())),
         };
+        let what = if r.cut == murmel_engine::ClipMode::Flat {
+            self.i18n
+                .tr_args("region-cut-flat", &[("shape", what.into())])
+        } else {
+            what
+        };
         let cells = d
             .region_cells
             .as_ref()
@@ -96,13 +102,24 @@ impl MurmelApp {
                         action = Some(("view.fit", json!({ "item": id })));
                     }
                     row.context_menu(|ui| {
-                        for (key, call) in [
-                            ("tree-fit", ("view.fit", json!({ "item": id }))),
-                            (
-                                "tree-region-remove",
-                                ("region.clear", json!({ "region": n })),
-                            ),
-                        ] {
+                        let mut calls = vec![("tree-fit", ("view.fit", json!({ "item": id })))];
+                        if r.shape.cuts_flat() {
+                            calls.push(match r.cut {
+                                murmel_engine::ClipMode::Crinkle => (
+                                    "tree-region-cut-flat",
+                                    ("region.set", json!({"region": n, "cut": "flat"})),
+                                ),
+                                murmel_engine::ClipMode::Flat => (
+                                    "tree-region-cut-whole",
+                                    ("region.set", json!({"region": n, "cut": "crinkle"})),
+                                ),
+                            });
+                        }
+                        calls.push((
+                            "tree-region-remove",
+                            ("region.clear", json!({ "region": n })),
+                        ));
+                        for (key, call) in calls {
                             if ui.button(self.i18n.tr(key)).clicked() {
                                 action = Some(call);
                                 ui.close();

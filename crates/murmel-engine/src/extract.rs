@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::clip::{Clip, ClipMode};
 use crate::display::{Display, Item};
 use crate::field::{FieldChoice, FieldSet, FieldValues};
+use crate::region::Bound;
 use crate::surface::Surface;
 use crate::theme::{Rgb, Tokens};
 
@@ -263,11 +264,12 @@ fn unit(a: [f64; 3]) -> [f64; 3] {
     }
 }
 
-/// The part of `poly` that the flat clip planes keep (Sutherland and
-/// Hodgman), node values and normals interpolated at the cuts.
-fn clip_flat(poly: Vec<Vx>, planes: &[&Clip]) -> Vec<Vx> {
+/// The part of `poly` that the flat clip planes and the borders of the
+/// region cutting its cell flat keep (Sutherland and Hodgman), node
+/// values and normals interpolated at the cuts.
+fn clip_flat(poly: Vec<Vx>, planes: &[Bound], region: &[Bound]) -> Vec<Vx> {
     let mut v = poly;
-    for plane in planes {
+    for plane in planes.iter().chain(region) {
         if v.len() < 3 {
             break;
         }
@@ -546,10 +548,16 @@ pub fn append(
     display: &Display,
     shown: &[bool],
 ) {
-    let flat: Vec<&Clip> = display
+    let flat: Vec<Bound> = display
         .active_clips()
         .filter(|c| c.mode == ClipMode::Flat)
+        .map(Bound::from)
         .collect();
+    let regions = display
+        .region_cells
+        .as_deref()
+        .filter(|rc| rc.cuts_flat() && rc.regions == display.regions);
+    let borders = |c: u32| regions.map_or(&[][..], |rc| rc.borders_of(c as usize));
     let field = display.field_values();
     let edges = display.render_mode.edges();
     let sel = tokens.mesh.selection;
@@ -627,7 +635,7 @@ pub fn append(
             let mut pieces: Vec<(u32, Vec<Vx>)> = Vec::new();
             for t in level_set(mesh, fields, Level::Plane(&plane), field, vector, shown) {
                 let verts: Vec<Vx> = t.verts.iter().map(|v| Vx { n: normal, ..*v }).collect();
-                let verts = clip_flat(verts, &flat);
+                let verts = clip_flat(verts, &flat, borders(t.cell));
                 out.poly(
                     &verts,
                     &Paint {
@@ -667,7 +675,7 @@ pub fn append(
                             }
                         })
                         .collect();
-                    out.outline(&clip_flat(verts, &flat), ec);
+                    out.outline(&clip_flat(verts, &flat, borders(c as u32)), ec);
                 }
             }
         }
@@ -708,7 +716,7 @@ pub fn append(
                     sel_mix: if picked { mix } else { 0.0 },
                     cell: t.cell,
                 };
-                let verts = clip_flat(t.verts.to_vec(), &flat);
+                let verts = clip_flat(t.verts.to_vec(), &flat, borders(t.cell));
                 out.poly(&verts, &paint);
             }
         }
@@ -1302,6 +1310,63 @@ mod tests {
         let half: f64 = tris.iter().map(area).sum();
         let full = (b.max[0] - b.min[0]) * (b.max[2] - b.min[2]);
         assert!((half - 0.5 * full).abs() < 1e-3 * full, "{half} vs {full}");
+    }
+
+    /// Invariant (large-mesh stage 1b): a region cutting flat clips the
+    /// slices of its cells to its border, as a flat clip plane does: a
+    /// slab of width w across the duct leaves a slice w wide, exactly,
+    /// and a sphere keeps its slice inside it; with whole cells the slice
+    /// covers the slab's cells, wider than w. Breaks when slices ignore
+    /// the regions' flat cut (they would poke out of the cut cells).
+    #[test]
+    fn flat_regions_cut_slices() {
+        use crate::region::{Region, Shape};
+        let (m, set) = channel();
+        let b = m.bounds();
+        let c = b.center();
+        let w = 0.1 * (b.max[0] - b.min[0]);
+        let slab = Shape::Slab {
+            origin: c,
+            normal: [1.0, 0.0, 0.0],
+            thickness: w,
+        };
+        // Large enough to hold nodes of the coarse duct (else it shows
+        // whole cells).
+        let sphere = Shape::Sphere {
+            center: c,
+            radius: 0.45 * (b.max[1] - b.min[1]),
+        };
+        let depth = b.max[2] - b.min[2];
+        let slice_area = |shape: &Shape, cut: ClipMode| {
+            let mut d = by_field(&m, &set, "speed");
+            d.slices.push(Slice::new(c, [0.0, 1.0, 0.0]));
+            d.regions = vec![Region {
+                cut,
+                ..Region::new(shape.clone())
+            }];
+            crate::region::ensure(&mut d, &m);
+            assert_eq!(d.region_cells.as_ref().unwrap().whole_instead, [false]);
+            let tris = extract_tris(&build(&m, &set, &d));
+            assert!(!tris.is_empty(), "{shape:?} {cut:?}");
+            if cut == ClipMode::Flat {
+                for bd in shape.borders() {
+                    assert!(
+                        tris.iter().flatten().all(|&p| bd.distance(p) <= 1e-6),
+                        "{shape:?} pokes out"
+                    );
+                }
+            }
+            tris.iter().map(area).sum::<f64>()
+        };
+        let flat = slice_area(&slab, ClipMode::Flat);
+        assert!(
+            (flat - w * depth).abs() < 1e-3 * w * depth,
+            "{flat} vs {}",
+            w * depth
+        );
+        let whole = slice_area(&slab, ClipMode::Crinkle);
+        assert!(whole > flat * 1.01, "whole cells {whole} vs flat {flat}");
+        slice_area(&sphere, ClipMode::Flat);
     }
 
     /// Invariant: the iso-surface of a field linear in x (the pressure,

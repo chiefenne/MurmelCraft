@@ -7,7 +7,8 @@
 //! zone or cell type, or the clip plane, lays them open; they take the
 //! cell's colour), and with a flat clip the section of every cell the
 //! plane crosses. So hiding the prism layers shows the polyhedral core,
-//! and a crinkle clip shows the cells themselves.
+//! and a crinkle clip shows the cells themselves. A region that cuts flat
+//! clips the cells it cuts to its borders in the same way.
 //!
 //! Each polygon is a fan about its node average (exact for the
 //! star-shaped faces KoflCraft writes, including merged faces, and for
@@ -22,9 +23,10 @@ use crate::fasthash::{FastMap, FastSet, set_with_capacity};
 
 use murmel_mesh::{Bounds, Mesh, NO_CELL};
 
-use crate::clip::{Clip, ClipMode};
+use crate::clip::ClipMode;
 use crate::display::{Display, Item, RenderMode};
 use crate::field::FieldSet;
+use crate::region::{Bound, NOT_CUT, RegionCells};
 
 /// Feature edges (render mode 4) bend by more than this angle between
 /// their two faces (UI spec, Display).
@@ -110,11 +112,14 @@ struct Poly {
     group: u32,
 }
 
-/// A clip plane that cuts, with the side and distance of every node.
-struct Plane<'a> {
-    clip: &'a Clip,
-    keep: Vec<bool>,
-    dist: Vec<f64>,
+/// A border that cuts: a clip plane, with the side and distance of every
+/// node, or a border of a region cutting flat, whose distances are found
+/// as needed (it cuts only the cells along it).
+struct Plane {
+    bound: Bound,
+    /// Whether a clip plane cuts flat (region borders always do).
+    flat: bool,
+    nodes: Option<(Vec<bool>, Vec<f64>)>,
 }
 
 /// The cut points found so far: where each is, which plane made it, and
@@ -129,46 +134,99 @@ struct Cuts {
     along: Vec<(V, V, f64)>,
 }
 
-/// The clip planes that cut. A point where plane `p` crosses the edge
-/// between corners `a` and `b` is named by `(p, a, b)`, so the cuts of
-/// neighbouring faces and cells meet at the same named points and the
-/// sections close. Flat planes slice in the order they were added, each
-/// one the polygons the ones before it left, so a corner where two planes
-/// meet a face has one name too.
+/// The clip planes that cut, and the borders of regions that cut flat.
+/// A point where plane `p` crosses the edge between corners `a` and `b`
+/// is named by `(p, a, b)`, so the cuts of neighbouring faces and cells
+/// meet at the same named points and the sections close. Flat planes
+/// slice in the order they were added, each one the polygons the ones
+/// before it left, so a corner where two planes meet a face has one name
+/// too; a cell a region cuts is then sliced by that region's borders.
 struct Cutter<'a> {
     points: &'a [[f64; 3]],
-    planes: Vec<Plane<'a>>,
-    /// The flat planes, by index into `planes`, in order.
+    planes: Vec<Plane>,
+    /// The clip planes are `planes[..clips]`.
+    clips: usize,
+    /// The flat clip planes, by index into `planes`, in order.
     flat: Vec<usize>,
+    /// Which region cuts each cell, and each region's borders, by index
+    /// into `planes`.
+    regions: Option<(&'a RegionCells, Vec<std::ops::Range<usize>>)>,
     cuts: RefCell<Cuts>,
 }
 
 impl<'a> Cutter<'a> {
     /// The planes of `display` that cut, or `None` when none does.
     fn new(mesh: &'a Mesh, display: &'a Display) -> Option<Cutter<'a>> {
-        let planes: Vec<Plane<'a>> = display
+        let mut planes: Vec<Plane> = display
             .active_clips()
             .map(|clip| {
                 let dist: Vec<f64> = mesh.points.iter().map(|&p| clip.distance(p)).collect();
                 Plane {
-                    clip,
-                    keep: dist.iter().map(|&d| d <= 0.0).collect(),
-                    dist,
+                    bound: Bound::from(clip),
+                    flat: clip.mode == ClipMode::Flat,
+                    nodes: Some((dist.iter().map(|&d| d <= 0.0).collect(), dist)),
                 }
             })
             .collect();
+        let clips = planes.len();
+        let flat = (0..clips).filter(|&p| planes[p].flat).collect();
+        let regions = display
+            .region_cells
+            .as_deref()
+            .filter(|rc| rc.cuts_flat() && rc.regions == display.regions)
+            .map(|rc| {
+                let ranges = rc
+                    .borders
+                    .iter()
+                    .map(|bs| {
+                        let start = planes.len();
+                        planes.extend(bs.iter().map(|&bound| Plane {
+                            bound,
+                            flat: true,
+                            nodes: None,
+                        }));
+                        start..planes.len()
+                    })
+                    .collect();
+                (rc, ranges)
+            });
         if planes.is_empty() {
             return None;
         }
-        let flat = (0..planes.len())
-            .filter(|&p| planes[p].clip.mode == ClipMode::Flat)
-            .collect();
         Some(Cutter {
             points: &mesh.points,
             planes,
+            clips,
             flat,
+            regions,
             cuts: RefCell::default(),
         })
+    }
+
+    /// Whether anything cuts flat.
+    fn slices(&self) -> bool {
+        !self.flat.is_empty() || self.regions.is_some()
+    }
+
+    /// The region that cuts cell `c` flat, or `NOT_CUT`.
+    fn cut_by(&self, c: u32) -> u8 {
+        self.regions
+            .as_ref()
+            .and_then(|(rc, _)| rc.cut_by.as_ref()?.get(c as usize).copied())
+            .unwrap_or(NOT_CUT)
+    }
+
+    /// The planes that slice cell `c` (`NO_CELL`: the clip planes only),
+    /// in order.
+    fn flat_of(&self, c: u32) -> impl Iterator<Item = usize> + '_ {
+        let region = self.regions.as_ref().and_then(|(rc, ranges)| {
+            let k = *rc.cut_by.as_ref()?.get(c as usize)?;
+            (k != NOT_CUT).then(|| ranges[k as usize].clone())
+        });
+        self.flat
+            .iter()
+            .copied()
+            .chain(region.into_iter().flatten())
     }
 
     fn pos(&self, v: V) -> [f64; 3] {
@@ -179,26 +237,30 @@ impl<'a> Cutter<'a> {
     }
 
     fn dist(&self, p: usize, v: V) -> f64 {
-        match v {
-            V::Node(i) => self.planes[p].dist[i as usize],
-            V::Cut(_) => self.planes[p].clip.distance(self.pos(v)),
+        let plane = &self.planes[p];
+        match (v, &plane.nodes) {
+            (V::Node(i), Some((_, dist))) => dist[i as usize],
+            _ => plane.bound.distance(self.pos(v)),
         }
     }
 
     /// Whether plane `p` keeps corner `v` (a point on the plane counts as
     /// kept, and so does every cut point the plane made).
     fn keeps(&self, p: usize, v: V) -> bool {
-        match v {
-            V::Node(i) => self.planes[p].keep[i as usize],
-            V::Cut(k) => self.cuts.borrow().plane[k as usize] == p || self.dist(p, v) <= 0.0,
+        match (v, &self.planes[p].nodes) {
+            (V::Node(i), Some((keep, _))) => keep[i as usize],
+            (V::Node(_), None) => self.dist(p, v) <= 0.0,
+            (V::Cut(k), _) => self.cuts.borrow().plane[k as usize] == p || self.dist(p, v) <= 0.0,
         }
     }
 
-    /// Whether every plane keeps a node of `face`.
+    /// Whether every clip plane keeps a node of `face`.
     fn keeps_some(&self, face: &[u32]) -> bool {
-        self.planes
-            .iter()
-            .all(|pl| face.iter().any(|&i| pl.keep[i as usize]))
+        self.planes[..self.clips].iter().all(|pl| {
+            pl.nodes
+                .as_ref()
+                .is_none_or(|(keep, _)| face.iter().any(|&i| keep[i as usize]))
+        })
     }
 
     /// The point where plane `p` crosses the edge from `a` to `b`.
@@ -255,10 +317,11 @@ impl<'a> Cutter<'a> {
         out
     }
 
-    /// The part of `poly` every flat plane keeps, cut in their order.
-    fn clip_flat(&self, verts: Vec<V>) -> Vec<V> {
+    /// The part of `poly`, a polygon of cell `cell`, that every plane
+    /// slicing that cell keeps, cut in their order.
+    fn clip_flat(&self, cell: u32, verts: Vec<V>) -> Vec<V> {
         let mut v = verts;
-        for &p in &self.flat {
+        for p in self.flat_of(cell) {
             if v.len() < 3 {
                 break;
             }
@@ -328,18 +391,16 @@ impl<'a> Cutter<'a> {
     /// polygons the next one cuts (convex clipping of a polyhedron by
     /// half-spaces, one plane at a time).
     fn sections(&self, mesh: &Mesh, c: usize) -> Vec<Vec<V>> {
-        let crossed = |p: usize| {
-            mesh.cell_points(c)
-                .any(|i| !self.planes[p].keep[i as usize])
-        };
-        if !self.flat.iter().any(|&p| crossed(p)) {
+        let planes: Vec<usize> = self.flat_of(c as u32).collect();
+        let crossed = |p: usize| mesh.cell_points(c).any(|i| !self.keeps(p, V::Node(i)));
+        if !planes.iter().any(|&p| crossed(p)) {
             return Vec::new();
         }
         let mut set: Vec<(Vec<V>, bool)> = mesh
             .cell(c)
             .map(|f| (f.oriented().map(V::Node).collect(), false))
             .collect();
-        for &p in &self.flat {
+        for p in planes {
             let polys: Vec<Vec<V>> = set.iter().map(|(v, _)| v.clone()).collect();
             if !polys.iter().flatten().any(|&v| !self.keeps(p, v)) {
                 continue;
@@ -707,11 +768,11 @@ fn polygons(
     shown: &[bool],
     cutter: Option<&Cutter<'_>>,
 ) -> Vec<Poly> {
-    let flat = cutter.filter(|c| !c.flat.is_empty());
+    let flat = cutter.filter(|c| c.slices());
     let mut polys: Vec<Poly> = Vec::new();
     let mut add = |verts: Vec<V>, cell: u32, face: u32, boundary: u32, color: Rgb, group: u32| {
         let verts = match flat {
-            Some(c) => c.clip_flat(verts),
+            Some(c) => c.clip_flat(cell, verts),
             None => verts,
         };
         if verts.len() >= 3 {
@@ -783,7 +844,28 @@ fn polygons(
             continue;
         }
         let sn = shown[n as usize];
-        if so == sn {
+        if so && sn {
+            // Two cells cut differently (one by a flat region, the other
+            // whole or by another region): each side draws the face as
+            // its own clip keeps it, so where one side is cut away the
+            // other's face closes the surface (the rest lies inside).
+            if let Some(cut) = flat
+                && cut.cut_by(o) != cut.cut_by(n)
+            {
+                for c in [o, n] {
+                    add(
+                        nodes(mesh.face_nodes(u)),
+                        c,
+                        u as u32,
+                        NO_CELL,
+                        display.cell_color(mesh, tokens, c as usize),
+                        GROUP_OPEN,
+                    );
+                }
+            }
+            continue;
+        }
+        if !so && !sn {
             continue;
         }
         let c = if so { o } else { n };
@@ -1078,6 +1160,148 @@ mod tests {
             }
         }
         uses
+    }
+
+    /// The mean of cell `c`'s points.
+    fn cell_mean(mesh: &Mesh, c: usize) -> [f64; 3] {
+        let pts: Vec<[f64; 3]> = mesh
+            .cell_points(c)
+            .map(|i| mesh.points[i as usize])
+            .collect();
+        [0, 1, 2].map(|k| pts.iter().map(|p| p[k]).sum::<f64>() / pts.len() as f64)
+    }
+
+    /// A display of the channel with `regions` (their cells found).
+    fn with_regions(mesh: &Mesh, regions: Vec<crate::Region>, clips: Vec<Clip>) -> Display {
+        let mut d = Display {
+            regions,
+            clips,
+            ..Display::default()
+        };
+        crate::region::ensure(&mut d, mesh);
+        d
+    }
+
+    /// Invariant (large-mesh stage 1b, the maintainer's card 6): a box,
+    /// a slab or a sphere region cutting flat draws a closed surface,
+    /// every edge shared by exactly two polygons, and nothing outside
+    /// the shape: a box's and a slab's corners lie inside every face's
+    /// half-space, a sphere's within the sphere (a cut point on an edge
+    /// is inside, the distance being convex). A slab thinner than the
+    /// channel's cells still draws its cells' sections. Breaks when a
+    /// cell's cut does not close, when a polygon escapes its region's
+    /// clip, or when a thin slab draws nothing.
+    #[test]
+    fn flat_regions_are_closed_and_stay_inside() {
+        use crate::region::{Region, Shape};
+        let m = channel();
+        let b = m.bounds();
+        // Inside the fluid (the channel's middle is its obstacle).
+        let c = cell_mean(&m, m.cell_count() / 3);
+        let r = 0.3 * b.radius();
+        let thin = 1e-3 * b.radius();
+        let flat = |shape: Shape| Region {
+            cut: ClipMode::Flat,
+            ..Region::new(shape)
+        };
+        for shape in [
+            Shape::default_box(&b),
+            Shape::Box {
+                center: c,
+                size: [r, r, 0.5 * thin],
+            },
+            Shape::Sphere {
+                center: c,
+                radius: r,
+            },
+            Shape::Slab {
+                origin: c,
+                normal: [0.6, 0.0, 0.8],
+                thickness: 0.5 * r,
+            },
+            Shape::Slab {
+                origin: c,
+                normal: [0.0, 1.0, 0.0],
+                thickness: thin,
+            },
+        ] {
+            let d = with_regions(&m, vec![flat(shape.clone())], Vec::new());
+            let t = Tokens::builtin().unwrap();
+            let shown = d.shown_cells(&m);
+            let cutter = Cutter::new(&m, &d).expect("a flat region cuts");
+            let polys = polygons(&m, &t, &d, &shown, Some(&cutter));
+            assert!(
+                polys.iter().any(|p| p.group == GROUP_SECTION),
+                "{shape:?} draws sections"
+            );
+            let borders = shape.borders();
+            let tol = 1e-9 * b.radius();
+            for p in &polys {
+                for &v in &p.verts {
+                    let at = cutter.pos(v);
+                    for bd in &borders {
+                        assert!(bd.distance(at) <= tol, "{shape:?}: {at:?} outside");
+                    }
+                }
+            }
+            let uses = edge_uses(&m, &d);
+            let open: Vec<_> = uses.iter().filter(|(_, n)| **n != 2).take(3).collect();
+            assert!(open.is_empty(), "{shape:?}: {open:?}");
+        }
+    }
+
+    /// Invariant: regions cutting differently side by side still draw a
+    /// closed surface: a flat box beside a whole-cell sphere, two flat
+    /// regions overlapping, and a flat region under a flat clip plane;
+    /// every edge is used an even number of times (each way of cutting
+    /// closes its own cells, and the face between two cells cut
+    /// differently is drawn by both). Breaks when the face between a
+    /// clipped cell and a whole one is left out, which opens a hole into
+    /// the whole cell.
+    #[test]
+    fn mixed_regions_are_closed() {
+        use crate::region::{Region, Shape};
+        let m = channel();
+        let b = m.bounds();
+        let c = cell_mean(&m, m.cell_count() / 3);
+        let r = 0.3 * b.radius();
+        let flat = |shape: Shape| Region {
+            cut: ClipMode::Flat,
+            ..Region::new(shape)
+        };
+        let sphere = Shape::Sphere {
+            center: [c[0] + 0.5 * r, c[1], c[2]],
+            radius: r,
+        };
+        let cases = [
+            (
+                "flat box, whole sphere",
+                vec![flat(Shape::default_box(&b)), Region::new(sphere.clone())],
+                Vec::new(),
+            ),
+            (
+                "flat box, flat sphere",
+                vec![flat(Shape::default_box(&b)), flat(sphere.clone())],
+                Vec::new(),
+            ),
+            (
+                "flat sphere, flat clip",
+                vec![flat(sphere.clone())],
+                vec![Clip {
+                    origin: c,
+                    normal: [0.0, 1.0, 0.0],
+                    mode: ClipMode::Flat,
+                    enabled: true,
+                }],
+            ),
+        ];
+        for (name, regions, clips) in cases {
+            let d = with_regions(&m, regions, clips);
+            let uses = edge_uses(&m, &d);
+            assert!(!uses.is_empty(), "{name}");
+            let odd: Vec<_> = uses.iter().filter(|(_, n)| **n % 2 != 0).take(3).collect();
+            assert!(odd.is_empty(), "{name}: {odd:?}");
+        }
     }
 
     /// Invariant: what the viewport draws is a closed surface, every edge

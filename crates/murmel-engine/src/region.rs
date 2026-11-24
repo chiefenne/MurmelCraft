@@ -11,6 +11,19 @@
 //! enabled regions show their union; with none enabled the whole mesh
 //! shows.
 //!
+//! A box, sphere or slab region can cut flat instead (stage 1b, the
+//! maintainer's card 6): its border cells are clipped to the shape and
+//! closed by their sections, as a flat clip plane cuts (Sutherland and
+//! Hodgman 1974). A box is six half-spaces and a slab two, so their cut
+//! is exact, also where the shape is thinner than a cell; a sphere cuts
+//! along its signed distance, the crossing on each edge found by linear
+//! interpolation, so its cut is the sphere to within a cell; a sphere
+//! that holds no node of its cells (smaller than them, between their
+//! nodes) shows whole cells instead, as no edge would cross it. Each
+//! cell is cut by one region: a cell a whole-cell region takes stays
+//! whole, and where flat regions overlap a cell is cut by the one its
+//! centre lies deepest in.
+//!
 //! The halo of a set of cells is the cells outside it that share a point
 //! with it. On a mesh read in pieces the halo is loaded but never drawn,
 //! so node values (inverse distance over the cells around a point) and
@@ -21,6 +34,8 @@ use std::sync::Arc;
 
 use murmel_mesh::{Bounds, Mesh, NO_CELL, par};
 use serde::{Deserialize, Serialize};
+
+use crate::clip::ClipMode;
 
 /// Most regions one mesh keeps.
 pub const MAX_REGIONS: usize = 16;
@@ -140,6 +155,54 @@ impl Shape {
             }
             _ => false,
         }
+    }
+
+    /// Whether the shape can cut flat (box, sphere, slab).
+    pub fn cuts_flat(&self) -> bool {
+        self.is_geometric()
+    }
+
+    /// The borders a flat cut clips to: a box's six faces, a slab's two
+    /// planes, a sphere; none for the sets of cells.
+    pub fn borders(&self) -> Vec<Bound> {
+        match self {
+            Shape::Box { center, size } => {
+                let mut v = Vec::with_capacity(6);
+                for k in 0..3 {
+                    for s in [1.0, -1.0] {
+                        let mut normal = [0.0; 3];
+                        normal[k] = s;
+                        let mut origin = *center;
+                        origin[k] += s * 0.5 * size[k];
+                        v.push(Bound::Plane { origin, normal });
+                    }
+                }
+                v
+            }
+            Shape::Sphere { center, radius } => vec![Bound::Sphere {
+                center: *center,
+                radius: *radius,
+            }],
+            Shape::Slab {
+                origin,
+                normal,
+                thickness,
+            } => [1.0, -1.0]
+                .into_iter()
+                .map(|s| Bound::Plane {
+                    origin: [0, 1, 2].map(|k| origin[k] + s * 0.5 * thickness * normal[k]),
+                    normal: normal.map(|n| s * n),
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// How deep `p` lies in the shape: negative inside, the deeper the
+    /// smaller (the largest of the borders' distances; for a sphere its
+    /// signed distance). Infinite for the sets of cells.
+    pub fn depth(&self, p: [f64; 3]) -> f64 {
+        depth(&self.borders(), p)
     }
 
     /// The box of a box or sphere; `None` for a slab and the sets of
@@ -317,12 +380,52 @@ impl Shape {
     }
 }
 
-/// A region of interest: a shape, on or off (the tree's eye).
+/// A border of a flat region: a plane whose normal points to the side
+/// cut away, or a sphere (the outside cut away).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Bound {
+    Plane { origin: [f64; 3], normal: [f64; 3] },
+    Sphere { center: [f64; 3], radius: f64 },
+}
+
+impl Bound {
+    /// Signed distance of `p` (positive: cut away).
+    pub fn distance(&self, p: [f64; 3]) -> f64 {
+        match self {
+            Bound::Plane { origin, normal } => (0..3).map(|k| (p[k] - origin[k]) * normal[k]).sum(),
+            Bound::Sphere { center, radius } => {
+                (0..3)
+                    .map(|k| (p[k] - center[k]).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+                    - radius
+            }
+        }
+    }
+}
+
+impl From<&crate::Clip> for Bound {
+    fn from(c: &crate::Clip) -> Self {
+        Bound::Plane {
+            origin: c.origin,
+            normal: c.normal,
+        }
+    }
+}
+
+/// A region of interest: a shape, on or off (the tree's eye), cutting
+/// whole cells (crinkle, the default) or flat along its border.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Region {
     pub shape: Shape,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "is_crinkle")]
+    pub cut: ClipMode,
+}
+
+fn is_crinkle(m: &ClipMode) -> bool {
+    *m == ClipMode::Crinkle
 }
 
 impl Region {
@@ -330,7 +433,25 @@ impl Region {
         Self {
             shape,
             enabled: true,
+            cut: ClipMode::Crinkle,
         }
+    }
+
+    /// Whether the region is on and cuts flat.
+    pub fn cuts_flat(&self) -> bool {
+        self.enabled && self.cut == ClipMode::Flat && self.shape.cuts_flat()
+    }
+
+    /// What is wrong with the region on its own: its shape's problem, or
+    /// a flat cut on a set of cells.
+    pub fn problem_alone(&self) -> Option<String> {
+        if self.cut == ClipMode::Flat && !self.shape.cuts_flat() {
+            return Some(format!(
+                "a {} region has no border to cut flat; only box, sphere and slab regions cut flat",
+                self.shape.kind()
+            ));
+        }
+        self.shape.problem_alone()
     }
 }
 
@@ -347,7 +468,20 @@ pub struct RegionCells {
     pub cells: Option<Vec<bool>>,
     /// The union of the enabled regions, with its halo.
     pub union: Estimate,
+    /// By cell: the region that cuts it flat, or [`NOT_CUT`]; `None`
+    /// while no enabled region cuts flat.
+    pub cut_by: Option<Vec<u8>>,
+    /// By region: the borders a flat region cuts along (empty for the
+    /// others).
+    pub borders: Vec<Vec<Bound>>,
+    /// By region: a flat sphere that holds no node of the cells it takes
+    /// (it lies between the nodes), which shows whole cells instead,
+    /// since a cut along its distance would find no crossing.
+    pub whole_instead: Vec<bool>,
 }
+
+/// A cell no region cuts flat.
+pub const NOT_CUT: u8 = u8::MAX;
 
 impl RegionCells {
     /// The regions on `mesh`; `None` when there are none.
@@ -357,17 +491,34 @@ impl RegionCells {
         }
         let mut estimates = Vec::with_capacity(regions.len());
         let mut cells: Option<Vec<bool>> = None;
-        for r in regions {
+        // The cells whole-cell regions take, and each flat region's.
+        let mut whole: Option<Vec<bool>> = None;
+        let mut flat: Vec<(usize, Vec<bool>)> = Vec::new();
+        let mut whole_instead = vec![false; regions.len()];
+        for (k, r) in regions.iter().enumerate() {
             let own = r.shape.cells(mesh);
             estimates.push(Estimate::of(mesh, &own));
-            if r.enabled {
-                match &mut cells {
-                    Some(all) => {
-                        for (a, b) in all.iter_mut().zip(&own) {
-                            *a |= *b;
-                        }
-                    }
-                    None => cells = Some(own),
+            if !r.enabled {
+                continue;
+            }
+            match &mut cells {
+                Some(all) => or_into(all, &own),
+                None => cells = Some(own.clone()),
+            }
+            whole_instead[k] = r.cuts_flat()
+                && matches!(r.shape, Shape::Sphere { .. })
+                && !(0..own.len()).any(|c| {
+                    own[c]
+                        && mesh
+                            .cell_points(c)
+                            .any(|p| r.shape.contains(mesh.points[p as usize]))
+                });
+            if r.cuts_flat() && !whole_instead[k] {
+                flat.push((k, own));
+            } else {
+                match &mut whole {
+                    Some(all) => or_into(all, &own),
+                    None => whole = Some(own),
                 }
             }
         }
@@ -375,12 +526,77 @@ impl RegionCells {
             Some(c) => Estimate::of(mesh, c),
             None => Estimate::default(),
         };
+        let cut_by = (!flat.is_empty()).then(|| {
+            let deep: Vec<Vec<Bound>> = flat
+                .iter()
+                .map(|(k, _)| regions[*k].shape.borders())
+                .collect();
+            par::collect(mesh.cell_count(), 1 << 14, |range| {
+                range
+                    .map(|c| {
+                        if whole.as_ref().is_some_and(|w| w[c]) {
+                            return NOT_CUT;
+                        }
+                        let mut takes = flat.iter().enumerate().filter(|(_, (_, own))| own[c]);
+                        let Some((i, (k, _))) = takes.next() else {
+                            return NOT_CUT;
+                        };
+                        let Some(next) = takes.next() else {
+                            return *k as u8;
+                        };
+                        // Overlapping flat regions: the one the centre
+                        // lies deepest in.
+                        let p = cell_centre(mesh, c);
+                        [(i, *k), (next.0, next.1.0)]
+                            .into_iter()
+                            .chain(takes.map(|(i, (k, _))| (i, *k)))
+                            .map(|(i, k)| (depth(&deep[i], p), k))
+                            .fold((f64::INFINITY, NOT_CUT), |best, (d, k)| {
+                                if d < best.0 || best.1 == NOT_CUT {
+                                    (d, k as u8)
+                                } else {
+                                    best
+                                }
+                            })
+                            .1
+                    })
+                    .collect()
+            })
+        });
+        let borders = regions
+            .iter()
+            .zip(&whole_instead)
+            .map(|(r, &w)| {
+                if r.cuts_flat() && !w {
+                    r.shape.borders()
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
         Some(RegionCells {
             regions: regions.to_vec(),
             estimates,
             cells,
             union,
+            cut_by,
+            borders,
+            whole_instead,
         })
+    }
+
+    /// The borders cell `c` is cut along (none when no region cuts it
+    /// flat).
+    pub fn borders_of(&self, c: usize) -> &[Bound] {
+        match self.cut_by.as_ref().and_then(|v| v.get(c)) {
+            Some(&k) if k != NOT_CUT => &self.borders[k as usize],
+            _ => &[],
+        }
+    }
+
+    /// Whether an enabled region cuts flat.
+    pub fn cuts_flat(&self) -> bool {
+        self.cut_by.is_some()
     }
 
     /// Whether cell `c` shows: in an enabled region, or none is enabled.
@@ -487,6 +703,37 @@ pub fn grow(mesh: &Mesh, mask: &mut [bool], rings: u32) {
         }
         front = next;
     }
+}
+
+/// The largest of the borders' distances of `p` (negative inside all).
+fn depth(borders: &[Bound], p: [f64; 3]) -> f64 {
+    if borders.is_empty() {
+        return f64::INFINITY;
+    }
+    borders
+        .iter()
+        .map(|b| b.distance(p))
+        .fold(f64::NEG_INFINITY, f64::max)
+}
+
+fn or_into(all: &mut [bool], own: &[bool]) {
+    for (a, b) in all.iter_mut().zip(own) {
+        *a |= *b;
+    }
+}
+
+/// The mean of cell `c`'s points.
+fn cell_centre(mesh: &Mesh, c: usize) -> [f64; 3] {
+    let mut sum = [0.0; 3];
+    let mut n: f64 = 0.0;
+    for p in mesh.cell_points(c) {
+        let q = mesh.points[p as usize];
+        for k in 0..3 {
+            sum[k] += q[k];
+        }
+        n += 1.0;
+    }
+    sum.map(|x| x / n.max(1.0))
 }
 
 /// The bounding box of cell `c`.
@@ -606,6 +853,39 @@ mod tests {
         assert!(!slab.contains(lo) && !slab.contains(hi));
         assert!(slab.touches_box(lo, hi));
         assert!(slab.cells(&m)[c]);
+    }
+
+    /// Invariant (stage 1b): a flat sphere inside one cell, with no node
+    /// of the mesh inside it, shows that cell whole instead of cutting it
+    /// to nothing; a flat box there cuts it exactly (its six planes cross
+    /// the cell's edges). Breaks when a small flat sphere makes its
+    /// region vanish.
+    #[test]
+    fn a_flat_sphere_between_nodes_shows_whole_cells() {
+        let m = honeycomb();
+        let c = m.cell_count() / 2;
+        let (lo, hi) = cell_box(&m, c);
+        let mid = [0, 1, 2].map(|k| 0.5 * (lo[k] + hi[k]));
+        let small = 1e-3 * (hi[0] - lo[0]);
+        let flat = |shape: Shape| Region {
+            cut: ClipMode::Flat,
+            ..Region::new(shape)
+        };
+        let sphere = flat(Shape::Sphere {
+            center: mid,
+            radius: small,
+        });
+        let rc = RegionCells::of(&m, &[sphere]).unwrap();
+        assert_eq!(rc.whole_instead, [true]);
+        assert!(rc.contains(c));
+        assert!(rc.borders_of(c).is_empty(), "shown whole");
+        let cube = flat(Shape::Box {
+            center: mid,
+            size: [small; 3],
+        });
+        let rc = RegionCells::of(&m, &[cube]).unwrap();
+        assert_eq!(rc.whole_instead, [false]);
+        assert_eq!(rc.borders_of(c).len(), 6, "cut by the box's faces");
     }
 
     /// Invariant: the halo touches the cells and never overlaps them;
