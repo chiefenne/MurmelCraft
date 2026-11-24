@@ -6,6 +6,7 @@
 
 pub mod animation;
 pub mod camera;
+pub mod checked;
 pub mod clip;
 pub mod colormap;
 pub mod cube;
@@ -48,7 +49,7 @@ pub use measure::{Anchor, MeasureKind, Measurement, Probe, SnapKind};
 pub use navigation::Navigation;
 pub use quality::{Metric, Quality};
 pub use region::{Region, RegionCells, Shape};
-pub use session::{Loaded, OpenMesh, Session, Validity, load, load_with};
+pub use session::{Loaded, OpenMesh, Session, Validity, load, load_checked, load_with};
 pub use session_file::SessionFile;
 pub use stream::{Direction, Look, Seed, Stream};
 pub use surface::Surface;

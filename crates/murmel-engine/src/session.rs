@@ -201,14 +201,16 @@ pub struct Hashing {
 }
 
 impl Hashing {
-    fn start(files: Vec<PathBuf>) -> Hashing {
+    /// Hash `files` on a thread of its own, remembering them in
+    /// `checked` (the settings folder; see [`crate::checked`]).
+    fn start(files: Vec<PathBuf>, checked: Option<PathBuf>) -> Hashing {
         let stop = Arc::new(AtomicBool::new(false));
         let done = Arc::new((Mutex::new(None), Condvar::new()));
         let (s, d) = (stop.clone(), done.clone());
         std::thread::spawn(move || {
             let mut digests = Vec::with_capacity(files.len());
             for f in &files {
-                match murmel_mesh::sha256_file(f, &s) {
+                match crate::checked::sha256(checked.as_deref(), f, &s) {
                     Ok(Some(h)) => digests.push(h),
                     Ok(None) => return,
                     Err(_) => digests.push(String::new()),
@@ -490,9 +492,36 @@ pub fn load(path: &Path) -> Result<Loaded, MeshError> {
 /// empty and the badge checking until the session that opens the mesh has
 /// taken them ([`Hashing`]).
 pub fn load_with(path: &Path, hash: bool) -> Result<Loaded, MeshError> {
+    load_checked(path, hash, None)
+}
+
+/// As [`load_with`], with the files checked before remembered in
+/// `checked` (the settings folder; see [`crate::checked`]): a mesh file
+/// unchanged since it was hashed is read without hashing it again, and
+/// the files hashed now are remembered.
+pub fn load_checked(path: &Path, hash: bool, checked: Option<&Path>) -> Result<Loaded, MeshError> {
+    // A mesh of one file, checked before and unchanged since, is read
+    // without hashing; the stamp tells later whether the digest the
+    // reader takes may be remembered.
+    let (known, before) = match checked {
+        Some(dir) if hash && path.is_file() => (
+            crate::checked::lookup(dir, path),
+            crate::checked::Stamp::of(path),
+        ),
+        _ => (None, None),
+    };
     let t = murmel_mesh::profile::span("open.read");
-    let (mut mesh, results) = murmel_mesh::read_results_with(path, hash)?;
+    let (mut mesh, results) = murmel_mesh::read_results_with(path, hash && known.is_none())?;
     drop(t);
+    let one_file = |mesh: &Mesh| match mesh.files.as_slice() {
+        [f] => std::fs::canonicalize(f).ok() == std::fs::canonicalize(path).ok(),
+        _ => false,
+    };
+    if let Some(d) = &known
+        && one_file(&mesh)
+    {
+        mesh.file_sha256 = vec![d.clone()];
+    }
     let fields = FieldSet::new(results);
     // The evidence sits beside the mesh file: beside the .vtu, or in the
     // polyMesh folder among its files.
@@ -517,12 +546,21 @@ pub fn load_with(path: &Path, hash: bool) -> Result<Loaded, MeshError> {
         .map(|(i, f)| {
             let digest = match mesh.file_sha256.get(i).filter(|d| d.len() == 64) {
                 Some(d) => d.clone(),
-                None if hash => sha256(f),
+                None if hash => crate::checked::sha256(checked, f, &AtomicBool::new(false))
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
                 None => String::new(),
             };
             (file_name(f), digest)
         })
         .collect();
+    // The digest the reader took of a mesh of one file.
+    if let (Some(dir), Some(b), None, [(_, d)]) = (checked, &before, &known, files.as_slice())
+        && one_file(&mesh)
+    {
+        crate::checked::remember(dir, path, b, d);
+    }
     let (digest, validity) = if hash {
         let v = Validity::check(&files, &mesh, evidence.as_ref(), evidence_problem.as_ref());
         (combined(&files), v)
@@ -607,6 +645,10 @@ pub struct Session {
     pub hash_after_open: bool,
     /// The SHA-256 of the open mesh's files being taken.
     pub hashing: Option<Hashing>,
+    /// Remember the SHA-256 of the files hashed in `config_dir`, and take
+    /// it from there for a file unchanged since ([`crate::checked`]; the
+    /// window and the command line).
+    pub remember_checked: bool,
     /// Build the cut of a moving clip plane on a thread of its own (the
     /// window, the user's choice for the clip drag): a change of `display`
     /// that only moves or turns clip planes leaves the surface as it is
@@ -638,6 +680,7 @@ impl Session {
             preloaded: None,
             hash_after_open: false,
             hashing: None,
+            remember_checked: false,
             defer_clips: false,
             preview: None,
         }
@@ -680,6 +723,11 @@ impl Session {
         true
     }
 
+    /// Where the files checked are remembered, if anywhere.
+    pub fn checked_dir(&self) -> Option<&Path> {
+        self.config_dir.as_deref().filter(|_| self.remember_checked)
+    }
+
     pub fn aspect(&self) -> f64 {
         self.viewport[0].max(1.0) / self.viewport[1].max(1.0)
     }
@@ -690,7 +738,7 @@ impl Session {
     pub fn open(&mut self, path: &Path) -> Result<&OpenMesh, MeshError> {
         let loaded = match self.preloaded.take() {
             Some(l) if l.path == path && l.is_fresh() => l,
-            _ => load_with(path, !self.hash_after_open)?,
+            _ => load_checked(path, !self.hash_after_open, self.checked_dir())?,
         };
         Ok(self.install(loaded))
     }
@@ -704,7 +752,8 @@ impl Session {
             h.stop();
         }
         if l.pending {
-            self.hashing = Some(Hashing::start(l.mesh.files.clone()));
+            let dir = self.checked_dir().map(Path::to_path_buf);
+            self.hashing = Some(Hashing::start(l.mesh.files.clone(), dir));
         }
         let base = display_for_new_mesh(&self.display, &l.fields);
         let (display, surface) = match l.prepared.take() {
@@ -1123,6 +1172,85 @@ mod tests {
     /// never lands on the next mesh. A digest put on the wrong mesh would
     /// show green for a file never checked; the window test only checks
     /// that the badge ends up set.
+    /// Invariant: with `remember_checked`, a mesh file hashed once is
+    /// not hashed again while it is unchanged, whether the open hashes it
+    /// at once (the command line) or afterwards (the window), and the
+    /// digest it remembered is still checked against the evidence; a
+    /// changed file, or a session that does not remember, hashes again;
+    /// the files of a polyMesh folder are remembered one by one. Breaks
+    /// when an open skips the list (the iMac waits 17 s again for a 4 M
+    /// cell mesh) or trusts it for a changed file. `checked`'s own tests
+    /// see the list without a session.
+    #[test]
+    fn remembers_checked_files() {
+        use crate::checked::{Stamp, lookup, remember};
+        const FAKE: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let dir = std::env::temp_dir().join(format!("murmel-remember-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Files written a while ago (`checked::SETTLED`).
+        let age = |f: &Path| {
+            let t = SystemTime::now() - Duration::from_secs(3600);
+            let file = std::fs::File::options().write(true).open(f).unwrap();
+            file.set_modified(t).unwrap();
+        };
+        for f in ["foehncraft.vtu", "mesh-evidence.json"] {
+            std::fs::copy(fixture("channel").join(f), dir.join(f)).unwrap();
+            age(&dir.join(f));
+        }
+        let mesh = dir.join("foehncraft.vtu");
+        let list = dir.join("settings");
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = Some(list.clone());
+        s.remember_checked = true;
+
+        let real = s.open(&mesh).unwrap().digest.clone();
+        assert_eq!(real, sha256(&mesh));
+        assert_eq!(lookup(&list, &mesh), Some(real.clone()));
+        // A remembered digest is taken as it is, and checked: one the
+        // evidence does not list fails.
+        remember(&list, &mesh, &Stamp::of(&mesh).unwrap(), FAKE);
+        let m = s.open(&mesh).unwrap();
+        assert_eq!(m.digest, FAKE);
+        assert!(matches!(m.validity, Validity::Failed(_)));
+        // The same after the open, as the window hashes.
+        s.hash_after_open = true;
+        s.open(&mesh).unwrap();
+        s.wait_digest();
+        assert_eq!(s.mesh.as_ref().unwrap().digest, FAKE);
+
+        // Changed: hashed again, and remembered anew.
+        let mut text = std::fs::read(&mesh).unwrap();
+        text.extend_from_slice(b"\n");
+        std::fs::write(&mesh, &text).unwrap();
+        age(&mesh);
+        s.open(&mesh).unwrap();
+        s.wait_digest();
+        let changed = sha256(&mesh);
+        assert_ne!(changed, real);
+        assert_eq!(s.mesh.as_ref().unwrap().digest, changed);
+        assert_eq!(lookup(&list, &mesh), Some(changed.clone()));
+
+        // A session that does not remember hashes every time.
+        remember(&list, &mesh, &Stamp::of(&mesh).unwrap(), FAKE);
+        s.remember_checked = false;
+        s.hash_after_open = false;
+        assert_eq!(s.open(&mesh).unwrap().digest, changed);
+
+        // The files of a polyMesh folder, hashed after the open.
+        s.remember_checked = true;
+        s.hash_after_open = true;
+        let case = fixture("openfoam/box");
+        s.open(&case).unwrap();
+        s.wait_digest();
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.mesh.files.len() > 1);
+        for f in &m.mesh.files {
+            assert_eq!(lookup(&list, f), Some(sha256(f)), "{}", f.display());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn hash_after_open() {
         let mut s = Session::new(Tokens::builtin().unwrap());
