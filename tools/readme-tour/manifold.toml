@@ -3,7 +3,7 @@
 case_format = "0.6"
 
 [mesh]
-file = "manifold-mesh/foehncraft.vtu"
+file = "manifold-mesh/foehncraft.vtkhdf"
 scale = 0.001
 renumber = "rcm"
 
