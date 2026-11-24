@@ -1,0 +1,3 @@
+### Added
+
+- A box, sphere or slab region drawn on a mesh open as an overview (beyond the memory budget) now reads the cells of the blocks it touches, with a hidden halo for the values at its border, and shows what it shows on the mesh read whole. Turn the regions off and the overview shows again. The window reads the blocks in the background: the status bar says how many blocks and cells, and Cancel or Esc stops the read. The model tree's note and Properties tell the blocks shown, and Properties gives a picked cell's number in the file. A region whose blocks need more memory than the budget is refused (BLOCK006). Zone, patch and picked-cell regions need the cells read whole, so an overview refuses them (REGION004).
