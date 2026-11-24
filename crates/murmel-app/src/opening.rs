@@ -87,6 +87,7 @@ impl MurmelApp {
         // them afterwards); a session file needs the digest at once, to
         // tell whether its mesh changed, so its mesh is hashed here.
         let hash = matches!(then, Then::Session(_)) || !self.session.hash_after_open;
+        let checked = self.session.checked_dir().map(std::path::Path::to_path_buf);
         #[cfg(test)]
         let gate = self.opening_gate.take();
         let handle = std::thread::spawn(move || {
@@ -95,7 +96,7 @@ impl MurmelApp {
                 let _ = g.recv();
             }
             profile::watch(watched, || {
-                let mut l = murmel_engine::load_with(&from, hash)?;
+                let mut l = murmel_engine::load_checked(&from, hash, checked.as_deref())?;
                 profile::check()?;
                 l.prepare(&display, &tokens);
                 Ok(l)

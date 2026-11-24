@@ -144,10 +144,12 @@ impl MurmelApp {
         let tokens = Tokens::builtin()?;
         style::install(&cc.egui_ctx, &tokens);
         let mut session = Session::new(tokens);
-        // The window opens a mesh first and hashes its files afterwards,
+        // The window opens a mesh first and hashes its files afterwards
+        // (remembering them, so an unchanged file is not hashed again),
         // and a clip plane being dragged is cut on the GPU while the exact
         // cut is built on a thread of its own.
         session.hash_after_open = true;
+        session.remember_checked = true;
         session.defer_clips = true;
         let mut error = None;
         if let Some(dir) = settings::config_dir() {

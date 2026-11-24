@@ -594,3 +594,44 @@ ms, one thread), finding the cells shown and crossed (two walks over
 every cell's points, about 190 ms on all threads, which one walk could
 do), and the clip's distances, worked out twice (once for the cells
 shown and once for the cutter).
+
+## Remembering checked files (2026-11-24)
+
+On the iMac, the SHA-256 of a 4 M cell ascii `.vtu` (5 GB) takes 17 s
+after the mesh shows: its Core i9 has no SHA instructions, and SHA-256
+cannot be split over threads. The user's choice for it: remember the
+files already checked now, and hash with BLAKE3 in all three projects
+later.
+
+The window and the command line remember the SHA-256 of every mesh file
+they hash in `checked-files.json` in the settings folder
+(`murmel_engine::checked`). A file opened again with the same size and
+modification time, and on Unix the same change time and file id
+(device and inode), is not hashed again: its digest comes from the list
+and is checked against the evidence as before. Writing to a file
+changes its times, replacing it changes its id, and setting its
+modification time back by hand changes its change time, which programs
+cannot set. A file written while it was hashed is not remembered, nor
+one modified less than 3 s before: written again within the same tick
+of its file system's clock (2 s on FAT) at the same size, it would look
+unchanged. The list keeps the 500 files checked last; it is a cache,
+so a list that cannot be read or written means only that files are
+hashed again. The MCP server's headless sessions and `murmel bench` do
+not use it.
+
+- **The window** (hash after the open): for a file opened again, the
+  badge turns from *Checking* to its colour as soon as the mesh shows,
+  instead of 17 s later at 4 M cells on the iMac, and saving a session
+  no longer waits.
+- **The command line** (`murmel call mesh.open`, hash while reading): a
+  `.vtu` or `.vtkhdf` file is read without hashing, so the open is the
+  parsing alone. The files of a polyMesh folder are still hashed while
+  reading there; the window remembers them one by one.
+
+Here (4 threads, SHA instructions, 1 GB/s), `murmel call mesh.open` of
+the 4 M cell `.vtu` takes 8.2 s the first time and 7.2 s again. On the
+iMac the hash sets the pace instead: its benchmark read the same mesh in
+20.2 s while hashing and opened it in 5.3 s without, so opening it again
+from the command line should take about 5 s instead of 20 s, and in the
+window the badge should be final when the mesh shows instead of 17 s
+later (estimates from the iMac's benchmark of 2026-11-24).

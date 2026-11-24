@@ -48,11 +48,15 @@ const USAGE: &str = "Usage: murmel COMMAND
 Example: a headless screenshot of a KoflCraft mesh
   murmel call view.screenshot --input '{\"mesh\": \"foehncraft.vtu\", \"view\": \"iso\", \"path\": \"shot.png\"}'
 
-Settings are read from MURMEL_CONFIG_DIR or the platform's config folder.";
+Settings are read from MURMEL_CONFIG_DIR or the platform's config folder. The
+SHA-256 of each mesh file hashed is remembered there (checked-files.json), so
+a file opened again unchanged is not hashed again.";
 
 fn session() -> Result<Session, String> {
     let tokens = Tokens::builtin()?;
     let mut s = Session::new(tokens);
+    // A mesh file hashed before and unchanged since is not hashed again.
+    s.remember_checked = true;
     if let Some(dir) = settings::config_dir() {
         let (st, nav, problems) = settings::load(&dir, cfg!(target_os = "macos"));
         for p in problems {
