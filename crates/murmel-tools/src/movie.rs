@@ -199,6 +199,8 @@ struct ExportMovie {
     legend: bool,
     #[serde(default = "yes")]
     axes: bool,
+    /// The time and step label; left out, on for motion series.
+    time: Option<bool>,
     line_width: Option<f64>,
     theme: Option<Theme>,
 }
@@ -867,6 +869,7 @@ pub fn export_movie(input: Value, s: &mut Session) -> Run {
         transparent: i.transparent,
         legend: i.legend,
         axes: i.axes,
+        time: i.time.unwrap_or(i.motion == Motion::Series),
         line_width: export::line_width(i.line_width, scale)?,
     };
     let p = progress();
@@ -939,6 +942,7 @@ pub fn export_movie(input: Value, s: &mut Session) -> Run {
         "transparent": i.transparent,
         "legend": i.legend,
         "axes": i.axes,
+        "time": look.time && s.series.is_some(),
         "adapter": adapter,
         "camera": camera_json(s),
     }))
@@ -966,6 +970,7 @@ pub fn export_movie_schema() -> Value {
             "transparent": {"type": "boolean", "default": false, "description": "Leave the background out (GIF and PNG frames only)"},
             "legend": {"type": "boolean", "default": true, "description": "Draw the colour legend (top left)"},
             "axes": {"type": "boolean", "default": true, "description": "Draw the axis triad (bottom left)"},
+            "time": {"type": "boolean", "description": "Draw the time and step of the series' step shown, bottom right (default: on for motion series, else off; nothing without a series)"},
             "theme": {"enum": ["dark", "light", "system"]},
             "line_width": {"type": "number", "minimum": 1, "maximum": 32, "description": "Edge width in pixels (default: the scale)"}
         }),

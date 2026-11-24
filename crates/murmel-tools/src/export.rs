@@ -39,6 +39,8 @@ struct ExportImage {
     legend: bool,
     #[serde(default = "yes")]
     axes: bool,
+    #[serde(default)]
+    time: bool,
     dpi: Option<f64>,
     theme: Option<Theme>,
     line_width: Option<f64>,
@@ -106,6 +108,8 @@ pub struct Look {
     pub transparent: bool,
     pub legend: bool,
     pub axes: bool,
+    /// The time and step of the open series, bottom right.
+    pub time: bool,
     pub line_width: f64,
 }
 
@@ -133,10 +137,12 @@ pub fn draw_overlays(
     } else {
         Vec::new()
     };
+    let caption = look.time.then(|| crate::series::caption(s, i18n)).flatten();
     let o = Overlays {
         legend: legend.as_ref(),
         own_bars: &own,
         triad: look.axes.then_some(&s.camera),
+        caption: caption.as_deref(),
         i18n,
         tokens: &s.tokens,
         dark: s.theme.is_dark(None),
@@ -170,6 +176,7 @@ pub fn export_image(input: Value, s: &mut Session) -> Run {
         transparent: i.transparent,
         legend: i.legend,
         axes: i.axes,
+        time: i.time,
         line_width,
     };
     let i18n = i18n()?;
@@ -196,6 +203,7 @@ pub fn export_image(input: Value, s: &mut Session) -> Run {
         "transparent": i.transparent,
         "legend": i.legend,
         "axes": i.axes,
+        "time": i.time && s.series.is_some(),
         "dpi": i.dpi,
         "adapter": shot.adapter,
         "camera": camera_json(s),
@@ -212,6 +220,7 @@ pub fn export_image_schema() -> Value {
             "transparent": {"type": "boolean", "default": false, "description": "Leave the background out (alpha 0)"},
             "legend": {"type": "boolean", "default": true, "description": "Draw the colour legend (top left)"},
             "axes": {"type": "boolean", "default": true, "description": "Draw the axis triad (bottom left)"},
+            "time": {"type": "boolean", "default": false, "description": "Draw the time and step of the open time series (bottom right); nothing without a series"},
             "dpi": {"type": "number", "minimum": 1, "maximum": 10000, "description": "Resolution stored in the PNG (pHYs), for print"},
             "theme": {"enum": ["dark", "light", "system"]},
             "line_width": {"type": "number", "minimum": 1, "maximum": 32, "description": "Edge width in pixels (default: the scale)"}

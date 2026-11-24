@@ -45,6 +45,10 @@ pub struct Overlays<'a> {
     pub own_bars: &'a [Legend],
     /// The camera whose axes the triad shows (bottom left).
     pub triad: Option<&'a Camera>,
+    /// A line of text in a panel at the bottom right: the time and step
+    /// of a time series (the maintainer's card of 2026-11-24, "Time
+    /// label, optional").
+    pub caption: Option<&'a str>,
     pub i18n: &'a I18n,
     pub tokens: &'a Tokens,
     pub dark: bool,
@@ -54,7 +58,10 @@ pub struct Overlays<'a> {
 
 impl Overlays<'_> {
     pub fn is_empty(&self) -> bool {
-        self.legend.is_none() && self.own_bars.is_empty() && self.triad.is_none()
+        self.legend.is_none()
+            && self.own_bars.is_empty()
+            && self.triad.is_none()
+            && self.caption.is_none()
     }
 }
 
@@ -100,6 +107,14 @@ pub fn draw(rgba: &mut [u8], width: u32, height: u32, o: &Overlays<'_>) -> Resul
     }
     if let Some(cam) = o.triad {
         p.triad(cam, o.tokens, height as f64 / p.scale);
+    }
+    if let Some(text) = o.caption.filter(|t| !t.is_empty()) {
+        p.caption(
+            text,
+            palette,
+            width as f64 / p.scale,
+            height as f64 / p.scale,
+        );
     }
     premultiply(rgba);
     let target = PixmapMut::new(w, h, rgba)
@@ -345,6 +360,34 @@ impl Painter<'_> {
             self.text(l, SMALL, bx1 + 8.0, yy + cap / 2.0, ink);
         }
         width
+    }
+
+    /// One line of `text` in a panel inset from the bottom right corner
+    /// as the legend is from the top left, in a picture `width` x
+    /// `height` points.
+    fn caption(
+        &mut self,
+        text: &str,
+        palette: &murmel_engine::theme::Palette,
+        width: f64,
+        height: f64,
+    ) {
+        let pad = 10.0;
+        let w = self.text_width(text, TEXT) + 2.0 * pad;
+        let h = 1.2 * TEXT as f64 + 2.0 * pad - 6.0;
+        let (x1, y1) = (width - LEGEND_AT.0, height - LEGEND_AT.1);
+        self.rounded(
+            Rect::new(x1 - w, y1 - h, x1, y1),
+            6.0,
+            paint(palette.bg_panel, PANEL_ALPHA),
+        );
+        self.label(
+            text,
+            TEXT,
+            x1 - w + pad,
+            y1 - h + pad - 3.0,
+            paint(palette.text_primary, 1.0),
+        );
     }
 
     /// The window's axis triad: 28 points long from 48 points inside the

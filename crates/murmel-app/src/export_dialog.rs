@@ -75,6 +75,8 @@ pub struct ExportDialog {
     pub custom: [u32; 2],
     pub legend: bool,
     pub axes: bool,
+    /// The time and step of the open series, bottom right.
+    pub time: bool,
     pub transparent: bool,
     /// Resolution stored in the PNG; `None` stores none (screen).
     pub dpi: Option<u32>,
@@ -92,6 +94,7 @@ impl Default for ExportDialog {
             custom: [1920, 1080],
             legend: true,
             axes: true,
+            time: true,
             transparent: false,
             dpi: None,
             last: None,
@@ -106,6 +109,7 @@ impl ExportDialog {
         let mut v = json!({
             "legend": self.legend,
             "axes": self.axes,
+            "time": self.time,
             "transparent": self.transparent,
         });
         self.size.put(&mut v, self.custom);
@@ -210,6 +214,9 @@ impl MurmelApp {
                 ui.add_space(4.0);
                 ui.checkbox(&mut ed.legend, self.i18n.tr("export-legend"));
                 ui.checkbox(&mut ed.axes, self.i18n.tr("export-axes"));
+                if self.session.series.is_some() {
+                    ui.checkbox(&mut ed.time, self.i18n.tr("export-time"));
+                }
                 ui.checkbox(&mut ed.transparent, self.i18n.tr("export-transparent"));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {

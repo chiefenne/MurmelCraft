@@ -51,6 +51,34 @@ pub(crate) fn series_json(s: &Session) -> Value {
     })
 }
 
+/// A time in seconds as a caption shows it: up to six decimals, without
+/// trailing zeros (0.25, 1.5, 0.000125), large and tiny times in
+/// scientific notation.
+pub fn time_text(t: f64) -> String {
+    let a = t.abs();
+    if a != 0.0 && !(1e-4..1e6).contains(&a) {
+        return format!("{t:.4e}");
+    }
+    let s = format!("{t:.6}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".into() } else { s.to_string() }
+}
+
+/// The caption of the step shown, as exported pictures and movies draw
+/// it: "t = 0.25 s · step 50", or "Step 50" without a time; `None`
+/// without a series.
+pub fn caption(s: &Session, i18n: &murmel_engine::i18n::I18n) -> Option<String> {
+    let r = s.series.as_ref()?;
+    let step = (r.entry().step as i64).into();
+    Some(match shown_time(s) {
+        Some(t) => i18n.tr_args(
+            "export-caption-time",
+            &[("time", time_text(t).into()), ("step", step)],
+        ),
+        None => i18n.tr_args("export-caption-step", &[("step", step)]),
+    })
+}
+
 /// The time of the step shown: the manifest's, else the parcel file's,
 /// else the fields file's.
 pub fn shown_time(s: &Session) -> Option<f64> {
