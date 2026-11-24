@@ -205,7 +205,7 @@ impl MurmelApp {
         let range = self.session.field_range();
         self.style_menu(ui, &st, range, true, &mut calls);
         for (tool, mut input) in calls {
-            if tool == "field.style" {
+            if tool == "field.style" || tool == "settings.set_default" {
                 input["field"] = json!(name);
             }
             self.call(tool, input);
@@ -364,6 +364,24 @@ impl MurmelApp {
         ui.separator();
         if ui.button(self.i18n.tr("field-reset")).clicked() {
             calls.push(("field.style", json!({"reset": true})));
+        }
+        // Your default: fields shown for the first time start from this
+        // colouring (its field is filled in by the caller).
+        if ui
+            .button(self.i18n.tr("field-save-default"))
+            .on_hover_text(self.i18n.tr("field-save-default-tip"))
+            .clicked()
+        {
+            calls.push(("settings.set_default", json!({"kind": "field_style"})));
+        }
+        if self
+            .session
+            .defaults
+            .of(murmel_engine::defaults::Kind::FieldStyle)
+            .is_some()
+            && ui.button(self.i18n.tr("field-forget-default")).clicked()
+        {
+            calls.push(("settings.reset_default", json!({"kind": "field_style"})));
         }
     }
 }

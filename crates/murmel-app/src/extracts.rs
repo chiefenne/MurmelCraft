@@ -236,6 +236,10 @@ impl MurmelApp {
                                 ui.close();
                             }
                         }
+                        ui.separator();
+                        if let Some(a) = self.default_entries(ui, item, &[]) {
+                            action = Some(a);
+                        }
                     });
                     if moved {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -316,6 +320,9 @@ impl MurmelApp {
                             ui.close();
                         }
                         ui.separator();
+                        if let Some(a) = self.default_entries(ui, item, &[]) {
+                            action = Some(a);
+                        }
                         if ui.button(self.i18n.tr("tree-iso-remove")).clicked() {
                             action = Some(("iso.clear", json!({ "iso": n })));
                             ui.close();
@@ -420,6 +427,9 @@ impl MurmelApp {
                             ui.close();
                         }
                         ui.separator();
+                        if let Some(a) = self.default_entries(ui, item, &[]) {
+                            action = Some(a);
+                        }
                         if ui.button(self.i18n.tr("tree-arrows-remove")).clicked() {
                             action = Some(("arrows.clear", json!({})));
                             ui.close();
@@ -440,6 +450,11 @@ impl MurmelApp {
                         )
                         .on_hover_text(self.i18n.tr("tree-arrows-density-tip"));
                     r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name.clone()));
+                    r.context_menu(|ui| {
+                        if let Some(a) = self.default_entries(ui, Item::Arrows, &["density"]) {
+                            action = Some(a);
+                        }
+                    });
                     if n != a.density {
                         action = Some(("arrows.set", json!({ "density": n })));
                     }
@@ -455,6 +470,11 @@ impl MurmelApp {
                         )
                         .on_hover_text(self.i18n.tr("tree-arrows-scale-tip"));
                     r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name.clone()));
+                    r.context_menu(|ui| {
+                        if let Some(a) = self.default_entries(ui, Item::Arrows, &["scale"]) {
+                            action = Some(a);
+                        }
+                    });
                     if x != a.scale && x > 0.0 {
                         action = Some(("arrows.set", json!({ "scale": x })));
                     }
@@ -526,6 +546,11 @@ impl MurmelApp {
                         let look = if faces { "faces" } else { "outline" };
                         action = Some(("display.mesh_look", json!({ "look": look })));
                     }
+                    r.context_menu(|ui| {
+                        if let Some(a) = self.view_default_entries(ui, "mesh_look") {
+                            action = Some(a);
+                        }
+                    });
                 });
             }
         });

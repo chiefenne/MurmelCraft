@@ -215,6 +215,12 @@ const OWN: &[Code] = &[
         fix: Some("Give each gesture, button and modifier combination one action."),
     },
     Code {
+        code: "SET003",
+        severity: Severity::Error,
+        meaning: "A value cannot be a default: its kind has no such value, it does not fit, or it belongs to one mesh or field.",
+        fix: Some("settings.get lists the values each kind can keep as a default (defaultable)."),
+    },
+    Code {
         code: "EXPORT001",
         severity: Severity::Error,
         meaning: "An export setting is out of range (scale, line width, dpi).",

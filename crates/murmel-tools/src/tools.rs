@@ -600,6 +600,7 @@ fn display_color_by(input: Value, s: &mut Session) -> Run {
     let i: ColorByInput = parse(input)?;
     if i.by == ColorBy::Field {
         let choice = field_choice(s, i.field.as_deref(), i.component)?;
+        crate::defaults::adopt_style(s, &choice.name);
         s.display.field = Some(choice);
     } else if i.field.is_some() || i.component.is_some() {
         return Err(Diagnostic::new(
@@ -1011,11 +1012,17 @@ fn clip_set(input: Value, s: &mut Session) -> Run {
     } else {
         plane_index(s, i.plane)?
     };
-    let mut c = at.map(|k| s.display.clips[k]).unwrap_or(Clip {
-        origin: bounds.center(),
-        normal: [1.0, 0.0, 0.0],
-        mode: ClipMode::Crinkle,
-        enabled: true,
+    let mut c = at.map(|k| s.display.clips[k]).unwrap_or_else(|| {
+        crate::defaults::fresh(
+            s,
+            murmel_engine::defaults::Kind::Clip,
+            Clip {
+                origin: bounds.center(),
+                normal: [1.0, 0.0, 0.0],
+                mode: ClipMode::Crinkle,
+                enabled: true,
+            },
+        )
     });
     if let Some(a) = i.axis {
         // The half nearer the eye is cut away, so the cut faces the
@@ -1197,7 +1204,7 @@ fn settings_set_theme(input: Value, s: &mut Session) -> Run {
 
 /// Write settings.toml from the session (theme, mesh colours, view cube), so one
 /// setting never drops another.
-fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> {
+pub(crate) fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> {
     let dir = config_dir(s)?;
     save_settings(
         &dir,
@@ -1206,6 +1213,7 @@ fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> {
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
             agents: Agents { enabled: s.agents },
+            defaults: s.defaults.clone(),
             ..Settings::default()
         },
     )
@@ -1365,6 +1373,8 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
         "view_cube": s.view_cube,
         "agents": {"enabled": s.agents},
         "presets": PRESETS,
+        "defaults": s.defaults,
+        "defaultable": crate::defaults::defaultable(),
         "config_dir": s.config_dir,
     }))
 }
@@ -2014,8 +2024,13 @@ fn field_style(input: Value, s: &mut Session) -> Run {
         ));
     }
     let bad = |m: String| Err(Diagnostic::new("FIELD004", m));
+    // Reset goes back to your default style.
     let mut st = if i.reset {
-        FieldStyle::default()
+        crate::defaults::fresh(
+            s,
+            murmel_engine::defaults::Kind::FieldStyle,
+            FieldStyle::default(),
+        )
     } else {
         s.display
             .field_styles
@@ -2194,6 +2209,8 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("settings.set_view_cube", "settings are files, not undone"),
     ("settings.set_agents", "settings are files, not undone"),
     ("settings.set_bindings", "settings are files, not undone"),
+    ("settings.set_default", "settings are files, not undone"),
+    ("settings.reset_default", "settings are files, not undone"),
     ("journal.undo", "walks the journal"),
     ("journal.redo", "walks the journal"),
     ("journal.group", "groups the steps"),
@@ -3086,7 +3103,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-settings-get",
-        summary: "The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets and the config folder.",
+        summary: "The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets, your defaults for new items (and which values of each kind can be defaults) and the config folder.",
         outputs: &[],
         reads: &[],
         input_schema: no_input,
@@ -3171,6 +3188,28 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: || object(json!({"enabled": {"type": "boolean"}}), &["enabled"]),
         run: settings_set_agents,
+    },
+    Tool {
+        id: "settings.set_default",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-set-default",
+        summary: "Keep values as your defaults: new items of their kind start from them (arrows, slice, iso, stream, clip, region), a field shown for the first time takes the default field style (field_style), and the window starts with the default view (view: render_mode, mesh_look, projection); items already open keep theirs. Either kind with values ({\"density\": 60}), or item (an item's id, such as arrows or slice:1) with keys to take from it (left out: every value its kind can keep), or kind view or field_style (with field, else the field shown) to take the values now. Only an item's look, density, count and modes can be defaults, never where it is or its field (settings.get lists them per kind); a value at its built-in default forgets the default. Writes settings.toml in the config folder.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::defaults::set_default_schema,
+        run: crate::defaults::settings_set_default,
+    },
+    Tool {
+        id: "settings.reset_default",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-reset-default",
+        summary: "Forget your defaults: one value (kind and key), every value of a kind (kind), or all (no input), so new items start from the built-in values again. Items already open keep theirs. Writes settings.toml in the config folder.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::defaults::reset_default_schema,
+        run: crate::defaults::settings_reset_default,
     },
     Tool {
         id: "settings.set_bindings",

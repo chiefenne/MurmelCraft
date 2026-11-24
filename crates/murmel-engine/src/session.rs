@@ -593,6 +593,8 @@ pub struct Session {
     pub agents: bool,
     /// Where settings tools write; `None` disables them.
     pub config_dir: Option<PathBuf>,
+    /// Where new items start (`settings.set_default`, settings.toml).
+    pub defaults: crate::defaults::Defaults,
     /// The undo and redo steps of the open mesh.
     pub journal: Journal,
     /// A mesh read in advance (the window reads a large one on a thread
@@ -631,6 +633,7 @@ impl Session {
             surface_revision: 0,
             agents: true,
             config_dir: crate::settings::config_dir(),
+            defaults: crate::defaults::Defaults::default(),
             journal: Journal::default(),
             preloaded: None,
             hash_after_open: false,
