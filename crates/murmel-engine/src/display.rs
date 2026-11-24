@@ -1084,8 +1084,11 @@ fn padded(mut b: Bounds, mesh: &Mesh) -> Bounds {
 /// cell types it has, patches.
 pub fn all_items(mesh: &Mesh) -> Vec<Item> {
     let mut v: Vec<Item> = (0..mesh.zones.len() as u32).map(Item::Zone).collect();
+    // The kinds the mesh has, from its counts (taken once), not a scan
+    // of the cells: the tree and the legend list the items every frame.
+    let kinds = &mesh.summary().cell_kinds;
     for k in CellKind::ALL {
-        if mesh.cell_kind.contains(&k) {
+        if kinds.contains_key(k.name()) {
             v.push(Item::Kind(k));
         }
     }

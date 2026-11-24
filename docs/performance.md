@@ -38,6 +38,7 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `surface.cell_type` | colour by cell type |
 | `surface.feature_edges` | render mode 4 (feature edges found on the surface) |
 | `quality` | the cell quality metrics (colour by quality) |
+| `tree.frame` | what the model tree and the legend ask of the mesh on each frame (counts, items), median of 5 |
 | `pick.9` | nine picks over the iso view (the hover tooltip, a click, snapping) |
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
 
@@ -273,3 +274,32 @@ At 4 M cells the default surface now spends about 110 ms choosing faces,
 the edge set. With 8 cores (the iMac) quality should take well under a
 second at 4 M cells (estimate). Picking (30 ms a pick at 4 M cells) and
 the clip modes' cutting are next.
+
+## Nothing per frame walks the mesh; picking with boxes (2026-11-24)
+
+- **Model tree and legend.** Each frame they asked the mesh for its
+  counts (`Mesh::summary`: cells by kind, zone and patch, and the bounds)
+  and for its items (`all_items`, which looked through every cell for
+  each cell type). At 4 M cells that was 49 ms a frame, so the window
+  could not draw faster than about 20 frames a second while the tree
+  showed. The counts and bounds are now taken once and kept in the mesh;
+  the items come from the counts.
+- **Picking** walked every triangle of the surface (Möller and
+  Trumbore) for each pick, and the measure tool snaps with a pick on
+  every pointer move. The surface now keeps a box around each run of 128
+  triangles (`Surface::tri_boxes`, filled on all threads at the end of a
+  build, 12 ms at 4 M cells); the ray is tested against the boxes first
+  (slab test, Kay and Kajiya 1986) and only against the triangles of the
+  boxes it passes through nearer than the best hit so far. The hit is the
+  same as before (a test compares both over a grid of rays, views and
+  clip modes). The triangles come in face order, so a run covers a small
+  patch of the surface; a hierarchy over the boxes (a BVH) would help
+  further only if picks again show up in a frame.
+
+polyMesh binary, same machine (4 threads). "was" is main at 6e49af0.
+
+| | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| tree.frame, ms per frame | 0.0 (10.2) | 0.0 (49.3) |
+| pick.9, ms for nine picks | 1.1 (72.3) | 2.5 (330.6) |
+| surface.boxes, ms (new) | 7 | 12 |

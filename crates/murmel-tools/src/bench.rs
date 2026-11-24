@@ -221,6 +221,7 @@ pub fn surface_bytes(s: &Surface) -> usize {
         + s.indices.len() * 4
         + (s.tri_cell.len() + s.tri_face.len()) * 4
         + s.edge_positions.len() * 24
+        + s.tri_boxes.len() * 24
         + s.outline.len() * 12
 }
 
@@ -318,6 +319,11 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
         st.note(surface_note(&s));
     }
     st.time("quality", r, || Quality::compute(&mesh));
+    // What the model tree and the legend ask of the mesh on every frame
+    // (counts, the items to list), after the first frame.
+    let tree_frame = || mesh.summary().cells + murmel_engine::display::all_items(&mesh).len();
+    tree_frame();
+    st.time("tree.frame", r.max(5), tree_frame);
 
     let mut cam = Camera::default();
     cam.set_standard(StandardView::ISO);

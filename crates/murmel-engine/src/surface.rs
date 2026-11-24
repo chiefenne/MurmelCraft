@@ -36,6 +36,9 @@ use crate::theme::{Rgb, Tokens};
 const GROUP_OPEN: u32 = u32::MAX - 1;
 const GROUP_SECTION: u32 = u32::MAX - 2;
 
+/// Triangles per pick box ([`Surface::tri_boxes`]).
+pub const PICK_RUN: usize = 128;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Surface {
     pub origin: [f64; 3],
@@ -68,6 +71,11 @@ pub struct Surface {
     /// [`NO_CELL`] for a section). Picking reads these.
     pub tri_cell: Vec<u32>,
     pub tri_face: Vec<u32>,
+    /// The box (smallest and largest corner, relative to `origin`) of
+    /// each run of [`PICK_RUN`] triangles in `indices`, so a pick tests
+    /// only the runs its ray passes through ([`crate::pick`]). Triangles
+    /// come in face order, so a run covers a small patch of the surface.
+    pub tri_boxes: Vec<[[f32; 3]; 2]>,
     /// Edge line vertices, two per edge, with their linear colour.
     pub edge_positions: Vec<[f32; 3]>,
     pub edge_colors: Vec<[f32; 3]>,
@@ -639,8 +647,37 @@ impl Surface {
                 s.outline.push([0, 1, 2].map(|k| (p[k] - origin[k]) as f32));
             }
         }
+        drop(_phase);
+        let _phase = murmel_mesh::profile::span("surface.boxes");
+        s.tri_boxes = tri_boxes(&s.positions, &s.indices);
         s
     }
+}
+
+/// The box of each run of [`PICK_RUN`] triangles, runs split over the
+/// threads.
+fn tri_boxes(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[[f32; 3]; 2]> {
+    let tris = indices.as_chunks::<3>().0;
+    let runs = tris.len().div_ceil(PICK_RUN);
+    murmel_mesh::par::collect(runs, 1 << 10, |r| {
+        r.map(|k| {
+            let mut lo = [f32::INFINITY; 3];
+            let mut hi = [f32::NEG_INFINITY; 3];
+            let end = ((k + 1) * PICK_RUN).min(tris.len());
+            for tri in &tris[k * PICK_RUN..end] {
+                for &i in tri {
+                    if let Some(p) = positions.get(i as usize) {
+                        for d in 0..3 {
+                            lo[d] = lo[d].min(p[d]);
+                            hi[d] = hi[d].max(p[d]);
+                        }
+                    }
+                }
+            }
+            [lo, hi]
+        })
+        .collect()
+    })
 }
 
 /// The smallest and largest of the values added.
