@@ -381,7 +381,6 @@ fn predicted(
 }
 
 /// Scalar `c` of a field whose entities have the values `comps` (one
-/// list per component)./// Scalar `c` of a field whose entities have the values `comps` (one
 /// list per component).
 fn combine(comps: &[Vec<f64>], i: usize, c: Component) -> f64 {
     let at = |k: usize| {
@@ -432,6 +431,9 @@ pub struct FieldSet {
     /// Values made once per field and component (colour mode field and
     /// every iso-surface ask for them again on each redraw).
     cache: ValueCache,
+    /// How each derived field was made, in the order they were added
+    /// ([`crate::derive`]); its fields are in `results` with the file's.
+    derived: Vec<crate::derive::Recipe>,
 }
 
 impl FieldSet {
@@ -441,6 +443,130 @@ impl FieldSet {
             topology: OnceLock::new(),
             grid: OnceLock::new(),
             cache: ValueCache::default(),
+            derived: Vec::new(),
+        }
+    }
+
+    /// How derived field `name` was made; `None` for a field of the file.
+    pub fn recipe(&self, name: &str) -> Option<&crate::derive::Recipe> {
+        self.derived.iter().find(|r| r.field() == name)
+    }
+
+    /// The recipes of the derived fields, in the order they were added.
+    pub fn recipes(&self) -> &[crate::derive::Recipe] {
+        &self.derived
+    }
+
+    /// This set with the derived `fields` made by `recipe` in place of
+    /// any it made before (the mesh's topology is shared, the values
+    /// computed of other fields kept).
+    pub(crate) fn with_derived(
+        &self,
+        fields: Vec<Field>,
+        recipe: crate::derive::Recipe,
+    ) -> FieldSet {
+        let name = recipe.field();
+        let mut out = self.without(name);
+        match out.derived.iter_mut().find(|r| r.field() == name) {
+            Some(r) => *r = recipe,
+            None => out.derived.push(recipe),
+        }
+        out.results.fields.extend(fields);
+        out
+    }
+
+    /// This set without derived field `name`; `None` when it has no such
+    /// derived field.
+    pub(crate) fn without_derived(&self, name: &str) -> Option<FieldSet> {
+        self.recipe(name)?;
+        let mut out = self.without(name);
+        out.derived.retain(|r| r.field() != name);
+        Some(out)
+    }
+
+    /// A copy without the fields called `name` and their cached values.
+    fn without(&self, name: &str) -> FieldSet {
+        let mut out = self.clone();
+        out.results.fields.retain(|f| f.name != name);
+        let kept: HashMap<(String, Component), Arc<FieldValues>> = self
+            .cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|((n, _), _)| n != name)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        out.cache = Arc::new(Mutex::new(kept));
+        out
+    }
+
+    /// The velocity gradient Gᵢⱼ = ∂uᵢ/∂xⱼ in every cell of the vector
+    /// field `f`: for a cell field the least-squares gradient of each
+    /// component (with its values on the boundary faces when the file
+    /// has them), for a node field each cell's own fit to its nodes
+    /// about their mean, exact for a field linear in space. `None` for a
+    /// field on the boundary faces alone or one that does not fit.
+    pub(crate) fn velocity_gradient(&self, mesh: &Mesh, f: &Field) -> Option<Vec<[[f64; 3]; 3]>> {
+        if !f.is_vector() || !Self::fits(f, mesh) {
+            return None;
+        }
+        let t = self.topology(mesh);
+        let comps = components(f);
+        let n = mesh.cell_count();
+        match f.location {
+            Location::Cell => {
+                let twin = self.boundary_twin(mesh, f);
+                let g: Vec<Vec<[f64; 3]>> = comps
+                    .iter()
+                    .enumerate()
+                    .map(|(j, v)| {
+                        let b = twin.as_ref().and_then(|b| b.get(j));
+                        crate::gradient::cell_gradients(
+                            mesh,
+                            &t.centre,
+                            v,
+                            b.map(|b| (b.as_slice(), t.face_centre.as_slice())),
+                            &|c, out| t.near(c, out),
+                        )
+                    })
+                    .collect();
+                Some(
+                    (0..n)
+                        .map(|c| [0, 1, 2].map(|i| g[i].get(c).copied().unwrap_or([0.0; 3])))
+                        .collect(),
+                )
+            }
+            Location::Point => Some(
+                murmel_mesh::par::map(n, 4096, |r| {
+                    r.map(|c| {
+                        let nodes = t.nodes_of(c);
+                        let k = nodes.len().max(1) as f64;
+                        let x = [0, 1, 2].map(|d| {
+                            nodes
+                                .iter()
+                                .map(|&p| mesh.points[p as usize][d])
+                                .sum::<f64>()
+                                / k
+                        });
+                        [0, 1, 2].map(|i| {
+                            let v = &comps[i];
+                            let mean = nodes.iter().map(|&p| v[p as usize]).sum::<f64>() / k;
+                            crate::gradient::fit(
+                                x,
+                                mean,
+                                nodes
+                                    .iter()
+                                    .map(|&p| (mesh.points[p as usize], v[p as usize])),
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                })
+                .into_iter()
+                .flatten()
+                .collect(),
+            ),
+            Location::Boundary => None,
         }
     }
 
@@ -549,7 +675,7 @@ impl FieldSet {
     }
 
     /// Whether `f` has one value per entity of `mesh` it sits on.
-    fn fits(f: &Field, mesh: &Mesh) -> bool {
+    pub(crate) fn fits(f: &Field, mesh: &Mesh) -> bool {
         let n = match f.location {
             Location::Cell => mesh.cell_count(),
             Location::Point => mesh.points.len(),

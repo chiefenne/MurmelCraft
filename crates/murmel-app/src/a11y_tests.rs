@@ -1177,3 +1177,83 @@ fn defaults_from_the_window() {
     assert!(d.get(Kind::Arrows, "length").is_some());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Invariant: every character of the English strings has a glyph in
+/// the window's fonts (Inter, its Greek subset, Lucide), so no string
+/// draws a box in place of a letter (λ₂, ρ_ref, Ω of the derived
+/// fields). Breaks when a string uses a sign the bundled subsets leave
+/// out.
+#[test]
+fn every_string_has_its_glyphs() {
+    let h = harness();
+    let ftl = include_str!("../../../assets/i18n/en/murmel.ftl");
+    let font = egui::FontId::proportional(14.0);
+    // The check can fail: Inter has no nabla.
+    assert!(!h.ctx.fonts_mut(|f| f.has_glyph(&font, '∇')));
+    let mut missing: Vec<(String, char)> = Vec::new();
+    for line in ftl.lines().filter(|l| !l.trim_start().starts_with('#')) {
+        for c in line.chars().filter(|c| !c.is_ascii()) {
+            if !h.ctx.fonts_mut(|f| f.has_glyph(&font, c)) {
+                missing.push((line.to_string(), c));
+            }
+        }
+    }
+    assert_eq!(missing, Vec::new());
+}
+
+/// Invariant: the Derived fields window computes a quantity with one
+/// click and shows it, offers Show and Remove for it then, greys a
+/// quantity whose input is missing, and a right-click on a reference
+/// value keeps it as your default; every control is named. Breaks when
+/// the window's calls do not reach `field.derive` or a button loses
+/// the quantity in its name.
+#[test]
+fn derived_fields_from_the_window() {
+    use murmel_engine::defaults::Kind;
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-window-derived-{}", std::process::id()));
+    h.state_mut().session.config_dir = Some(dir.clone());
+    // A mesh without fields: the window says so.
+    h.state_mut().open_derived();
+    h.run_steps(3);
+    h.get_by_label("Open a result with fields to derive more from them.");
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "the catalogue");
+    assert!(named(&h, "Vorticity, Velocity: velocity"), "input choice");
+    h.get_by_label("Compute Vorticity").click();
+    h.run_steps(3);
+    let s = &h.state().session;
+    assert!(s.fields().unwrap().recipe("vorticity").is_some());
+    assert_eq!(
+        s.display.field.as_ref().map(|c| c.name.as_str()),
+        Some("vorticity"),
+        "computed and shown"
+    );
+    assert!(named(&h, "Show Vorticity") && named(&h, "Remove Vorticity"));
+    assert_eq!(problems(&h), Vec::<String>::new(), "a field computed");
+    // A reference value kept as your default.
+    h.get_by(|n| n.role() == Role::SpinButton && n.label().as_deref() == Some("Density ρ_ref"))
+        .click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Save Reference density as your default")
+        .click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.defaults.get(Kind::Reference, "density"),
+        Some(&serde_json::json!(1.225))
+    );
+    h.get_by_label("Remove Vorticity").click();
+    h.run_steps(3);
+    assert!(
+        h.state()
+            .session
+            .fields()
+            .unwrap()
+            .get("vorticity")
+            .is_none()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -2449,3 +2449,98 @@ fn export_movie_mp4() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Invariant: field.catalogue lists every quantity with its inputs and
+/// where the reference values start from; field.derive adds the field
+/// (no journal step), takes reference values in part and says where
+/// the rest came from, removes it again, and refuses what cannot be
+/// derived with its code. Breaks when a tool reads the wrong input or
+/// the reference values given are not the ones used.
+#[test]
+fn derived_field_tools() {
+    let mut s = session();
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    let e = call("field.catalogue", json!({}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let qs = e.result["quantities"].as_array().unwrap();
+    assert_eq!(qs.len(), 5);
+    assert!(qs.iter().all(|q| q["available"] == true), "{qs:?}");
+    assert_eq!(qs[0]["inputs"][0]["field"], "velocity");
+    assert_eq!(e.result["reference"]["from"]["density"], "built_in");
+    assert_eq!(e.result["reference"]["density"], 1.225);
+
+    let before = s.journal.undo.len();
+    let e = call("field.derive", json!({"quantity": "vorticity"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.journal.undo.len(), before);
+    assert_eq!(e.result["field"], "vorticity");
+    assert_eq!(e.result["places"][0]["components"], 3);
+    assert_eq!(e.result["places"][0]["unit"], "1/s");
+    assert!(
+        call(
+            "display.color_by",
+            json!({"by": "field", "field": "vorticity"}),
+            &mut s
+        )
+        .ok()
+    );
+
+    let e = call(
+        "field.derive",
+        json!({"quantity": "pressure-coefficient", "reference": {"velocity": 2.0}}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["recipe"]["reference"]["velocity"], 2.0);
+    assert_eq!(e.result["recipe"]["reference"]["density"], 1.225);
+    assert_eq!(e.result["reference_from"]["velocity"], "given");
+    assert_eq!(e.result["reference_from"]["density"], "built_in");
+    // Made again: the values not given are its own.
+    let e = call(
+        "field.derive",
+        json!({"quantity": "pressure-coefficient", "reference": {"density": 1.0}}),
+        &mut s,
+    );
+    assert_eq!(e.result["recipe"]["reference"]["velocity"], 2.0);
+    assert_eq!(e.result["reference_from"]["velocity"], "kept");
+    let e = call("field.catalogue", json!({}), &mut s);
+    assert_eq!(
+        e.result["quantities"][4]["derived"]["reference"]["density"],
+        1.0
+    );
+
+    for (input, code) in [
+        (
+            json!({"quantity": "lambda2", "velocity": "pressure"}),
+            "FIELD006",
+        ),
+        (
+            json!({"quantity": "lambda2", "velocity": "nothing"}),
+            "FIELD005",
+        ),
+        (
+            json!({"quantity": "total-pressure", "reference": {"density": -1.0}}),
+            "FIELD007",
+        ),
+        (
+            json!({"quantity": "vorticity", "reference": {"density": 1.0}}),
+            "TOOL002",
+        ),
+        (json!({"quantity": "helicity"}), "TOOL002"),
+        (
+            json!({"quantity": "q-criterion", "remove": true}),
+            "FIELD009",
+        ),
+    ] {
+        let e = call("field.derive", input.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, code, "{input}");
+    }
+    let e = call(
+        "field.derive",
+        json!({"quantity": "vorticity", "remove": true}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(s.fields().unwrap().get("vorticity").is_none());
+}

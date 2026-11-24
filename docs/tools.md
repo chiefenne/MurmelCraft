@@ -31,6 +31,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
 | `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
 | `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
+| `field.derive` | 1 | read | Compute a derived field from the open result's fields and add it to them, as if the file had it (colour by it, slice it, iso-surfaces, arrows and streamlines of it; saved in sessions as its recipe and computed again on loading). quantity: vorticity (the vector field vorticity, ω = ∇ × u, 1/s), q-criterion (q_criterion, Q = ½ (‖Ω‖² − ‖S‖²), vortices where Q > 0, 1/s²), lambda2 (lambda2, the middle eigenvalue of S² + Ω², vortices where λ₂ < 0, 1/s²), total-pressure (total_pressure, p + ½ ρ u·u, Pa) or pressure-coefficient (pressure_coefficient, (p − p_ref) / (½ ρ_ref U_ref²)). S and Ω are the symmetric and antisymmetric parts of the velocity gradient, taken in each cell by least squares from the cells around it (the vortex quantities are cell fields); the pressure quantities are taken wherever the pressure is (cells, nodes, boundary faces). velocity and pressure name the input fields; left out, they are found by name (velocity, U, u; pressure, p, static_pressure). A pressure in m²/s² is kinematic and takes no density; a density field (density, rho) wins over the reference density. reference: density (kg/m³), pressure (p_ref) and velocity (U_ref); values left out are the field's own when it is made again, else FoehnCraft's (case.resolved.toml beside the result), else your defaults (settings.set_default kind reference), else air at sea level (1.225), 0 and the largest speed of the velocity; the result's reference_from says where each came from. Computing a field again replaces it. remove: true removes the derived field (refused while an iso-surface, the arrows or a streamline set is made from it). A field the file already has is not computed again. field.catalogue lists what can be derived. |
+| `field.catalogue` | 1 | read | What can be derived from the open result (field.derive): for each quantity its group (vortices, pressure), field name, formula, unit, inputs (the field each reads now and the fields that could be it), the reference values it uses, the inputs missing, whether the file has the field already and the recipe of the field when it is derived; and the reference values a new field starts from, with where each came from (case, defaults or built_in). |
 | `field.style` | 1 | read | Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values rebuilt from the cells' least-squares gradients, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes rainbow_desaturated, or cool_warm for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>, iso:<n>, arrows, stream:<n>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type, an iso-surface's, the arrows' and a streamline set's colours when they are solid. |
@@ -811,6 +813,69 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 ```
 
 ### `field.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `field.derive`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "pressure": {
+      "description": "the pressure field (a scalar); left out: found by its name",
+      "type": "string"
+    },
+    "quantity": {
+      "enum": [
+        "vorticity",
+        "q-criterion",
+        "lambda2",
+        "total-pressure",
+        "pressure-coefficient"
+      ]
+    },
+    "reference": {
+      "additionalProperties": false,
+      "properties": {
+        "density": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "pressure": {
+          "type": "number"
+        },
+        "velocity": {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "remove": {
+      "type": "boolean"
+    },
+    "velocity": {
+      "description": "the velocity field (a vector); left out: found by its name",
+      "type": "string"
+    }
+  },
+  "required": [
+    "quantity"
+  ],
+  "type": "object"
+}
+```
+
+### `field.catalogue`
 
 ```json
 {
@@ -2131,7 +2196,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "clip",
         "region",
         "field_style",
-        "view"
+        "view",
+        "reference"
       ]
     },
     "values": {
@@ -2161,7 +2227,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "clip",
         "region",
         "field_style",
-        "view"
+        "view",
+        "reference"
       ]
     }
   },
@@ -2839,6 +2906,12 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `FIELD002` | error | The open mesh has no field of this name, or no field is chosen. | field.list names the fields; pass `field`. |
 | `FIELD003` | error | A component (x, y, z) was asked of a scalar field. | Leave `component` out, or give `magnitude`, for a scalar. |
 | `FIELD004` | error | A field style value is out of range: bands outside 2 to 64, contour lines outside 1 to 64, an unknown colour map, or a fixed range whose min is not below its max. | field.list names the colour maps; give finite min < max. |
+| `FIELD005` | error | A derived field's input is missing: no field of the name given, or none found by its name (velocity: velocity, U or u; pressure: pressure, p or static_pressure). | Name the input field (velocity, pressure); field.catalogue lists the candidates. |
+| `FIELD006` | error | A derived field's input has the wrong shape or place: the velocity needs three components, the pressure one, the vortex quantities a velocity in the cells or at the nodes, the total pressure a velocity where the pressure is. | field.catalogue lists the fields that fit each input. |
+| `FIELD007` | error | A reference value is out of range: the density and the velocity must be above 0, every value finite and at most 1e12 in size. | Give reference density, pressure and velocity in range. |
+| `FIELD008` | error | The result's file already has a field of the derived quantity's name; it is not computed again. | Colour by the file's field with display.color_by. |
+| `FIELD009` | error | No derived field of this name: none was made with field.derive, or the field is the file's own. | field.catalogue says which fields are derived. |
+| `FIELD010` | error | The derived field is in use: an iso-surface, the arrows or a streamline set is made from it. | Remove or change the items named (iso.clear, arrows.clear, stream.clear), then remove the field. |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
 | `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a .vtu file such as KoflCraft's foehncraft.vtu. |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |

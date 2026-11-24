@@ -139,6 +139,12 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Rainbow (jet) | `field.style` `{"map":"rainbow"}` |
 | palette | Grey | `field.style` `{"map":"grey"}` |
 | palette | Field: default style | `field.style` `{"reset":true}` |
+| palette | Derived fields… | window, then `field.derive` |
+| palette | Derive vorticity | `field.derive` `{"quantity":"vorticity"}` |
+| palette | Derive Q criterion | `field.derive` `{"quantity":"q-criterion"}` |
+| palette | Derive λ₂ | `field.derive` `{"quantity":"lambda2"}` |
+| palette | Derive total pressure | `field.derive` `{"quantity":"total-pressure"}` |
+| palette | Derive pressure coefficient | `field.derive` `{"quantity":"pressure-coefficient"}` |
 | palette | Colour by: quality, non-orthogonality | `display.color_by` `{"by":"quality","metric":"non_orthogonality"}` |
 | palette | Colour by: quality, skewness | `display.color_by` `{"by":"quality","metric":"skewness"}` |
 | palette | Colour by: quality, volume ratio | `display.color_by` `{"by":"quality","metric":"volume_ratio"}` |

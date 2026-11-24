@@ -60,6 +60,18 @@ impl MurmelApp {
         )
     }
 
+    /// The menu entries that keep value `key` of `kind` with
+    /// settings.set_default's input `save`.
+    pub(crate) fn kind_default_entries(
+        &self,
+        ui: &mut Ui,
+        kind: Kind,
+        key: &'static str,
+        save: Value,
+    ) -> Option<(&'static str, Value)> {
+        self.entries(ui, kind, &[key], save)
+    }
+
     /// Save `keys` of `kind` (all of them when empty) with
     /// settings.set_default's input `save`, and forget them once saved.
     fn entries(

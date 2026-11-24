@@ -17,6 +17,7 @@ pub mod bench;
 mod blocks;
 pub mod commands;
 mod defaults;
+mod derive;
 mod diag;
 pub mod export;
 mod extract;

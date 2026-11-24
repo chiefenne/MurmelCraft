@@ -188,6 +188,10 @@ impl MurmelApp {
             })
             .response
             .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, format!("{label}: {name}")));
+        if ui.button(self.i18n.tr("cmd-derived")).clicked() {
+            self.open_derived();
+            ui.close();
+        }
         if vector {
             ui.horizontal(|ui| {
                 for c in Component::ALL {

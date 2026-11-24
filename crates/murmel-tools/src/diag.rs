@@ -334,6 +334,46 @@ const OWN: &[Code] = &[
         meaning: "A field style value is out of range: bands outside 2 to 64, contour lines outside 1 to 64, an unknown colour map, or a fixed range whose min is not below its max.",
         fix: Some("field.list names the colour maps; give finite min < max."),
     },
+    Code {
+        code: "FIELD005",
+        severity: Severity::Error,
+        meaning: "A derived field's input is missing: no field of the name given, or none found by its name (velocity: velocity, U or u; pressure: pressure, p or static_pressure).",
+        fix: Some(
+            "Name the input field (velocity, pressure); field.catalogue lists the candidates.",
+        ),
+    },
+    Code {
+        code: "FIELD006",
+        severity: Severity::Error,
+        meaning: "A derived field's input has the wrong shape or place: the velocity needs three components, the pressure one, the vortex quantities a velocity in the cells or at the nodes, the total pressure a velocity where the pressure is.",
+        fix: Some("field.catalogue lists the fields that fit each input."),
+    },
+    Code {
+        code: "FIELD007",
+        severity: Severity::Error,
+        meaning: "A reference value is out of range: the density and the velocity must be above 0, every value finite and at most 1e12 in size.",
+        fix: Some("Give reference density, pressure and velocity in range."),
+    },
+    Code {
+        code: "FIELD008",
+        severity: Severity::Error,
+        meaning: "The result's file already has a field of the derived quantity's name; it is not computed again.",
+        fix: Some("Colour by the file's field with display.color_by."),
+    },
+    Code {
+        code: "FIELD009",
+        severity: Severity::Error,
+        meaning: "No derived field of this name: none was made with field.derive, or the field is the file's own.",
+        fix: Some("field.catalogue says which fields are derived."),
+    },
+    Code {
+        code: "FIELD010",
+        severity: Severity::Error,
+        meaning: "The derived field is in use: an iso-surface, the arrows or a streamline set is made from it.",
+        fix: Some(
+            "Remove or change the items named (iso.clear, arrows.clear, stream.clear), then remove the field.",
+        ),
+    },
 ];
 
 /// Every code: the tools' own, then the mesh and render codes.

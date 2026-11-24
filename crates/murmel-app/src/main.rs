@@ -14,6 +14,7 @@ mod color_edit;
 mod commands;
 mod cube;
 mod defaults;
+mod derived;
 mod edges;
 mod export_dialog;
 mod extracts;

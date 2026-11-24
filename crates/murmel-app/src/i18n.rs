@@ -29,6 +29,8 @@ mod tests {
             include_str!("clip_handle.rs"),
             include_str!("streams.rs"),
             include_str!("stream_handle.rs"),
+            include_str!("derived.rs"),
+            include_str!("defaults.rs"),
         ];
         for s in src {
             for part in s
@@ -113,6 +115,26 @@ mod tests {
         }
         for l in [murmel_engine::Look::Lines, murmel_engine::Look::Tubes] {
             assert!(t.has(&format!("stream-look-{}", l.key())));
+        }
+        // The Derived fields window: each quantity, group, input and
+        // source of reference values.
+        use murmel_engine::derive::{Group, Input, Quantity};
+        for q in Quantity::ALL {
+            assert!(t.has(&format!("derived-{}", q.key())));
+            assert!(t.has(&format!("derived-formula-{}", q.key())));
+        }
+        for g in Group::ALL {
+            assert!(t.has(&format!("derived-group-{}", g.key())));
+        }
+        for i in [Input::Velocity, Input::Pressure] {
+            assert!(t.has(&format!("derived-input-{}", i.key())));
+            assert!(t.has(&format!("derived-no-{}", i.key())));
+        }
+        for s in ["case", "defaults", "built_in", "edited"] {
+            assert!(t.has(&format!("derived-from-{s}")));
+        }
+        for k in ["density", "pressure", "velocity"] {
+            assert!(t.has(&format!("derived-ref-{k}")));
         }
         // Every property row of every item of the channel mesh, of a
         // region of every shape, and of its field results with a slice
