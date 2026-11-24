@@ -283,3 +283,80 @@ fn openfoam_dual_polyhedra_clipped() {
     s.redraw();
     check_session("openfoam-dual-clip-flat", &s);
 }
+
+/// The channel's FoehnCraft result (`fields.vtkhdf` layout), framed in
+/// the iso view.
+fn field_session(name: &str, component: murmel_mesh::Component) -> Session {
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.viewport = [480.0, 320.0];
+    s.open(&root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf"))
+        .unwrap();
+    s.camera.set_standard(StandardView::ISO);
+    s.fit();
+    s.display.color_by = ColorBy::Field;
+    s.display.field = Some(murmel_engine::FieldChoice {
+        name: name.into(),
+        component,
+    });
+    s.redraw();
+    s
+}
+
+/// Stage 1 field colouring, the first look (decided 2026-11-24): the
+/// channel's pressure in smooth colours on viridis over the whole
+/// field's range, mesh edges dark over the colours. A wrong node value,
+/// range, colour table or texel lookup moves the colours here.
+#[test]
+fn field_pressure_smooth() {
+    let s = field_session("pressure", murmel_mesh::Component::Magnitude);
+    check_session("field-pressure-smooth", &s);
+}
+
+/// Flat colours (one per cell, the solver's values) on a flat cut along
+/// x, so the sections show the cells' own values; the speed (velocity
+/// magnitude) without edges.
+#[test]
+fn field_speed_flat_clipped() {
+    let mut s = field_session("velocity", murmel_mesh::Component::Magnitude);
+    s.display.render_mode = RenderMode::Shaded;
+    s.display.field_styles.insert(
+        "velocity".into(),
+        murmel_engine::FieldStyle {
+            mode: murmel_engine::FieldMode::Flat,
+            ..Default::default()
+        },
+    );
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    s.display.clips = vec![Clip {
+        origin: b.center(),
+        normal: [1.0, 0.0, 0.0],
+        mode: ClipMode::Flat,
+        enabled: true,
+    }];
+    s.redraw();
+    check_session("field-speed-flat-clip", &s);
+}
+
+/// Banded colours with contour lines: 12 bands of the pressure with 11
+/// lines on their edges, on the reversed turbo map, shaded without
+/// edges. Lines that lost their anti-aliasing, sat off the band edges or
+/// vanished would show here.
+#[test]
+fn field_pressure_banded_lines() {
+    let mut s = field_session("pressure", murmel_mesh::Component::Magnitude);
+    s.display.render_mode = RenderMode::Shaded;
+    s.display.field_styles.insert(
+        "pressure".into(),
+        murmel_engine::FieldStyle {
+            mode: murmel_engine::FieldMode::Banded,
+            bands: 12,
+            lines: true,
+            line_count: 11,
+            map: Some("turbo".into()),
+            reverse: true,
+            ..Default::default()
+        },
+    );
+    s.redraw();
+    check_session("field-pressure-banded-lines", &s);
+}
