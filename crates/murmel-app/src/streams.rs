@@ -230,6 +230,10 @@ impl MurmelApp {
                     if ui.button(self.i18n.tr("tree-fit")).clicked() {
                         pick(("view.fit", json!({ "item": id })), ui);
                     }
+                    ui.separator();
+                    if let Some(a) = self.default_entries(ui, item, &[]) {
+                        pick(a, ui);
+                    }
                     if ui.button(self.i18n.tr("tree-stream-remove")).clicked() {
                         pick(("stream.clear", json!({ "stream": n })), ui);
                     }
@@ -249,6 +253,11 @@ impl MurmelApp {
                     )
                     .on_hover_text(self.i18n.tr("tree-stream-seeds-tip"));
                 r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name.clone()));
+                r.context_menu(|ui| {
+                    if let Some(a) = self.default_entries(ui, item, &["count"]) {
+                        action = Some(a);
+                    }
+                });
                 if c != st.count {
                     action = Some(set(json!({ "count": c })));
                 }
@@ -431,7 +440,7 @@ impl MurmelApp {
         let mut own: Vec<(&'static str, Value)> = Vec::new();
         self.style_menu(ui, &style, range, false, &mut own);
         for (tool, mut input) in own {
-            if tool == "field.style" {
+            if tool == "field.style" || tool == "settings.set_default" {
                 input["field"] = json!(choice.name);
             }
             calls.push((tool, input));

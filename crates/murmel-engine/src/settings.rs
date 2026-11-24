@@ -1,5 +1,6 @@
 //! The user's settings files: `settings.toml` (theme, mesh colours, view
-//! cube placement, whether agents may drive the window) and
+//! cube placement, whether agents may drive the window, the defaults new
+//! items start from) and
 //! `navigation.toml` (mouse bindings), in the MurmelCraft config folder.
 //! `MURMEL_CONFIG_DIR` overrides the folder (tests, portable installs).
 
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::cube::CubeSettings;
+use crate::defaults::Defaults;
 use crate::navigation::Navigation;
 use crate::theme::{MeshColors, Theme};
 
@@ -45,6 +47,9 @@ pub struct Settings {
     /// Whether the window lets agents drive it (the live bridge).
     #[serde(default)]
     pub agents: Agents,
+    /// Where new items start (`[defaults.<kind>]`, [`crate::defaults`]).
+    #[serde(default, skip_serializing_if = "Defaults::is_empty")]
+    pub defaults: Defaults,
 }
 
 /// `[agents]` in settings.toml: the window listens for `murmel mcp --live`
@@ -74,6 +79,7 @@ impl Default for Settings {
             colors: MeshColors::default(),
             view_cube: CubeSettings::default(),
             agents: Agents::default(),
+            defaults: Defaults::default(),
         }
     }
 }

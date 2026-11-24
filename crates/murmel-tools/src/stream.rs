@@ -315,9 +315,13 @@ pub(crate) fn stream_set(input: Value, s: &mut Session) -> Run {
         old.as_ref().map(|o| o.field.as_str()),
     )?;
     let seed = seed_of(s, &i, old.as_ref().map(|o| &o.seed))?;
-    let mut st = old
-        .clone()
-        .unwrap_or_else(|| Stream::new(field.clone(), seed.clone()));
+    let mut st = old.clone().unwrap_or_else(|| {
+        crate::defaults::fresh(
+            s,
+            murmel_engine::defaults::Kind::Stream,
+            Stream::new(field.clone(), seed.clone()),
+        )
+    });
     // A new traced field takes its magnitude as the colour when the set
     // was coloured by the old one's.
     if st.field != field
@@ -418,6 +422,9 @@ pub(crate) fn stream_set(input: Value, s: &mut Session) -> Run {
     }
     if let Some(why) = st.problem_alone() {
         return Err(bad(why));
+    }
+    if let Some(c) = &st.color {
+        crate::defaults::adopt_style(s, &c.name.clone());
     }
     let k = match at {
         Some(k) => {

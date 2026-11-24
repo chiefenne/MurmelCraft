@@ -314,7 +314,13 @@ pub(crate) fn region_set(input: Value, s: &mut Session) -> Run {
             ),
         ));
     }
-    let mut region = old.unwrap_or_else(|| Region::new(shape.clone()));
+    let mut region = old.unwrap_or_else(|| {
+        crate::defaults::fresh(
+            s,
+            murmel_engine::defaults::Kind::Region,
+            Region::new(shape.clone()),
+        )
+    });
     region.shape = shape;
     if let Some(e) = i.enabled {
         region.enabled = e;

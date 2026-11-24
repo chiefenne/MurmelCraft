@@ -67,6 +67,11 @@ every change.
   volume ratio, face count) with a histogram and a threshold that shows
   only the worst cells. Every colour is configurable, dark and light
   themes switch live.
+- Your defaults: right-click a value or an item (arrows, slices,
+  iso-surfaces, streamlines, clip planes, regions, field colouring, the
+  render mode and projection) to save it as your default
+  (`settings.set_default`); new items start from it, items already open
+  keep theirs, and Settings lists each default with a Forget button.
 - Model tree (T): the mesh with its evidence badge, cell zones, cell
   types, patches, saved views (Ctrl + B), clip planes, slices,
   iso-surfaces, arrows, streamlines, regions, measurements and probes,

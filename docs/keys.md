@@ -221,3 +221,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | View cube: hide when the pointer is far away (on or off) | `settings.set_view_cube` (input from the session) |
 | palette | Agents: let them drive this window (on or off) | `settings.set_agents` (input from the session) |
 | palette | Reset to the built-in colours | `settings.set_colors` `{"reset":true}` |
+| palette | Defaults: save the selected item's settings for new ones | `settings.set_default` (input from the session) |
+| palette | Defaults: start with this view (render mode, mesh look, projection) | `settings.set_default` `{"kind":"view"}` |
+| palette | Defaults: colour new fields like the field shown | `settings.set_default` (input from the session) |
+| palette | Defaults: forget them all | `settings.reset_default` `{}` |

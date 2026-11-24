@@ -91,6 +91,15 @@ mod tests {
         for l in murmel_engine::glyph::Length::ALL {
             assert!(t.has(&format!("arrow-length-{}", l.key())));
         }
+        for k in murmel_engine::defaults::Kind::ALL {
+            assert!(t.has(&format!("defaults-kind-{}", k.key())));
+            for key in k.keys() {
+                assert!(t.has(&format!("default-{}-{key}", k.key())), "{key}");
+            }
+        }
+        for l in murmel_engine::MeshLook::ALL {
+            assert!(t.has(&format!("mesh-look-{}", l.key())));
+        }
         for k in murmel_engine::region::Shape::KINDS {
             assert!(t.has(&format!("region-shape-{k}")));
         }

@@ -4,6 +4,8 @@
 //! and `arrows.clear`. The geometry is the engine's
 //! ([`murmel_engine::extract`], [`murmel_engine::glyph`]).
 
+use crate::defaults::{adopt_style, fresh};
+use murmel_engine::defaults::Kind;
 use murmel_engine::extract::{IsoColor, MAX_ISOS, MAX_SERIES, MAX_SLICES, MeshLook};
 use murmel_engine::glyph::{ArrowColor, Arrows, Length, MAX_DENSITY, MAX_SCALE, MIN_DENSITY};
 use murmel_engine::{Item, ScreenAxis, Session};
@@ -138,9 +140,13 @@ pub(crate) fn slice_set(input: Value, s: &mut Session) -> Run {
             format!("{MAX_SLICES} slices are the most"),
         ));
     }
-    let mut c = at
-        .map(|k| s.display.slices[k])
-        .unwrap_or_else(|| murmel_engine::Slice::new(b.center(), [1.0, 0.0, 0.0]));
+    let mut c = at.map(|k| s.display.slices[k]).unwrap_or_else(|| {
+        fresh(
+            s,
+            Kind::Slice,
+            murmel_engine::Slice::new(b.center(), [1.0, 0.0, 0.0]),
+        )
+    });
     if let Some(a) = i.axis {
         // As for clip planes: the normal points towards the eye.
         let to_eye = s.camera.to_eye().to_array();
@@ -183,7 +189,13 @@ pub(crate) fn slice_set(input: Value, s: &mut Session) -> Run {
         c.enabled = e;
     }
     let series = |why: String| Diagnostic::new("SLICE003", why);
-    match (i.count, i.spacing) {
+    // A new slice with a default count of planes spreads them as a count
+    // alone does.
+    let (count, spacing) = match (at, i.count, i.spacing) {
+        (None, None, None) if c.count > 1 => (Some(c.count), None),
+        _ => (i.count, i.spacing),
+    };
+    match (count, spacing) {
         (Some(n), _) if !(1..=MAX_SERIES).contains(&n) => {
             return Err(series(format!("count {n} is outside 1 to {MAX_SERIES}")));
         }
@@ -381,18 +393,21 @@ pub(crate) fn iso_set(input: Value, s: &mut Session) -> Run {
             })?,
         },
     };
-    let iso = murmel_engine::Iso {
+    let mut iso = murmel_engine::Iso {
         field,
         value,
         enabled: i
             .enabled
             .or(old.as_ref().map(|o| o.enabled))
             .unwrap_or(true),
-        color: i
-            .color
-            .or(old.as_ref().map(|o| o.color))
-            .unwrap_or_default(),
+        color: old.as_ref().map(|o| o.color).unwrap_or_default(),
     };
+    if old.is_none() {
+        iso = fresh(s, Kind::Iso, iso);
+    }
+    if let Some(c) = i.color {
+        iso.color = c;
+    }
     match at {
         Some(k) => s.display.isos[k] = iso,
         None => {
@@ -569,7 +584,7 @@ pub(crate) fn arrows_set(input: Value, s: &mut Session) -> Run {
         .display
         .arrows
         .clone()
-        .unwrap_or_else(|| Arrows::new(field.clone()));
+        .unwrap_or_else(|| fresh(s, Kind::Arrows, Arrows::new(field.clone())));
     a.field = field;
     if let Some(x) = i.enabled {
         a.enabled = x;
@@ -591,6 +606,9 @@ pub(crate) fn arrows_set(input: Value, s: &mut Session) -> Run {
     }
     if let Some(x) = i.color {
         a.color = x;
+    }
+    if a.color == ArrowColor::Magnitude {
+        adopt_style(s, &a.field);
     }
     s.display.arrows = Some(a);
     s.redraw();

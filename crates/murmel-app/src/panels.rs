@@ -611,6 +611,10 @@ impl MurmelApp {
                                 ui.close();
                             }
                         }
+                        ui.separator();
+                        if let Some(a) = self.default_entries(ui, item, &[]) {
+                            action = Some(a);
+                        }
                     });
                     if current == Some(k) && d.clips.len() > 1 {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -715,6 +719,19 @@ impl MurmelApp {
             );
         }
         ui.add_space(4.0);
+        // The rows whose value can be a default of new items of the
+        // item's kind, with the item's own name of it.
+        let shown = self
+            .session
+            .mesh
+            .as_ref()
+            .and_then(|m| Item::parse(&c.item, &m.mesh));
+        let defaultable = |key: &str| {
+            let item = shown?;
+            let kind = murmel_engine::defaults::Kind::of_item(item)?;
+            Some((item, crate::defaults::item_key(kind, key)?))
+        };
+        let mut default_call: Option<(&'static str, Value)> = None;
         let out =
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
@@ -769,6 +786,15 @@ impl MurmelApp {
                             first.get_or_insert(resp.clone());
                             if resp.clicked() {
                                 ui.ctx().copy_text(value.clone());
+                            }
+                            // Right-click: keep it as the default of new
+                            // items of its kind.
+                            if let Some((item, k)) = defaultable(key) {
+                                resp.context_menu(|ui| {
+                                    if let Some(a) = self.default_entries(ui, item, &[k]) {
+                                        default_call = Some(a);
+                                    }
+                                });
                             }
                         });
                         ui.add_space(2.0);
@@ -850,6 +876,9 @@ impl MurmelApp {
                 });
         if let Some(r) = out.inner {
             self.focus.offer(crate::focus::Region::Properties, &r);
+        }
+        if let Some((tool, input)) = default_call {
+            self.call(tool, input);
         }
     }
 

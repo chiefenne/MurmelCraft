@@ -1100,3 +1100,80 @@ fn status_message_expires() {
         "gone when a journalled call works"
     );
 }
+
+/// Invariant (the maintainer's card of 2026-11-24: right-click any value
+/// or item to save it as the default; Settings lists and forgets each):
+/// a Properties row's context menu keeps its value as the default of new
+/// items of its kind through settings.set_default, the item row's menu
+/// keeps all its values, and the Settings window lists each default with
+/// a named Forget button that forgets it through settings.reset_default;
+/// every control keeps a clean name. Breaks when the window offers no
+/// way to save a value, or the list cannot forget one.
+#[test]
+fn defaults_from_the_window() {
+    use murmel_engine::defaults::Kind;
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-window-defaults-{}", std::process::id()));
+    h.state_mut().session.config_dir = Some(dir.clone());
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.run_steps(3);
+    h.state_mut()
+        .call("slice.set", serde_json::json!({"axis": "z"}));
+    h.state_mut().call(
+        "arrows.set",
+        serde_json::json!({"density": 60, "length": "equal"}),
+    );
+    h.state_mut()
+        .call("select.item", serde_json::json!({"item": "arrows"}));
+    h.run_steps(3);
+    // A Properties row is a label, which kittest's label query reads by
+    // its text; find it by the name it is read as.
+    h.get_by(|n| n.label().as_deref() == Some("Arrows across: 60"))
+        .click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Save Arrows across as your default").click();
+    h.run_steps(3);
+    let d = &h.state().session.defaults;
+    assert_eq!(d.get(Kind::Arrows, "density"), Some(&serde_json::json!(60)));
+    assert!(d.get(Kind::Arrows, "length").is_none(), "only that value");
+    // The row's menu keeps them all.
+    h.get_by_label("Arrows: velocity").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Save these settings as your default")
+        .click();
+    h.run_steps(3);
+    let d = &h.state().session.defaults;
+    assert_eq!(
+        d.get(Kind::Arrows, "length"),
+        Some(&serde_json::json!("equal"))
+    );
+    // The toolbar's render mode keeps the one the window starts in.
+    h.state_mut().call(
+        "display.render_mode",
+        serde_json::json!({"mode": "wireframe"}),
+    );
+    h.run_steps(2);
+    h.get_by_label("Render mode: Wireframe").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Save Render mode as your default").click();
+    h.run_steps(3);
+    let d = &h.state().session.defaults;
+    assert_eq!(
+        d.get(Kind::View, "render_mode"),
+        Some(&serde_json::json!("wireframe"))
+    );
+    // Settings lists them, each with a named Forget button.
+    h.state_mut().settings_open = true;
+    h.run_steps(2);
+    let forget = "Forget Arrows · Arrows across: 60";
+    assert!(named(&h, forget), "the density's row");
+    assert_eq!(problems(&h), Vec::<String>::new(), "settings with defaults");
+    h.get_by_label(forget).click();
+    h.run_steps(3);
+    let d = &h.state().session.defaults;
+    assert!(d.get(Kind::Arrows, "density").is_none());
+    assert!(d.get(Kind::Arrows, "length").is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}

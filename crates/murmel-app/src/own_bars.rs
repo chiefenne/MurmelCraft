@@ -204,7 +204,7 @@ impl MurmelApp {
         let mut own: Vec<(&'static str, Value)> = Vec::new();
         self.style_menu(ui, &style, range, false, &mut own);
         for (tool, mut input) in own {
-            if tool == "field.style" {
+            if tool == "field.style" || tool == "settings.set_default" {
                 input["field"] = json!(a.field);
             }
             calls.push((tool, input));

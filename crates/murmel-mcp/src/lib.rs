@@ -98,6 +98,8 @@ pub fn session() -> Result<Session, String> {
         s.navigation = nav;
         s.view_cube = st.view_cube;
         s.agents = st.agents.enabled;
+        s.defaults = st.defaults;
+        murmel_engine::defaults::start_view(&mut s);
         if let Err(e) = s.set_colors(st.colors) {
             eprintln!("murmel mcp: warning: settings.toml colors: {e}");
         }

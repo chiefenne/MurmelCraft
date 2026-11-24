@@ -190,6 +190,139 @@ fn view_cube_placement_is_saved() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Invariant (the maintainer's words of 2026-11-24, "each configurable
+/// value can be set interactively as default"): values saved by
+/// settings.set_default, from an item (its values now; one at its
+/// built-in value forgets the default) or given, are where new items of
+/// their kind start, while items already open keep theirs; they are
+/// saved in settings.toml beside the theme and load back; a field shown
+/// for the first time takes the default field style, the view starts
+/// from the default view; values tied to one mesh or field, items of the
+/// mesh, unknown kinds and keys are refused; nothing here is an undo
+/// step; reset forgets one value, a kind or all. Breaks when a tool that
+/// adds items skips the defaults or a settings write drops them.
+#[test]
+fn defaults_start_new_items() {
+    use murmel_engine::defaults::Kind;
+    let dir = std::env::temp_dir().join(format!("murmel-defaults-{}", std::process::id()));
+    let mut s = session();
+    s.config_dir = Some(dir.clone());
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    assert!(call("slice.set", json!({"axis": "z"}), &mut s).ok());
+    let e = call(
+        "arrows.set",
+        json!({"density": 60, "length": "equal"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let steps = s.journal.undo.len();
+    let e = call("settings.set_default", json!({"item": "arrows"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["saved"]["density"], 60);
+    assert_eq!(e.result["saved"]["length"], "equal");
+    assert_eq!(e.result["saved"]["color"], "magnitude");
+    assert!(
+        e.result["forgot"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("scale"))
+    );
+    assert_eq!(s.journal.undo.len(), steps, "not an undo step");
+    // New arrows start from them; the open ones keep theirs.
+    assert!(call("arrows.clear", json!({}), &mut s).ok());
+    let e = call("arrows.set", json!({}), &mut s);
+    assert_eq!(e.result["arrows"]["density"], 60);
+    assert_eq!(e.result["arrows"]["length"], "equal");
+    let given = json!({"kind": "slice", "values": {"count": 3}});
+    assert!(call("settings.set_default", given, &mut s).ok());
+    assert_eq!(
+        s.display.slices[0].count, 1,
+        "an open slice keeps its count"
+    );
+    assert!(call("slice.set", json!({"new": true, "axis": "x"}), &mut s).ok());
+    let new = s.display.slices[1];
+    assert!(new.count == 3 && new.spacing > 0.0, "{new:?}");
+    let given = json!({"kind": "clip", "values": {"mode": "flat"}});
+    assert!(call("settings.set_default", given, &mut s).ok());
+    assert!(call("clip.set", json!({"new": true, "axis": "y"}), &mut s).ok());
+    assert_eq!(s.display.clips[0].mode, murmel_engine::ClipMode::Flat);
+    // A field shown for the first time takes the default style; a field
+    // with a style keeps it.
+    let style = json!({"field": "pressure", "bands": 5, "mode": "banded"});
+    assert!(call("field.style", style, &mut s).ok());
+    let given = json!({"kind": "field_style", "values": {"mode": "banded", "bands": 9}});
+    assert!(call("settings.set_default", given, &mut s).ok());
+    let by = json!({"by": "field", "field": "k"});
+    assert!(call("display.color_by", by, &mut s).ok());
+    assert_eq!(s.display.style_of("k").bands, 9);
+    let by = json!({"by": "field", "field": "pressure"});
+    assert!(call("display.color_by", by, &mut s).ok());
+    assert_eq!(s.display.style_of("pressure").bands, 5);
+    // The view: taken from the session now.
+    assert!(call("display.render_mode", json!({"mode": "wireframe"}), &mut s).ok());
+    let e = call("settings.set_default", json!({"kind": "view"}), &mut s);
+    assert_eq!(
+        e.result["saved"]["render_mode"], "wireframe",
+        "{:?}",
+        e.result
+    );
+    // Saved beside the theme, and back.
+    assert!(call("settings.set_theme", json!({"theme": "light"}), &mut s).ok());
+    let (st, _, problems) = murmel_engine::settings::load(&dir, false);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(st.defaults, s.defaults);
+    assert_eq!(st.defaults.get(Kind::Arrows, "density"), Some(&json!(60)));
+    let mut t = session();
+    t.defaults = st.defaults.clone();
+    murmel_engine::defaults::start_view(&mut t);
+    assert_eq!(t.display.render_mode, murmel_engine::RenderMode::Wireframe);
+    let e = call("settings.get", json!({}), &mut s);
+    assert_eq!(e.result["defaults"]["slice"]["count"], 3);
+    assert!(
+        e.result["defaultable"]["arrows"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("density"))
+    );
+    // Refused, with nothing changed.
+    for (bad, code) in [
+        (
+            json!({"kind": "arrows", "values": {"field": "pressure"}}),
+            "SET003",
+        ),
+        (
+            json!({"kind": "arrows", "values": {"density": 500}}),
+            "SET003",
+        ),
+        (json!({"kind": "lava", "values": {}}), "SET003"),
+        (json!({"item": "patch:inlet"}), "SET003"),
+        (json!({"item": "arrows", "keys": ["field"]}), "SET003"),
+        (json!({"item": "arrows", "kind": "arrows"}), "TOOL002"),
+        (json!({"item": "stream:4"}), "TOOL002"),
+        (json!({"kind": "slice"}), "TOOL002"),
+        (json!({}), "TOOL002"),
+    ] {
+        let e = call("settings.set_default", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, code, "{bad}");
+        assert_eq!(s.defaults, st.defaults, "{bad}");
+    }
+    let e = call("settings.reset_default", json!({"key": "count"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let e = call(
+        "settings.reset_default",
+        json!({"kind": "arrows", "key": "density"}),
+        &mut s,
+    );
+    assert_eq!(e.result["forgot"], 1);
+    assert!(s.defaults.get(Kind::Arrows, "density").is_none());
+    let e = call("settings.reset_default", json!({}), &mut s);
+    assert!(e.ok() && s.defaults.is_empty());
+    let (st, _, _) = murmel_engine::settings::load(&dir, false);
+    assert!(st.defaults.is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Invariant: user mesh colours reach the tokens, are saved in
 /// settings.toml beside the theme (neither setting drops the other) and
 /// load back; a reset returns to the built-in colours; bad input is

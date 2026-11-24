@@ -125,6 +125,10 @@ impl MurmelApp {
                                 ui.close();
                             }
                         }
+                        ui.separator();
+                        if let Some(a) = self.default_entries(ui, item, &[]) {
+                            action = Some(a);
+                        }
                     });
                 });
             }

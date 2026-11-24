@@ -63,11 +63,13 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `journal.redo` | 1 | read | Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none. |
 | `journal.group` | 1 | read | Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps). |
 | `journal.list` | 1 | read | The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept. |
-| `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets and the config folder. |
+| `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets, your defaults for new items (and which values of each kind can be defaults) and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
 | `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
 | `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_agents` | 1 | write-files | Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder. |
+| `settings.set_default` | 1 | write-files | Keep values as your defaults: new items of their kind start from them (arrows, slice, iso, stream, clip, region), a field shown for the first time takes the default field style (field_style), and the window starts with the default view (view: render_mode, mesh_look, projection); items already open keep theirs. Either kind with values ({"density": 60}), or item (an item's id, such as arrows or slice:1) with keys to take from it (left out: every value its kind can keep), or kind view or field_style (with field, else the field shown) to take the values now. Only an item's look, density, count and modes can be defaults, never where it is or its field (settings.get lists them per kind); a value at its built-in default forgets the default. Writes settings.toml in the config folder. |
+| `settings.reset_default` | 1 | write-files | Forget your defaults: one value (kind and key), every value of a kind (kind), or all (no input), so new items start from the built-in values again. Items already open keep theirs. Writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
 | `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement. |
 | `session.load` | 1 | read | Load a .murmel session file: open its mesh unless that mesh is already open (tried relative to the file first, then at its absolute path), then restore the camera, the display, the selection and the clip plane; the mesh colours and the view cube placement apply to this session and are not written to settings.toml. A mesh changed since the save (SESS003) or items it no longer has (SESS004) give warnings. A new journal starts. |
@@ -2102,6 +2104,72 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `settings.set_default`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "field": {
+      "type": "string"
+    },
+    "item": {
+      "type": "string"
+    },
+    "keys": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "kind": {
+      "enum": [
+        "arrows",
+        "slice",
+        "iso",
+        "stream",
+        "clip",
+        "region",
+        "field_style",
+        "view"
+      ]
+    },
+    "values": {
+      "type": "object"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `settings.reset_default`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "key": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "arrows",
+        "slice",
+        "iso",
+        "stream",
+        "clip",
+        "region",
+        "field_style",
+        "view"
+      ]
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `settings.set_bindings`
 
 ```json
@@ -2752,6 +2820,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `LIVE003` | error | The window could not listen for agents: another window listens already, or the socket folder is not private. | Close the other window, or make the socket folder private (chmod 700); MURMEL_LIVE_SOCKET names another socket. |
 | `SET001` | error | A settings file could not be written, or no config folder is known. | Set MURMEL_CONFIG_DIR to a writable folder. |
 | `SET002` | error | The navigation bindings bind one input to two actions. | Give each gesture, button and modifier combination one action. |
+| `SET003` | error | A value cannot be a default: its kind has no such value, it does not fit, or it belongs to one mesh or field. | settings.get lists the values each kind can keep as a default (defaultable). |
 | `EXPORT001` | error | An export setting is out of range (scale, line width, dpi). | Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000; a movie 1 to 60 frames a second and at most 36000 frames, an MP4 without transparency. |
 | `EXPORT002` | error | An MP4 needs ffmpeg, and none was found (MURMEL_FFMPEG, PATH, /opt/homebrew/bin, /usr/local/bin). | Install ffmpeg (macOS: brew install ffmpeg), set MURMEL_FFMPEG to its path, or write a GIF or PNG frames. |
 | `EXPORT003` | error | ffmpeg could not be started or failed while writing the MP4; the message ends with what it said. | Check the path and the free space; try another ffmpeg with MURMEL_FFMPEG. |

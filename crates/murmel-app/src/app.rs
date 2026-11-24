@@ -154,6 +154,8 @@ impl MurmelApp {
             session.navigation = nav;
             session.view_cube = st.view_cube;
             session.agents = st.agents.enabled;
+            session.defaults = st.defaults;
+            murmel_engine::defaults::start_view(&mut session);
             let mut problems = problems;
             if let Err(e) = session.set_colors(st.colors) {
                 problems.push(format!("settings.toml colors: {e}"));
@@ -693,6 +695,12 @@ impl MurmelApp {
         if b.clicked() {
             self.call("view.set_camera", json!({ "projection": proj.next() }));
         }
+        // Right-click: start the window with this projection.
+        let mut keep = None;
+        b.context_menu(|ui| keep = self.view_default_entries(ui, "projection"));
+        if let Some((tool, input)) = keep {
+            self.call(tool, input);
+        }
         ui.separator();
         self.group_label(ui, "display", secondary);
         let mode = self.session.display.render_mode;
@@ -714,11 +722,21 @@ impl MurmelApp {
                     }
                 }
             });
-        r.response
-            .on_hover_text(self.i18n.tr("toolbar-render-mode-tip"))
-            .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, name.clone()));
+        let r = r
+            .response
+            .on_hover_text(self.i18n.tr("toolbar-render-mode-tip"));
+        r.widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, name.clone()));
         if let Some(m) = pick_mode.filter(|&m| m != mode) {
             self.call("display.render_mode", json!({ "mode": m }));
+        }
+        // Right-click: start the window in this render mode (a menu id of
+        // its own, as the combo box's list has the response's).
+        let mut keep = None;
+        egui::Popup::context_menu(&r)
+            .id(r.id.with("keep-default"))
+            .show(|ui| keep = self.view_default_entries(ui, "render_mode"));
+        if let Some((tool, input)) = keep {
+            self.call(tool, input);
         }
         let by = self.session.display.color_by;
         let metric = self.session.display.metric;
@@ -1143,6 +1161,8 @@ impl MurmelApp {
                 {
                     self.call("settings.set_colors", json!({"reset": true}));
                 }
+                ui.add_space(8.0);
+                self.defaults_settings(ui);
                 if let Some(d) = &self.session.config_dir {
                     ui.add_space(8.0);
                     ui.label(

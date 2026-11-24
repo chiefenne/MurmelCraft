@@ -60,6 +60,12 @@ fn session() -> Result<Session, String> {
         }
         s.theme = st.theme;
         s.navigation = nav;
+        // All of the file, so a settings tool run here writes it back
+        // whole.
+        s.view_cube = st.view_cube;
+        s.agents = st.agents.enabled;
+        s.defaults = st.defaults;
+        murmel_engine::defaults::start_view(&mut s);
         if let Err(e) = s.set_colors(st.colors) {
             eprintln!("warning: settings.toml colors: {e}");
         }

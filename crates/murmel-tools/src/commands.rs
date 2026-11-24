@@ -1443,6 +1443,50 @@ pub fn commands() -> Vec<Command> {
         &[],
         Tool("settings.set_colors", json!({"reset": true})),
     ));
+    // Your defaults: the selected item's settings, the view's look, the
+    // colouring of the field shown; or forget them all.
+    v.push(cmd(
+        "settings.set_default:selected",
+        "cmd-defaults-selected",
+        "settings",
+        &[],
+        Dynamic("settings.set_default", |s| {
+            let m = s.mesh.as_ref()?;
+            let item = s
+                .display
+                .selection
+                .iter()
+                .rev()
+                .copied()
+                .find(|&i| murmel_engine::defaults::Kind::of_item(i).is_some())?;
+            Some(json!({"item": item.id(&m.mesh)}))
+        }),
+    ));
+    v.push(cmd(
+        "settings.set_default:view",
+        "cmd-defaults-view",
+        "settings",
+        &[],
+        Tool("settings.set_default", json!({"kind": "view"})),
+    ));
+    v.push(cmd(
+        "settings.set_default:field_style",
+        "cmd-defaults-field-style",
+        "settings",
+        &[],
+        Dynamic("settings.set_default", |s| {
+            let f = s.display.field.as_ref()?;
+            s.mesh.as_ref()?.fields.get(&f.name)?;
+            Some(json!({"kind": "field_style", "field": f.name}))
+        }),
+    ));
+    v.push(cmd(
+        "settings.reset_default",
+        "cmd-defaults-reset",
+        "settings",
+        &[],
+        Tool("settings.reset_default", json!({})),
+    ));
     v
 }
 
@@ -1713,6 +1757,8 @@ mod tests {
             let d = json!({"kind": "distance", "points": [at(0), at(1)]});
             assert!(crate::call("measure.add", d, s).ok());
             assert!(crate::call("probe.add", json!({"at": {"cell": 0}}), s).ok());
+            // A slice selected, so its settings can become the defaults.
+            assert!(crate::call("select.item", json!({"item": "slice:1", "add": true}), s).ok());
             assert!(crate::call("select.item", json!({"item": "measure:1", "add": true}), s).ok());
         };
         open(&mut s);
