@@ -673,6 +673,10 @@ pub struct Session {
     /// The time series being walked (`series.open`), whose current entry
     /// is the open mesh and parcels; ended by opening another mesh.
     pub series: Option<crate::series::Series>,
+    /// The probe history read last (`probe.history`), shared by copies
+    /// of the session so the window's reading on a copy serves the
+    /// export after it.
+    pub probe_history: crate::history::Cache,
 }
 
 impl Session {
@@ -700,6 +704,7 @@ impl Session {
             defer_clips: false,
             preview: None,
             series: None,
+            probe_history: crate::history::Cache::default(),
         }
     }
 

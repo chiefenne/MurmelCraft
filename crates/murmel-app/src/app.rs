@@ -96,6 +96,8 @@ pub struct MurmelApp {
     pub(crate) movie: crate::movie_dialog::MovieDialog,
     /// The Derived fields window ("Derived fields…").
     pub(crate) derived: crate::derived::DerivedWindow,
+    /// The Probe history window and its reading.
+    pub(crate) history: crate::probe_history::HistoryWindow,
     /// The movie being made on its own thread, if one is.
     pub(crate) movie_job: Option<crate::movie_dialog::MovieJob>,
     /// The large mesh being read on its own thread, if one is.
@@ -217,6 +219,7 @@ impl MurmelApp {
             movie: Default::default(),
             derived: Default::default(),
             movie_job: None,
+            history: Default::default(),
             opening: None,
             background_bytes: crate::opening::BACKGROUND_BYTES,
             #[cfg(test)]
@@ -1361,6 +1364,8 @@ impl eframe::App for MurmelApp {
         self.export_window(&ctx);
         self.derived_window(&ctx);
         self.poll_movie(&ctx);
+        self.poll_probe_history(&ctx);
+        self.probe_history_window(&ctx);
         self.play_series(&ctx);
         self.poll_opening(&ctx);
         self.poll_digest(&ctx);

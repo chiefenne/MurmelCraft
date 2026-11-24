@@ -89,8 +89,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `measure.rename` | 1 | read | Name a measurement or a probe (measure:<n>, probe:<n>); a null name goes back to "Distance n", "Angle n" or "Probe n". |
 | `measure.remove` | 1 | read | Remove measurements and probes: the items named (measure:<n>, probe:<n>), or all of them. Undo brings them back. |
 | `measure.list` | 1 | read | The measurements (value, unit, points and what they snapped to) and the probes (point, cell and what it reads) of the open mesh. |
-| `probe.add` | 1 | read | Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (inverse distance weighted from the cell's nodes). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it. |
+| `probe.add` | 1 | read | Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (derived and calculated fields too: a cell field's value is the cell's own plus its least-squares gradient times the way from the centroid, as a finite-volume solver reconstructs it; a node field's the cell's linear fit to its nodes; on a boundary face also the boundary fields there) and shown, the value of the field colouring the mesh (title, unit, value). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it. |
 | `probe.at` | 1 | read | What a probe at a point would read, without keeping it: the point given as for measure.add, the cell holding it and that cell's values. Changes nothing. |
+| `probe.history` | 1 | read | Every probe's field values over the time steps of the open series (just the step shown without one): each step's fields file is read (the step shown is not read again), the derived and calculated fields are made again of its values, and each probe reads its cell as probe.add does (the cell's value plus its least-squares gradient to the point). probes (probe:<n> ids) and fields (names) narrow it; left out, every probe inside the mesh and every cell and node field. The result gives the probes (id, name), the columns (name, unit, components) and a row per step (index, step, time, values by probe then column, null where the step has none, and a note when a step has no fields file or another mesh). The history read last is kept until the probes, the series or the derived fields change, so probe.export after it reads nothing again. Changes nothing. |
+| `probe.export` | 1 | write-files | Write the probe history (probe.history, the same probes and fields filters) as CSV at path: a line per step with step and time, then a column per probe, field and component (velocity_x, velocity_y, velocity_z), named "<probe>: <field> [unit]"; values in full precision, an empty cell where a step has none. |
 
 ## Inputs
 
@@ -3141,6 +3143,64 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `probe.history`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "fields": {
+      "description": "Field names; all cell and node fields when left out",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "probes": {
+      "description": "probe:<n> ids; all probes inside the mesh when left out",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `probe.export`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "fields": {
+      "description": "Field names; all cell and node fields when left out",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "path": {
+      "description": "The CSV file to write",
+      "type": "string"
+    },
+    "probes": {
+      "description": "probe:<n> ids; all probes inside the mesh when left out",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
 ## Diagnostic codes
 
 | Code | Severity | Meaning | Fix |
@@ -3190,6 +3250,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `MEAS001` | error | Nothing of the mesh lies under the screen point, so there is no point to measure from. | Point at a face of the mesh, or give typed coordinates (point), a node, a face or a cell. |
 | `MEAS002` | error | The open mesh has no node, face or cell with this number. | mesh.info gives the counts; numbers start at 0. |
 | `MEAS003` | error | The name of a measurement or probe is empty, longer than 64 characters or holds control characters. |  |
+| `PROBE001` | error | No probe history can be read: no probe lies inside the mesh, the open mesh has no cell or node fields, or a probe named is not inside the mesh. | Place a probe inside the mesh (probe.add) on a mesh with results; measure.list gives the probes. |
+| `PROBE002` | error | The probe history was cancelled before every step was read. | Read it again; the steps already read are not kept. |
+| `PROBE003` | error | The probe history's CSV file cannot be written. | Give a path in a folder that exists and can be written. |
 | `SESS001` | error | A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values. | Check the path; save the session again with session.save. |
 | `SESS002` | error | A session file could not be written. | Choose a writable folder. |
 | `SESS003` | warning | The session's mesh changed since the session was saved (its SHA-256 differs). | Check the view; save the session again to accept the new mesh. |

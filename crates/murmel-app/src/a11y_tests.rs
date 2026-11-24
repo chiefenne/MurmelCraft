@@ -1386,3 +1386,54 @@ fn player_bar_steps_and_plays() {
     assert_eq!(seen[at + 1], "Player", "{seen:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Invariant (the maintainer's cards of 2026-11-24, "Shown field on
+/// label and tree" and "Follow steps, plus history plot"): with a field
+/// colouring the mesh, a probe's tree row gives that field's value at
+/// the probe, and the Probe history window reads the history on a
+/// thread of its own, then shows a named plot, the field picker and
+/// Export CSV, every control named. Breaks if the row went back to the
+/// cell alone, or the window never took the reading.
+#[test]
+fn probe_values_and_history_window() {
+    let mut h = harness();
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.state_mut()
+        .call("probe.add", serde_json::json!({"at": {"cell": 3}}));
+    h.state_mut().call(
+        "display.color_by",
+        serde_json::json!({"by": "field", "field": "pressure"}),
+    );
+    h.run_steps(3);
+    let row = h.root().children_recursive().find_map(|n| {
+        n.accesskit_node()
+            .label()
+            .filter(|l| l.starts_with("Probe 1: pressure "))
+    });
+    assert!(row.is_some(), "the probe's row gives the pressure there");
+    h.state_mut().open_probe_history();
+    for _ in 0..300 {
+        h.run_steps(1);
+        if h.state().history.job.is_none()
+            && murmel_tools::probe::kept(&h.state().session).is_some()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    h.run_steps(3);
+    assert!(
+        murmel_tools::probe::kept(&h.state().session).is_some(),
+        "the history was read"
+    );
+    let plot = h.root().children_recursive().find_map(|n| {
+        n.accesskit_node()
+            .label()
+            .filter(|l| l.ends_with("at each probe over the run"))
+    });
+    assert_eq!(plot.as_deref(), Some("pressure at each probe over the run"));
+    assert!(h.query_by_label("Export CSV…").is_some());
+    assert_eq!(problems(&h), Vec::<String>::new(), "probe history window");
+}

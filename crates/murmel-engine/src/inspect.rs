@@ -818,7 +818,8 @@ pub fn probe_rows(m: &Mesh, at: &Anchor) -> Vec<Row> {
 
 /// The field values of `item` (UI spec to come, Properties: "Fields"):
 /// a cell's own values, a boundary face's boundary values and its cell's
-/// values, a probe's values interpolated at its point. Empty for other
+/// values, a probe's values at its point ([`crate::field::FieldSet::probe_values`]:
+/// the cell's value plus its gradient, and a wall's boundary values). Empty for other
 /// items and for a mesh without fields.
 pub fn field_values(
     open: &OpenMesh,
@@ -845,8 +846,8 @@ pub fn field_values(
         }
         Item::Probe(n) => display
             .probe(n)
-            .and_then(|p| Some((p.at.cell?, p.at.point)))
-            .map(|(c, at)| f.point_values(m, c as usize, at))
+            .and_then(|p| Some((p.at.cell?, &p.at)))
+            .map(|(c, at)| f.probe_values(m, c as usize, at.point, at.face))
             .unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -1061,4 +1062,39 @@ mod tests {
         let rows = super::rows(&open, &d, Item::Face(f));
         assert!(rows.iter().any(|r| r.key == "owner"));
     }
+}
+
+/// The value a probe shows at a glance (the maintainer's card of
+/// 2026-11-24, "Shown field on label and tree"): the field colouring the
+/// mesh, with the component shown, at the probe's point.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ShownValue {
+    /// The legend's title: `pressure`, `|velocity|`, `velocity_x`.
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    pub value: f64,
+}
+
+/// What probe `p` shows of the field colouring the mesh; `None` while no
+/// field colours it, outside the mesh or without a value there.
+pub fn probe_shown(
+    open: &OpenMesh,
+    display: &Display,
+    p: &crate::measure::Probe,
+) -> Option<ShownValue> {
+    if display.color_by != crate::display::ColorBy::Field {
+        return None;
+    }
+    let choice = display.field.as_ref()?;
+    let cell = p.at.cell? as usize;
+    let f = open.fields.get(&choice.name)?;
+    let value =
+        open.fields
+            .probe_value(&open.mesh, &choice.name, choice.component, cell, p.at.point)?;
+    Some(ShownValue {
+        title: choice.title(f.is_vector()),
+        unit: f.unit.clone(),
+        value,
+    })
 }
