@@ -15,6 +15,7 @@
 
 pub mod bench;
 mod blocks;
+pub mod charts;
 pub mod commands;
 mod defaults;
 mod derive;

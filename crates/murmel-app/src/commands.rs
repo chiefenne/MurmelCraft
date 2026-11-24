@@ -108,6 +108,8 @@ impl MurmelApp {
                 "window.open_folder" => self.open_folder_dialog(),
                 "window.parcels_open" => self.parcels_open_dialog(),
                 "window.series_open" => self.series_open_dialog(),
+                "window.charts_open" => self.charts_open_dialog(),
+                "window.charts_export" => self.charts_export_dialog(),
                 "window.screenshot" => self.screenshot_dialog(),
                 "window.export_image" => self.export.open = true,
                 "window.export_movie" => self.movie.open = true,

@@ -193,6 +193,14 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Open time series… | window, then `series.open` |
 | palette | First time step | `series.go` (input from the session) |
 | palette | Last time step | `series.go` (input from the session) |
+| palette | Open the charts of a run… | window, then `charts.open` |
+| palette | Show or hide the charts | `charts.show` (input from the session) |
+| palette | Chart the liquid mass flow | `charts.show` (input from the session) |
+| palette | Chart the liquid through the datums so far | `charts.show` (input from the session) |
+| palette | Chart the spray penetration | `charts.show` (input from the session) |
+| palette | Chart the Sauter mean diameter | `charts.show` (input from the session) |
+| palette | Chart the droplet sizes | `charts.show` (input from the session) |
+| palette | Save the chart as a picture… | window, then `charts.export` |
 | palette | Add streamlines from a line of seeds | `stream.set` (input from the session) |
 | palette | Add streamlines from a ball of seeds | `stream.set` (input from the session) |
 | palette | Add streamlines from a patch | `stream.set` (input from the session) |

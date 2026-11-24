@@ -156,3 +156,17 @@ halo = "#101214"
 line = "#A06A00"
 probe = "#1C7BB0"
 halo = "#FFFFFF"
+
+# Charts of a run's tables (D268, second milestone: datums, sprays): six
+# series hues of our own, in this fixed order and never cycled (a seventh
+# series is refused, the call picks which six show). OKLCH hues 250, 70,
+# 300, 160, 30, 200 with the lightness alternating, chroma 0.15 (light)
+# and 0.13 (dark), each theme stepped for its own panel colour. Checked
+# 2026-11-24 with a palette validator: lightness band, chroma floor,
+# contrast >= 3:1 on bg_panel, and neighbours at least 10.6 ΔE apart
+# under simulated protanopia, deuteranopia and tritanopia. Grid, axes and
+# text take the theme's line and text colours; the step cursor its accent.
+[chart.light]
+series = ["#0465AF", "#BF7B0F", "#724AAB", "#00A66D", "#A8372A", "#179FA5"]
+[chart.dark]
+series = ["#2D78BD", "#C7852A", "#8160B5", "#39AD79", "#B45244", "#19A9B0"]

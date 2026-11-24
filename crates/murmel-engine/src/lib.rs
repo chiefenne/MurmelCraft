@@ -6,6 +6,7 @@
 
 pub mod animation;
 pub mod camera;
+pub mod chart;
 pub mod checked;
 pub mod clip;
 pub mod colormap;

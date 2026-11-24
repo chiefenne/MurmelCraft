@@ -142,6 +142,27 @@ pub struct Tokens {
     pub mesh: MeshTokens,
     pub gizmo: GizmoTokens,
     pub measure: MeasureTokens,
+    pub chart: ChartTokens,
+}
+
+/// The colours of charts (D268): the series hues per theme, in order.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ChartTokens {
+    pub dark: ChartColors,
+    pub light: ChartColors,
+}
+
+impl ChartTokens {
+    pub fn colors(&self, dark: bool) -> &ChartColors {
+        if dark { &self.dark } else { &self.light }
+    }
+}
+
+/// Chart colours in one theme.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct ChartColors {
+    /// The series hues in their fixed order.
+    pub series: Vec<Rgb>,
 }
 
 /// The colours of measurements and probes drawn over the viewport, per
@@ -207,6 +228,14 @@ impl Tokens {
         }
         if t.mesh.quality.len() < 2 {
             return Err("tokens.toml: the quality ramp needs two colours".into());
+        }
+        for c in [&t.chart.dark, &t.chart.light] {
+            if c.series.len() < crate::chart::MAX_SERIES {
+                return Err(format!(
+                    "tokens.toml: [chart] needs {} series colours",
+                    crate::chart::MAX_SERIES
+                ));
+            }
         }
         Ok(t)
     }

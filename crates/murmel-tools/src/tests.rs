@@ -1014,6 +1014,9 @@ fn reads_only_tools_change_nothing() {
         )
         .ok()
     );
+    // A run's tables, for the chart tools that read them.
+    let run = root().join("test-fixtures/spray-run");
+    assert!(call("charts.open", json!({"path": run}), &mut s).ok());
     let mut ran = 0;
     for t in tools().iter().filter(|t| crate::reads_only(t.id)) {
         assert_eq!(t.action, crate::Action::Read, "{}", t.id);
@@ -2867,4 +2870,93 @@ fn series_tools() {
     assert_eq!(e.result["series"]["time"], 0.5, "the parcel file's time");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&dir2);
+}
+
+/// Invariant (charts, D268 second milestone): charts.open reads a
+/// FoehnCraft run's tables, charts.show changes the panel's chart and
+/// refuses what the run lacks (CHART003) without changing it, charts.data
+/// and stats.at follow the series' step, charts.export writes a PNG of
+/// the size asked and an SVG, and every chart tool without a run is
+/// CHART002. Breaks when a tool stops reaching the engine, the step of
+/// the player is not used or an export writes another size; the engine's
+/// tests check the numbers.
+#[test]
+fn chart_tools() {
+    let mut s = session();
+    for (id, input) in [
+        ("charts.show", json!({})),
+        ("charts.data", json!({})),
+        ("stats.at", json!({})),
+    ] {
+        let e = call(id, input, &mut s);
+        assert_eq!(e.diagnostics[0].code, "CHART002", "{id}");
+    }
+    let e = call("charts.open", json!({"path": "/nonexistent/run"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "CHART001");
+    let run = root().join("test-fixtures/spray-run");
+    let e = call("charts.open", json!({"path": run}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["charts"]["run"]["injectors"], json!(["nozzle"]));
+    assert_eq!(e.result["charts"]["spec"]["chart"], "mass_flow");
+    let e = call(
+        "charts.show",
+        json!({"chart": "histogram", "datums": ["nope"]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "CHART003");
+    assert!(e.diagnostics[0].message.contains("outlet"));
+    assert_eq!(s.charts.as_ref().unwrap().spec.chart.key(), "mass_flow");
+    let e = call(
+        "charts.show",
+        json!({"chart": "histogram", "datums": ["outlet"], "weight": "droplets"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["chart"]["bars"].as_array().unwrap().len(), 40);
+    // The panel's chart is the default of charts.data; a step picks the
+    // histogram's interval.
+    let e = call(
+        "charts.data",
+        json!({"step": 100, "cumulative": false}),
+        &mut s,
+    );
+    assert!(
+        e.result["chart"]["title"]
+            .as_str()
+            .unwrap()
+            .contains("step 100")
+    );
+    let e = call("stats.at", json!({"step": 100}), &mut s);
+    assert_eq!(e.result["statistics"]["step"], 100);
+    let dir = root().join("target/render-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("chart.png");
+    let e = call(
+        "charts.export",
+        json!({"path": png, "chart": "penetration", "width": 400, "height": 240, "scale": 1.5}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let (w, h, _) = murmel_render::read_png(&png).unwrap();
+    assert_eq!((w, h), (600, 360));
+    let svg = dir.join("chart.svg");
+    let e = call(
+        "charts.export",
+        json!({"path": svg, "theme": "light"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(std::fs::read_to_string(&svg).unwrap().starts_with("<svg"));
+    let e = call(
+        "charts.export",
+        json!({"path": dir.join("chart.jpg")}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "CHART003");
+    let e = call(
+        "charts.export",
+        json!({"path": png, "chart": "columns", "columns": ["spray:in_flow_kg", "spray:d32_m"]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "CHART003");
 }

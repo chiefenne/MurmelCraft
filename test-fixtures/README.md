@@ -54,3 +54,21 @@ no OpenFOAM code was read. The gzip case of the reader tests compresses
 A larger mesh for trying the window (not in the repository, 1 MB):
 `kofl generate-duct test-fixtures/elbow/elbow.stl test-fixtures/elbow/patches.json test-fixtures/elbow/partition.json polyhedral elbow`
 writes `elbow/foehncraft.vtu` (1,082 polyhedral cells).
+
+## Tables of a spray run (`spray-run/`)
+
+Written by FoehnCraft (MIT, github.com/chiefenne/Foehncraft) at the head of
+pull request #265 (`8c1efc5`, stage SP1b, 2026-11-24): `foehn flow
+examples/cases/flow/spray_datums.toml --out <dir>`, a 3-second run of
+the gallery case `spray_datums` (one injector `nozzle`, six surface
+datums and one box). The CSV files are copied unchanged (three of the six
+histograms); `result.json` keeps only the first solve's `datums` and
+`spray` (the end-of-run statistics), cut by a Python script, no number
+changed. Layouts: FoehnCraft `docs/interfaces.md`, "Files of a run".
+
+| File | What it checks |
+|---|---|
+| `spray-run/datums.csv` | format `foehncraft-datums 1`: 7 datums (6 surfaces with liquid columns, the volume `nozzle_box`), a row every 10 steps |
+| `spray-run/spray.csv` | format `foehncraft-spray 1`: the mass book every step and injector `nozzle` with its penetration |
+| `spray-run/spray_hist_{outlet,floor,x06}.csv` | format `foehncraft-spray-histogram 1`: 40 log bins from 1 µm to 1 mm plus the under and over rows, per interval |
+| `spray-run/result.json` | the end-of-run statistics of the datums and the spray |
