@@ -788,7 +788,8 @@ impl Session {
             h.stop();
         }
         if l.pending {
-            self.hashing = Some(Hashing::start(l.mesh.files.clone()));
+            let dir = self.checked_dir().map(Path::to_path_buf);
+            self.hashing = Some(Hashing::start(l.mesh.files.clone(), dir));
         }
         let mut base = self.display.clone();
         base.field_values = None;
