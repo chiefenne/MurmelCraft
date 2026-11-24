@@ -53,6 +53,15 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
 - **Clip planes** (format 1.2) are `display.clips`, in the order they
   were added; `clip:1` in `selection` is the first. A 1.0 or 1.1 file has
   one plane in `display.clip`, which loads as `clip:1`.
+- **Fields** (format 1.4) are `display.field`, the field shown when
+  `color_by` is `field` (`{"name": "velocity", "component": "magnitude"}`),
+  and `display.field_styles`, one style per field: `mode` (`flat`,
+  `smooth`, `banded`), `bands` (2 to 64), `lines` and `line_count` (1 to
+  64), `map` (a colour map id, or left out for automatic), `reverse` and
+  `range` (`field`, `shown`, `symmetric` or `{"fixed": {"min": 0, "max": 2}}`).
+  A field the result does not have is skipped as `field:<name>` and the
+  colour falls back to solid. The values themselves are read from the
+  result file again, never stored.
 - **Saved views** (format 1.1) are the named cameras of the model tree's
   "Saved views" (`views.save`, `views.go`, `views.rename`,
   `views.delete`), in the order they were saved. A 1.0 file has none and

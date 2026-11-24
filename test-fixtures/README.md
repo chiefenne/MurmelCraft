@@ -9,6 +9,22 @@ on 2026-11-23. Nothing here was edited by hand.
 | `box/` | `kofl generate test-fixtures/box-4.json box.mesh.json`, then `kofl export box.mesh.json foehncraft foehncraft.vtu` | 4 Voronoi polyhedra, 6 named patches with role `unspecified`, the digests as field data |
 | `channel/` | `kofl generate-channel test-fixtures/straight-channel.json channel` (`foehncraft.vtu` and `mesh-evidence.json` of the bundle) | 776 cells with prism layers, patches `inlet`, `outlet`, `walls` with roles, the evidence beside the mesh |
 
+## FoehnCraft results (`vtkhdf/`)
+
+Written by `python3 -I test-fixtures/vtkhdf/make_vtkhdf.py` with h5py (BSD)
+on the HDF5 library, so MurmelCraft's own HDF5 and VTKHDF readers are
+checked against an independent writer. The meshes are `box/` and
+`channel/` above; the layout follows FoehnCraft's `fields.vtkhdf` (MIT,
+github.com/chiefenne/Foehncraft, `docs/interfaces.md`, "Files of a run").
+The fields are analytic functions of the cell and face centres, so the
+tests know every value.
+
+| File | What it checks |
+|---|---|
+| `vtkhdf/channel_fields.vtkhdf` | a PartitionedDataSetCollection with the cells in `internal` and one PolyData block per patch; cell fields velocity (vector), speed, pressure, k, omega, nu_t with units; boundary fields wall_shear_stress and y_plus; the run's root attributes (iteration 250) |
+| `vtkhdf/box_chunked.vtkhdf` | the 4 Voronoi polyhedra of `box/` with 14 cell fields (two chunks each, deflate with the shuffle filter), units in one attribute, step and time |
+| `vtkhdf/box_latest.vtkhdf` | the same written with the newest HDF5 file format (`libver="latest"`): compact datasets, a single-chunk dataset, a big-endian dataset and many root attributes |
+
 ## OpenFOAM polyMesh cases (`openfoam/`)
 
 | Folder | Made with | What it checks |

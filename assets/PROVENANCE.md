@@ -10,5 +10,10 @@ no SolidCraft or FieldCraft asset, kit, theme or icon is used (clean room).
 | `icons/lucide-subset.ttf` | `lucide-static` 0.460.0 (npm), `font/lucide.ttf` | ISC (`icons/Lucide-LICENSE.txt`) | `pyftsubset` to the glyphs folder-open, scan, house, box, square, sun, moon, monitor, settings, search, circle-alert, rotate-3d, move, zoom-in, eye, eye-off, layers, info (codepoints in `crates/murmel-app/src/style.rs`) |
 | `tokens.toml` | ours (UI spec, design tokens) | MIT | patch, role and cell-type palettes computed in OKLCH and checked under simulated colour-vision deficiencies, see the file and the theme tests |
 | `i18n/en/murmel.ftl` | ours | MIT | |
+| `colormaps.toml` (viridis, magma, inferno, plasma) | the data of Nathaniel J. Smith, Stefan van der Walt and Eric Firing (github.com/BIDS/colormap), as the 256-entry tables matplotlib 3.11 ships | CC0 1.0 | `colormaps.py` samples every third entry (86 stops) |
+| `colormaps.toml` (turbo) | Anton Mikhailov, Google LLC, 2019, as the 256-entry table matplotlib 3.11 ships | Apache 2.0 (`Turbo-LICENSE.txt`) | sampled as above |
+| `colormaps.toml` (cool_warm) | ours, computed from K. Moreland, "Diverging Color Maps for Scientific Visualization", ISVC 2009 (Msh interpolation, the paper's end colours) | MIT | `colormaps.py` |
+| `colormaps.toml` (rainbow, grey) | ours: the piecewise-linear "jet" formula and a black-to-white ramp | MIT | `colormaps.py` |
+| `colormaps.py` | ours | MIT | `python3 -I assets/colormaps.py` writes `colormaps.toml`; needs numpy and matplotlib at generation time only (nothing of matplotlib ships) |
 | `logo/murmelcraft-logo-source.png` | supplied by the maintainer (Andreas Ennemoser), 2026-11-23 | MurmelCraft logo, all rights with the maintainer; not under the MIT licence of the code | the image as supplied, 1254 x 1254 |
 | `logo/murmelcraft-256.png`, `logo/murmelcraft-128.png` | from the source above | as above | rounded square (1151 px, corner radius 278 px) cut out of the white page with a 4x supersampled mask, resized with Lanczos |

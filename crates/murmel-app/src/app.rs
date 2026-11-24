@@ -350,12 +350,14 @@ impl MurmelApp {
                 self.i18n.tr("open-filter-meshes"),
                 &[
                     "vtu",
+                    "vtkhdf",
                     "foam",
                     "OpenFOAM",
                     murmel_engine::session_file::EXTENSION,
                 ],
             )
             .add_filter(self.i18n.tr("open-filter-vtu"), &["vtu"])
+            .add_filter(self.i18n.tr("open-filter-vtkhdf"), &["vtkhdf"])
             .add_filter(self.i18n.tr("open-filter-foam"), &["foam", "OpenFOAM"])
             .add_filter(self.i18n.tr("open-filter-all"), &["*"])
             .pick_file();

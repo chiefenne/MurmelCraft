@@ -16,6 +16,14 @@ tool that the window, the command line and the MCP server share.
   `.foam` file in the case (ascii, binary and gzip files, `cellZones`),
   such as KoflCraft's `export … openfoam`; the evidence in the polyMesh
   folder is checked file by file.
+- Opens FoehnCraft results (`fields.vtkhdf`, read by our own HDF5 reader)
+  and the cell or point data of a `.vtu`, and colours the mesh by a field
+  (`display.color_by` with `field`, `field.style`): flat (one colour per
+  cell), smooth (node values by inverse distance) or banded, contour lines
+  on or off with their own count, eight colour maps (viridis by default,
+  cool-warm for ranges symmetric about zero), each reversible, and a
+  colour bar with its settings menu. Properties and probes show the
+  values.
 - Shaded with edges, patch colours, orbit, pan, zoom to the cursor, fit,
   home, the three projection modes (default: perspective with orthographic
   faces), dark and light themes switched live.

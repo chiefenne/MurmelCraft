@@ -6,9 +6,10 @@ app-no-file = No mesh open
 
 toolbar-open = Open
 toolbar-open-tip = Open a mesh or a session ({ $ctrl } + O; an OpenFOAM case folder: { $ctrl } + Shift + O)
-open-filter-meshes = Meshes and sessions (.vtu, .foam, .murmel)
+open-filter-meshes = Meshes, results and sessions (.vtu, .vtkhdf, .foam, .murmel)
 open-filter-session = MurmelCraft session (.murmel)
 open-filter-vtu = VTK unstructured grid (.vtu)
+open-filter-vtkhdf = FoehnCraft result (.vtkhdf)
 open-filter-foam = OpenFOAM case (.foam)
 open-filter-all = All files (a file of a polyMesh folder)
 toolbar-group-view = View
