@@ -50,6 +50,14 @@ pub struct Surface {
     pub positions: Vec<[f32; 3]>,
     pub normals: Vec<[f32; 3]>,
     pub colors: Vec<[f32; 3]>,
+    /// Per vertex, for colour mode field: the cell value (colour mode
+    /// flat), the node value (smooth and banded), both relative to
+    /// `value_origin`, the share of the selection colour to mix in, and
+    /// 1 when the face has a value (0: it keeps `colors`).
+    pub values: Vec<[f32; 4]>,
+    pub value_origin: f64,
+    /// The smallest and largest field value drawn (range mode shown).
+    pub field_range: Option<(f64, f64)>,
     pub indices: Vec<u32>,
     /// Per triangle: the cell it shows (the owner of a boundary face, the
     /// cell shown beside an open face, the cell of a section;
@@ -98,6 +106,9 @@ struct Cuts {
     pos: Vec<[f64; 3]>,
     plane: Vec<usize>,
     ids: HashMap<(usize, V, V), u32>,
+    /// The edge each cut point lies on and where along it (0 at the
+    /// first corner), so values interpolate like positions.
+    along: Vec<(V, V, f64)>,
 }
 
 /// The clip planes that cut. A point where plane `p` crosses the edge
@@ -188,7 +199,26 @@ impl<'a> Cutter<'a> {
         c.pos.push(at);
         c.plane.push(p);
         c.ids.insert(key, k);
+        c.along.push((a, b, t));
         V::Cut(k)
+    }
+
+    /// The value at corner `v` of a field with `node` values: a node's
+    /// own, a cut point's mixed from the ends of its edge.
+    fn value(&self, v: V, node: &[f64]) -> f64 {
+        match v {
+            V::Node(i) => node.get(i as usize).copied().unwrap_or(f64::NAN),
+            V::Cut(k) => {
+                let along = self.cuts.borrow().along.get(k as usize).copied();
+                match along {
+                    Some((a, b, t)) => {
+                        let (va, vb) = (self.value(a, node), self.value(b, node));
+                        va + t * (vb - va)
+                    }
+                    None => f64::NAN,
+                }
+            }
+        }
     }
 
     /// The part of `poly` that plane `p` keeps (Sutherland and Hodgman).
@@ -375,12 +405,74 @@ impl Surface {
                 FEATURE_ANGLE_DEG.to_radians().cos(),
             )
         });
+        // Colour mode field: the value of each polygon (colour mode flat)
+        // and of each corner (smooth, banded).
+        let field = display.field_values();
+        s.value_origin = field.map_or(0.0, |f| f.origin);
+        let corner_values: Vec<Vec<f64>> = match field {
+            Some(f) => polys
+                .iter()
+                .map(|p| {
+                    p.verts
+                        .iter()
+                        .map(|&v| match (v, &cutter) {
+                            (V::Node(i), _) => f.node.get(i as usize).copied().unwrap_or(f64::NAN),
+                            (_, Some(c)) => c.value(v, &f.node),
+                            (V::Cut(_), None) => f64::NAN,
+                        })
+                        .collect()
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let mut drawn = Bounds1::default();
         // Lines alone are drawn in the face colour; over faces, darker.
         let lines_only = !display.render_mode.faces();
         for (unselected, _, i) in order {
             let poly = &polys[i];
             let rgb = poly.color;
-            let (color, ec) = if unselected {
+            // The polygon's flat value and its corners' values, when it
+            // has them all.
+            let valued = field.and_then(|f| {
+                let corners = &corner_values[i];
+                if !corners.iter().all(|x| x.is_finite()) {
+                    return None;
+                }
+                let mut flat = f.flat(poly.cell, poly.boundary);
+                if !flat.is_finite() {
+                    // A face of no cell (a surface mesh) with a point
+                    // field: the mean of its corners.
+                    flat = corners.iter().sum::<f64>() / corners.len().max(1) as f64;
+                }
+                flat.is_finite().then_some((flat, corners))
+            });
+            if let Some((flat, corners)) = valued {
+                drawn.add(flat);
+                corners.iter().for_each(|&x| drawn.add(x));
+            }
+            let sel_mix = if unselected { 0.0 } else { mix };
+            let (color, ec) = if field.is_some() {
+                let face = if valued.is_some() {
+                    rgb
+                } else {
+                    tokens.mesh.field.none
+                };
+                let face = if unselected {
+                    face
+                } else {
+                    Rgb(std::array::from_fn(|k| {
+                        (face.0[k] as f32 * (1.0 - mix) + sel.0[k] as f32 * mix).round() as u8
+                    }))
+                };
+                let edge = if !unselected {
+                    sel
+                } else if lines_only {
+                    tokens.mesh.field.none
+                } else {
+                    tokens.mesh.field.edge
+                };
+                (face.linear(), edge.linear())
+            } else if unselected {
                 (
                     rgb.linear(),
                     if lines_only {
@@ -401,23 +493,39 @@ impl Surface {
             }
             let n = normals[i];
             let base = s.positions.len() as u32;
-            let push = |s: &mut Surface, p: [f64; 3]| {
+            let origin_v = s.value_origin;
+            let value = |node: f64| -> [f32; 4] {
+                match valued {
+                    Some((flat, _)) => [
+                        (flat - origin_v) as f32,
+                        (node - origin_v) as f32,
+                        sel_mix,
+                        1.0,
+                    ],
+                    None => [0.0, 0.0, 0.0, 0.0],
+                }
+            };
+            let corner =
+                |j: usize| -> f64 { valued.map_or(0.0, |(_, c)| c.get(j).copied().unwrap_or(0.0)) };
+            let push = |s: &mut Surface, p: [f64; 3], v: [f32; 4]| {
                 s.positions.push(p.map(|v| v as f32));
                 s.normals.push(n);
                 s.colors.push(color);
+                s.values.push(v);
             };
             let tris_before = s.indices.len() / 3;
             if pts.len() == 3 {
-                for &p in pts {
-                    push(&mut s, p);
+                for (j, &p) in pts.iter().enumerate() {
+                    push(&mut s, p, value(corner(j)));
                 }
                 s.indices.extend([base, base + 1, base + 2]);
             } else {
                 let k = pts.len() as f64;
                 let c = [0, 1, 2].map(|d| pts.iter().map(|p| p[d]).sum::<f64>() / k);
-                push(&mut s, c);
-                for &p in pts {
-                    push(&mut s, p);
+                let mean = (0..pts.len()).map(corner).sum::<f64>() / k;
+                push(&mut s, c, value(mean));
+                for (j, &p) in pts.iter().enumerate() {
+                    push(&mut s, p, value(corner(j)));
                 }
                 let m = pts.len() as u32;
                 for i in 0..m {
@@ -445,6 +553,7 @@ impl Surface {
             }
         }
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
+        s.field_range = drawn.range();
         s.outline_color = sel.linear();
         for (a, b) in outline(mesh, display) {
             for i in [a, b] {
@@ -453,6 +562,25 @@ impl Surface {
             }
         }
         s
+    }
+}
+
+/// The smallest and largest of the values added.
+#[derive(Default)]
+struct Bounds1(Option<(f64, f64)>);
+
+impl Bounds1 {
+    fn add(&mut self, x: f64) {
+        if x.is_finite() {
+            self.0 = Some(match self.0 {
+                None => (x, x),
+                Some((a, b)) => (a.min(x), b.max(x)),
+            });
+        }
+    }
+
+    fn range(&self) -> Option<(f64, f64)> {
+        self.0
     }
 }
 

@@ -9,7 +9,7 @@
 //! and the tests all read the same keys.
 
 use murmel_engine::{
-    ColorBy, Item, Metric, Projection, Quality, RenderMode, Session, StandardView,
+    ColorBy, FieldMode, Item, Metric, Projection, Quality, RenderMode, Session, StandardView,
 };
 use serde_json::{Value, json};
 
@@ -70,6 +70,7 @@ pub const GROUPS: &[&str] = &[
     "file",
     "window",
     "display",
+    "field",
     "clip",
     "measure",
     "selection",
@@ -460,6 +461,85 @@ pub fn commands() -> Vec<Command> {
             Tool("display.color_by", json!({"by": c})),
         ));
     }
+    // Fields: the colouring one key away (B cycles flat, smooth and
+    // banded; L turns the contour lines on and off), the rest in the
+    // palette. They act on the field shown now.
+    v.push(cmd(
+        "field.style:next_mode",
+        "cmd-field-next-mode",
+        "field",
+        &["B"],
+        Dynamic("field.style", |s| {
+            let v = s.field_values()?;
+            let next = match s.field_style().mode {
+                FieldMode::Flat => FieldMode::Smooth,
+                FieldMode::Smooth => FieldMode::Banded,
+                FieldMode::Banded => FieldMode::Flat,
+            };
+            Some(json!({"field": v.choice.name, "mode": next}))
+        }),
+    ));
+    v.push(cmd(
+        "field.style:lines",
+        "cmd-field-lines",
+        "field",
+        &["L"],
+        Dynamic("field.style", |s| {
+            let v = s.field_values()?;
+            Some(json!({"field": v.choice.name, "lines": !s.field_style().lines}))
+        }),
+    ));
+    for m in FieldMode::ALL {
+        v.push(cmd(
+            format!("field.style:{}", m.key()),
+            format!("cmd-field-mode-{}", m.key()),
+            "field",
+            &[],
+            Tool("field.style", json!({ "mode": m })),
+        ));
+    }
+    v.push(cmd(
+        "field.style:reverse",
+        "cmd-field-reverse",
+        "field",
+        &[],
+        Dynamic("field.style", |s| {
+            let v = s.field_values()?;
+            Some(json!({"field": v.choice.name, "reverse": !s.field_style().reverse}))
+        }),
+    ));
+    for r in ["field", "shown", "symmetric", "fixed"] {
+        v.push(cmd(
+            format!("field.style:range-{r}"),
+            format!("cmd-field-range-{r}"),
+            "field",
+            &[],
+            Tool("field.style", json!({ "range": r })),
+        ));
+    }
+    v.push(cmd(
+        "field.style:map-auto",
+        "cmd-field-map-auto",
+        "field",
+        &[],
+        Tool("field.style", json!({"map": "auto"})),
+    ));
+    for id in murmel_engine::colormap::ids() {
+        v.push(cmd(
+            format!("field.style:map-{id}"),
+            format!("colormap-{id}"),
+            "field",
+            &[],
+            Tool("field.style", json!({ "map": id })),
+        ));
+    }
+    v.push(cmd(
+        "field.style:reset",
+        "cmd-field-reset",
+        "field",
+        &[],
+        Tool("field.style", json!({"reset": true})),
+    ));
     for m in Metric::ALL {
         v.push(cmd(
             format!("display.color_by:quality-{}", m.key()),
@@ -804,6 +884,10 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "the status bar shows a diagnostic with its fix",
     ),
     ("mesh.info", "the Properties panel shows it"),
+    (
+        "field.list",
+        "the colour-by menu and the legend show the fields",
+    ),
     ("views.list", "the model tree shows the saved views"),
     (
         "views.rename",
@@ -987,14 +1071,15 @@ mod tests {
     }
 
     /// Invariant: every command with a fixed input runs on a session with
-    /// the channel open, and the selection commands run once something is
+    /// the channel open (its FoehnCraft result, so the field commands
+    /// apply), and the selection commands run once something is
     /// selected; so no key or palette entry fails with a bad input.
     #[test]
     fn every_command_runs() {
         let mut s = Session::new(Tokens::builtin().unwrap());
         s.config_dir =
             Some(std::env::temp_dir().join(format!("murmel-commands-{}", std::process::id())));
-        let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+        let channel = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
         let open = |s: &mut Session| {
             assert!(crate::call("mesh.open", json!({"path": channel}), s).ok());
             assert!(crate::call("select.item", json!({"item": "patch:inlet"}), s).ok());

@@ -130,7 +130,14 @@ struct Globals {
     params: [f32; 4],
     bg_top: [f32; 4],
     bg_bottom: [f32; 4],
+    field: [f32; 4],
+    field_mode: [f32; 4],
+    contour: [f32; 4],
+    selection: [f32; 4],
 }
+
+/// Width of the contour lines in pixels.
+const LINE_PX: f32 = 1.5;
 
 /// What to draw in one frame.
 pub struct View<'a> {
@@ -152,6 +159,11 @@ pub struct View<'a> {
     pub faces: bool,
     /// Draw the edge lines (render modes 1, 3 and 4).
     pub edges: bool,
+    /// Colour mode field: how the faces with values are coloured.
+    pub field: Option<&'a murmel_engine::FieldPaint>,
+    /// Physical pixels per logical pixel, so contour lines keep their
+    /// width on a HiDPI screen.
+    pub scale: f32,
 }
 
 struct Targets {
@@ -178,6 +190,10 @@ struct Geometry {
 
 pub struct MeshRenderer {
     globals: wgpu::Buffer,
+    /// The colour table of the field's colour map, and which map and
+    /// direction it holds.
+    lut: wgpu::Texture,
+    lut_key: Option<(&'static str, bool)>,
     bind_group: wgpu::BindGroup,
     face_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
@@ -191,6 +207,9 @@ pub struct MeshRenderer {
     revision: Option<u64>,
     targets: Option<Targets>,
 }
+
+/// Bytes per face vertex: position, normal, colour, field values.
+const FACE_STRIDE: u64 = 4 * (3 + 3 + 3 + 4);
 
 fn f32x3(v: [f32; 3]) -> [f32; 4] {
     [v[0], v[1], v[2], 0.0]
@@ -210,24 +229,77 @@ impl MeshRenderer {
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("murmel-globals"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
+        // The colour table: LUT_SIZE sRGB texels in one row, mixed
+        // linearly between texels.
+        let lut = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("murmel-colormap"),
+            size: wgpu::Extent3d {
+                width: murmel_engine::colormap::LUT_SIZE as u32,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("murmel-colormap"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let lut_view = lut.create_view(&Default::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("murmel-globals"),
             layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&lut_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("murmel"),
@@ -272,14 +344,19 @@ impl MeshRenderer {
                 cache: None,
             })
         };
-        let face_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
+        let face_attrs = wgpu::vertex_attr_array![
+            0 => Float32x3,
+            1 => Float32x3,
+            2 => Float32x3,
+            3 => Float32x4
+        ];
         let line_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
         let face_pipeline = pipeline(
             "murmel-faces",
             "vs_face",
             "fs_face",
             &[Some(wgpu::VertexBufferLayout {
-                array_stride: 36,
+                array_stride: FACE_STRIDE,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &face_attrs,
             })],
@@ -387,6 +464,8 @@ impl MeshRenderer {
         );
         Self {
             globals,
+            lut,
+            lut_key: None,
             bind_group,
             face_pipeline,
             line_pipeline,
@@ -403,11 +482,12 @@ impl MeshRenderer {
     fn upload(&mut self, device: &wgpu::Device, surface: Option<&Surface>) {
         use wgpu::util::DeviceExt;
         self.geometry = surface.filter(|s| !s.indices.is_empty()).map(|s| {
-            let mut faces = Vec::with_capacity(s.positions.len() * 9);
+            let mut faces = Vec::with_capacity(s.positions.len() * 13);
             for i in 0..s.positions.len() {
                 faces.extend_from_slice(&s.positions[i]);
                 faces.extend_from_slice(&s.normals[i]);
                 faces.extend_from_slice(&s.colors[i]);
+                faces.extend_from_slice(s.values.get(i).unwrap_or(&[0.0; 4]));
             }
             let mut lines = Vec::with_capacity(s.edge_positions.len() * 6);
             for i in 0..s.edge_positions.len() {
@@ -529,6 +609,12 @@ impl MeshRenderer {
         let frame = view
             .camera
             .frame(origin, radius, size[0] as f64 / size[1] as f64);
+        let f = view.field;
+        if let Some(p) = f
+            && self.lut_key != Some((p.map, p.reverse))
+        {
+            self.write_lut(queue, p.map, p.reverse);
+        }
         let g = Globals {
             view_proj: frame.view_proj.to_cols_array_2d(),
             eye: f32x3(frame.eye),
@@ -541,6 +627,20 @@ impl MeshRenderer {
             ],
             bg_top: f32x3(view.bg_top),
             bg_bottom: f32x3(view.bg_bottom),
+            field: f.map_or([0.0, 1.0, 1.0, 0.0], |p| {
+                [p.lo, p.hi, p.bands as f32, p.lines as f32]
+            }),
+            field_mode: f.map_or([0.0; 4], |p| {
+                let mode = match p.mode {
+                    murmel_engine::FieldMode::Flat => 1.0,
+                    murmel_engine::FieldMode::Smooth => 2.0,
+                    murmel_engine::FieldMode::Banded => 3.0,
+                };
+                // Lines keep their width in pixels on a HiDPI target.
+                [mode, p.line_mix, LINE_PX * view.scale.max(1.0), 0.0]
+            }),
+            contour: f.map_or([0.0; 4], |p| f32x3(p.line_color)),
+            selection: f.map_or([0.0; 4], |p| f32x3(p.selection)),
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&g));
         let Some(t) = &self.targets else { return };
@@ -615,6 +715,35 @@ impl MeshRenderer {
             }
         }
         queue.submit([encoder.finish()]);
+    }
+
+    /// Fill the colour table with colour map `id`, turned when `reverse`.
+    fn write_lut(&mut self, queue: &wgpu::Queue, id: &'static str, reverse: bool) {
+        let Some(map) = murmel_engine::colormap::get(id) else {
+            return;
+        };
+        let texels = map.lut(reverse);
+        let n = texels.len() as u32;
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.lut,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * n),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: n,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.lut_key = Some((id, reverse));
     }
 
     /// The rendered image (sRGB), valid after [`MeshRenderer::render`].
@@ -754,6 +883,7 @@ impl Offscreen<'_> {
         }
         let dark = session.theme.is_dark(None);
         let p = session.tokens.palette(dark);
+        let field = session.field_paint();
         self.renderer.render(
             &self.gpu.device,
             &self.gpu.queue,
@@ -768,6 +898,9 @@ impl Offscreen<'_> {
                 edges: session.display.render_mode.edges(),
                 line_width: shoot.line_width,
                 transparent: shoot.transparent,
+                field: field.as_ref(),
+                // Contour lines widen with the edges of a scaled export.
+                scale: shoot.line_width,
             },
         );
         let mut rgba = self.renderer.read_rgba(&self.gpu.device, &self.gpu.queue)?;

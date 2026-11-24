@@ -44,11 +44,15 @@ fn ids_and_codes_are_unique() {
     for src in [
         include_str!("tools.rs"),
         include_str!("../../murmel-mesh/src/vtu.rs"),
+        include_str!("../../murmel-mesh/src/vtkhdf.rs"),
+        include_str!("../../murmel-mesh/src/hdf5.rs"),
         include_str!("../../murmel-mesh/src/evidence.rs"),
         include_str!("../../murmel-render/src/lib.rs"),
     ] {
         for part in src.split('"').skip(1).step_by(2) {
-            let is_code = part.len() == 7
+            // Codes are an upper-case area and three digits: SET001,
+            // TOOL001, FIELD001.
+            let is_code = (6..=8).contains(&part.len())
                 && part[..part.len() - 3]
                     .chars()
                     .all(|ch| ch.is_ascii_uppercase())
@@ -1409,7 +1413,10 @@ fn sessions_keep_every_clip_plane() {
 
     let mut v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    assert_eq!(v["format_version"], "1.3");
+    assert_eq!(
+        v["format_version"],
+        murmel_engine::session_file::SESSION_VERSION
+    );
     let first = v["display"]["clips"][0].clone();
     let d = v["display"].as_object_mut().unwrap();
     d.remove("clips");
@@ -1585,6 +1592,209 @@ fn measuring_tools() {
     let e = call("measure.list", json!({}), &mut s);
     assert_eq!(e.result["measurements"], json!([]));
     assert_eq!(e.result["probes"], json!([]));
+}
+
+/// Invariant (stage 1 of field results): a FoehnCraft result opens with
+/// its fields; colour by field takes the file's first field unless one
+/// is named, keeps a vector's component, refuses a component of a
+/// scalar (FIELD003), an unknown field (FIELD002) and a mesh without
+/// fields (FIELD001); field.style validates every value (FIELD004),
+/// keeps one style per field, fixes the range shown now when no bounds
+/// are given, and is an undo step. A front end calling these tools with
+/// a field the file does not have would otherwise colour nothing and
+/// report success.
+#[test]
+fn field_tools() {
+    let mut s = session();
+    let e = call(
+        "mesh.open",
+        json!({"path": root().join("test-fixtures/channel/foehncraft.vtu")}),
+        &mut s,
+    );
+    assert!(e.ok());
+    let e = call("display.color_by", json!({"by": "field"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "FIELD001");
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let e = call("mesh.open", json!({ "path": path }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["format"], "vtkhdf");
+    assert_eq!(e.result["fields"][0], "velocity");
+
+    let e = call("field.list", json!({}), &mut s);
+    assert_eq!(e.result["iteration"], 250);
+    assert_eq!(e.result["fields"][0]["components"], 3);
+    assert_eq!(e.result["fields"][0]["unit"], "m/s");
+    assert!(e.result["fields"][0]["ranges"]["x"].is_array());
+    assert_eq!(e.result["colormaps"][0]["id"], "viridis");
+    assert!(e.result["shown"].is_null());
+
+    let e = call("display.color_by", json!({"by": "field"}), &mut s);
+    assert_eq!(e.result["color_by"], "field");
+    assert_eq!(e.result["field"]["field"], "velocity");
+    assert_eq!(e.result["field"]["title"], "|velocity|");
+    assert_eq!(e.result["field"]["style"]["mode"], "smooth");
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "component": "x"}),
+        &mut s,
+    );
+    assert_eq!(e.result["field"]["title"], "velocity_x");
+    let e = call("display.color_by", json!({"by": "solid"}), &mut s);
+    assert!(e.result["field"].is_null());
+    // Back to the field: the component chosen before stays.
+    let e = call("display.color_by", json!({"by": "field"}), &mut s);
+    assert_eq!(e.result["field"]["component"], "x");
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "field": "pressure", "component": "y"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "FIELD003");
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "field": "nope"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "FIELD002");
+    let e = call(
+        "display.color_by",
+        json!({"by": "patch", "field": "pressure"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "field": "pressure"}),
+        &mut s,
+    );
+    assert_eq!(e.result["field"]["title"], "pressure");
+    let whole = e.result["field"]["range"].clone();
+
+    for bad in [
+        json!({"bands": 1}),
+        json!({"bands": 65}),
+        json!({"line_count": 0}),
+        json!({"map": "jet2"}),
+        json!({"range": "fixed", "min": 2.0, "max": 1.0}),
+    ] {
+        let e = call("field.style", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, "FIELD004", "{bad}");
+    }
+    let before = s.journal.undo.len();
+    let e = call(
+        "field.style",
+        json!({"mode": "banded", "bands": 8, "lines": true, "line_count": 7, "map": "turbo", "reverse": true}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["style"]["bands"], 8);
+    assert_eq!(e.result["map"], "turbo");
+    assert_eq!(s.journal.undo.len(), before + 1);
+    // A fixed range without bounds keeps the range shown now.
+    let e = call("field.style", json!({"range": "fixed"}), &mut s);
+    assert_eq!(e.result["range"], whole);
+    assert_eq!(e.result["style"]["range"]["fixed"]["min"], whole[0]);
+    let e = call("field.style", json!({"min": -1.0, "max": 1.0}), &mut s);
+    assert_eq!(e.result["range"], json!([-1.0, 1.0]));
+    // Each field keeps its own style.
+    let e = call("field.style", json!({"field": "k", "mode": "flat"}), &mut s);
+    assert!(e.ok());
+    assert_eq!(e.result["style"]["mode"], "banded");
+    let e = call("field.list", json!({}), &mut s);
+    let k = e.result["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "k")
+        .unwrap()
+        .clone();
+    assert_eq!(k["style"]["mode"], "flat");
+    let e = call(
+        "field.style",
+        json!({"field": "nope", "mode": "flat"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "FIELD002");
+    let e = call("journal.undo", json!({}), &mut s);
+    assert_eq!(e.result["undone"], "field.style");
+    let e = call("field.style", json!({"reset": true}), &mut s);
+    assert_eq!(e.result["style"]["mode"], "smooth");
+    assert_eq!(e.result["range"], whole);
+    // Properties and probes read the fields: a cell its own values, a
+    // probe the values interpolated at its point (same names, in file
+    // order; the boundary-only y+ only on a boundary face).
+    let e = call("inspect.item", json!({"item": "cell:3"}), &mut s);
+    let names: Vec<&str> = e.result["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["velocity", "speed", "pressure", "k", "omega", "nu_t"]
+    );
+    let e = call("probe.at", json!({"at": {"cell": 3}}), &mut s);
+    assert_eq!(e.result["fields"].as_array().unwrap().len(), 6);
+    assert_eq!(e.result["fields"][0]["value"].as_array().unwrap().len(), 3);
+    let m = s.mesh.as_ref().unwrap();
+    let wall = m.mesh.boundary_face_id[0];
+    let e = call(
+        "inspect.item",
+        json!({"item": format!("face:{wall}")}),
+        &mut s,
+    );
+    assert!(
+        e.result["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "y_plus" && f["location"] == "boundary"),
+        "{}",
+        e.result["fields"]
+    );
+}
+
+/// Invariant (session format 1.4): the field shown, its component and
+/// every field's style come back from a session file, and loading draws
+/// the same field paint (range, map, bands, lines) as before; a file
+/// naming a field the result does not have falls back to solid colour
+/// and reports it as skipped. Without the field in the file a saved
+/// result view would come back in the mesh colour.
+#[test]
+fn field_sessions_round_trip() {
+    let dir = std::env::temp_dir().join(format!("murmel-field-session-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("fields.murmel");
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let mut s = session();
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    let by = json!({"by": "field", "field": "velocity", "component": "z"});
+    assert!(call("display.color_by", by, &mut s).ok());
+    let style =
+        json!({"mode": "banded", "bands": 6, "lines": true, "map": "magma", "range": "symmetric"});
+    assert!(call("field.style", style, &mut s).ok());
+    let k = json!({"field": "k", "range": "fixed", "min": 0.0, "max": 0.5});
+    assert!(call("field.style", k, &mut s).ok());
+    let e = call("session.save", json!({"path": file}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let mut t = session();
+    let e = call("session.load", json!({"path": file}), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(t.display.field, s.display.field);
+    assert_eq!(t.display.field_styles, s.display.field_styles);
+    assert_eq!(t.field_paint(), s.field_paint());
+    assert!(t.field_paint().is_some());
+
+    let text = std::fs::read_to_string(&file)
+        .unwrap()
+        .replace("\"velocity\"", "\"vorticity\"");
+    std::fs::write(&file, text).unwrap();
+    let mut u = session();
+    let e = call("session.load", json!({"path": file}), &mut u);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["skipped"], json!(["field:vorticity"]));
+    assert_eq!(u.display.color_by, murmel_engine::ColorBy::Solid);
 }
 
 /// Invariant: export.movie writes the frames its motion makes (a part

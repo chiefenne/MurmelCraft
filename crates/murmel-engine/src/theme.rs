@@ -85,6 +85,19 @@ pub struct MeshTokens {
     pub quality: Vec<Rgb>,
     pub role: RoleTokens,
     pub kind: KindTokens,
+    pub field: FieldTokens,
+}
+
+/// Colours of field colouring that no colour map gives.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct FieldTokens {
+    /// Faces without a value.
+    pub none: Rgb,
+    /// Mesh edges drawn over a field.
+    pub edge: Rgb,
+    /// Contour lines, and how much of their colour they mix in.
+    pub line: Rgb,
+    pub line_mix: f32,
 }
 
 /// Colours of the patch roles.
@@ -265,6 +278,9 @@ pub struct MeshColors {
     /// `line`, `probe` and `halo` to a colour (same shape as `gizmo`).
     #[serde(default, skip_serializing_if = "UserGizmo::is_empty")]
     pub measure: UserGizmo,
+    /// Field colouring: `none`, `edge` and `line` to a colour.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub field: BTreeMap<String, Rgb>,
 }
 
 /// The user's clip handle colours (`[colors.gizmo.dark]` and
@@ -305,6 +321,7 @@ impl MeshColors {
         self.gizmo.light.extend(other.gizmo.light);
         self.measure.dark.extend(other.measure.dark);
         self.measure.light.extend(other.measure.light);
+        self.field.extend(other.field);
     }
 }
 
@@ -379,6 +396,15 @@ impl Tokens {
                     _ => return Err(format!("unknown measure colour {name} (measure.{theme})")),
                 } = rgb;
             }
+        }
+        for (name, &rgb) in &c.field {
+            let f = &mut t.mesh.field;
+            *match name.as_str() {
+                "none" => &mut f.none,
+                "edge" => &mut f.edge,
+                "line" => &mut f.line,
+                _ => return Err(format!("unknown field colour {name}")),
+            } = rgb;
         }
         Ok(t)
     }

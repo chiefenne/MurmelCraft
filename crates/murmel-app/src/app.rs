@@ -350,12 +350,14 @@ impl MurmelApp {
                 self.i18n.tr("open-filter-meshes"),
                 &[
                     "vtu",
+                    "vtkhdf",
                     "foam",
                     "OpenFOAM",
                     murmel_engine::session_file::EXTENSION,
                 ],
             )
             .add_filter(self.i18n.tr("open-filter-vtu"), &["vtu"])
+            .add_filter(self.i18n.tr("open-filter-vtkhdf"), &["vtkhdf"])
             .add_filter(self.i18n.tr("open-filter-foam"), &["foam", "OpenFOAM"])
             .add_filter(self.i18n.tr("open-filter-all"), &["*"])
             .pick_file();
@@ -666,7 +668,10 @@ impl MurmelApp {
             .selected_text(text)
             .show_ui(ui, |ui| {
                 for c in murmel_engine::ColorBy::ALL {
-                    if c == murmel_engine::ColorBy::Quality {
+                    if matches!(
+                        c,
+                        murmel_engine::ColorBy::Quality | murmel_engine::ColorBy::Field
+                    ) {
                         continue;
                     }
                     let name = self.i18n.tr(&format!("color-by-{}", c.key()));
@@ -686,6 +691,28 @@ impl MurmelApp {
                         pick = Some(json!({"by": "quality", "metric": m}));
                     }
                 }
+                // The fields of a result, each by name (the legend picks
+                // the component and the style).
+                let fields: Vec<String> = self
+                    .session
+                    .fields()
+                    .map(|f| f.names().iter().map(|n| n.to_string()).collect())
+                    .unwrap_or_default();
+                if !fields.is_empty() {
+                    ui.separator();
+                }
+                let shown = (by == murmel_engine::ColorBy::Field)
+                    .then(|| self.session.display.field.as_ref().map(|c| c.name.clone()))
+                    .flatten();
+                for n in fields {
+                    let on = shown.as_deref() == Some(n.as_str());
+                    let text = self
+                        .i18n
+                        .tr_args("field-menu-item", &[("name", n.clone().into())]);
+                    if ui.selectable_label(on, text).clicked() && !on {
+                        pick = Some(json!({"by": "field", "field": n}));
+                    }
+                }
             });
         let tip = format!(
             "{label}: {current}\n{}",
@@ -694,7 +721,9 @@ impl MurmelApp {
         r.response.on_hover_text(tip).widget_info(|| {
             WidgetInfo::labeled(Role::ComboBox, true, format!("{label}: {current}"))
         });
-        if let Some(input) = pick.filter(|i| i["by"] != json!(by) || i.get("metric").is_some()) {
+        if let Some(input) = pick.filter(|i| {
+            i["by"] != json!(by) || i.get("metric").is_some() || i.get("field").is_some()
+        }) {
             self.call("display.color_by", input);
         }
         ui.separator();
@@ -709,13 +738,16 @@ impl MurmelApp {
     pub(crate) fn color_by_name(&self) -> String {
         let d = &self.session.display;
         let by = self.i18n.tr(&format!("color-by-{}", d.color_by.key()));
-        if d.color_by == murmel_engine::ColorBy::Quality {
-            format!(
+        match d.color_by {
+            murmel_engine::ColorBy::Quality => format!(
                 "{by}: {}",
                 self.i18n.tr(&format!("metric-{}", d.metric.key()))
-            )
-        } else {
-            by
+            ),
+            murmel_engine::ColorBy::Field => match self.session.field_values() {
+                Some(v) => format!("{by}: {}", v.choice.title(v.vector)),
+                None => by,
+            },
+            _ => by,
         }
     }
 

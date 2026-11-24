@@ -71,6 +71,18 @@ quality = [
   "#CD6A01", "#BE4F04", "#B22C01", "#9E0117",
 ]
 
+# Field colouring (thread "Show FoehnCraft field results", 2026-11-24).
+# Faces without a value (a field only the boundary has, seen on a cut)
+# take `none`, a neutral grey between the two viewports' ends; mesh
+# edges over a field take `edge`, dark so they read on every colour map;
+# contour lines mix `line_mix` of `line` over the field's colours. Users
+# change them with settings.set_colors, "field".
+[mesh.field]
+none = "#8C9198"
+edge = "#2B2F35"
+line = "#0E1012"
+line_mix = 0.85
+
 # Patch roles (UI spec, Colour by): wall grey, inlet blue, outlet orange,
 # symmetry green, interface violet, unspecified sand. Searched in OKLCH
 # within those hue families for the largest smallest OKLab distance

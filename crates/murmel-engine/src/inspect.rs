@@ -267,6 +267,7 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 .map_or(String::new(), |f| f.to_string_lossy().into_owned());
             let format = match m.metadata.get("openfoam_format") {
                 Some(f) => format!("OpenFOAM polyMesh ({f})"),
+                None if m.metadata.contains_key("vtkhdf") => "VTKHDF result (.vtkhdf)".into(),
                 None => "VTK unstructured grid (.vtu)".into(),
             };
             let mut v = vec![row("file", file), row("format", format)];
@@ -479,6 +480,42 @@ pub fn probe_rows(m: &Mesh, at: &Anchor) -> Vec<Row> {
     v
 }
 
+/// The field values of `item` (UI spec to come, Properties: "Fields"):
+/// a cell's own values, a boundary face's boundary values and its cell's
+/// values, a probe's values interpolated at its point. Empty for other
+/// items and for a mesh without fields.
+pub fn field_values(
+    open: &OpenMesh,
+    display: &Display,
+    item: Item,
+) -> Vec<crate::field::FieldValue> {
+    let (m, f) = (&open.mesh, &open.fields);
+    if f.is_empty() {
+        return Vec::new();
+    }
+    match item {
+        Item::Cell(c) => f.cell_values(m, c as usize),
+        Item::Face(u) => {
+            let mut v = match m.face_boundary.get(u as usize) {
+                Some(&b) if b != NO_CELL => f.face_values(m, b as usize),
+                _ => Vec::new(),
+            };
+            if let Some(&o) = m.face_owner.get(u as usize)
+                && o != NO_CELL
+            {
+                v.extend(f.cell_values(m, o as usize));
+            }
+            v
+        }
+        Item::Probe(n) => display
+            .probe(n)
+            .and_then(|p| Some((p.at.cell?, p.at.point)))
+            .map(|(c, at)| f.point_values(m, c as usize, at))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 /// The worst non-orthogonality (degrees) and skewness over the faces of
 /// cell `c`, as the Properties panel shows them.
 pub fn cell_quality(m: &Mesh, c: usize) -> (f64, f64) {
@@ -681,6 +718,7 @@ mod tests {
             digest: String::new(),
             files: Vec::new(),
             validity: Validity::NoEvidence,
+            fields: Default::default(),
         };
         let d = Display::default();
         let rows = rows(&open, &d, Item::Cell(0));

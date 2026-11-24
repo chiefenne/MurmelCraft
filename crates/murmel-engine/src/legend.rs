@@ -89,6 +89,9 @@ impl Legend {
         if d.color_by == ColorBy::Quality {
             return quality(d, &s.tokens);
         }
+        if d.color_by == ColorBy::Field {
+            return field(s);
+        }
         let entries = categories(&m.mesh, d, &s.tokens);
         (!entries.is_empty()).then(|| Legend {
             title: Label::Key(format!("color-by-{}", d.color_by.key())),
@@ -127,7 +130,7 @@ fn categories(mesh: &Mesh, d: &Display, t: &Tokens) -> Vec<Entry> {
         ColorBy::Patch | ColorBy::CellType | ColorBy::Zone => {
             all_items(mesh).into_iter().filter_map(shown).collect()
         }
-        ColorBy::Quality => Vec::new(),
+        ColorBy::Quality | ColorBy::Field => Vec::new(),
     }
 }
 
@@ -161,6 +164,33 @@ fn quality(d: &Display, t: &Tokens) -> Option<Legend> {
             bands: None,
             contours: Vec::new(),
             threshold: d.threshold,
+        }),
+    })
+}
+
+/// The colour bar of the field shown: its colour map over the colour
+/// range, the bands of colour mode banded and the contour lines' values.
+fn field(s: &Session) -> Option<Legend> {
+    let v = s.field_values()?;
+    let (lo, hi) = s.field_range()?;
+    let (map, reverse) = s.field_map()?;
+    let style = s.field_style();
+    Some(Legend {
+        title: Label::Text(v.choice.title(v.vector)),
+        body: Body::Ramp(Ramp {
+            stops: map.legend_stops(reverse),
+            lo,
+            hi,
+            ticks: ticks(lo, hi, MAX_TICKS),
+            unit: v.unit.clone(),
+            bands: (style.mode == crate::field::FieldMode::Banded).then_some(
+                style
+                    .bands
+                    .clamp(crate::field::MIN_BANDS, crate::field::MAX_BANDS)
+                    as usize,
+            ),
+            contours: style.contours((lo, hi)),
+            threshold: None,
         }),
     })
 }

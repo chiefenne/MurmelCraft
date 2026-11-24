@@ -210,6 +210,30 @@ const OWN: &[Code] = &[
         meaning: "Items the session names are not in the mesh; they were skipped.",
         fix: Some("Save the session again to drop them."),
     },
+    Code {
+        code: "FIELD001",
+        severity: Severity::Error,
+        meaning: "The open mesh has no fields: it was read without results.",
+        fix: Some("Open a result: FoehnCraft's fields.vtkhdf, or a .vtu with cell or point data."),
+    },
+    Code {
+        code: "FIELD002",
+        severity: Severity::Error,
+        meaning: "The open mesh has no field of this name, or no field is chosen.",
+        fix: Some("field.list names the fields; pass `field`."),
+    },
+    Code {
+        code: "FIELD003",
+        severity: Severity::Error,
+        meaning: "A component (x, y, z) was asked of a scalar field.",
+        fix: Some("Leave `component` out, or give `magnitude`, for a scalar."),
+    },
+    Code {
+        code: "FIELD004",
+        severity: Severity::Error,
+        meaning: "A field style value is out of range: bands outside 2 to 64, contour lines outside 1 to 64, an unknown colour map, or a fixed range whose min is not below its max.",
+        fix: Some("field.list names the colour maps; give finite min < max."),
+    },
 ];
 
 /// Every code: the tools' own, then the mesh and render codes.

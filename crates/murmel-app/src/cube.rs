@@ -117,6 +117,16 @@ impl MurmelApp {
         }
     }
 
+    /// How far a legend at the right edge stays below the top and above
+    /// the bottom, so a cube in a right corner does not cover it.
+    pub(crate) fn cube_right_room(&self) -> (f32, f32) {
+        match self.session.view_cube.placement {
+            Placement::TopRight => (HEIGHT + 8.0, 0.0),
+            Placement::BottomRight => (0.0, HEIGHT + 8.0),
+            _ => (0.0, 0.0),
+        }
+    }
+
     /// The floating panel behind the block, and its grip: dragging the
     /// grip moves the panel; the position is saved when the drag ends.
     fn cube_panel(&mut self, ui: &mut Ui, viewport: Rect, block: Rect, dark: bool) {

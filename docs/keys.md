@@ -49,6 +49,8 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `3` | Wireframe | `display.render_mode` `{"mode":"wireframe"}` |
 | `4` | Feature edges | `display.render_mode` `{"mode":"feature_edges"}` |
 | `C` | Colour by… | window |
+| `B` | Field: next colouring (flat, smooth, banded) | `field.style` (input from the session) |
+| `L` | Field: contour lines on or off | `field.style` (input from the session) |
 | `X` | Clip normal to X | `clip.set` `{"axis":"x"}` |
 | `Y` | Clip normal to Y | `clip.set` `{"axis":"y"}` |
 | `Z` | Clip normal to Z | `clip.set` `{"axis":"z"}` |
@@ -108,6 +110,25 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Colour by: patch role | `display.color_by` `{"by":"role"}` |
 | palette | Colour by: cell type | `display.color_by` `{"by":"cell_type"}` |
 | palette | Colour by: cell zone | `display.color_by` `{"by":"zone"}` |
+| palette | Colour by: field | `display.color_by` `{"by":"field"}` |
+| palette | Field: flat colours per cell | `field.style` `{"mode":"flat"}` |
+| palette | Field: smooth colours | `field.style` `{"mode":"smooth"}` |
+| palette | Field: banded colours | `field.style` `{"mode":"banded"}` |
+| palette | Field: reverse the colour map | `field.style` (input from the session) |
+| palette | Field range: whole field | `field.style` `{"range":"field"}` |
+| palette | Field range: shown cells | `field.style` `{"range":"shown"}` |
+| palette | Field range: symmetric about zero | `field.style` `{"range":"symmetric"}` |
+| palette | Field range: fix as shown now | `field.style` `{"range":"fixed"}` |
+| palette | Colour map: automatic | `field.style` `{"map":"auto"}` |
+| palette | Viridis | `field.style` `{"map":"viridis"}` |
+| palette | Cool to warm | `field.style` `{"map":"cool_warm"}` |
+| palette | Plasma | `field.style` `{"map":"plasma"}` |
+| palette | Magma | `field.style` `{"map":"magma"}` |
+| palette | Inferno | `field.style` `{"map":"inferno"}` |
+| palette | Turbo | `field.style` `{"map":"turbo"}` |
+| palette | Rainbow (jet) | `field.style` `{"map":"rainbow"}` |
+| palette | Grey | `field.style` `{"map":"grey"}` |
+| palette | Field: default style | `field.style` `{"reset":true}` |
 | palette | Colour by: quality, non-orthogonality | `display.color_by` `{"by":"quality","metric":"non_orthogonality"}` |
 | palette | Colour by: quality, skewness | `display.color_by` `{"by":"quality","metric":"skewness"}` |
 | palette | Colour by: quality, volume ratio | `display.color_by` `{"by":"quality","metric":"volume_ratio"}` |

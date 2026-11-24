@@ -90,10 +90,10 @@ impl MurmelApp {
             .filter(|_| resp.hovered() && self.drag.is_none())
             .map(|p| (p, alt));
         self.measure_overlay(ui, rect, &cam, dark, pointer);
-        if self.session.display.color_by == murmel_engine::ColorBy::Quality {
-            self.quality_legend(ui, rect, dark);
-        } else {
-            self.legend(ui, rect, dark);
+        match self.session.display.color_by {
+            murmel_engine::ColorBy::Quality => self.quality_legend(ui, rect, dark),
+            murmel_engine::ColorBy::Field => self.field_legend(ui, rect, dark),
+            _ => self.legend(ui, rect, dark),
         }
         self.clip_handles(ui, rect, &cam, dark);
         self.view_cube(ui, rect, &cam, dark);
@@ -393,8 +393,11 @@ impl MurmelApp {
             ((rect.width() * ppp).round() as u32).clamp(1, murmel_render::MAX_SIDE),
             ((rect.height() * ppp).round() as u32).clamp(1, murmel_render::MAX_SIDE),
         ];
+        // The field's range, map and style are uniforms: a change of them
+        // draws again without a new surface.
+        let field = self.session.field_paint();
         let key = format!(
-            "{cam:?}|{}|{px:?}|{dark}|{:?}",
+            "{cam:?}|{}|{px:?}|{dark}|{:?}|{field:?}",
             self.session.surface_revision, self.session.display.render_mode
         );
         if g.last.as_deref() != Some(key.as_str()) {
@@ -412,6 +415,8 @@ impl MurmelApp {
                     edges: self.session.display.render_mode.edges(),
                     line_width: 1.0,
                     transparent: false,
+                    field: field.as_ref(),
+                    scale: ppp,
                 },
             );
             if let Some(view) = g.renderer.egui_view() {

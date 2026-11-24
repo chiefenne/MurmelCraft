@@ -13,7 +13,10 @@
 
 mod boundary;
 pub mod evidence;
+pub mod field;
+pub mod hdf5;
 pub mod polymesh;
+pub mod vtkhdf;
 mod vtu;
 
 use std::collections::BTreeMap;
@@ -24,7 +27,9 @@ use serde::Serialize;
 
 pub use boundary::NO_CELL;
 pub use evidence::{Evidence, EvidencePatch};
+pub use field::{Component, Field, Location, Results};
 pub use polymesh::{PolyMeshFiles, read_polymesh, read_polymesh_bytes};
+pub use vtkhdf::read_vtkhdf;
 pub use vtu::{read_vtu, read_vtu_str};
 
 /// A failure to read a mesh, with its diagnostic code.
@@ -124,6 +129,21 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "MESH014",
         "An OpenFOAM file is malformed: no FoamFile header, or a list or dictionary is broken.",
         "Write the mesh again; the file may be truncated or edited by hand.",
+    ),
+    (
+        "MESH016",
+        "The HDF5 structure of the file is broken: a signature, address or size does not fit the file.",
+        "Write the file again; it may be truncated.",
+    ),
+    (
+        "MESH017",
+        "The file uses an HDF5 feature the reader does not support (a chunk index, filter or storage kind).",
+        "Write the file with contiguous or chunked datasets and the deflate or shuffle filters, as FoehnCraft and VTK do.",
+    ),
+    (
+        "MESH018",
+        "The file is not a VTKHDF file, or its VTKHDF layout is broken (a block, dataset or count is missing or wrong).",
+        "Open a .vtkhdf file written by FoehnCraft or VTK (VTKHDF 2.x, UnstructuredGrid or PartitionedDataSetCollection).",
     ),
     (
         "MESH015",
@@ -498,15 +518,25 @@ impl Mesh {
 /// `constant` or `polyMesh` folder, a `.foam` file in the case or one of
 /// the polyMesh files ([`polymesh::is_openfoam`]).
 pub fn read(path: &Path) -> Result<Mesh, MeshError> {
+    read_results(path).map(|(m, _)| m)
+}
+
+/// Read a mesh and the fields that come with it: a `.vtkhdf` result
+/// (FoehnCraft's `fields.vtkhdf`), the data arrays of a `.vtu`, or an
+/// OpenFOAM mesh (no fields yet).
+pub fn read_results(path: &Path) -> Result<(Mesh, field::Results), MeshError> {
+    if path.is_file() && vtkhdf::is_vtkhdf(path) {
+        return vtkhdf::read_vtkhdf(path);
+    }
     let vtu = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("vtu"));
     if !vtu && polymesh::is_openfoam(path) {
-        return read_polymesh(path);
+        return read_polymesh(path).map(|m| (m, field::Results::default()));
     }
-    let mut mesh = read_vtu(path)?;
+    let (mut mesh, results) = vtu::read_vtu_results(path)?;
     mesh.files = vec![path.to_path_buf()];
-    Ok(mesh)
+    Ok((mesh, results))
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `system.info` | 1 | read | Version and platform of this build. |
 | `system.commands` | 1 | read | The catalogue of every tool with its input schema. |
 | `diag.codes` | 1 | read | The diagnostic codes with their severity, meaning and fix. |
-| `mesh.open` | 2 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). |
+| `mesh.open` | 3 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). |
 | `mesh.close` | 1 | read | Drop the open mesh from the session. |
 | `mesh.info` | 1 | read | Counts, zones, patches, metadata and evidence of the open mesh. |
 | `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport. |
@@ -29,7 +29,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `export.image` | 1 | write-files | Export the view as a PNG at path for reports and posters: the viewport's size times scale (or width and height in pixels), lines, legend and text grown with the scale so the picture looks like the window, the colour legend (top left) and the axis triad (bottom left) each optional, the background transparent if asked, the resolution (dpi) stored for print. |
 | `export.movie` | 1 | write-files | Export a movie at path (.mp4, .gif, or a folder of PNG frames) with the look of export.image (size, scale, legend, axes, lines): the camera turning about its target (orbit; a whole turn loops), a clip plane sweeping through the mesh (clip), or a flight through saved views that eases into each and holds there (views). MP4 is H.264 made by the ffmpeg installed on the machine (EXPORT002 without one); GIF and PNG are written by MurmelCraft. The view stays as it was. |
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
-| `display.color_by` | 2 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold. |
+| `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
+| `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
+| `field.style` | 1 | read | Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values by inverse distance weighting, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes viridis, or cool_warm for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
@@ -42,7 +44,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `inspect.at` | 1 | read | What lies under a screen point ndc (-1..1, y up), without selecting: the point, the cell with its type and zone, the face with its patch and role (null when nothing is there). The hover tooltip and the cursor coordinates use it. |
 | `inspect.quality` | 1 | read | Statistics of a cell quality metric over all cells (the current one when left out): min, max, mean and a histogram of bins equal-width bins (default 20); with above, the number of cells at or above that value. |
 | `select.clear` | 1 | read | Clear the selection. |
-| `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel. |
+| `inspect.item` | 1 | read | The property rows of an item (the selection, or the mesh when nothing is selected): the same data as the Properties panel; with results, the field values of a cell, a boundary face (its boundary values and its cell's) or a probe (interpolated at its point). |
 | `journal.undo` | 1 | read | Undo the last step of the camera or the display (a call of a journalled tool, or one group of calls such as a mouse drag); the selection stays. undone is the tool of the step, null when there was none. |
 | `journal.redo` | 1 | read | Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none. |
 | `journal.group` | 1 | read | Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps). |
@@ -53,14 +55,14 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_agents` | 1 | write-files | Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
-| `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the mesh colours and the view cube placement. |
+| `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement. |
 | `session.load` | 1 | read | Load a .murmel session file: open its mesh unless that mesh is already open (tried relative to the file first, then at its absolute path), then restore the camera, the display, the selection and the clip plane; the mesh colours and the view cube placement apply to this session and are not written to settings.toml. A mesh changed since the save (SESS003) or items it no longer has (SESS004) give warnings. A new journal starts. |
 | `measure.snap` | 1 | read | The point a click at a screen point would measure from: the face under it gives its nodes, edge midpoints, centre (and its cell's centre), projected to the screen; the first kind in the order node, edge_midpoint, face_centre, cell_centre, edge, surface with a candidate within radius_px (default 12) wins; snap lists the kinds allowed (default all but cell_centre). Null over empty space. Changes nothing. |
 | `measure.add` | 1 | read | Measure in the open mesh and keep the result as a tree item measure:<n>: a distance between two points (with dx, dy, dz) or the angle at the second of three points (degrees). Each point is a screen point snapped as measure.snap does, typed coordinates, a node, the midpoint of two nodes, a face centre or a cell centre. Kept in session files; undo removes it. |
 | `measure.rename` | 1 | read | Name a measurement or a probe (measure:<n>, probe:<n>); a null name goes back to "Distance n", "Angle n" or "Probe n". |
 | `measure.remove` | 1 | read | Remove measurements and probes: the items named (measure:<n>, probe:<n>), or all of them. Undo brings them back. |
 | `measure.list` | 1 | read | The measurements (value, unit, points and what they snapped to) and the probes (point, cell and what it reads) of the open mesh. |
-| `probe.add` | 1 | read | Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness. The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it. |
+| `probe.add` | 1 | read | Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (inverse distance weighted from the cell's nodes). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it. |
 | `probe.at` | 1 | read | What a probe at a point would read, without keeping it: the point given as for measure.add, the cell holding it and that cell's values. Changes nothing. |
 
 ## Inputs
@@ -105,7 +107,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "additionalProperties": false,
   "properties": {
     "path": {
-      "description": "A .vtu file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)",
+      "description": "A .vtu or .vtkhdf file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)",
       "type": "string"
     }
   },
@@ -759,8 +761,22 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "role",
         "cell_type",
         "zone",
-        "quality"
+        "quality",
+        "field"
       ]
+    },
+    "component": {
+      "description": "The scalar of a vector field; with by: field",
+      "enum": [
+        "magnitude",
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "field": {
+      "description": "A field name (field.list); with by: field",
+      "type": "string"
     },
     "metric": {
       "enum": [
@@ -774,6 +790,76 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "required": [
     "by"
   ],
+  "type": "object"
+}
+```
+
+### `field.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `field.style`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "bands": {
+      "maximum": 64,
+      "minimum": 2,
+      "type": "integer"
+    },
+    "field": {
+      "type": "string"
+    },
+    "line_count": {
+      "maximum": 64,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "lines": {
+      "type": "boolean"
+    },
+    "map": {
+      "description": "auto, or a colour map id (field.list)",
+      "type": "string"
+    },
+    "max": {
+      "type": "number"
+    },
+    "min": {
+      "type": "number"
+    },
+    "mode": {
+      "enum": [
+        "flat",
+        "smooth",
+        "banded"
+      ]
+    },
+    "range": {
+      "enum": [
+        "field",
+        "shown",
+        "symmetric",
+        "fixed"
+      ]
+    },
+    "reset": {
+      "type": "boolean"
+    },
+    "reverse": {
+      "type": "boolean"
+    }
+  },
+  "required": [],
   "type": "object"
 }
 ```
@@ -2066,6 +2152,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `SESS002` | error | A session file could not be written. | Choose a writable folder. |
 | `SESS003` | warning | The session's mesh changed since the session was saved (its SHA-256 differs). | Check the view; save the session again to accept the new mesh. |
 | `SESS004` | warning | Items the session names are not in the mesh; they were skipped. | Save the session again to drop them. |
+| `FIELD001` | error | The open mesh has no fields: it was read without results. | Open a result: FoehnCraft's fields.vtkhdf, or a .vtu with cell or point data. |
+| `FIELD002` | error | The open mesh has no field of this name, or no field is chosen. | field.list names the fields; pass `field`. |
+| `FIELD003` | error | A component (x, y, z) was asked of a scalar field. | Leave `component` out, or give `magnitude`, for a scalar. |
+| `FIELD004` | error | A field style value is out of range: bands outside 2 to 64, contour lines outside 1 to 64, an unknown colour map, or a fixed range whose min is not below its max. | field.list names the colour maps; give finite min < max. |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
 | `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a .vtu file such as KoflCraft's foehncraft.vtu. |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |
@@ -2080,6 +2170,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `MESH011` | warning | mesh-evidence.json beside the mesh cannot be read; the mesh opens without it. | Write the evidence again with KoflCraft or remove it. |
 | `MESH013` | error | The folder holds no OpenFOAM mesh, or the polyMesh lacks one of points, faces, owner, neighbour and boundary. | Open a case folder, its constant folder or the polyMesh folder itself. |
 | `MESH014` | error | An OpenFOAM file is malformed: no FoamFile header, or a list or dictionary is broken. | Write the mesh again; the file may be truncated or edited by hand. |
+| `MESH016` | error | The HDF5 structure of the file is broken: a signature, address or size does not fit the file. | Write the file again; it may be truncated. |
+| `MESH017` | error | The file uses an HDF5 feature the reader does not support (a chunk index, filter or storage kind). | Write the file with contiguous or chunked datasets and the deflate or shuffle filters, as FoehnCraft and VTK do. |
+| `MESH018` | error | The file is not a VTKHDF file, or its VTKHDF layout is broken (a block, dataset or count is missing or wrong). | Open a .vtkhdf file written by FoehnCraft or VTK (VTKHDF 2.x, UnstructuredGrid or PartitionedDataSetCollection). |
 | `MESH015` | error | The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces). | Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch. |
 | `RENDER001` | error | No GPU adapter was found (no driver, or no software renderer such as Mesa lavapipe). | Install a Vulkan, Metal or DirectX 12 driver; on a headless Linux machine install mesa-vulkan-drivers. |
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |
