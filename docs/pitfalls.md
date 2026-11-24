@@ -201,7 +201,7 @@ problem took more than a few minutes to understand.
   keeps it in a form whose result does not depend on which thread came
   first, such as a minimum, or the meshes differ from run to run.
 - **The window hashes a mesh after it opens** (`Session::hash_after_open`):
-  until the SHA-256 is taken on its own thread, `OpenMesh::digest` and the
+  until the digests are taken on their own thread, `OpenMesh::digest` and the
   files' digests are empty and the badge is `Validity::Checking`. A tool
   that needs the digest (`session.save` writes it, `session.load` compares
   it) calls `Session::wait_digest` first. The command line and agents on a

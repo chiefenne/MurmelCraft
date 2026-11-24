@@ -16,6 +16,7 @@ mod boundary;
 pub mod evidence;
 pub mod field;
 pub mod h5write;
+pub mod hash;
 pub mod hdf5;
 pub mod hilbert;
 mod numbers;
@@ -37,6 +38,7 @@ use serde::Serialize;
 pub use boundary::NO_CELL;
 pub use evidence::{Evidence, EvidencePatch};
 pub use field::{Component, Field, Location, Results};
+pub use hash::FileHash;
 pub use parcels::{Parcels, read_parcels};
 pub use polymesh::{PolyMeshFiles, read_polymesh, read_polymesh_bytes};
 pub use vtkhdf::read_vtkhdf;
@@ -432,21 +434,15 @@ pub struct Mesh {
     /// The files the mesh was read from: the `.vtu`, or the files of an
     /// OpenFOAM `polyMesh` (empty when read from memory).
     pub files: Vec<PathBuf>,
-    /// The SHA-256 (hex) of each of `files`, taken by the reader from the
-    /// bytes it read (on another thread while it parses), so the file is
-    /// not read twice; empty when the reader did not take them.
-    pub file_sha256: Vec<String>,
+    /// The BLAKE3 hash (hex) of each of `files`, taken by the reader from
+    /// the bytes it read (on other threads while it parses), so the file
+    /// is not read twice; empty when the reader did not take them.
+    pub file_blake3: Vec<String>,
     /// The counts [`Mesh::summary`] returns, taken the first time they
     /// are asked for: the model tree and the legend ask on every frame,
     /// and counting millions of cells each time held frames back. A mesh
     /// is not changed once read, so they stay true.
     summary: OnceLock<Summary>,
-}
-
-/// SHA-256 of `bytes`, lowercase hex.
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    hex(&Sha256::digest(bytes))
 }
 
 /// `bytes` as lowercase hex.
@@ -711,10 +707,10 @@ pub fn read_results(path: &Path) -> Result<(Mesh, field::Results), MeshError> {
 }
 
 /// As [`read_results`]. With `hash` false the readers do not take the
-/// SHA-256 of the files beside the parsing and leave
-/// [`Mesh::file_sha256`] empty: the window opens a mesh first and hashes
-/// its files afterwards ([`sha256_file`]), since hashing a large file can
-/// take longer than reading it.
+/// BLAKE3 hash of the files beside the parsing and leave
+/// [`Mesh::file_blake3`] empty: the window opens a mesh first and hashes
+/// its files afterwards ([`FileHash::of_file`]), since hashing a large
+/// file can take longer than reading it.
 pub fn read_results_with(path: &Path, hash: bool) -> Result<(Mesh, field::Results), MeshError> {
     if path.is_file() && vtkhdf::is_vtkhdf(path) {
         return vtkhdf::read_vtkhdf_with(path, hash);
@@ -728,33 +724,6 @@ pub fn read_results_with(path: &Path, hash: bool) -> Result<(Mesh, field::Result
     let (mut mesh, results) = vtu::read_vtu_file(path, hash)?;
     mesh.files = vec![path.to_path_buf()];
     Ok((mesh, results))
-}
-
-/// SHA-256 (hex) of the file at `path`, read in pieces so that a file of
-/// many gigabytes is never held whole. `None` when `stop` was set
-/// before the end (checked between pieces).
-pub fn sha256_file(
-    path: &Path,
-    stop: &std::sync::atomic::AtomicBool,
-) -> std::io::Result<Option<String>> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read as _;
-    let mut f = std::fs::File::open(path)?;
-    let mut h = Sha256::new();
-    let mut buf = vec![0u8; 8 << 20];
-    loop {
-        if stop.load(std::sync::atomic::Ordering::Relaxed) {
-            return Ok(None);
-        }
-        let n = match f.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
-        };
-        h.update(&buf[..n]);
-    }
-    Ok(Some(hex(&h.finalize())))
 }
 
 #[cfg(test)]
@@ -803,24 +772,6 @@ mod tests {
         m.apply_evidence_roles(&e);
         assert_eq!(roles(&m)[0], PatchRole::Symmetry);
         assert_eq!(roles(&m)[1..], before[1..]);
-    }
-
-    /// Invariant: a file hashed in pieces has the SHA-256 of its bytes
-    /// hashed at once (a file longer than one piece), and a set `stop`
-    /// ends the hashing without a digest. A piece lost or hashed twice
-    /// would change the digest the validity badge compares.
-    #[test]
-    fn sha256_of_a_file_in_pieces() {
-        let path = std::env::temp_dir().join(format!("murmel-sha-{}", std::process::id()));
-        let bytes: Vec<u8> = (0..(9u32 << 20) + 7).map(|i| (i % 251) as u8).collect();
-        std::fs::write(&path, &bytes).unwrap();
-        let go = std::sync::atomic::AtomicBool::new(false);
-        let d = sha256_file(&path, &go).unwrap();
-        assert_eq!(d.as_deref(), Some(sha256_hex(&bytes).as_str()));
-        let stop = std::sync::atomic::AtomicBool::new(true);
-        assert_eq!(sha256_file(&path, &stop).unwrap(), None);
-        let _ = std::fs::remove_file(&path);
-        assert!(sha256_file(&path, &go).is_err());
     }
 
     /// Invariant: the spec's face-count rules class KoflCraft's prism

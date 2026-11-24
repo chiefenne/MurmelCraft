@@ -36,8 +36,8 @@ pub const FORMAT: &str = "foehncraft.parcels";
 pub struct Parcels {
     /// The file read.
     pub path: PathBuf,
-    /// SHA-256 of the file, hex.
-    pub sha256: String,
+    /// BLAKE3 hash of the file, hex.
+    pub blake3: String,
     /// Each parcel's position.
     pub points: Vec<[f64; 3]>,
     /// The point data, one value or one 3-vector per parcel, with the
@@ -101,7 +101,7 @@ pub fn read_parcels(path: &Path) -> Result<Parcels, MeshError> {
     let h = H5::open(path)?;
     let mut p = read_parcels_h5(&h)?;
     p.path = path.to_path_buf();
-    p.sha256 = crate::sha256_hex(h.bytes());
+    p.blake3 = crate::FileHash::Blake3.of_bytes(h.bytes());
     Ok(p)
 }
 
@@ -170,7 +170,7 @@ pub fn read_parcels_h5(h: &H5) -> Result<Parcels, MeshError> {
     }
     Ok(Parcels {
         path: PathBuf::new(),
-        sha256: String::new(),
+        blake3: String::new(),
         points,
         fields,
         time,
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(v.unit.as_deref(), Some("m/s"));
         assert_eq!(p.field("diameter").unwrap().unit.as_deref(), Some("m"));
         assert_eq!(p.field("parcel_id").unwrap().unit, None);
-        assert_eq!(p.sha256.len(), 64);
+        assert_eq!(p.blake3.len(), 64);
     }
 
     /// Invariant: a file with no parcels (the first steps of a run, before

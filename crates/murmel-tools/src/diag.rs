@@ -345,7 +345,7 @@ const OWN: &[Code] = &[
     Code {
         code: "SESS003",
         severity: Severity::Warning,
-        meaning: "The session's mesh changed since the session was saved (its SHA-256 differs).",
+        meaning: "The session's mesh changed since the session was saved (its digest differs).",
         fix: Some("Check the view; save the session again to accept the new mesh."),
     },
     Code {

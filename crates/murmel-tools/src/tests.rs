@@ -1281,6 +1281,68 @@ fn stale_and_broken_sessions() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Invariant: a session names the mesh digest by its hash: `blake3` for a
+/// mesh without evidence (or with KoflCraft's evidence 1.1), `sha256` for
+/// one whose evidence 1.0 recorded SHA-256; a session saved before 1.15
+/// (`sha256` of a mesh now checked with BLAKE3) still recognises its mesh,
+/// and warns SESS003 only when that SHA-256 differs. Breaks when loading
+/// compares digests of two hashes (every older session would warn its
+/// mesh changed) or skips the check for older sessions.
+#[test]
+fn sessions_name_the_hash_of_their_mesh() {
+    use murmel_mesh::FileHash;
+    let dir = scratch("session-hash");
+    let mesh = dir.join("box.vtu");
+    std::fs::copy(root().join("test-fixtures/box/foehncraft.vtu"), &mesh).unwrap();
+    let file = dir.join("s.murmel");
+    let mut s = session();
+    let open = call("mesh.open", json!({"path": mesh}), &mut s);
+    assert_eq!(open.result["hash"], "blake3");
+    assert_eq!(
+        open.result["files"][0]["blake3"],
+        FileHash::Blake3
+            .of_bytes(&std::fs::read(&mesh).unwrap())
+            .as_str()
+    );
+    assert!(call("session.save", json!({"path": file}), &mut s).ok());
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(v["mesh"]["blake3"], open.result["digest"]);
+    assert!(v["mesh"].get("sha256").is_none());
+
+    // As saved before 1.15.
+    let sha = FileHash::Sha256.of_bytes(&std::fs::read(&mesh).unwrap());
+    v["format_version"] = "1.14".into();
+    v["mesh"].as_object_mut().unwrap().remove("blake3");
+    v["mesh"]["sha256"] = sha.into();
+    std::fs::write(&file, v.to_string()).unwrap();
+    for fresh in [true, false] {
+        let mut t = if fresh { session() } else { s.clone() };
+        let e = call("session.load", json!({"path": file}), &mut t);
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        assert_eq!(e.result["warnings"], json!([]), "fresh: {fresh}");
+    }
+    v["mesh"]["sha256"] = FileHash::Sha256.of_bytes(b"other").into();
+    std::fs::write(&file, v.to_string()).unwrap();
+    let e = call("session.load", json!({"path": file}), &mut session());
+    assert_eq!(e.result["warnings"][0]["code"], "SESS003");
+
+    // A mesh whose evidence (1.0) recorded SHA-256 is saved with it.
+    let channel = channel_case(&dir.join("channel"));
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    assert!(call("session.save", json!({"path": file}), &mut s).ok());
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(
+        v["mesh"]["sha256"],
+        FileHash::Sha256
+            .of_bytes(&std::fs::read(&channel).unwrap())
+            .as_str()
+    );
+    assert!(v["mesh"].get("blake3").is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Invariant: saved views are named cameras of the open mesh: views.save
 /// names a new one "View N" or updates the one with the name given,
 /// views.go puts its camera back, rename refuses a taken or empty name

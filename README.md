@@ -141,7 +141,7 @@ every change.
 - Session files (`.murmel`, Ctrl + S): mesh, camera, display, clip planes,
   saved views, regions, measurements ([docs/sessions.md](docs/sessions.md)).
 - Large meshes: files read, surfaces built and edges found on all threads,
-  the SHA-256 taken after the mesh shows, edges hidden while orbiting only
+  files checked with BLAKE3 after the mesh shows, edges hidden while orbiting only
   when frames get slow ([docs/performance.md](docs/performance.md),
   `murmel bench`).
 - Mouse presets (three-button, Apple, Fusion, ParaView), every binding
