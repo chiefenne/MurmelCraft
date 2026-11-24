@@ -726,3 +726,37 @@ Sorting the faces into buckets and copying the distinct faces out take
 more than half of it. Both write large fresh arrays, which is where the
 iMac (2.0 s for this step at 16 threads) is limited by memory rather
 than by its cores; its own split will show whether that holds there.
+
+## Sorting and copying the faces faster (2026-11-24)
+
+The split above showed two steps doing more than they had to:
+
+- **Sorting the faces into buckets** first found each face's smallest
+  point (reading all 1.4 GB of the polyhedra's faces again) and joined
+  the threads' pieces on one thread, then counted where the faces go in
+  another pass. The `.vtu` reader now notes each face's smallest point
+  while it reads the face (`Cells::least`), and linking takes it from
+  there: one pass counts, in place. Readers that do not note it (VTKHDF,
+  the synthetic meshes) have it found in that same pass.
+- **Copying the distinct faces out** added up their sizes on one thread
+  first. Each range of faces now adds up its own, and copies after the
+  ranges before it.
+
+The mesh is the same bit for bit (every array hashed, old against new,
+for the fixtures, the 1 M bench mesh and a synthetic honeycomb, at 1, 3
+and 4 threads).
+
+The 4 M cell `.vtu` here, two runs of `read` and `open` each (ms; main in
+brackets):
+
+| 4 threads | read | open |
+|---|---:|---:|
+| buckets | 238, 245 (536, 546) | 223, 248 (536, 571) |
+| distinct | 212, 209 (351, 345) | 244, 234 (357, 359) |
+| all of `read.topology` | 1,211, 1,219 (1,638, 1,688) | 1,259, 1,232 (1,652, 1,696) |
+| `read.cells` | 379, 379 (288, 280) | 396, 387 (286, 309) |
+
+Linking takes 0.44 s less, and the cells 0.1 s more: writing the
+smallest points (227 MB at 4 M cells) touches fresh memory. Together
+0.35 s less at 4 threads; the peak memory is unchanged (3,999 MiB). On
+one thread, linking went from 4.9 s to 3.4 s.

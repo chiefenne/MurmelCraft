@@ -226,7 +226,7 @@ pub fn honeycomb(n: usize) -> Mesh {
         .collect();
     mesh.metadata
         .insert("generator".into(), format!("murmel synth honeycomb n={n}"));
-    boundary::link(&mut mesh, polys);
+    boundary::link(&mut mesh, polys, None);
     mesh
 }
 
