@@ -73,6 +73,7 @@ pub const GROUPS: &[&str] = &[
     "field",
     "clip",
     "slice",
+    "region",
     "measure",
     "selection",
     "settings",
@@ -940,6 +941,123 @@ pub fn commands() -> Vec<Command> {
             Tool("display.mesh_look", json!({ "look": l })),
         ));
     }
+    // Regions of interest: Alt + R adds a box in the middle of the mesh,
+    // or turns the current region on and off.
+    v.push(cmd(
+        "region.set:toggle",
+        "cmd-region-toggle",
+        "region",
+        &["Alt+R"],
+        Dynamic("region.set", |s| {
+            s.mesh.as_ref()?;
+            Some(match s.display.current_region() {
+                Some(k) => json!({
+                    "region": k + 1,
+                    "enabled": !s.display.regions[k].enabled,
+                }),
+                None => json!({"new": true, "shape": "box"}),
+            })
+        }),
+    ));
+    for shape in ["box", "sphere", "slab"] {
+        v.push(cmd(
+            format!("region.set:{shape}"),
+            format!("cmd-region-{shape}"),
+            "region",
+            &[],
+            Dynamic(
+                "region.set",
+                match shape {
+                    "box" => |s: &Session| {
+                        s.mesh
+                            .as_ref()
+                            .map(|_| json!({"new": true, "shape": "box"}))
+                    },
+                    "sphere" => |s: &Session| {
+                        s.mesh
+                            .as_ref()
+                            .map(|_| json!({"new": true, "shape": "sphere"}))
+                    },
+                    _ => |s: &Session| {
+                        s.mesh
+                            .as_ref()
+                            .map(|_| json!({"new": true, "shape": "slab"}))
+                    },
+                },
+            ),
+        ));
+    }
+    v.push(cmd(
+        "region.set:picked",
+        "cmd-region-picked",
+        "region",
+        &[],
+        Dynamic("region.set", |s| {
+            let cells: Vec<u32> = s
+                .display
+                .selection
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Cell(c) => Some(*c),
+                    _ => None,
+                })
+                .collect();
+            (!cells.is_empty())
+                .then(|| json!({"new": true, "shape": "cells", "cells": cells, "rings": 1}))
+        }),
+    ));
+    v.push(cmd(
+        "region.set:zone",
+        "cmd-region-zone",
+        "region",
+        &[],
+        Dynamic("region.set", |s| {
+            let m = s.mesh.as_ref()?;
+            let z = s.display.selection.iter().rev().find_map(|i| match i {
+                Item::Zone(z) => Some(*z),
+                _ => None,
+            })?;
+            m.mesh
+                .zones
+                .get(z as usize)
+                .map(|name| json!({"new": true, "shape": "zone", "zone": name}))
+        }),
+    ));
+    v.push(cmd(
+        "region.set:patch",
+        "cmd-region-patch",
+        "region",
+        &[],
+        Dynamic("region.set", |s| {
+            let m = s.mesh.as_ref()?;
+            let p = s.display.selection.iter().rev().find_map(|i| match i {
+                Item::Patch(p) => Some(*p),
+                _ => None,
+            })?;
+            m.mesh
+                .patches
+                .get(p as usize)
+                .map(|pa| json!({"new": true, "shape": "patch", "patch": pa.name, "layers": 3}))
+        }),
+    ));
+    v.push(cmd(
+        "region.clear",
+        "cmd-region-clear",
+        "region",
+        &[],
+        Dynamic("region.clear", |s| {
+            s.display.current_region().map(|k| json!({"region": k + 1}))
+        }),
+    ));
+    v.push(cmd(
+        "region.clear:all",
+        "cmd-region-clear-all",
+        "region",
+        &[],
+        Dynamic("region.clear", |s| {
+            (!s.display.regions.is_empty()).then(|| json!({"all": true}))
+        }),
+    ));
     v.push(cmd(
         "display.visibility:hide",
         "cmd-hide",
@@ -1142,6 +1260,10 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     ),
     ("mesh.info", "the Properties panel shows it"),
     (
+        "region.list",
+        "the model tree and the Properties panel show the regions",
+    ),
+    (
         "field.list",
         "the colour-by menu and the legend show the fields",
     ),
@@ -1340,6 +1462,13 @@ mod tests {
         let open = |s: &mut Session| {
             assert!(crate::call("mesh.open", json!({"path": channel}), s).ok());
             assert!(crate::call("select.item", json!({"item": "patch:inlet"}), s).ok());
+            // A cell and a zone too, for the region commands that take
+            // the picked cells and the selected zone.
+            let zone = format!("zone:{}", s.mesh.as_ref().unwrap().mesh.zones[0]);
+            for item in ["cell:0".to_string(), zone] {
+                let e = crate::call("select.item", json!({"item": item, "add": true}), s);
+                assert!(e.ok(), "{item}: {:?}", e.diagnostics);
+            }
             // A saved view, so the commands that step through them apply.
             assert!(crate::call("views.save", json!({}), s).ok());
             // Two clip planes, so removing the current one leaves one for

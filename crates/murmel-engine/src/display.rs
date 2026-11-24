@@ -22,6 +22,7 @@ use crate::field::{FieldChoice, FieldStyle, FieldStyles, FieldValues};
 use crate::glyph::Arrows;
 use crate::measure::{Measurement, Probe};
 use crate::quality::{Metric, Quality};
+use crate::region::{Region, RegionCells};
 use crate::theme::{Rgb, Tokens};
 
 /// What gives a boundary face its colour.
@@ -133,6 +134,9 @@ pub enum Item {
     Iso(u32),
     /// The vector arrows (`arrows`), when `Display::arrows` is set.
     Arrows,
+    /// A region of interest, by index into `Display::regions`; its id
+    /// counts from one (`region:1`).
+    Region(u32),
 }
 
 impl Item {
@@ -159,6 +163,7 @@ impl Item {
             Item::Slice(i) => format!("slice:{}", i + 1),
             Item::Iso(i) => format!("iso:{}", i + 1),
             Item::Arrows => "arrows".into(),
+            Item::Region(i) => format!("region:{}", i + 1),
         }
     }
 
@@ -230,6 +235,11 @@ impl Item {
                 .ok()
                 .filter(|&n| n >= 1)
                 .map(|n| Item::Iso(n - 1)),
+            "region" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&n| n >= 1)
+                .map(|n| Item::Region(n - 1)),
             _ => None,
         }
     }
@@ -327,6 +337,14 @@ pub struct Display {
     pub isos: Vec<Iso>,
     /// What the mesh looks like while slices or iso-surfaces show.
     pub mesh_look: MeshLook,
+    /// Regions of interest (`region.set`), in the order they were added.
+    /// While one is enabled, only the cells of the enabled regions show
+    /// and the filters compute only there.
+    pub regions: Vec<Region>,
+    /// The regions as found on the mesh (their estimates and the cells
+    /// of the enabled ones), found again when they change
+    /// (`Session::redraw`); `None` while there are none.
+    pub region_cells: Option<Arc<RegionCells>>,
     /// The vector arrows on slices and the surface (`arrows.set`).
     pub arrows: Option<Arrows>,
 }
@@ -431,6 +449,11 @@ impl Display {
                         a.enabled = on;
                     }
                 }
+                (Item::Region(k), Some(on)) => {
+                    if let Some(r) = self.regions.get_mut(k as usize) {
+                        r.enabled = on;
+                    }
+                }
                 (Item::Measure(n), Some(on)) => {
                     for m in self.measurements.iter_mut().filter(|m| m.n == n) {
                         m.visible = on;
@@ -464,6 +487,7 @@ impl Display {
                         | Item::Slice(_)
                         | Item::Iso(_)
                         | Item::Arrows
+                        | Item::Region(_)
                 )
             })
             .collect();
@@ -704,6 +728,7 @@ impl Display {
             Item::Slice(k) => (k as usize) < self.slices.len(),
             Item::Iso(k) => (k as usize) < self.isos.len(),
             Item::Arrows => self.arrows.is_some(),
+            Item::Region(k) => (k as usize) < self.regions.len(),
             Item::Measure(n) => self.measurement(n).is_some(),
             Item::Probe(n) => self.probe(n).is_some(),
             _ => true,
@@ -774,6 +799,46 @@ impl Display {
             Item::Iso,
         );
         Some(c)
+    }
+
+    /// Remove region `k`, as [`Display::remove_clip`] does planes.
+    pub fn remove_region(&mut self, k: usize) -> Option<Region> {
+        if k >= self.regions.len() {
+            return None;
+        }
+        let r = self.regions.remove(k);
+        self.forget(
+            k as u32,
+            |i| match i {
+                Item::Region(j) => Some(j),
+                _ => None,
+            },
+            Item::Region,
+        );
+        Some(r)
+    }
+
+    /// The region tools act on: the one selected last, else the one added
+    /// last.
+    pub fn current_region(&self) -> Option<usize> {
+        self.selection
+            .iter()
+            .rev()
+            .find_map(|&i| match i {
+                Item::Region(k) if (k as usize) < self.regions.len() => Some(k as usize),
+                _ => None,
+            })
+            .or_else(|| self.regions.len().checked_sub(1))
+    }
+
+    /// Whether cell `c` is in an enabled region (always, while none is).
+    pub fn in_regions(&self, c: usize) -> bool {
+        self.region_cells.as_ref().is_none_or(|r| r.contains(c))
+    }
+
+    /// Whether enabled regions limit the cells shown.
+    pub fn region_filtering(&self) -> bool {
+        self.region_cells.as_ref().is_some_and(|r| r.filtering())
     }
 
     /// The selection forgets item `k` of the kind `index` reads, and the
@@ -900,6 +965,9 @@ impl Display {
         if !self.isolated.is_empty() && !self.isolated.contains(&Item::Cell(c as u32)) {
             return false;
         }
+        if !self.in_regions(c) {
+            return false;
+        }
         if let (Some(t), Some(v)) = (self.threshold, self.quality_values())
             && v.get(c).is_some_and(|&x| (x as f64) < t)
         {
@@ -918,7 +986,7 @@ impl Display {
 
     /// Whether boundary face `f` is drawn.
     pub fn face_visible(&self, mesh: &Mesh, f: usize) -> bool {
-        if self.hidden.is_empty() && !self.thresholding() {
+        if self.hidden.is_empty() && !self.thresholding() && !self.region_filtering() {
             return true;
         }
         if self.is_hidden(Item::Mesh) {
@@ -959,7 +1027,8 @@ impl Display {
             | Item::Probe(_)
             | Item::Slice(_)
             | Item::Iso(_)
-            | Item::Arrows => false,
+            | Item::Arrows
+            | Item::Region(_) => false,
         }
     }
 
@@ -1008,6 +1077,20 @@ impl Display {
                 }
                 return (!b.is_empty()).then_some(b);
             }
+            // A box or sphere as far as it lies in the mesh's box; a slab
+            // or a set of cells by the cells it takes.
+            Some(Item::Region(i)) => {
+                let shape = &self.regions.get(i as usize)?.shape;
+                if let Some(sb) = shape.bounds() {
+                    let mb = mesh.bounds();
+                    let cut = Bounds {
+                        min: [0, 1, 2].map(|k| sb.min[k].max(mb.min[k])),
+                        max: [0, 1, 2].map(|k| sb.max[k].min(mb.max[k])),
+                    };
+                    return Some(if cut.is_empty() { sb } else { cut });
+                }
+                return crate::region::cells_bounds(mesh, &shape.cells(mesh));
+            }
             // The points, with room around them (a probe's cell, or a
             // twentieth of the mesh), so a short distance or a lone point
             // still fills part of the view.
@@ -1044,6 +1127,7 @@ impl Display {
     pub fn visible_counts(&self, mesh: &Mesh) -> (usize, usize) {
         if self.hidden.is_empty()
             && self.isolated.is_empty()
+            && !self.region_filtering()
             && self.active_clips().next().is_none()
             && !self.thresholding()
         {

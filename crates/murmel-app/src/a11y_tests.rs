@@ -867,3 +867,48 @@ fn large_meshes_open_in_the_background() {
     opened(&mut h);
     assert_eq!(h.state().error.as_ref().map(|e| e.code), Some("MESH001"));
 }
+
+/// Invariant (large-mesh post-processing, stage 1, the maintainer's cards
+/// of 2026-11-24): the tree's "Add a box region" adds a box region that
+/// shows only the cells it takes, named in the tree with its shape and
+/// its cell count; a click on the row selects it so the Properties panel
+/// shows the region; its eye turns it off and every cell shows again;
+/// every control keeps a clean name. Breaks if the region section loses
+/// its buttons, the row its name, or the eye stops reaching region.set.
+#[test]
+fn regions_in_the_window() {
+    let mut h = harness();
+    let all = {
+        let s = &h.state().session;
+        s.display.visible_counts(&s.mesh.as_ref().unwrap().mesh).0
+    };
+    h.get_by_label("Add a box region (Alt + R)").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.display.regions.len(), 1);
+    let shown = {
+        let s = &h.state().session;
+        s.display.visible_counts(&s.mesh.as_ref().unwrap().mesh).0
+    };
+    assert!(0 < shown && shown < all, "{shown} of {all} cells show");
+    let label = h.state().region_label(0);
+    assert!(label.starts_with("Region 1: box · "), "{label}");
+    assert!(named(&h, &label), "region row");
+    assert_eq!(problems(&h), Vec::<String>::new(), "a region");
+
+    h.get_by_label(&label).click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.selection,
+        [murmel_engine::Item::Region(0)]
+    );
+    assert_eq!(problems(&h), Vec::<String>::new(), "region properties");
+
+    h.get_by_label(&format!("Hide {label}")).click();
+    h.run_steps(3);
+    assert!(!h.state().session.display.regions[0].enabled);
+    let back = {
+        let s = &h.state().session;
+        s.display.visible_counts(&s.mesh.as_ref().unwrap().mesh).0
+    };
+    assert_eq!(back, all, "no region on, every cell shows");
+}

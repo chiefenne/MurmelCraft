@@ -203,15 +203,7 @@ fn phases() -> Value {
 
 /// The bytes of the mesh's arrays.
 pub fn mesh_bytes(m: &Mesh) -> usize {
-    m.points.len() * 24
-        + (m.distinct.start.len() + m.distinct.nodes.len()) * 4
-        + (m.boundary.start.len() + m.boundary.nodes.len()) * 4
-        + (m.cell_faces.len() + m.cell_zone.len()) * 4
-        + m.cell_kind.len() * std::mem::size_of::<murmel_mesh::CellKind>()
-        + (m.boundary_patch.len() + m.boundary_owner.len()) * 4
-        + (m.cell_face_id.len() + m.face_owner.len() + m.face_neighbour.len()) * 4
-        + m.cell_face_flip.len()
-        + (m.boundary_face_id.len() + m.face_boundary.len()) * 4
+    m.model_bytes()
 }
 
 /// The bytes of a surface's arrays (CPU side).

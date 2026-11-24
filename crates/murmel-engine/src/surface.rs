@@ -802,7 +802,8 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         | Item::Probe(_)
         | Item::Slice(_)
         | Item::Iso(_)
-        | Item::Arrows => false,
+        | Item::Arrows
+        | Item::Region(_) => false,
     })
 }
 

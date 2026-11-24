@@ -31,6 +31,7 @@ impl Snapshot {
         display.pick = Default::default();
         display.quality = None;
         display.field_values = None;
+        display.region_cells = None;
         Self {
             camera: s.camera.clone(),
             display,
@@ -53,6 +54,8 @@ impl Snapshot {
         d.pick = s.display.pick;
         d.quality = s.display.quality.take();
         d.field_values = s.display.field_values.take();
+        // Found again by the redraw when the regions differ.
+        d.region_cells = s.display.region_cells.take();
         s.display = d;
         if redraw {
             s.redraw();

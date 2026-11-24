@@ -21,6 +21,7 @@ mod extract;
 pub mod live;
 mod markdown;
 pub mod movie;
+mod region;
 mod tools;
 
 use std::time::Instant;
