@@ -16,6 +16,7 @@ pub mod evidence;
 pub mod field;
 pub mod hdf5;
 pub mod polymesh;
+pub mod synth;
 pub mod vtkhdf;
 mod vtu;
 

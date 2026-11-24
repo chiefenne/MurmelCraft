@@ -13,6 +13,7 @@
 //! can judge a call before it runs; `reads` names the input fields that are
 //! paths the call reads, so the MCP server can confine both.
 
+pub mod bench;
 pub mod commands;
 mod diag;
 pub mod export;
