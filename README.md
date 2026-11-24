@@ -8,6 +8,15 @@ The shared desktop viewer of [KoflCraft](https://github.com/chiefenne/KoflCraft)
 eframe on wgpu; one engine with thin front ends, every action a registered
 tool that the window, the command line and the MCP server share.
 
+<p align="center">
+  <a href="assets/readme/tour"><img src="assets/readme/tour.webp" width="880" alt="A slideshow of the MurmelCraft window, five slides that change every four seconds, on a FoehnCraft result for KoflCraft's Manifold mesh: the mesh shaded with edges; cell types under a flat clip plane with its drag handles; a sphere region of interest cut flat and coloured cell by cell by speed; wall shear stress with two measurements and a probe; banded pressure with contour lines in the light theme"></a>
+</p>
+
+<sub>Screenshots of the window: a laminar FoehnCraft run (Re = 167) on
+KoflCraft's Manifold mesh, 229,615 polyhedra and prisms. The slides are
+also [full-size stills](assets/readme/tour); how they were made is in
+[tools/readme-tour](tools/readme-tour/README.md).</sub>
+
 ## What works today
 
 Not released yet (version 0.1.0): the V0.2 to V0.6 milestones of the UI
