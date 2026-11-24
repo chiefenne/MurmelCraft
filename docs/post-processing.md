@@ -38,8 +38,9 @@ Contents:
 
 | What | Window | Tool |
 |---|---|---|
-| A FoehnCraft result (`fields.vtkhdf`, `fields_<step>.vtkhdf`, `derived.vtkhdf`) | Open (Ctrl + O, Cmd + O on macOS), or drop the file on the window | `mesh.open` |
+| A FoehnCraft result (`fields.vtkhdf`, `fields_<step>.vtkhdf`, `derived.vtkhdf`) | File ▸ Open (Ctrl + O, Cmd + O on macOS), File ▸ Open recent, or drop the file on the window | `mesh.open` |
 | A KoflCraft mesh with its cell and point data (`foehncraft.vtu`) | the same | `mesh.open` |
+| A `.vtu` or `.vtkhdf` of another tool, an OpenFOAM case | File ▸ Import (VTK file…, OpenFOAM polyMesh…); the title bar then says "imported" | `mesh.open` |
 | The fields of the open result | Colour by (toolbar), or the Properties of the mesh | `field.list` |
 
 A `.vtkhdf` result holds the mesh and the fields in one HDF5 file, read by
@@ -442,10 +443,14 @@ streamlines need a region's cells. More in
 | A picture | "Export image…" (Ctrl + Shift + E) | `export.image` |
 | A movie | "Export movie…" (Ctrl + Shift + M): turn around, sweep a clip plane, fly through saved views, or play the time series | `export.movie` |
 | A chart | the chart panel's "Save…" | `charts.export` |
+| A printed page or a PDF page | File ▸ Print… (Ctrl + P), File ▸ Export ▸ Export PDF page…; paper, margins and header in File ▸ Page setup… | `export.pdf`, `settings.set_page` |
 
 Pictures and movies have the look of the window: lines, the legend and
 text grow with the scale. The legend and the axis triad are each
-optional; the background can be transparent. MP4 needs the `ffmpeg`
+optional; the background can be transparent. While a time series is open,
+the "Time and step" box adds the time and step at the bottom right
+(`time` in `export.image` and `export.movie`, on by default for series
+movies). MP4 needs the `ffmpeg`
 installed on the computer; GIF and PNG frames are written by MurmelCraft.
 Details in [export.md](export.md).
 

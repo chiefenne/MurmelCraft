@@ -4372,6 +4372,8 @@ fn pdf_page_and_page_setup() {
     );
     assert!(call("settings.set_page", json!({"reset": true}), &mut s).ok());
     assert!(s.page.is_default());
+}
+
 /// Invariant: the example script of docs/post-processing.md (section
 /// "The same from a script") runs: every call but the picture succeeds
 /// on the channel result, the Q iso-surface and the streamlines draw
