@@ -39,6 +39,9 @@ flate2 = "1.1"
 # The end of an array's text in the streaming .vtu reader: Unlicense OR
 # MIT, already a dependency of quick-xml.
 memchr = "2.8"
+# Peak memory for `murmel bench` on macOS as on Linux (getrusage): MIT,
+# with bitflags, cfg-if and libc (MIT OR Apache-2.0), already dependencies.
+nix = { version = "0.31", default-features = false, features = ["resource"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

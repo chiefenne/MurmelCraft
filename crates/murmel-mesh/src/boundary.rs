@@ -296,8 +296,13 @@ pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
         return;
     }
     let points = mesh.points.len();
+    let t = crate::profile::span("topology.buckets");
     let buckets = Buckets::new(&polys, points);
+    drop(t);
+    let t = crate::profile::span("topology.twins");
     let twin = first_twins(&polys, &buckets, points);
+    drop(t);
+    let t = crate::profile::span("topology.number");
     let Numbered {
         cell_face_id,
         owner,
@@ -305,6 +310,8 @@ pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
         first,
         shared,
     } = number(&mesh.cell_faces, &twin);
+    drop(t);
+    let t = crate::profile::span("topology.flip");
     let mut cell_face_flip = vec![false; polys.count()];
     drop(twin);
     mesh.unique_faces = owner.len();
@@ -318,6 +325,8 @@ pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
             *flip = owners != f && turned(cell_polys.face(owners), cell_polys.face(f));
         }
     });
+    drop(t);
+    let t = crate::profile::span("topology.distinct");
     // The distinct faces as their owners list them, copied in parallel.
     let mut start = Vec::with_capacity(n_unique + 1);
     start.push(0u32);
@@ -348,6 +357,8 @@ pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
         }
     });
     let distinct = Polygons { start, nodes };
+    drop(t);
+    let t = crate::profile::span("topology.boundary");
     if mesh.boundary.is_empty() {
         let mut b = Polygons::new();
         let mut bid = Vec::new();
@@ -400,6 +411,8 @@ pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
             })
             .collect();
     }
+    drop(t);
+    let t = crate::profile::span("topology.rest");
     let mut face_boundary = vec![NO_CELL; n_unique];
     for (b, &u) in mesh.boundary_face_id.iter().enumerate() {
         if u != NO_CELL {
@@ -412,6 +425,7 @@ pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
     mesh.face_owner = owner;
     mesh.face_neighbour = neighbour;
     mesh.face_boundary = face_boundary;
+    drop(t);
 }
 
 #[cfg(test)]

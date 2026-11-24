@@ -28,7 +28,7 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 
 | Stage | What it measures |
 |---|---|
-| `read` | the reader: file to mesh model, face topology included |
+| `read` | the reader: file to mesh model, face topology included; its phases name the reader's steps (`read.stream`, `read.cells`, `read.topology`, ...), and `topology.*` splits linking the cell faces of a `.vtu` or VTKHDF file: `buckets` (faces sorted by their smallest point), `twins` (each face finds its twin), `number` (distinct faces, owner and neighbour), `flip` (which cell faces run backwards), `distinct` (the distinct faces copied out), `boundary` (the boundary faces found), `rest` |
 | `digest` | SHA-256 of the mesh files (the validity badge needs it) |
 | `open` | `mesh.open` as the window does it: read, evidence, first surface (the files are hashed afterwards) |
 | `open.digest` | the wait, after `open`, until the SHA-256 of the files is in place (the validity badge) |
@@ -46,8 +46,8 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
 | `render.next.faces` | a later frame without the edges (the window while the view moves, when frames with edges are slow) |
 
-and reports the peak resident memory (Linux only; the `read` stage also
-reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
+and reports the peak resident memory (Linux and macOS, from
+`getrusage`; the `read` stage also reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
 rasteriser and says nothing about a real GPU; run it on the Mac for those.
 
 ## Baseline (2026-11-24, before any optimisation)
@@ -698,3 +698,31 @@ What it shows:
   the peak memory falls slightly: the stream holds each face's count
   besides its points, but the connectivity and the face offsets are now
   freed before the linking.
+
+## The steps of linking the faces, and peak memory on macOS (2026-11-24)
+
+`bench run` now splits `read.topology` into its steps (`topology.*`, see
+the stages above) and reports the peak memory on macOS too: it asks
+`getrusage` on Linux and macOS (the `nix` crate, MIT) instead of reading
+Linux's `/proc/self/status`. On Linux both give the same peak (3,999.6
+and 3,998.8 MiB for the read of the 4 M mesh below; 5,915 and 5,914 MiB
+over the whole run).
+
+The 4 M cell `.vtu` of polyhedra here (`bench make --cells 4000000`),
+4 threads, two runs of `read` and `open` (ms):
+
+| Step | read | open |
+|---|---:|---:|
+| buckets (faces sorted by their smallest point) | 660, 603 | 635, 589 |
+| twins (each face finds its twin) | 376, 322 | 331, 368 |
+| number (distinct faces, owner and neighbour) | 224, 184 | 243, 197 |
+| flip (cell faces that run backwards) | 139, 142 | 141, 144 |
+| distinct (the distinct faces copied out) | 448, 424 | 457, 370 |
+| boundary | 31, 31 | 28, 31 |
+| rest | 55, 55 | 64, 54 |
+| all of `read.topology` | 1,995, 1,839 | 1,962, 1,805 |
+
+Sorting the faces into buckets and copying the distinct faces out take
+more than half of it. Both write large fresh arrays, which is where the
+iMac (2.0 s for this step at 16 threads) is limited by memory rather
+than by its cores; its own split will show whether that holds there.
