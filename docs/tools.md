@@ -48,6 +48,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `region.set` | 1 | read | Add or change a region of interest (region: its number, region:1 is the first; left out: the current region, the one selected last or else added last; new: add one, up to 16). While a region is enabled, only the cells of the enabled regions show and slices, iso-surfaces, arrows and quality are computed only there; several enabled regions show their union. shape: box (center, size: full lengths along x, y, z; a new one is half the mesh's box), sphere (center, radius), slab (the cells between two planes thickness apart, the middle one through origin with normal), zone (zone: a cell zone's name), patch (patch: its name, layers: the cells along it and layers - 1 rings further in, 1 to 64), cells (cells: ids, left out: the cells picked now; rings: rings of face neighbours added, 0 to 64). A cell belongs to a box, sphere or slab when its bounding box touches the shape, so the shape is fully covered (also when it is thinner than a cell) and the border shows whole cells. cut: crinkle (the default, whole cells) or flat (box, sphere and slab only: the border cells are clipped to the shape and closed by their sections, as a flat clip plane cuts; a box's and a slab's cut is exact, a sphere's follows it to within a cell, and a sphere with no mesh node inside shows whole cells, with a note; a cell a whole-cell region takes stays whole, and where flat regions overlap a cell is cut by the one its centre lies deepest in). Changing shape replaces the region's shape; fields of another shape are refused. enabled false keeps the region but shows the whole mesh. The result lists each region with the cells it takes, its halo (the cells around it a mesh read in pieces also loads) and the size of that part of the mesh model. |
 | `region.clear` | 1 | read | Remove a region (region: its number; left out: the current region), or all of them (all); the regions after it move up one. With no region enabled the whole mesh shows. |
 | `region.list` | 1 | read | The regions of interest: each with its shape, whether it is enabled, and what it takes (cells, halo cells, points and the size of that part of the mesh model in MiB); shown is what the enabled regions take together (null while none is enabled and the whole mesh shows). |
+| `blocks.make` | 1 | write-files | Write a mesh and its fields as a blocked VTKHDF file (docs/blocked-vtkhdf.md, layout 1), the layout from which MurmelCraft reads a region of a large mesh without reading it all: the cells sorted along a 3-D Hilbert curve and cut into blocks of block_cells owned cells (default 65536, 16384 to 1048576), each block a partition with its own points and one layer of ghost cells (the point neighbours), global point and cell ids, the bounds and field ranges of every block, and the boundary patches as PolyData with their owner cells. mesh: the mesh to convert (a .vtu, an OpenFOAM case or polyMesh folder, or a VTKHDF file; it is read, not opened); left out, the open mesh and its fields. The file is an ordinary VTKHDF 2.4 file that ParaView 5.13 and later open; it opens whole with mesh.open. The result counts the blocks, ghost cells, linear cells and polyhedra written. |
 | `display.mesh_look` | 1 | read | What the mesh looks like while slices or iso-surfaces show: outline (the default: its feature edges only, faint, so what is inside stands out; a click then picks the slices) or faces (as the render mode says). |
 | `select.item` | 2 | read | Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected. |
 | `select.pick` | 1 | read | Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked. |
@@ -1461,6 +1462,34 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `blocks.make`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "block_cells": {
+      "description": "Owned cells per block (default 65536)",
+      "maximum": 1048576,
+      "minimum": 16384,
+      "type": "integer"
+    },
+    "mesh": {
+      "description": "The mesh to convert: a .vtu, an OpenFOAM case or polyMesh folder, or a VTKHDF file; left out, the open mesh and its fields",
+      "type": "string"
+    },
+    "out": {
+      "description": "The blocked VTKHDF file to write, usually *.vtkhdf",
+      "type": "string"
+    }
+  },
+  "required": [
+    "out"
+  ],
+  "type": "object"
+}
+```
+
 ### `display.mesh_look`
 
 ```json
@@ -2587,6 +2616,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `MESH017` | error | The file uses an HDF5 feature the reader does not support (a chunk index, filter or storage kind). | Write the file with contiguous or chunked datasets and the deflate or shuffle filters, as FoehnCraft and VTK do. |
 | `MESH018` | error | The file is not a VTKHDF file, or its VTKHDF layout is broken (a block, dataset or count is missing or wrong). | Open a .vtkhdf file written by FoehnCraft or VTK (VTKHDF 2.x, UnstructuredGrid or PartitionedDataSetCollection). |
 | `MESH019` | error | Opening the mesh was cancelled. | Open it again when you want it. |
+| `BLOCK001` | error | The blocked VTKHDF file cannot be written: the folder is missing or read-only, the disk is full, or the output is the mesh being converted. | Write to another path with room for about the size of the mesh file; the output must not be the input. |
+| `BLOCK002` | error | The block size is outside 16,384 to 1,048,576 cells. | Leave it out for the default of 65,536 cells per block. |
+| `BLOCK003` | error | The mesh has no volume cells to put in blocks. | Convert a volume mesh: a .vtu, an OpenFOAM polyMesh or a VTKHDF file. |
 | `MESH015` | error | The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces). | Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch. |
 | `RENDER001` | error | No GPU adapter was found (no driver, or no software renderer such as Mesa lavapipe). | Install a Vulkan, Metal or DirectX 12 driver; on a headless Linux machine install mesa-vulkan-drivers. |
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |

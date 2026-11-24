@@ -792,6 +792,7 @@ cmd-arrows-clear = Remove the vector arrows
 tool-region-set = Region of interest
 tool-region-clear = Remove the region
 tool-region-list = List the regions
+tool-blocks-make = Write a blocked VTKHDF file
 group-region = Regions of interest
 cmd-region-toggle = Region: show or hide (adds a box if there is none)
 cmd-region-cut = Region: cut flat along its border, or whole cells

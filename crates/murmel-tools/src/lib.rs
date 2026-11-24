@@ -14,6 +14,7 @@
 //! paths the call reads, so the MCP server can confine both.
 
 pub mod bench;
+mod blocks;
 pub mod commands;
 mod diag;
 pub mod export;

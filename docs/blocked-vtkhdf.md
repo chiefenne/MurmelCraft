@@ -28,19 +28,24 @@ version 2.4) and the HDF5 File Format Specification 3.0.
     file without it is read as an ordinary VTKHDF file (whole).
   - `block_order` = `"hilbert"`. Another order is allowed; regions then
     touch more blocks.
-  - Strings that writers already put there (`foehncraft_*`, `case`,
-    `units`, `step`, `time`, `iteration`, `koflcraft_*`). MurmelCraft
-    keeps every `koflcraft_*` and `foehncraft_*` string as mesh metadata.
+  - Digests and versions (`koflcraft_*`, § 8). MurmelCraft keeps every
+    string attribute of `/VTKHDF` as mesh metadata.
+- The attributes of a run (`foehncraft_*`, `case`, `units`, `step`,
+  `time`, `iteration`) stay where FoehnCraft puts them, on the file's root
+  group `/`. MurmelCraft reads them there, and keeps the `foehncraft_*`
+  and `koflcraft_*` strings it finds there as mesh metadata too.
 
 ## 2. Blocks
 
 - **Order.** The owned cells are sorted by the 3-D Hilbert index of their
   centroid, the mean of the cell's points.
   - Each axis of the bounding box of all mesh points is scaled on its own
-    to the integers 0 to 2²¹ − 1, so the index is 63 bits. An axis of zero
-    extent maps to 0.
+    to the integers 0 to 2²¹ − 1 as ⌊(x − min) / (max − min) × (2²¹ − 1)⌋,
+    so the index is 63 bits. An axis of zero extent maps to 0.
   - The index comes from Skilling's transpose algorithm ("Programming the
-    Hilbert curve", AIP Conf. Proc. 707, 2004).
+    Hilbert curve", AIP Conf. Proc. 707, 2004): `AxestoTranspose` on
+    (x, y, z), then the bits read from the top bit plane down, x, y, z
+    within each plane.
   - Ties are broken by the writer's own cell number.
 - **Size.** Consecutive runs of exactly 65,536 owned cells; the last block
   holds the rest. Writers may pick another fixed size from 16,384 to
@@ -99,13 +104,20 @@ All integers are 64-bit signed little-endian unless stated otherwise.
     0.
   - `Connectivity` holds local point ids.
 - Linear cells keep their own VTK types: tetra 10, hexahedron 12, wedge
-  13, pyramid 14. Polyhedra are type 42 in the 2.4 layout:
+  13, pyramid 14, with their points in VTK 9's order: the base (0, 1, 2)
+  or (0, 1, 2, 3) turns towards the rest of the cell, as VTK 9's face
+  tables have it, so that VTK finds positive volumes. A cell whose faces
+  are not exactly those of a linear cell (warped into another shape, a
+  collapsed point) is a polyhedron. Polyhedra are type 42 in the 2.4
+  layout:
   - `NumberOfFaces`, `NumberOfPolyhedronToFaceIds` and
     `NumberOfFaceConnectivityIds` hold one value per partition.
   - `FaceConnectivity` holds local point ids of each face, oriented with
     its normal out of the cell.
   - `FaceOffsets` holds `NumberOfFaces + 1` values per partition.
   - `PolyhedronToFaces` holds local face ids.
+  - `Connectivity` of a polyhedron holds its distinct points, in the
+    order its faces first use them.
   - `PolyhedronOffsets` holds `NumberOfCells + 1` values per partition;
     a non-polyhedral cell has an empty range.
 
@@ -165,6 +177,9 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
 
 - **Superblock** 0, 2 or 3. **Object headers** version 1 or 2. **Links**
   compact or dense. **Attributes** compact or dense.
+- **Groups track the creation order of their links** (and index it):
+  VTK's `vtkHDFReader` lists a group's links in creation order, and the
+  HDF5 library refuses that order for a group that does not track it.
 - **Contiguous is required** for every topology and id dataset of
   `internal`:
   - `Points`, `Types`, `Offsets` and `Connectivity`
@@ -185,6 +200,22 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   - szip, n-bit and scale-offset filters
   - virtual datasets and external files
 - **Byte order:** little-endian throughout.
+
+## Writers
+
+- `murmel blocks make MESH --out FILE [--block-cells N]` (the tool
+  `blocks.make`) writes a `.vtu`, an OpenFOAM `polyMesh` or a VTKHDF file
+  with its fields in this layout. It holds the mesh in memory while it
+  writes; a converter for meshes beyond the memory budget comes later.
+  Its HDF5 writer is MurmelCraft's own (`crates/murmel-mesh/src/h5write.rs`,
+  from the HDF5 File Format Specification 3.0): superblock 2, version 2
+  object headers, compact links and attributes, contiguous datasets.
+- KoflCraft writes its binary hand-off this way, FoehnCraft its
+  `fields.vtkhdf`.
+- Choices the layout leaves to the writer, which a reader must not
+  depend on: the order of a block's points (MurmelCraft sorts them by
+  global id, KoflCraft takes them in order of first use) and whether a
+  patch without faces has a block.
 
 ## Example
 

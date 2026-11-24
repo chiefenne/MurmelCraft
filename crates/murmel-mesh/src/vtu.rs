@@ -922,7 +922,7 @@ fn strings(a: &Array) -> Result<Vec<String>, MeshError> {
 }
 
 /// `id=name` entries into a table indexed by id.
-fn id_table(entries: &[String]) -> BTreeMap<usize, String> {
+pub(crate) fn id_table(entries: &[String]) -> BTreeMap<usize, String> {
     let mut t = BTreeMap::new();
     for (i, e) in entries.iter().enumerate() {
         match e.split_once('=') {
