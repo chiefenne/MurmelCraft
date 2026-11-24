@@ -89,6 +89,7 @@ impl MurmelApp {
                 | Item::Iso(_)
                 | Item::Arrows
                 | Item::Parcels
+                | Item::Blocks
                 | Item::Stream(_)
                 | Item::Region(_) => {}
             }
@@ -767,6 +768,7 @@ impl MurmelApp {
                 format!("{} · {name}", self.i18n.tr(&format!("props-area-{area}")))
             }
             None if c.item == "arrows" => self.i18n.tr("props-area-arrows"),
+            None if c.item == "blocks" => self.i18n.tr("props-area-blocks"),
             None => self.i18n.tr("props-area-mesh"),
         };
         ui.heading(heading);

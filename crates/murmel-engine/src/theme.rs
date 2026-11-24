@@ -112,6 +112,10 @@ pub struct FieldTokens {
     pub stream: Rgb,
     /// Spray parcels in their own colour.
     pub parcel: Rgb,
+    /// The boxes of an overview's blocks.
+    pub block: Rgb,
+    /// The boxes of the blocks the regions read.
+    pub block_read: Rgb,
 }
 
 /// Colours of the patch roles.
@@ -321,7 +325,9 @@ pub struct MeshColors {
     /// `line`, `probe` and `halo` to a colour (same shape as `gizmo`).
     #[serde(default, skip_serializing_if = "UserGizmo::is_empty")]
     pub measure: UserGizmo,
-    /// Field colouring: `none`, `edge` and `line` to a colour.
+    /// Field colouring and the colours of what draws inside the mesh
+    /// (`none`, `edge`, `line`, `outline`, `arrow`, `stream`, `parcel`,
+    /// `block`, `block_read`) to a colour.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub field: BTreeMap<String, Rgb>,
 }
@@ -450,6 +456,8 @@ impl Tokens {
                 "arrow" => &mut f.arrow,
                 "stream" => &mut f.stream,
                 "parcel" => &mut f.parcel,
+                "block" => &mut f.block,
+                "block_read" => &mut f.block_read,
                 _ => return Err(format!("unknown field colour {name}")),
             } = rgb;
         }
