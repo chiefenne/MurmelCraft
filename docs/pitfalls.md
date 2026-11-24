@@ -172,6 +172,16 @@ problem took more than a few minutes to understand.
 - **Apple mouse.** `cmd` in a binding is the Command key (`mac_cmd` in
   egui); on Linux and Windows it never fires, so the Apple preset is a macOS
   preset. The Magic Mouse's right side is the secondary button.
+- **A handle must not cover the viewport.** An egui widget's rect takes
+  the pointer from the viewport below it, so a handle that registered its
+  whole bounding box blocked orbiting in a large square round a diagonal
+  arrow. The clip handles register a small square at the nearest point of
+  their centre line only while the pointer is within reach, and the whole
+  viewport only while their own drag lasts (`clip_handle.rs`).
+- **A tilt needs a fixed axis and pivot for the whole drag.** Recomputing
+  the plane's axes and centre every frame let the plane drift and the
+  arcs jump; the drag keeps the pivot, the axis and which side each arc
+  sits on from the press to the release (`ClipDrag`).
 - **A click is not a drag.** egui starts a drag only after its movement
   threshold, so a press without movement stays a click (pick), as the spec
   asks.

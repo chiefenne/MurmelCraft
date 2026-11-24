@@ -446,6 +446,82 @@ fn clip_plane_tools() {
     assert!(s.display.clips.is_empty());
 }
 
+/// Invariant (V1.0 clip handle): `clip.rotate` tilts the plane about a
+/// world vector or a screen axis through the pivot (by default inside
+/// the mesh, so cells stay on both sides), a drag of many small steps in
+/// one undo group is one undo step back to the plane before it, and the
+/// Alt + arrow commands send screen-axis tilts that turn the normal the
+/// way they say (left: towards the screen's left). Without a plane, a
+/// zero axis or a non-finite angle it is refused. Breaks if the rotation
+/// sense, the pivot or the journal entry change; the engine test checks
+/// the geometry only, not the tool, the keys or the undo.
+#[test]
+fn clip_rotate_tool() {
+    let mut s = session();
+    let ch = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": ch}), &mut s).ok());
+    let e = call("clip.rotate", json!({"axis": "y", "deg": 5}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002", "no plane yet");
+    assert!(call("view.standard", json!({"view": "front"}), &mut s).ok());
+    assert!(call("clip.set", json!({"normal": [1, 0, 0]}), &mut s).ok());
+    let e = call("clip.rotate", json!({"axis": [0, 0, 1], "deg": 90}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let n = s.display.clip().unwrap().normal;
+    assert!((n[1] - 1.0).abs() < 1e-9, "x turns to y about z: {n:?}");
+    let shown = e.result["visible_cells"].as_u64().unwrap();
+    assert!(shown > 100 && shown < 776, "{shown}");
+    for bad in [
+        json!({"axis": [0, 0, 0], "deg": 5}),
+        json!({"axis": "y"}),
+        json!({"axis": "w", "deg": 5}),
+        json!({"axis": "x", "deg": 5, "pivot": [0, 0]}),
+    ] {
+        let e = call("clip.rotate", bad.clone(), &mut s);
+        assert!(!e.ok(), "{bad}");
+    }
+    // A drag: many small tilts in one group, undone in one step.
+    assert!(call("clip.set", json!({"normal": [1, 0, 0]}), &mut s).ok());
+    let start = *s.display.clip().unwrap();
+    assert!(call("journal.group", json!({"open": true}), &mut s).ok());
+    let pivot = start.pivot(&s.mesh.as_ref().unwrap().mesh.bounds());
+    for _ in 0..12 {
+        let e = call(
+            "clip.rotate",
+            json!({"axis": [0, 1, 0], "deg": 2.5, "pivot": pivot}),
+            &mut s,
+        );
+        assert!(e.ok());
+    }
+    assert!(call("journal.group", json!({"open": false}), &mut s).ok());
+    let tilted = *s.display.clip().unwrap();
+    let cos: f64 = (0..3).map(|k| tilted.normal[k] * start.normal[k]).sum();
+    assert!((cos - 30f64.to_radians().cos()).abs() < 1e-9, "{cos}");
+    assert!(
+        tilted.distance(pivot).abs() < 1e-9,
+        "the pivot stays on the plane"
+    );
+    assert!(call("journal.undo", json!({}), &mut s).ok());
+    assert_eq!(s.display.clip().copied(), Some(start));
+    // Keys: Alt + Left turns the normal towards the screen's left,
+    // Alt + Up towards its top.
+    let cmds = crate::commands::commands();
+    let run = |id: &str, s: &mut Session| {
+        let c = cmds.iter().find(|c| c.id == id).unwrap();
+        let (tool, input) = c.input(s).unwrap();
+        assert!(call(tool, input, s).ok());
+    };
+    let (right, up) = s.camera.basis();
+    let (right, up) = (right.to_array(), up.to_array());
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let n0 = s.display.clip().unwrap().normal;
+    run("clip.rotate:left", &mut s);
+    let n1 = s.display.clip().unwrap().normal;
+    assert!(dot(n1, right) < dot(n0, right), "left: {n0:?} -> {n1:?}");
+    run("clip.rotate:up", &mut s);
+    let n2 = s.display.clip().unwrap().normal;
+    assert!(dot(n2, up) > dot(n1, up), "up: {n1:?} -> {n2:?}");
+}
+
 /// Invariant: quality colouring and its threshold go through tools only.
 /// A threshold hides the cells below it (fewer cells shown, and exactly as
 /// many as inspect.quality counts at or above it), null shows them all
@@ -1166,6 +1242,23 @@ fn several_clip_planes() {
     let e = call("journal.undo", json!({}), &mut s);
     assert_eq!(e.result["undone"], "clip.clear");
     assert_eq!(s.display.clips.len(), 2);
+
+    // clip.rotate (the viewport's tilt arcs) tilts the plane named.
+    let before = s.display.clips.clone();
+    let e = call(
+        "clip.rotate",
+        json!({"plane": 2, "axis": "x", "deg": 30.0}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.display.clips[0], before[0]);
+    assert_ne!(s.display.clips[1].normal, before[1].normal);
+    let e = call(
+        "clip.rotate",
+        json!({"plane": 9, "axis": "x", "deg": 3.0}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "CLIP001");
 
     for _ in 2..crate::tools::MAX_CLIPS {
         assert!(call("clip.set", json!({"new": true}), &mut s).ok());

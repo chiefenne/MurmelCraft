@@ -113,6 +113,18 @@ pub struct Tokens {
     pub dark: Palette,
     pub light: Palette,
     pub mesh: MeshTokens,
+    pub gizmo: GizmoTokens,
+}
+
+/// The shading of the clip plane's handles in the viewport: the accent
+/// darkened towards `shade` on the sides turned from the light and
+/// lifted towards `shine` in the highlight.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct GizmoTokens {
+    pub shade: Rgb,
+    pub shade_mix: f32,
+    pub shine: Rgb,
+    pub shine_mix: f32,
 }
 
 impl Tokens {

@@ -32,6 +32,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
 | `clip.set` | 2 | read | Set a clip plane (plane: its number, clip:1 is the first; left out: the current plane, the one selected last or else added last; new: add one, up to 8): its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). A cell shows when every enabled plane keeps it; flat planes slice in the order they were added. |
+| `clip.rotate` | 1 | read | Tilt a clip plane (plane: its number; left out: the current plane) by deg degrees about an axis through pivot (right-hand rule). The axis is a screen axis (x right, y up, z towards the viewer, as in view.rotate) or a world vector; the pivot defaults to the centre of the plane inside the mesh's box, so the plane stays in the mesh. The window's tilt arcs and Alt + arrow keys call it. |
 | `clip.clear` | 2 | read | Remove a clip plane (plane: its number; left out: the current plane), or all of them (all); the planes after it move up one. |
 | `select.item` | 2 | read | Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected. |
 | `select.pick` | 1 | read | Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked. |
@@ -703,6 +704,55 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     }
   },
   "required": [],
+  "type": "object"
+}
+```
+
+### `clip.rotate`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axis": {
+      "oneOf": [
+        {
+          "enum": [
+            "x",
+            "y",
+            "z"
+          ]
+        },
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ]
+    },
+    "deg": {
+      "type": "number"
+    },
+    "pivot": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "plane": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "axis",
+    "deg"
+  ],
   "type": "object"
 }
 ```
