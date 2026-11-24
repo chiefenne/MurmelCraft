@@ -175,6 +175,15 @@ problem took more than a few minutes to understand.
   `kind_of` first. A chunk can end anywhere (inside a number, a base64
   group, a tag), so a change to the streaming path is tested with the
   file handed over a few bytes at a time (`streams_in_any_pieces`).
+- **Parsed numbers are filled into room, not pushed or resized**
+  (`numbers::Filling`). The room comes zeroed from the allocator, sized
+  from the counts the file declares (or a guess from the density of the
+  first megabyte), and the parsing threads are the first to write it;
+  `Vec::resize` would write every page on one thread first. The token
+  count tests bytes with compares instead of the separator table
+  (`numbers::count_tokens`), so a separator stays a control byte, a space
+  or a parenthesis: with any other, the count and the parse disagree and
+  every array that uses it fails to read.
 - **The window hashes a mesh after it opens** (`Session::hash_after_open`):
   until the SHA-256 is taken on its own thread, `OpenMesh::digest` and the
   files' digests are empty and the badge is `Validity::Checking`. A tool

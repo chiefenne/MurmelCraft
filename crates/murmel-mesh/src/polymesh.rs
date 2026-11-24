@@ -455,17 +455,17 @@ impl<'a> Lex<'a> {
     /// to the caller; `None` (nothing taken) when the body holds anything
     /// else, such as a comment, so the token-by-token reader can say what
     /// is wrong.
-    fn fast_list<T: numbers::Number>(
+    fn fast_list<S: numbers::Slot>(
         &mut self,
         n: usize,
         per: usize,
         sep: &numbers::Sep,
-    ) -> Option<Vec<T>> {
+    ) -> Option<Vec<S>> {
         let rest = &self.b[self.i..];
         let end = list_end(rest);
         let end = end?;
-        let v = numbers::parse::<T>(&rest[..end], sep).ok()?;
-        if v.len() != n.checked_mul(per)? {
+        let v = numbers::parse::<S>(&rest[..end], sep).ok()?;
+        if v.len().checked_mul(S::N)? != n.checked_mul(per)? {
             return None;
         }
         self.i += end;
@@ -604,8 +604,8 @@ fn points(b: &[u8]) -> Result<Vec<[f64; 3]>, MeshError> {
     let v = match h.format {
         Format::Ascii => {
             let n = l.list_start(7)?;
-            match l.fast_list::<f64>(n, 3, &numbers::SPACE_PAREN) {
-                Some(xyz) => xyz.as_chunks::<3>().0.to_vec(),
+            match l.fast_list::<[f64; 3]>(n, 3, &numbers::SPACE_PAREN) {
+                Some(xyz) => xyz,
                 None => {
                     let mut v = Vec::with_capacity(n);
                     for _ in 0..n {

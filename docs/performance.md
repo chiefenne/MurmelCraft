@@ -469,3 +469,49 @@ branch; in brackets the points phase, where the feature edges are found:
 |---|---:|---:|
 | surface.feature_edges | 147 (237) | 442 (651) |
 | — points phase | 38 (127) | 93 (316) |
+
+## Parsing ascii arrays: room filled by the threads (2026-11-24)
+
+Timing the parts of the `.vtu` stream at 1 M cells (4 threads) showed
+where the time went: counting the numbers 360 ms, parsing them 455 ms,
+and 254 ms growing the arrays on one thread (`Vec::resize` writes zeros
+over the new part, so every page of the result is first touched there,
+and each growth copies what was read before).
+
+- **Room, not resizing** (`numbers::Filling`). An array is parsed into a
+  buffer the allocator hands over zeroed: fresh pages from the system,
+  which no thread writes before the parsing threads do, each its own
+  part. The buffer is sized from the counts the file declares (points,
+  cells and their data); the connectivity and face streams, which have no
+  count, get room for what the rest of the file would hold at the density
+  of their first megabyte, and too much room is given back at the end
+  (pages never written cost no memory). A buffer that is still too small
+  doubles, copied over on all threads.
+- **Points straight into points.** The coordinates parse into `[x, y, z]`
+  directly (the `.vtu` and the ascii polyMesh reader), no longer into a
+  flat array copied into points afterwards (about 150 MB at 1 M cells).
+- **The token count compares, it does not look up.** Counting tests each
+  byte against the space and control bytes (and parentheses for
+  OpenFOAM) instead of a table, so the compiler compares sixteen bytes at
+  a time: 3× faster on one thread. A control byte that is not a separator
+  is still an error wherever it sits (`stray_control_bytes_are_errors`).
+
+Same machine (4 threads), `--no-render`, two runs each alternating, main
+at f55f80f against this branch:
+
+| | 1 M: vtu (1.18 GB) | 4 M: vtu (4.99 GB) |
+|---|---:|---:|
+| open, ms (was) | 1,779 (2,148) | 7,503 (9,255) |
+| — streaming the arrays | 1,026 (1,348) | 4,353 (5,988) |
+| read with the SHA-256 beside it, ms (was) | 1,870 (2,448) | 8,169 (10,076) |
+| peak memory while reading, MiB (was) | 1,067 (1,059) | 3,945 (3,961) |
+
+What it shows:
+
+- Opening a 4 M cell ascii `.vtu` takes 1.8 s less (19 %), the
+  streaming of its arrays 27 % less, with the same peak memory.
+- With the arrays' growth gone, what is left of the stream is spread
+  over the threads (parsing the numbers is most of it), so the iMac's
+  16 threads gain more from it than this machine's 4.
+- The hash beside the reading finishes sooner too: the parse leaves it
+  more of the CPU.
