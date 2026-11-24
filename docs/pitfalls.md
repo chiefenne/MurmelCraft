@@ -111,6 +111,16 @@ problem took more than a few minutes to understand.
   name in the face and in both sections, and the cut stays closed. A
   section taken from the whole, uncut cell would name those corners
   differently and leave holes.
+- **A flat cut numbers its cut points on one thread, in order**
+  (`polygons` in `surface.rs`). The threads only sort the faces (whole,
+  dropped, or crossed by a plane: `Sides::fate`) and build the sections
+  of cells one plane slices, reading points already numbered (`View`
+  over a `Store`). The numbers decide the start of each section's loop,
+  so a change that makes a cut point anywhere else (a new kind of cut, a
+  section that asks for a point `Cutter::cut_edges` did not name) adds it
+  in that serial pass, or the surface changes with the threads; the
+  reading store answers `None` for a point it lacks, and that cell is
+  cut on one thread instead.
 - **Cut towards the camera.** `clip.set` by axis points the normal at the
   eye, so the half nearer the viewer goes and the cut is in sight; a fixed
   +axis normal hid the cut behind the mesh from the iso view.
