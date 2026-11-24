@@ -1795,3 +1795,266 @@ fn overview_in_the_window() {
     assert!(!named(&h, "Budget"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The channel's result with nine spray parcels spread through its box,
+/// in FoehnCraft's layout (`murmel_mesh::parcels::write_parcels`), in a
+/// fresh folder of its own.
+fn parcels_beside_the_channel(h: &mut Harness<'_, MurmelApp>) -> std::path::PathBuf {
+    use murmel_mesh::{Field, Location};
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.run_steps(3);
+    let b = h.state().session.mesh.as_ref().unwrap().mesh.bounds();
+    let at = |t: f64| [0, 1, 2].map(|k| b.min[k] + t * (b.max[k] - b.min[k]));
+    let points: Vec<[f64; 3]> = (1..=9).map(|i| at(f64::from(i) / 10.0)).collect();
+    let n = points.len();
+    let fields = vec![
+        Field {
+            name: "velocity".into(),
+            unit: None,
+            location: Location::Point,
+            components: 3,
+            values: (0..3 * n).map(|i| (i % 3) as f64).collect(),
+        },
+        Field {
+            name: "diameter".into(),
+            unit: None,
+            location: Location::Point,
+            components: 1,
+            values: (1..=n).map(|i| i as f64 * 1e-5).collect(),
+        },
+    ];
+    let dir = std::env::temp_dir().join(format!("murmel-parcel-window-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("parcels_000100.vtkhdf");
+    murmel_mesh::parcels::write_parcels(&path, &points, &fields, 0.5, 100, "channel").unwrap();
+    path
+}
+
+/// Invariant (D268, first milestone: spray parcels in the window): with
+/// no parcels the tree offers a named "Open spray parcels…" button; with
+/// a parcel file open the tree has a named row with an eye, a named
+/// size box and a context menu, and the parcels a named colour bar of
+/// their own whose title opens their settings; the bar's filter box,
+/// the menu's size choice, the size box and the eye each change the
+/// parcels through `parcels.set` (one undo step each), and choosing a
+/// solid colour drops their bar. Breaks if a control calls nothing,
+/// changes the display behind the tools' back or loses its name; the
+/// tool tests (`parcel_tools`) do not click, and the README chart
+/// picture only draws the parcels.
+#[test]
+fn spray_parcels_in_the_window() {
+    use murmel_engine::parcel::Size;
+    let mut h = harness();
+    let path = parcels_beside_the_channel(&mut h);
+    assert!(named(&h, "Open spray parcels…"), "the open button");
+    h.state_mut()
+        .call("parcels.open", serde_json::json!({ "path": path }));
+    h.run_steps(3);
+    assert!(!named(&h, "Open spray parcels…"), "no open button now");
+    let label = h.state().parcels_label();
+    assert!(
+        label.starts_with("Parcels · parcels_000100.vtkhdf"),
+        "{label}"
+    );
+    assert!(named(&h, &label), "the tree row");
+    assert!(
+        named(&h, "Colours of the spray parcels: diameter"),
+        "the parcels' colour bar"
+    );
+    assert!(
+        named_from(&h, "Colour bar of the spray parcels: diameter from "),
+        "the bar itself"
+    );
+    assert!(shows(&h, "9 of 9 shown"), "the count");
+    assert_eq!(problems(&h), Vec::<String>::new(), "parcels");
+
+    // The bar's title opens their settings: the diameter filter.
+    let steps = |h: &Harness<'_, MurmelApp>| h.state().session.journal.undo.len();
+    let before = steps(&h);
+    h.get_by_label("Colours of the spray parcels: diameter")
+        .click();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "the parcels' menu");
+    h.get_by_role_and_label(Role::CheckBox, "Only some diameters")
+        .click();
+    h.run_steps(3);
+    let v = h.state().session.display.parcels.clone().unwrap();
+    let [lo, hi] = v.diameter.expect("a diameter filter");
+    assert!(
+        (lo - 1e-5).abs() < 1e-12 && (hi - 9e-5).abs() < 1e-12,
+        "{lo} {hi}"
+    );
+    assert_eq!(steps(&h), before + 1, "one undo step");
+    assert!(
+        named(&h, "From"),
+        "the filter's bounds, the menu still open"
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+
+    // The row's context menu sizes them by diameter.
+    h.get_by_role_and_label(Role::Button, &label)
+        .click_secondary();
+    h.run_steps(3);
+    h.get_by_label("By diameter").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.parcels.as_ref().unwrap().size,
+        Size::Diameter
+    );
+    assert_eq!(steps(&h), before + 2);
+
+    // The size box.
+    h.get_by_role_and_label(Role::SpinButton, "Size").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::SpinButton, "Size")
+        .type_text("2.5");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.parcels.as_ref().unwrap().scale,
+        2.5
+    );
+    assert_eq!(steps(&h), before + 3);
+
+    // The eye hides them, and shows them again.
+    h.get_by_label(&format!("Hide {label}")).click();
+    h.run_steps(3);
+    assert!(!h.state().session.display.parcels.as_ref().unwrap().enabled);
+    assert_eq!(h.state().session.mesh.as_ref().unwrap().surface.parcels, 0);
+    h.get_by_label(&format!("Show {label}")).click();
+    h.run_steps(3);
+    assert!(h.state().session.display.parcels.as_ref().unwrap().enabled);
+    assert_eq!(steps(&h), before + 5);
+
+    // A solid colour: no bar of their own.
+    h.get_by_label("Colours of the spray parcels: diameter")
+        .click();
+    h.run_steps(3);
+    h.get_by_label("Solid colour").click();
+    h.run_steps(3);
+    assert!(
+        h.state()
+            .session
+            .display
+            .parcels
+            .as_ref()
+            .unwrap()
+            .color
+            .is_none()
+    );
+    assert!(
+        !named(&h, "Colours of the spray parcels: diameter"),
+        "no bar for a solid colour"
+    );
+    assert_eq!(problems(&h), Vec::<String>::new(), "solid parcels");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// Invariant (the maintainer's card of 2026-11-24: arrows coloured by
+/// their own magnitude have a colour bar of their own): the title of the
+/// arrows' bar opens a named menu whose style entries change the arrow
+/// field's style through `field.style` (the field the arrows show, not
+/// the field on the mesh) and whose colouring radio buttons call
+/// `arrows.set`; a solid colour drops the bar. Breaks if the menu styles
+/// the mesh's field instead, a radio button calls nothing, or the menu
+/// loses its names; `vector_arrows_in_the_window` only checks that the
+/// bar is there.
+#[test]
+fn arrows_colour_bar_menu() {
+    use murmel_engine::FieldMode;
+    use murmel_engine::glyph::ArrowColor;
+    let mut h = harness();
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    for (tool, input) in [
+        (
+            "display.color_by",
+            serde_json::json!({"by": "field", "field": "pressure"}),
+        ),
+        ("slice.set", serde_json::json!({"axis": "z"})),
+        ("arrows.set", serde_json::json!({})),
+    ] {
+        let r = h.state_mut().call_envelope(tool, input.clone());
+        assert!(r.ok(), "{tool} {input}: {:?}", r.diagnostics);
+    }
+    h.run_steps(3);
+    let bar = "Colours of the arrows: |velocity|";
+    assert!(named(&h, bar), "the arrows' colour bar");
+    h.get_by_label(bar).click();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "the arrows' menu");
+    h.get_by_label("Banded").click();
+    h.run_steps(3);
+    let d = &h.state().session.display;
+    assert_eq!(
+        d.style_of("velocity").mode,
+        FieldMode::Banded,
+        "arrows' field"
+    );
+    assert_ne!(
+        d.style_of("pressure").mode,
+        FieldMode::Banded,
+        "not the mesh's"
+    );
+    assert!(named(&h, "Bands"), "the menu stays open with the bands");
+
+    h.get_by_role_and_label(Role::RadioButton, "Solid").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.arrows.as_ref().unwrap().color,
+        ArrowColor::Solid
+    );
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!named(&h, bar), "no bar for solid arrows");
+    assert_eq!(problems(&h), Vec::<String>::new(), "solid arrows");
+}
+
+/// Invariant (V0.5, quality colouring): coloured by quality, the legend
+/// shows a named histogram, and its "Hide cells below" box, its "Worst
+/// 10 %" button and the box again set and clear the threshold through
+/// `display.threshold`, so fewer cells show and then all of them again.
+/// Breaks if the box or the button calls nothing or the surface is not
+/// rebuilt; the tool tests do not click, and the name test only checks
+/// that the legend has names.
+#[test]
+fn quality_legend_and_threshold() {
+    let mut h = harness();
+    h.state_mut().call(
+        "display.color_by",
+        serde_json::json!({"by": "quality", "metric": "skewness"}),
+    );
+    h.run_steps(3);
+    assert!(named_from(&h, "Histogram of "), "the histogram has a name");
+    let cells = |h: &Harness<'_, MurmelApp>| h.state().session.mesh.as_ref().unwrap().surface.cells;
+    let all = cells(&h);
+    assert_eq!(all, 776);
+    h.get_by_role_and_label(Role::CheckBox, "Hide cells below")
+        .click();
+    h.run_steps(3);
+    let t = h.state().session.display.threshold.expect("a threshold");
+    assert!(cells(&h) < all, "fewer cells at {t}");
+    assert!(
+        shows(&h, &format!("{} of 776 cells shown", cells(&h))),
+        "the count of the cells shown"
+    );
+    h.get_by_label("Worst 10 %").click();
+    h.run_steps(3);
+    let worst = h.state().session.display.threshold.expect("a threshold");
+    assert_ne!(worst, t, "the worst tenth");
+    let shown = cells(&h);
+    assert!(shown < all && shown > 0, "{shown}");
+    assert_eq!(problems(&h), Vec::<String>::new(), "threshold");
+    h.get_by_role_and_label(Role::CheckBox, "Hide cells below")
+        .click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.display.threshold, None);
+    assert_eq!(cells(&h), all);
+}
