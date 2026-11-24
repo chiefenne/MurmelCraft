@@ -65,6 +65,10 @@ pub struct MurmelApp {
     pub(crate) cube_distance_edit: Option<f64>,
     /// Until when a run of wheel steps keeps its undo group open.
     wheel_until: f64,
+    /// A drag of a clip plane handle under way.
+    pub(crate) clip_drag: Option<crate::clip_handle::ClipDrag>,
+    /// Where the clip plane's handles were drawn last frame.
+    pub(crate) clip_spots: Vec<crate::clip_handle::Spot>,
     /// Keyboard focus: F6 regions, the focus ring, the arrow keys.
     pub(crate) focus: crate::focus::Focus,
     /// The width of the panel toggles at the right of the toolbar, as
@@ -136,6 +140,8 @@ impl MurmelApp {
             cube_busy: false,
             cube_distance_edit: None,
             wheel_until: 0.0,
+            clip_drag: None,
+            clip_spots: Vec::new(),
             focus: crate::focus::Focus::default(),
             toggles_w: 90.0,
             title_buttons_w: 110.0,

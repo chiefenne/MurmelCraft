@@ -834,6 +834,71 @@ fn clip_set(input: Value, s: &mut Session) -> Run {
     Ok(display_json(s))
 }
 
+/// The axis of `clip.rotate`: a screen axis (x right, y up, z towards
+/// the viewer, as in `view.rotate`) or a world vector.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TiltAxis {
+    Screen(ScreenAxis),
+    World([f64; 3]),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipRotate {
+    axis: TiltAxis,
+    deg: f64,
+    pivot: Option<[f64; 3]>,
+}
+
+fn clip_rotate(input: Value, s: &mut Session) -> Run {
+    let i: ClipRotate = parse(input)?;
+    need_mesh(s)?;
+    let Some(mut c) = s.display.clip else {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "there is no clip plane to tilt; set one with clip.set first",
+        ));
+    };
+    let deg = finite(i.deg, "deg")?;
+    let axis = match i.axis {
+        TiltAxis::Screen(a) => {
+            let (right, up) = s.camera.basis();
+            match a {
+                ScreenAxis::X => right,
+                ScreenAxis::Y => up,
+                ScreenAxis::Z => s.camera.to_eye(),
+            }
+            .to_array()
+        }
+        TiltAxis::World(v) => {
+            for x in v {
+                finite(x, "axis")?;
+            }
+            v
+        }
+    };
+    let bounds = s
+        .mesh
+        .as_ref()
+        .map(|m| m.mesh.bounds())
+        .unwrap_or_else(murmel_mesh::Bounds::empty);
+    let pivot = match i.pivot {
+        Some(p) => {
+            for x in p {
+                finite(x, "pivot")?;
+            }
+            p
+        }
+        None => c.pivot(&bounds),
+    };
+    c.rotate(axis, deg, pivot)
+        .ok_or_else(|| Diagnostic::new("TOOL002", "axis must not be zero"))?;
+    s.display.clip = Some(c);
+    s.redraw();
+    Ok(display_json(s))
+}
+
 fn clip_clear(_: Value, s: &mut Session) -> Run {
     s.display.clip = None;
     s.redraw();
@@ -1131,6 +1196,7 @@ pub const JOURNALED: &[&str] = &[
     "display.set_color",
     "display.visibility",
     "clip.set",
+    "clip.rotate",
     "clip.clear",
 ];
 
@@ -1580,6 +1646,29 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: clip_set,
+    },
+    Tool {
+        id: "clip.rotate",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-clip-rotate",
+        summary: "Tilt the clip plane by deg degrees about an axis through pivot (right-hand rule). The axis is a screen axis (x right, y up, z towards the viewer, as in view.rotate) or a world vector; the pivot defaults to the centre of the plane inside the mesh's box, so the plane stays in the mesh. The window's tilt arcs and Alt + arrow keys call it.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "axis": {"oneOf": [
+                        {"enum": ["x", "y", "z"]},
+                        {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+                    ]},
+                    "deg": {"type": "number"},
+                    "pivot": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+                }),
+                &["axis", "deg"],
+            )
+        },
+        run: clip_rotate,
     },
     Tool {
         id: "clip.clear",

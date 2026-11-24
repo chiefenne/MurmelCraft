@@ -9,6 +9,7 @@
 mod a11y_tests;
 mod agents;
 mod app;
+mod clip_handle;
 mod commands;
 mod cube;
 mod focus;

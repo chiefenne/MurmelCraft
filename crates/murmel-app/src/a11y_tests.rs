@@ -187,3 +187,72 @@ fn arrows_orbit_unless_a_widget_has_the_keys() {
     h.run_steps(2);
     assert_ne!(yaw(&h), before, "Left orbits after a click");
 }
+
+/// Drag from `at` by `by` in `steps` frames with the left button.
+fn drag(h: &mut Harness<'_, MurmelApp>, at: egui::Pos2, by: egui::Vec2, steps: usize) {
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    h.input_mut().events.push(egui::Event::PointerMoved(at));
+    h.run_steps(2);
+    h.input_mut().events.push(button(at, true));
+    h.run();
+    for i in 1..=steps {
+        let p = at + by * (i as f32 / steps as f32);
+        h.input_mut().events.push(egui::Event::PointerMoved(p));
+        h.run();
+    }
+    h.input_mut().events.push(button(at + by, false));
+    h.run_steps(2);
+}
+
+/// Invariant (V1.0 clip handle): the arrow and the two arcs are drawn
+/// with names, dragging the arrow slides the plane without turning it,
+/// dragging an arc turns the normal and leaves the pivot on the plane,
+/// and each drag is one undo step. Breaks if the handles stop taking the
+/// pointer from the viewport's navigation, the drag maps to the wrong
+/// tool, or the undo group is not held for the drag; the tool tests run
+/// the tools, not the pointer.
+#[test]
+fn clip_handles_drag_and_undo() {
+    use crate::clip_handle::Handle;
+    let mut h = harness();
+    h.state_mut()
+        .call("clip.set", serde_json::json!({"axis": "x"}));
+    h.run_steps(3);
+    let spot = |h: &Harness<'_, MurmelApp>, k: Handle| {
+        *h.state().clip_spots.iter().find(|s| s.handle == k).unwrap()
+    };
+    let start = h.state().session.display.clip.unwrap();
+    assert_eq!(h.state().clip_spots.len(), 3);
+
+    let s = spot(&h, Handle::Slide);
+    let cam = h.state().session.camera.clone();
+    drag(&mut h, s.at, s.dir * 40.0, 6);
+    let slid = h.state().session.display.clip.unwrap();
+    assert_eq!(slid.normal, start.normal, "a slide does not turn");
+    assert!(slid.distance(start.origin).abs() > 1e-6, "the plane moved");
+    assert_eq!(h.state().session.camera, cam, "the view did not orbit");
+    h.state_mut().call("journal.undo", serde_json::json!({}));
+    assert_eq!(h.state().session.display.clip, Some(start), "one undo step");
+
+    h.run_steps(2);
+    for k in [Handle::TiltU, Handle::TiltV] {
+        let s = spot(&h, k);
+        drag(&mut h, s.at, s.dir * 30.0, 6);
+        let tilted = h.state().session.display.clip.unwrap();
+        let cos: f64 = (0..3).map(|i| tilted.normal[i] * start.normal[i]).sum();
+        assert!(cos < 0.999, "{k:?} turned the plane: {cos}");
+        assert_eq!(h.state().session.camera, cam, "the view did not orbit");
+        h.state_mut().call("journal.undo", serde_json::json!({}));
+        assert_eq!(
+            h.state().session.display.clip,
+            Some(start),
+            "{k:?}: one undo step"
+        );
+        h.run_steps(2);
+    }
+}
