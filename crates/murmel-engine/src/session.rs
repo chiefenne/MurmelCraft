@@ -895,6 +895,17 @@ pub struct Session {
     /// Blocks that failed or were stopped are not read again until the
     /// regions need others.
     pub blocks_problem: Option<(Vec<usize>, Option<MeshError>)>,
+    /// The preview grid of the open overview being read (`defer_blocks`),
+    /// for its slices, iso-surfaces and arrows ([`crate::preview`]).
+    pub preview_job: Option<crate::preview::PreviewJob>,
+    /// Why the open overview has no preview grid: the read failed, or
+    /// (`None`) the person stopped it while that many slices, iso-surfaces
+    /// and arrows showed. It is not read again for this mesh, unless more
+    /// of them show after a stop.
+    pub preview_problem: Option<(usize, Option<MeshError>)>,
+    /// The cells of the preview grid along its longest side
+    /// ([`murmel_mesh::vtkhdf::PREVIEW_CELLS`]; tests take fewer).
+    pub preview_cells: usize,
 }
 
 impl Session {
@@ -928,6 +939,9 @@ impl Session {
             defer_blocks: false,
             block_job: None,
             blocks_problem: None,
+            preview_job: None,
+            preview_problem: None,
+            preview_cells: murmel_mesh::vtkhdf::PREVIEW_CELLS,
         }
     }
 
@@ -1199,7 +1213,7 @@ impl Session {
     /// [`Session::defer_clips`], a change that only moves or turns clip
     /// planes starts a [`ClipPreview`] instead and returns at once.
     pub fn redraw(&mut self) {
-        let swapped = self.sync_blocks();
+        let swapped = self.sync_blocks() | self.sync_preview();
         let Some(m) = &mut self.mesh else {
             self.preview = None;
             self.surface_revision += 1;
@@ -1367,6 +1381,97 @@ impl Session {
             j.stop();
         }
         self.blocks_problem = None;
+        if let Some(j) = self.preview_job.take() {
+            j.stop();
+        }
+        self.preview_problem = None;
+    }
+
+    /// How many slices, iso-surfaces and arrows show.
+    fn extracts_showing(&self) -> usize {
+        let d = &self.display;
+        d.slices.iter().filter(|s| s.enabled).count()
+            + d.isos.iter().filter(|i| i.enabled).count()
+            + usize::from(d.arrows_shown())
+    }
+
+    /// Read the preview grid of the open overview the first time a
+    /// slice, an iso-surface or the arrows show on it (with
+    /// `defer_blocks`, on a thread of its own, put in place by a later
+    /// call once read). True when it was put in place now.
+    fn sync_preview(&mut self) -> bool {
+        let Some(m) = &self.mesh else {
+            return false;
+        };
+        let Some(o) = m.overview.as_deref() else {
+            return false;
+        };
+        // the overview's fields, shown or kept while blocks show
+        let fields = match &m.blocks {
+            Some(b) => b.overview.1.clone(),
+            None => m.fields.clone(),
+        };
+        let showing = self.extracts_showing();
+        if fields.preview().is_some() || (m.blocks.is_some() && self.preview_job.is_none()) {
+            return false;
+        }
+        let job = match self.preview_job.take() {
+            Some(j) => j,
+            None => {
+                if showing == 0 {
+                    return false;
+                }
+                match &self.preview_problem {
+                    Some((_, Some(_))) => return false,
+                    Some((at, None)) if showing <= *at => return false,
+                    _ => {}
+                }
+                self.preview_problem = None;
+                crate::preview::PreviewJob::start(
+                    m.path.clone(),
+                    self.preview_cells,
+                    crate::blocks::volume_ranges(o),
+                )
+            }
+        };
+        match job.take(!self.defer_blocks) {
+            None => {
+                self.preview_job = Some(job);
+                false
+            }
+            Some(Ok(p)) => {
+                fields.set_preview(Arc::new(p));
+                m.blocks.is_none()
+            }
+            Some(Err(e)) => {
+                let stopped = e.code == "MESH019";
+                self.preview_problem = Some((showing, (!stopped).then_some(e)));
+                false
+            }
+        }
+    }
+
+    /// Put the preview grid of the open overview in place once it is read
+    /// (`defer_blocks`) and draw again. True while it is read, or when it
+    /// was put in place now (the window draws again).
+    pub fn poll_preview(&mut self) -> bool {
+        match &self.preview_job {
+            Some(j) if j.is_done() => {
+                self.redraw();
+                true
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Stop reading the preview grid; it is read again once more slices,
+    /// iso-surfaces or arrows show.
+    pub fn cancel_preview(&mut self) {
+        if let Some(j) = self.preview_job.take() {
+            j.stop();
+            self.preview_problem = Some((self.extracts_showing(), None));
+        }
     }
 
     /// Compute the derived field of `recipe` ([`crate::derive`]) on the
@@ -2350,6 +2455,155 @@ mod tests {
             assert!(s.block_job.is_none(), "a stopped read starts again");
         }
         s.close();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The area of the triangles of `s`.
+    fn area_of(s: &Surface) -> f64 {
+        s.indices
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|t| {
+                let [a, b, c] =
+                    t.map(|i| glam::DVec3::from(s.positions[i as usize].map(f64::from)));
+                0.5 * (b - a).cross(c - a).length()
+            })
+            .sum()
+    }
+
+    fn slice_by_pressure(s: &mut Session, at: [f64; 3]) {
+        s.display.color_by = ColorBy::Field;
+        s.display.field = Some(crate::field::FieldChoice {
+            name: "pressure".into(),
+            component: Component::Magnitude,
+        });
+        s.display
+            .slices
+            .push(crate::Slice::new(at, [1.0, 0.0, 0.0]));
+        s.redraw();
+    }
+
+    /// Invariant (the maintainer's card 7 of 2026-11-24: the overview is
+    /// the surface, the block ranges and a preview grid): a slice on an
+    /// overview draws on its preview grid, read the first time a slice
+    /// shows (not for colouring alone), and covers the section the whole
+    /// mesh's slice covers, in the field's colours; its triangles name no
+    /// cell. Once a region's blocks show, the slice draws on their cells,
+    /// and the preview stays with the overview's fields, given back as it
+    /// was when the region goes. Breaks when the slice draws on the
+    /// boundary (nothing), when its triangles name cells of the grid,
+    /// when the grid is read before anything cuts the volume or again
+    /// after the blocks, or when it is dropped with them. The mesh test
+    /// reads the grid but nothing draws on it there.
+    #[test]
+    fn slices_on_an_overview_draw_on_its_preview_grid() {
+        let (dir, path, whole, mut s) = overview_session("preview-slices");
+        s.preview_cells = 16;
+        let mid = whole.bounds().center();
+        s.display.color_by = ColorBy::Field;
+        s.redraw();
+        assert!(s.mesh.as_ref().unwrap().fields.preview().is_none());
+        slice_by_pressure(&mut s, mid);
+        let m = s.mesh.as_ref().unwrap();
+        let p = m.fields.preview().expect("read for the slice").clone();
+        assert_eq!(p.grid.shape, [16, 8, 4]);
+        assert!(m.surface.triangles() > 0);
+        assert!(
+            m.surface
+                .tri_cell
+                .iter()
+                .all(|&c| c == murmel_mesh::NO_CELL)
+        );
+        assert!(
+            m.surface.values.iter().all(|v| v[3] == 1.0),
+            "coloured by the field"
+        );
+        // the section the whole mesh's slice covers
+        let mut w = Session::new(Tokens::builtin().unwrap());
+        w.config_dir = None;
+        w.open_as(&path, Fit::Whole).unwrap();
+        slice_by_pressure(&mut w, mid);
+        let (a, b) = (
+            area_of(&m.surface),
+            area_of(&w.mesh.as_ref().unwrap().surface),
+        );
+        assert!((a - b).abs() < 0.02 * b, "preview {a}, whole {b}");
+
+        // A region's blocks: the slice draws on their cells.
+        s.display.regions.push(corner_box(&whole));
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        let blocks = m.blocks.as_ref().expect("the blocks read");
+        assert!(Arc::ptr_eq(blocks.overview.1.preview().unwrap(), &p));
+        assert!(m.fields.preview().is_none());
+        assert!(
+            m.surface
+                .tri_cell
+                .iter()
+                .all(|&c| (c as usize) < m.mesh.cell_count())
+        );
+        // and the overview comes back with its grid
+        s.display.regions.clear();
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.blocks.is_none());
+        assert!(Arc::ptr_eq(m.fields.preview().unwrap(), &p));
+        assert!((area_of(&m.surface) - a).abs() < 1e-9 * a);
+        s.close();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant: with `defer_blocks` (the window), the preview grid is
+    /// read on a thread of its own while the overview shows, and put in
+    /// place by `poll_preview`; Cancel stops it until one more slice,
+    /// iso-surface or the arrows show, and opening the mesh again
+    /// forgets the stop. Breaks when the window waits for the grid, when
+    /// a stopped read starts again at the next redraw, or when it never
+    /// does. The test above reads the grid at once.
+    #[test]
+    fn the_window_reads_the_preview_in_the_background() {
+        let (dir, path, whole, mut s) = overview_session("preview-bg");
+        s.preview_cells = 16;
+        s.defer_blocks = true;
+        let mid = whole.bounds().center();
+        slice_by_pressure(&mut s, mid);
+        assert!(s.mesh.as_ref().unwrap().fields.preview().is_none());
+        assert_eq!(s.mesh.as_ref().unwrap().surface.triangles(), 0);
+        let job = s.preview_job.clone().expect("a read in the background");
+        let until = Instant::now() + Duration::from_secs(30);
+        while !job.is_done() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(s.poll_preview());
+        assert!(s.preview_job.is_none());
+        assert!(s.mesh.as_ref().unwrap().fields.preview().is_some());
+        assert!(s.mesh.as_ref().unwrap().surface.triangles() > 0);
+        assert!(!s.poll_preview());
+
+        // Opened again (which drops the slices), sliced and stopped: not
+        // read again until another slice.
+        s.open_as(&path, Fit::Overview).unwrap();
+        assert!(s.display.slices.is_empty());
+        assert!(s.preview_job.is_none());
+        slice_by_pressure(&mut s, mid);
+        assert!(s.preview_job.is_some());
+        s.cancel_preview();
+        assert_eq!(s.preview_problem.as_ref().map(|p| p.0), Some(1));
+        s.redraw();
+        assert!(s.preview_job.is_none(), "a stopped read stays stopped");
+        s.display
+            .slices
+            .push(crate::Slice::new(mid, [0.0, 1.0, 0.0]));
+        s.redraw();
+        assert!(s.preview_job.is_some(), "one more slice reads it");
+        s.cancel_preview();
+        s.open_as(&path, Fit::Overview).unwrap();
+        assert!(s.preview_problem.is_none(), "a new open forgets the stop");
+        slice_by_pressure(&mut s, mid);
+        assert!(s.preview_job.is_some());
+        s.close();
+        assert!(s.preview_job.is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

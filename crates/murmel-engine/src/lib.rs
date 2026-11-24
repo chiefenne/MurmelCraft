@@ -30,6 +30,7 @@ pub mod memory;
 pub mod navigation;
 pub mod parcel;
 pub mod pick;
+pub mod preview;
 pub mod quality;
 pub mod region;
 pub mod series;

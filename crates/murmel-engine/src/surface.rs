@@ -936,8 +936,18 @@ impl Surface {
         s.field_range = drawn.range();
         let _phase = murmel_mesh::profile::span("surface.extras");
         if extras {
-            crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
-            crate::stream::append(&mut s, mesh, fields, tokens, display);
+            // An overview has no cells: what cuts through the volume draws
+            // on its preview grid.
+            match fields
+                .and_then(FieldSet::preview)
+                .filter(|_| mesh.cell_count() == 0)
+            {
+                Some(p) => crate::preview::append(&mut s, p, tokens, display),
+                None => {
+                    crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
+                    crate::stream::append(&mut s, mesh, fields, tokens, display);
+                }
+            }
             crate::parcel::append(&mut s, mesh, tokens, display);
         }
         s.outline_color = sel.linear();

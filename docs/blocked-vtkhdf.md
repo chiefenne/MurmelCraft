@@ -223,6 +223,9 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   centre lies in, from the points and point lists of the owned cells
   and the fields at the rows found (docs/performance.md, "The preview
   grid of an overview").
+- Slices, iso-surfaces and arrows on an overview draw on its preview
+  grid (the engine's `preview.rs`), read the first time one shows, until
+  a region reads the cells of its blocks.
 - A box, sphere or slab region drawn on an overview reads, with
   `read_blocks`, the blocks whose `BlockBounds` it touches, with their
   halo (the engine's `blocks.rs`); beyond the memory budget it is

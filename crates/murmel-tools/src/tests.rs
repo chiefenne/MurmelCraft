@@ -3363,3 +3363,46 @@ fn the_memory_budget_decides_how_a_mesh_opens() {
     assert_eq!(e.diagnostics[0].code, "TOOL002");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Invariant (the maintainer's card 7 of 2026-11-24: the overview is the
+/// surface, the block ranges and a preview grid): through the tools, a
+/// slice and an iso-surface on a mesh open as an overview draw on its
+/// preview grid, read before the tool returns, and mesh.info's overview
+/// tells the grid (`preview`). Breaks when the tool returns before the
+/// grid is read (nothing drawn for a script or an agent), or when the
+/// result does not tell it. The engine tests do not go through the
+/// tools.
+#[test]
+fn slices_on_an_overview_draw_through_the_tools() {
+    let dir = std::env::temp_dir().join(format!("murmel-preview-tool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = None;
+    s.preview_cells = 16;
+    let e = call(
+        "mesh.open",
+        json!({"path": path, "mode": "overview"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let preview = &e.result["overview"]["preview"];
+    assert!(preview["grid"].is_null() && preview["reading"] == json!(false));
+
+    let e = call("slice.set", json!({"axis": "x"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let sliced = s.mesh.as_ref().unwrap().surface.triangles();
+    assert!(sliced > 0);
+    let e = call("iso.set", json!({"field": "pressure"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(s.mesh.as_ref().unwrap().surface.triangles() > sliced);
+    let e = call("mesh.info", json!({}), &mut s);
+    let preview = &e.result["overview"]["preview"];
+    assert_eq!(preview["grid"], json!([16, 8, 4]));
+    assert_eq!(preview["cells"], json!(512));
+    assert!(preview["not_read"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
+}

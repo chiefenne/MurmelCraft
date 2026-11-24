@@ -193,6 +193,14 @@ impl MurmelApp {
         {
             self.session.cancel_blocks();
         }
+        // Then the preview grid being read for an overview's slices.
+        if self.session.preview_job.is_some()
+            && !typing
+            && self.palette.is_none()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            self.session.cancel_preview();
+        }
         // Esc stops measuring before it clears the selection.
         if self.measuring.is_some()
             && !typing
