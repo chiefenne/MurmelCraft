@@ -1971,13 +1971,34 @@ fn arrow_tools() {
     assert_eq!(s.journal.undo.len(), before + 1);
     let a = &e.result["arrows"];
     assert_eq!(a["field"], "velocity");
-    assert_eq!(a["density"], 25);
-    assert_eq!(a["color"], "solid");
+    assert_eq!(a["density"], 40);
+    assert_eq!(a["length"], "floor");
+    assert_eq!(a["color"], "magnitude");
     assert_eq!(a["id"], "arrows");
-    // No slice and not on the surface: none drawn yet.
+    // No slice and not on the surface: none drawn yet, and no colour
+    // range of the arrows drawn.
     assert_eq!(a["drawn"], 0);
+    assert!(a["range"].is_null());
     assert!(call("slice.set", json!({"axis": "z"}), &mut s).ok());
-    let e = call("arrows.set", json!({"color": "field"}), &mut s);
+    // Coloured by their magnitude: over the field's whole range; the
+    // slice's own spacing (the duct is 4 long: 40 along it).
+    let e = call("arrows.set", json!({}), &mut s);
+    let a = &e.result["arrows"];
+    let spacing = a["slice_spacing"][0].as_f64().unwrap();
+    assert!((spacing - 0.1).abs() < 1e-9, "{spacing}");
+    let (lo, hi) = (
+        a["range"][0].as_f64().unwrap(),
+        a["range"][1].as_f64().unwrap(),
+    );
+    let top = a["color_range"][1].as_f64().unwrap();
+    assert!(lo < hi && hi <= top + 1e-9, "{a}");
+    let e = call(
+        "arrows.set",
+        json!({"length": "equal", "color": "field"}),
+        &mut s,
+    );
+    assert_eq!(e.result["arrows"]["length"], "equal");
+    assert!(e.result["arrows"]["color_range"].is_null());
     let drawn = e.result["arrows"]["drawn"].as_u64().unwrap();
     assert!(drawn > 100, "{drawn}");
     let e = call("arrows.set", json!({"surface": true}), &mut s);
@@ -1991,6 +2012,7 @@ fn arrow_tools() {
         (json!({"density": 201}), "ARROW002"),
         (json!({"scale": 0.0}), "ARROW002"),
         (json!({"scale": 101.0}), "ARROW002"),
+        (json!({"length": "long"}), "TOOL002"),
         (json!({"shape": "cone"}), "TOOL002"),
     ] {
         let e = call("arrows.set", bad.clone(), &mut s);
@@ -2045,7 +2067,8 @@ fn extract_sessions_round_trip() {
     let colour = json!({"item": "iso:1", "color": "#123456"});
     assert!(call("display.set_color", colour, &mut s).ok());
     assert!(call("display.mesh_look", json!({"look": "faces"}), &mut s).ok());
-    let arrows = json!({"surface": true, "density": 30, "scale": 1.5, "color": "field"});
+    let arrows =
+        json!({"surface": true, "density": 30, "scale": 1.5, "length": "equal", "color": "field"});
     assert!(call("arrows.set", arrows, &mut s).ok());
     let colour = json!({"item": "arrows", "color": "#ABCDEF"});
     assert!(call("display.set_color", colour, &mut s).ok());

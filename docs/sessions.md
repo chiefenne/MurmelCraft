@@ -75,11 +75,15 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   loading, never stored.
 - **Vector arrows** (format 1.6) are `display.arrows` (`{"field":
   "velocity", "enabled": true}`, plus `surface` and `in_plane` when on,
-  `density` (4 to 200, left out for 25), `scale` (above 0 up to 100, left
-  out for 1) and `color` (`solid`, the default, or `field`); an own
-  colour is in `colors` as `arrows`). Arrows of a field the result does
-  not have, or of a scalar, are skipped as `field:<name>`. The arrows are
-  computed again on loading, never stored.
+  `density` (4 to 200 across each slice, left out for 40; 25 across the
+  whole mesh before 1.10), `scale` (above 0 up to 100, left out for 1),
+  `length` (format 1.10: `magnitude`, `equal`, or left out for `floor`)
+  and `color` (`solid`, `field`, or `magnitude`, the default from 1.10:
+  their own magnitude with a colour bar of their own); an own colour is
+  in `colors` as `arrows`). Files before 1.10 open with the newer
+  defaults: denser and with a floor on the length. Arrows of a field the
+  result does not have, or of a scalar, are skipped as `field:<name>`.
+  The arrows are computed again on loading, never stored.
 - **Streamlines** (format 1.9) are `display.streams`, in the order they
   were added (`stream:1` is the first): `{"field": "velocity", "seed":
   {"shape": "line", "from": [0.2, 0.1, 0.5], "to": [0.2, 1.9, 0.5]},

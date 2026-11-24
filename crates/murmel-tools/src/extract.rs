@@ -5,7 +5,7 @@
 //! ([`murmel_engine::extract`], [`murmel_engine::glyph`]).
 
 use murmel_engine::extract::{IsoColor, MAX_ISOS, MAX_SERIES, MAX_SLICES, MeshLook};
-use murmel_engine::glyph::{Arrows, MAX_DENSITY, MAX_SCALE, MIN_DENSITY};
+use murmel_engine::glyph::{ArrowColor, Arrows, Length, MAX_DENSITY, MAX_SCALE, MIN_DENSITY};
 use murmel_engine::{Item, ScreenAxis, Session};
 use murmel_mesh::Component;
 use serde::Deserialize;
@@ -444,6 +444,19 @@ pub(crate) fn arrows_json(s: &Session) -> Value {
     };
     let unit = m.fields.get(&a.field).and_then(|f| f.unit.clone());
     let surface = &m.surface;
+    let slice_spacing: Vec<f64> = s
+        .display
+        .slices
+        .iter()
+        .filter(|x| x.enabled)
+        .map(|x| a.plane_spacing(&m.mesh, &x.plane()))
+        .collect();
+    let color_range = murmel_engine::glyph::color_range(
+        &s.display,
+        &m.mesh,
+        Some(&m.fields),
+        surface.arrow_range,
+    );
     json!({
         "id": Item::Arrows.id(&m.mesh),
         "field": a.field,
@@ -452,13 +465,17 @@ pub(crate) fn arrows_json(s: &Session) -> Value {
         "in_plane": a.in_plane,
         "density": a.density,
         "spacing": a.spacing(&m.mesh),
+        "slice_spacing": slice_spacing,
         "scale": a.scale,
+        "length": a.length,
         "color": a.color,
         "solid": s.display.item_color(&m.mesh, &s.tokens, Item::Arrows).map(|c| c.hex()),
         "unit": unit,
         "drawn": surface.arrows,
         "capped": surface.arrows_capped,
         "longest": (surface.arrow_longest > 0.0).then_some(surface.arrow_longest),
+        "range": surface.arrow_range.map(|(lo, hi)| [lo, hi]),
+        "color_range": color_range.map(|(lo, hi)| [lo, hi]),
         "slices_shown": s.display.slices.iter().filter(|x| x.enabled).count(),
     })
 }
@@ -472,7 +489,8 @@ struct ArrowsSet {
     in_plane: Option<bool>,
     density: Option<u32>,
     scale: Option<f64>,
-    color: Option<IsoColor>,
+    length: Option<Length>,
+    color: Option<ArrowColor>,
 }
 
 /// The vector field the arrows draw: the one named, else their own, else
@@ -567,6 +585,9 @@ pub(crate) fn arrows_set(input: Value, s: &mut Session) -> Run {
     }
     if let Some(x) = i.scale {
         a.scale = x;
+    }
+    if let Some(x) = i.length {
+        a.length = x;
     }
     if let Some(x) = i.color {
         a.color = x;
@@ -664,7 +685,8 @@ pub(crate) fn arrows_set_schema() -> Value {
             "in_plane": {"type": "boolean"},
             "density": {"type": "integer", "minimum": MIN_DENSITY, "maximum": MAX_DENSITY},
             "scale": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_SCALE},
-            "color": {"enum": ["solid", "field"]}
+            "length": {"enum": Length::ALL.map(Length::key)},
+            "color": {"enum": ArrowColor::ALL.map(ArrowColor::key)}
         }),
         &[],
     )

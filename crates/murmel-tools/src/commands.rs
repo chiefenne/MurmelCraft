@@ -907,18 +907,54 @@ pub fn commands() -> Vec<Command> {
             Some(json!({"scale": a.scale / 1.5}))
         }),
     ));
-    for c in murmel_engine::IsoColor::ALL {
+    for c in murmel_engine::glyph::ArrowColor::ALL {
+        use murmel_engine::glyph::ArrowColor as C;
         v.push(cmd(
             format!("arrows.set:{}", c.key()),
             format!("cmd-arrows-{}", c.key()),
             "slice",
             &[],
             match c {
-                murmel_engine::IsoColor::Solid => Dynamic("arrows.set", |s| {
+                C::Solid => Dynamic("arrows.set", |s| {
                     s.display.arrows.as_ref().map(|_| json!({"color": "solid"}))
                 }),
-                murmel_engine::IsoColor::Field => Dynamic("arrows.set", |s| {
+                C::Field => Dynamic("arrows.set", |s| {
                     s.display.arrows.as_ref().map(|_| json!({"color": "field"}))
+                }),
+                C::Magnitude => Dynamic("arrows.set", |s| {
+                    s.display
+                        .arrows
+                        .as_ref()
+                        .map(|_| json!({"color": "magnitude"}))
+                }),
+            },
+        ));
+    }
+    for l in murmel_engine::glyph::Length::ALL {
+        use murmel_engine::glyph::Length as L;
+        v.push(cmd(
+            format!("arrows.set:length-{}", l.key()),
+            format!("cmd-arrows-length-{}", l.key()),
+            "slice",
+            &[],
+            match l {
+                L::Magnitude => Dynamic("arrows.set", |s| {
+                    s.display
+                        .arrows
+                        .as_ref()
+                        .map(|_| json!({"length": "magnitude"}))
+                }),
+                L::Floor => Dynamic("arrows.set", |s| {
+                    s.display
+                        .arrows
+                        .as_ref()
+                        .map(|_| json!({"length": "floor"}))
+                }),
+                L::Equal => Dynamic("arrows.set", |s| {
+                    s.display
+                        .arrows
+                        .as_ref()
+                        .map(|_| json!({"length": "equal"}))
                 }),
             },
         ));

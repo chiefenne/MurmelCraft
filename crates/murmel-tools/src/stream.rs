@@ -710,7 +710,11 @@ mod tests {
         let e = call("session.save", json!({"path": file}), &mut s);
         assert!(e.ok(), "{:?}", e.diagnostics);
         let text = std::fs::read_to_string(&file).unwrap();
-        assert!(text.contains("\"format_version\": \"1.9\""), "{text}");
+        let version = murmel_engine::session_file::SESSION_VERSION;
+        assert!(
+            text.contains(&format!("\"format_version\": \"{version}\"")),
+            "{text}"
+        );
 
         let mut t = Session::new(Tokens::builtin().unwrap());
         t.config_dir = None;

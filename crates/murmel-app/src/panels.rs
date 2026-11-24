@@ -866,6 +866,7 @@ impl MurmelApp {
                 "seed" => self.i18n.tr(&format!("stream-seed-kind-{s}")),
                 "direction" => self.i18n.tr(&format!("stream-direction-{s}")),
                 "look" => self.i18n.tr(&format!("stream-look-{s}")),
+                "length" => self.i18n.tr(&format!("arrow-length-{s}")),
                 "snap" | "snap_a" | "snap_b" | "snap_vertex" => self.i18n.tr(&format!("snap-{s}")),
                 "name"
                     if self

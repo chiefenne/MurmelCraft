@@ -743,16 +743,29 @@ fn vector_arrows_in_the_window() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.run_steps(1);
     h.get_by_role_and_label(Role::SpinButton, "Across")
-        .type_text("40");
+        .type_text("60");
     h.run_steps(2);
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(
         h.state().session.display.arrows.as_ref().unwrap().density,
-        40
+        60
     );
     assert_eq!(h.state().session.journal.undo.len(), before + 1);
-    assert!(named(&h, "Length"), "length box");
+    assert!(named(&h, "Scale"), "length factor box");
+    // Coloured by their magnitude (the default), with their own colour
+    // bar beside the mesh's speed: named, its title a named button.
+    assert!(
+        named(&h, "Colours of the arrows: |velocity|"),
+        "the arrows' colour bar"
+    );
+    assert!(
+        h.root().children_recursive().any(|n| n
+            .accesskit_node()
+            .label()
+            .is_some_and(|l| l.starts_with("Colour bar of the arrows: |velocity| from "))),
+        "the bar itself"
+    );
     assert_eq!(problems(&h), Vec::<String>::new(), "arrows on a slice");
 }
 
