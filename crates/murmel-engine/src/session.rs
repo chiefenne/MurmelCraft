@@ -264,12 +264,14 @@ fn same_display(a: &Display, b: &Display) -> bool {
         field_values: None,
         region_cells: None,
         stream_traces: None,
+        parcel_data: None,
         ..d.clone()
     };
     same(&a.quality, &b.quality)
         && same(&a.field_values, &b.field_values)
         && same(&a.region_cells, &b.region_cells)
         && same(&a.stream_traces, &b.stream_traces)
+        && same(&a.parcel_data, &b.parcel_data)
         && bare(a) == bare(b)
 }
 
@@ -410,6 +412,8 @@ fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
     d.arrows = None;
     d.streams.clear();
     d.stream_traces = None;
+    d.parcels = None;
+    d.parcel_data = None;
     d.field_values = None;
     d.regions.clear();
     d.region_cells = None;

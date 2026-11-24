@@ -141,6 +141,8 @@ pub enum Item {
     /// A set of streamlines, by index into `Display::streams`
     /// (`stream:1`).
     Stream(u32),
+    /// The spray parcels (`parcels`), when `Display::parcels` is set.
+    Parcels,
 }
 
 impl Item {
@@ -169,6 +171,7 @@ impl Item {
             Item::Arrows => "arrows".into(),
             Item::Region(i) => format!("region:{}", i + 1),
             Item::Stream(i) => format!("stream:{}", i + 1),
+            Item::Parcels => "parcels".into(),
         }
     }
 
@@ -181,6 +184,9 @@ impl Item {
     pub fn parse(id: &str, mesh: &Mesh) -> Option<Item> {
         if id == "mesh" {
             return Some(Item::Mesh);
+        }
+        if id == "parcels" {
+            return Some(Item::Parcels);
         }
         if id == "arrows" {
             return Some(Item::Arrows);
@@ -362,6 +368,11 @@ pub struct Display {
     /// Their traces, made when their seeds, field or limits change
     /// (`Session::redraw`); `None` while there are none.
     pub stream_traces: Option<Arc<Traces>>,
+    /// The spray parcels shown (`parcels.open`, `parcels.set`).
+    pub parcels: Option<crate::parcel::ParcelView>,
+    /// The parcels of its file, read once and shared by every copy of
+    /// the display.
+    pub parcel_data: Option<Arc<murmel_mesh::Parcels>>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -464,6 +475,11 @@ impl Display {
                         a.enabled = on;
                     }
                 }
+                (Item::Parcels, Some(on)) => {
+                    if let Some(p) = &mut self.parcels {
+                        p.enabled = on;
+                    }
+                }
                 (Item::Region(k), Some(on)) => {
                     if let Some(r) = self.regions.get_mut(k as usize) {
                         r.enabled = on;
@@ -507,6 +523,7 @@ impl Display {
                         | Item::Slice(_)
                         | Item::Iso(_)
                         | Item::Arrows
+                        | Item::Parcels
                         | Item::Region(_)
                         | Item::Stream(_)
                 )
@@ -749,6 +766,7 @@ impl Display {
             Item::Slice(k) => (k as usize) < self.slices.len(),
             Item::Iso(k) => (k as usize) < self.isos.len(),
             Item::Arrows => self.arrows.is_some(),
+            Item::Parcels => self.parcels.is_some(),
             Item::Region(k) => (k as usize) < self.regions.len(),
             Item::Stream(k) => (k as usize) < self.streams.len(),
             Item::Measure(n) => self.measurement(n).is_some(),
@@ -977,6 +995,12 @@ impl Display {
         self.slices.iter().any(|s| s.enabled)
             || self.isos.iter().any(|i| i.enabled)
             || self.streams_shown()
+            || self.parcels_shown()
+    }
+
+    /// Whether spray parcels are drawn.
+    pub fn parcels_shown(&self) -> bool {
+        self.parcels.as_ref().is_some_and(|p| p.enabled) && self.parcel_data.is_some()
     }
 
     /// Whether the mesh draws as its faint outline (slices, iso-surfaces
@@ -1053,6 +1077,11 @@ impl Display {
                 .arrows
                 .as_ref()
                 .map(|_| set.unwrap_or(tokens.mesh.field.arrow)),
+            // The parcels' solid colour, in every mode.
+            (_, Item::Parcels) => self
+                .parcels
+                .as_ref()
+                .map(|_| set.unwrap_or(tokens.mesh.field.parcel)),
             // A streamline set's solid colour, in every mode.
             (_, Item::Stream(k)) => self
                 .streams
@@ -1130,6 +1159,7 @@ impl Display {
             | Item::Slice(_)
             | Item::Iso(_)
             | Item::Arrows
+            | Item::Parcels
             | Item::Region(_)
             | Item::Stream(_) => false,
         }

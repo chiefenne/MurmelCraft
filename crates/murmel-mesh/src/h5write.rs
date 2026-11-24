@@ -175,6 +175,8 @@ pub enum AttrValue {
     Ints(Vec<i64>),
     /// A string (a scalar).
     Text(String),
+    /// One 64-bit float (a scalar).
+    Float(f64),
 }
 
 /// A link of a group.
@@ -433,6 +435,7 @@ fn attribute(name: &str, value: &AttrValue) -> Vec<u8> {
             dataspace(Some(&[v.len() as u64])),
             v.iter().flat_map(|x| x.to_le_bytes()).collect(),
         ),
+        AttrValue::Float(v) => (Ty::F64, dataspace(None), v.to_le_bytes().to_vec()),
         AttrValue::Text(t) => {
             let n = t.len().max(1);
             let mut d = t.as_bytes().to_vec();

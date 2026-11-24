@@ -2544,3 +2544,153 @@ fn derived_field_tools() {
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert!(s.fields().unwrap().get("vorticity").is_none());
 }
+
+/// Parcels at the centre of the channel's box and spread through it, in
+/// FoehnCraft's layout, written to a fresh file.
+fn parcel_file(s: &Session, name: &str) -> PathBuf {
+    use murmel_mesh::{Field, Location};
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    let at = |t: f64| [0, 1, 2].map(|k| b.min[k] + t * (b.max[k] - b.min[k]));
+    let points: Vec<[f64; 3]> = (1..=9).map(|i| at(i as f64 / 10.0)).collect();
+    let n = points.len();
+    let scalar = |name: &str, values: Vec<f64>| Field {
+        name: name.into(),
+        unit: None,
+        location: Location::Point,
+        components: 1,
+        values,
+    };
+    let fields = vec![
+        Field {
+            name: "velocity".into(),
+            unit: None,
+            location: Location::Point,
+            components: 3,
+            values: (0..3 * n).map(|i| (i % 3) as f64).collect(),
+        },
+        scalar("diameter", (1..=n).map(|i| i as f64 * 1e-5).collect()),
+        scalar("parcel_id", (0..n).map(|i| i as f64).collect()),
+    ];
+    let dir = std::env::temp_dir().join(format!("murmel-parcel-tools-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    murmel_mesh::parcels::write_parcels(&path, &points, &fields, 0.5, 100, "channel").unwrap();
+    path
+}
+
+/// Invariant: parcels.open needs a mesh (VIEW001), reads a parcel file
+/// and draws every parcel coloured by diameter with a colour bar of its
+/// own; parcels.set colours by a vector component, sizes by diameter,
+/// filters by diameter (and refuses an injector filter on a file without
+/// injectors, listing its fields: PARCEL002), refuses a scale out of
+/// range (PARCEL003); a clip plane drops the parcels it cuts away; each
+/// call is one undo step; a session file brings them back with their
+/// settings; parcels.clear removes them with their colour. A front end
+/// that called these with bad input would otherwise draw nothing and
+/// report success.
+#[test]
+fn parcel_tools() {
+    let mut s = session();
+    let e = call("parcels.open", json!({"path": "nowhere.vtkhdf"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let mesh = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": mesh }), &mut s).ok());
+    let e = call("parcels.set", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "PARCEL001");
+    let path = parcel_file(&s, "parcels_000100.vtkhdf");
+    let before = s.journal.undo.len();
+    let e = call("parcels.open", json!({ "path": path }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.journal.undo.len(), before + 1);
+    let p = &e.result["parcels"];
+    assert_eq!(p["parcels"], 9);
+    assert_eq!(p["drawn"], 9);
+    assert_eq!(p["time"], 0.5);
+    assert_eq!(p["step"], 100);
+    assert_eq!(p["color"]["name"], "diameter");
+    assert_eq!(p["color_range"][0], 1e-5);
+    assert!((p["color_range"][1].as_f64().unwrap() - 9e-5).abs() < 1e-18);
+    assert!(s.display.outline_mesh(), "the mesh is a faint outline");
+    let bars = murmel_engine::Legend::own_bars(&s);
+    assert!(
+        bars.iter()
+            .any(|(o, _)| *o == murmel_engine::legend::Owner::Parcels),
+        "the parcels have a colour bar of their own"
+    );
+    // 20 triangles a parcel, and none of the mesh (its faint outline is
+    // lines).
+    assert_eq!(s.mesh.as_ref().unwrap().surface.tri_cell.len(), 9 * 20);
+    let e = call("parcels.set", json!({"enabled": false}), &mut s);
+    assert_eq!(e.result["parcels"]["drawn"], 0);
+    assert!(
+        !s.display.outline_mesh(),
+        "hidden parcels show the mesh's faces"
+    );
+    let e = call(
+        "parcels.set",
+        json!({"enabled": true, "color": "velocity", "component": "y", "size": "diameter", "scale": 2.0}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let p = &e.result["parcels"];
+    assert_eq!(p["color"]["component"], "y");
+    // Every y component is 1: the range widens about it.
+    let r = [0, 1].map(|k| p["color_range"][k].as_f64().unwrap());
+    assert!(
+        (r[0] - 0.999).abs() < 1e-12 && (r[1] - 1.001).abs() < 1e-12,
+        "{r:?}"
+    );
+    assert_eq!(p["size"], "diameter");
+    let e = call("parcels.set", json!({"diameter": [2.5e-5, 6.5e-5]}), &mut s);
+    assert_eq!(e.result["parcels"]["drawn"], 4);
+    let e = call("parcels.set", json!({"diameter": null}), &mut s);
+    assert_eq!(e.result["parcels"]["drawn"], 9);
+    for (bad, code) in [
+        (json!({"injector": 1}), "PARCEL002"),
+        (json!({"color": "temperature"}), "PARCEL002"),
+        (json!({"scale": 0.0}), "PARCEL003"),
+        (json!({"scale": 101.0}), "PARCEL003"),
+        (json!({"diameter": [2.0, 1.0]}), "PARCEL003"),
+        (json!({"map": "plaid"}), "PARCEL003"),
+        (json!({"size": "huge"}), "TOOL002"),
+    ] {
+        let e = call("parcels.set", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, code, "{bad}");
+    }
+    let e = call("parcels.set", json!({"color": "temperature"}), &mut s);
+    assert!(
+        e.diagnostics[0]
+            .message
+            .contains("velocity, diameter, parcel_id"),
+        "{}",
+        e.diagnostics[0].message
+    );
+    // A clip plane through the middle leaves about half.
+    assert!(call("clip.set", json!({"axis": "x"}), &mut s).ok());
+    let drawn = s.mesh.as_ref().unwrap().surface.parcels;
+    assert!((3..=6).contains(&drawn), "{drawn}");
+    assert!(call("clip.clear", json!({}), &mut s).ok());
+    // A session brings them back.
+    let colour = json!({"item": "parcels", "color": "#ABCDEF"});
+    assert!(call("display.set_color", colour, &mut s).ok());
+    let file = path.with_extension("murmel");
+    assert!(call("session.save", json!({ "path": file }), &mut s).ok());
+    assert!(call("parcels.clear", json!({}), &mut s).ok());
+    assert!(s.display.parcels.is_none() && s.display.colors.is_empty());
+    assert_eq!(s.mesh.as_ref().unwrap().surface.parcels, 0);
+    let e = call("session.load", json!({ "path": file }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let v = s.display.parcels.as_ref().unwrap();
+    assert_eq!(v.scale, 2.0);
+    assert_eq!(v.color.as_ref().unwrap().name, "velocity");
+    assert_eq!(s.mesh.as_ref().unwrap().surface.parcels, 9);
+    assert!(s.display.colors.contains_key(&murmel_engine::Item::Parcels));
+    // The palette's toggle hides them.
+    let toggle = crate::commands::commands()
+        .into_iter()
+        .find(|c| c.id == "parcels.set:toggle")
+        .unwrap();
+    let (tool, input) = toggle.input(&s).unwrap();
+    let e = call(tool, input, &mut s);
+    assert_eq!(e.result["parcels"]["enabled"], false);
+}

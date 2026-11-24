@@ -24,6 +24,7 @@ mod extract;
 pub mod live;
 mod markdown;
 pub mod movie;
+mod parcel;
 mod region;
 mod stream;
 mod tools;

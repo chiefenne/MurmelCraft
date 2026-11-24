@@ -86,6 +86,7 @@ impl MurmelApp {
                 | Item::Slice(_)
                 | Item::Iso(_)
                 | Item::Arrows
+                | Item::Parcels
                 | Item::Stream(_)
                 | Item::Region(_) => {}
             }
@@ -216,6 +217,7 @@ impl MurmelApp {
                 let field = |k: &str| input[k].as_str().unwrap_or_default().to_string();
                 self.open_color_edit(&field("item"), &field("label"));
             }
+            Some(("window.parcels_open", _)) => self.parcels_open_dialog(),
             Some((id, input)) => {
                 self.call(id, input);
             }

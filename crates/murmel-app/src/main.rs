@@ -26,6 +26,7 @@ mod movie_dialog;
 mod opening;
 mod own_bars;
 mod panels;
+mod parcels;
 mod quality;
 mod regions;
 mod stream_handle;

@@ -92,6 +92,9 @@ arrow = "#E8ECF2"
 # Streamlines drawn in a solid colour: a clear cyan, apart from the
 # arrows' grey and the role colours, readable on both viewports.
 stream = "#36B7C4"
+# Spray parcels drawn in a solid colour: a warm amber, apart from the
+# streamlines' cyan and the arrows' grey, readable on both viewports.
+parcel = "#E8A33D"
 
 # Patch roles (UI spec, Colour by): wall grey, inlet blue, outlet orange,
 # symmetry green, interface violet, unspecified sand. Searched in OKLCH

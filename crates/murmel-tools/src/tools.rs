@@ -1438,6 +1438,12 @@ fn session_load(input: Value, s: &mut Session) -> Run {
         }
         _ => s.close(),
     }
+    let mut f = f;
+    if let Some(p) = f.parcels_path(&i.path)
+        && let Some(v) = f.display.parcels.as_mut()
+    {
+        v.path = p;
+    }
     let missing = s.restore(f);
     if !missing.is_empty() {
         warnings.push(json!(Diagnostic::new(
@@ -1961,7 +1967,7 @@ fn field_list(_: Value, s: &mut Session) -> Run {
 /// What the colour range of `field.style` spans.
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum RangeKey {
+pub(crate) enum RangeKey {
     Field,
     Shown,
     Symmetric,
@@ -2150,6 +2156,9 @@ pub const JOURNALED: &[&str] = &[
     "arrows.clear",
     "stream.set",
     "stream.clear",
+    "parcels.open",
+    "parcels.set",
+    "parcels.clear",
     "region.set",
     "region.clear",
     "display.mesh_look",
@@ -2920,6 +2929,39 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::stream::stream_clear_schema,
         run: crate::stream::stream_clear,
+    },
+    Tool {
+        id: "parcels.open",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-parcels-open",
+        summary: "Show the spray parcels of a parcel file with the open mesh: FoehnCraft's spray/parcels_<step>.vtkhdf (VTKHDF PolyData: points with velocity, diameter, droplets, age, parcel_id and later temperature and injector as point data; time and step as attributes) or any VTKHDF PolyData of points. Each parcel is a small shaded sphere. A file opened while parcels show keeps their settings (the next file of a run looks the same); the first one is coloured by diameter (else its first field) with a colour bar of its own. While parcels show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's parcels lists the file's time, step, count, the parcels drawn and each field's range.",
+        outputs: &[],
+        reads: &["path"],
+        input_schema: crate::parcel::parcels_open_schema,
+        run: crate::parcel::parcels_open,
+    },
+    Tool {
+        id: "parcels.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-parcels-set",
+        summary: "Change how the parcels show. color: a parcel field (component: magnitude, x, y or z of a vector) or solid (display.set_color on parcels); its colour bar keeps its own map (map: a colour map id or auto), reverse and range (field: all parcels of the file, the default; shown: the parcels drawn; symmetric; fixed with min and max), apart from the gas field of the same name. size: fixed (every parcel 1/400 of the mesh diagonal times scale) or diameter (the largest droplet diameter that size, the others in proportion); scale above 0 up to 100. Filters: diameter [min, max] in metres and injector (a number, needs the file's injector field), null for all. Parcels on the cut-away side of a clip plane are left out. At most 200 000 are drawn, thinned evenly beyond (capped in the result). enabled false keeps the settings and draws none. A field the file lacks is refused with the list of its fields.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::parcel::parcels_set_schema,
+        run: crate::parcel::parcels_set,
+    },
+    Tool {
+        id: "parcels.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-parcels-clear",
+        summary: "Remove the parcels and their settings.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::parcel::parcels_clear_schema,
+        run: crate::parcel::parcels_clear,
     },
     Tool {
         id: "region.set",

@@ -64,6 +64,17 @@ every change.
   length limit; thin lines, or shaded tubes with a radius setting and
   arrowheads on request; a solid colour, or any field with its own
   colour bar beside the mesh's, in exported pictures too.
+- Spray parcels (`parcels.open`, `parcels.set`): the droplets of a
+  FoehnCraft spray (`spray/parcels_<step>.vtkhdf`, or any VTKHDF PolyData
+  of points) shown with the mesh and its fields as small shaded spheres,
+  all the same size or sized by droplet diameter, coloured by any parcel
+  field (diameter, a velocity component, age, …) with their own colour
+  bar, map and range, or in one solid colour; filtered by a diameter
+  range, an injector and the clip planes; a row in the model tree with
+  eye and settings, kept in session files.
+
+  <img src="assets/readme/spray-parcels.png" width="700" alt="Droplets of a FoehnCraft spray in a duct, seen from the top: a stream of small spheres enters at the upper left, slows from about 9 to 4 m/s (yellow to dark purple) and bends down towards the lower wall, over a slice of the gas coloured by speed">
+
 - Derived fields (`field.derive`, the Derived fields window): vorticity,
   Q criterion, λ₂, total pressure and pressure coefficient computed from
   the result's velocity and pressure (the velocity gradient by least

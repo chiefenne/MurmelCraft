@@ -1,0 +1,9 @@
+[
+ {"tool": "mesh.open", "input": {"path": "output/spray_duct/fields_000300.vtkhdf"}},
+ {"tool": "slice.set", "input": {"axis": "z"}},
+ {"tool": "display.color_by", "input": {"by": "field", "field": "velocity"}},
+ {"tool": "parcels.open", "input": {"path": "output/spray_duct/spray/parcels_000300.vtkhdf"}},
+ {"tool": "parcels.set", "input": {"color": "velocity", "map": "inferno", "scale": 2}},
+ {"tool": "view.standard", "input": {"view": "top"}},
+ {"tool": "export.image", "input": {"path": "spray-parcels.png", "width": 1400, "height": 560}}
+]

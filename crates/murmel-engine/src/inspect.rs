@@ -620,6 +620,50 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ]);
             v
         }
+        Item::Parcels => {
+            let (Some(v), Some(p)) = (&display.parcels, display.parcel_data.as_deref()) else {
+                return Vec::new();
+            };
+            let file = v
+                .path
+                .file_name()
+                .map_or(String::new(), |f| f.to_string_lossy().into_owned());
+            let mut out = vec![row("file", file)];
+            if let Some(c) = p.attrs.get("case") {
+                out.push(row("case", c.clone()));
+            }
+            if let Some(l) = p.attrs.get("liquid") {
+                out.push(row("liquid", l.clone()));
+            }
+            if let Some(t) = p.time {
+                out.push(unit("time", t, "s"));
+            }
+            if let Some(st) = p.step {
+                out.push(row("step", st));
+            }
+            out.extend([
+                row("parcels", p.len()),
+                row("drawn", open.surface.parcels),
+                row("enabled", v.enabled),
+            ]);
+            let color = match &v.color {
+                Some(c) => c.title(p.field(&c.name).is_some_and(|f| f.is_vector())),
+                None => "solid".into(),
+            };
+            out.extend([
+                row("color", color),
+                row("size", v.size.key()),
+                row("scale", v.scale),
+            ]);
+            if let Some([lo, hi]) = v.diameter {
+                out.push(unit("diameter_min", lo, "m"));
+                out.push(unit("diameter_max", hi, "m"));
+            }
+            if let Some(k) = v.injector {
+                out.push(row("injector", k));
+            }
+            out
+        }
         Item::Arrows => {
             let Some(a) = &display.arrows else {
                 return Vec::new();
