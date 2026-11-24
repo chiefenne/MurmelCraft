@@ -15,6 +15,7 @@
 
 pub mod commands;
 mod diag;
+pub mod live;
 mod markdown;
 mod tools;
 

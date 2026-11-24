@@ -21,6 +21,7 @@ fn harness() -> Harness<'static, MurmelApp> {
         .build_eframe(|cc| {
             let mut app = MurmelApp::new(cc, None).unwrap();
             app.session.config_dir = None;
+            app.bridge_path = None;
             app.open_path(channel());
             app
         });

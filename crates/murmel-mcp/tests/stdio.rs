@@ -33,7 +33,20 @@ struct Client {
 
 impl Client {
     fn start(write_root: &Path) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_murmel-mcp"))
+        Self::spawn(write_root, None)
+    }
+
+    /// The server with --live, driving the window listening at `socket`.
+    fn start_live(write_root: &Path, socket: &Path) -> Self {
+        Self::spawn(write_root, Some(socket))
+    }
+
+    fn spawn(write_root: &Path, live: Option<&Path>) -> Self {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_murmel-mcp"));
+        if let Some(socket) = live {
+            cmd.arg("--live").env("MURMEL_LIVE_SOCKET", socket);
+        }
+        let mut child = cmd
             .arg("--read-root")
             .arg(root().join("test-fixtures"))
             .arg("--write-root")
@@ -305,4 +318,78 @@ fn session_files_stay_inside_the_roots() {
     let r = c.call("session.load", json!({"path": "box.murmel"}));
     assert_eq!(r["isError"], false, "{r}");
     assert_eq!(c.call("mesh.info", json!({}))["isError"], false);
+}
+
+/// A stand-in for the window: a listener on a headless session, run on
+/// this thread while `drive` talks to the server on another.
+fn with_window<T: Send + 'static>(
+    socket: &Path,
+    drive: impl FnOnce() -> T + Send + 'static,
+) -> (T, murmel_engine::Session) {
+    use murmel_tools::live::Listener;
+    let l = Listener::start(socket, std::sync::Arc::new(|| {})).unwrap();
+    let mut s = murmel_engine::Session::new(murmel_engine::Tokens::builtin().unwrap());
+    s.config_dir = None;
+    let worker = std::thread::spawn(drive);
+    while !worker.is_finished() {
+        for j in l.jobs() {
+            let e = murmel_tools::call(&j.tool, j.input.clone(), &mut s);
+            j.answer(e.to_json());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    (worker.join().unwrap(), s)
+}
+
+/// Invariant: with --live the server forwards calls to the window and
+/// returns its envelopes and screenshots as images; the roots are still
+/// checked before a call leaves (a path outside never reaches the
+/// window); without a window a call fails with LIVE001 and the server
+/// lives on; the agent is told it drives the person's window. Breaks when
+/// --live runs a headless session after all, or the roots are checked
+/// only in the headless case.
+#[test]
+fn live_drives_the_window_and_keeps_the_roots() {
+    let out = scratch("live");
+    let socket = out.join("sock/live.sock");
+    let mut c = Client::start_live(&out, &socket);
+    let r = c.request(
+        "initialize",
+        json!({"protocolVersion": "2025-11-25", "capabilities": {},
+               "clientInfo": {"name": "test", "version": "1"}}),
+    );
+    let text = r["result"]["instructions"].as_str().unwrap();
+    assert!(text.contains("open MurmelCraft window"), "{text}");
+    c.send_raw(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+
+    // no window yet
+    let r = c.call("view.get_camera", json!({}));
+    assert_eq!(r["isError"], true);
+    assert_eq!(envelope(&r)["diagnostics"][0]["code"], "LIVE001");
+
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    // a real mesh, but outside the roots
+    let outside = scratch("live-outside").join("foehncraft.vtu");
+    std::fs::copy(&channel, &outside).unwrap();
+    let ((opened, refused, shot, mut c), window) = with_window(&socket, move || {
+        let opened = c.call("mesh.open", json!({"path": channel}));
+        let refused = c.call("mesh.open", json!({"path": outside}));
+        let shot = c.call("view.screenshot", json!({"width": 96, "height": 64}));
+        (opened, refused, shot, c)
+    });
+    assert_eq!(opened["isError"], false, "{opened}");
+    assert_eq!(envelope(&refused)["diagnostics"][0]["code"], "MCP001");
+    assert_eq!(shot["isError"], false, "{shot}");
+    let png = shot["content"][1]["data"].as_str().unwrap();
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(png)
+        .unwrap();
+    assert_eq!(&png[1..4], b"PNG");
+    assert!(out.join("screenshots/shot-0001.png").exists());
+    // the calls ran on the window's session
+    assert!(window.mesh.is_some());
+
+    // the window has gone again
+    let r = c.call("view.get_camera", json!({}));
+    assert_eq!(envelope(&r)["diagnostics"][0]["code"], "LIVE001", "{r}");
 }

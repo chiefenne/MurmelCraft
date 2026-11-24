@@ -2,10 +2,12 @@
 //!
 //! `murmelcraft [MESH]` opens the window, optionally with a mesh: a
 //! `.vtu` file or an OpenFOAM case, `constant` or `polyMesh` folder, or
-//! with a session file (`.murmel`).
+//! with a session file (`.murmel`). While agents are allowed (Settings),
+//! `murmel mcp --live` drives the window.
 
 #[cfg(test)]
 mod a11y_tests;
+mod agents;
 mod app;
 mod commands;
 mod cube;

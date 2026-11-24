@@ -2,12 +2,15 @@
 //! `initialize`, `ping`, `tools/list` and `tools/call` of the MCP
 //! specification (2025-11-25, and 2025-06-18 for older clients). One
 //! session lives as long as the connection, so the camera, the display,
-//! the selection and the journal carry from one call to the next.
+//! the selection and the journal carry from one call to the next: a
+//! headless one of its own, or with `--live` the session of the person's
+//! open window, reached over the live bridge (`murmel_tools::live`). The
+//! roots are checked here in both cases, before a call leaves.
 
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
-use murmel_engine::Session;
+use murmel_engine::{Session, SessionFile};
 use murmel_tools::{Diagnostic, Envelope, Tool};
 use serde_json::{Map, Value, json};
 
@@ -32,6 +35,28 @@ journal.undo and journal.redo walk the camera and display steps. Paths must lie 
 the server's read roots (meshes) or write roots (screenshots); relative paths start \
 at the first write root. Settings tools change this session only.";
 
+const LIVE_INSTRUCTIONS: &str = "MurmelCraft is a viewer for KoflCraft and OpenFOAM meshes. \
+This server drives the person's open MurmelCraft window: every call runs in that window, \
+the person sees each step and can undo it, and the status bar shows that an agent is \
+connected. Check what is open with mesh.info and view.get_camera before changing it; open \
+a mesh with mesh.open only when asked to. Set the view (view.standard, view.orbit, \
+view.set_camera), the display (display.*, clip.*) and the selection (select.*), and call \
+view.screenshot to see the window's view as an image (at the viewport's size unless a size \
+is given). journal.undo and journal.redo walk the camera and display steps, the person's and \
+yours. Paths must lie below the server's read roots (meshes) or write roots (screenshots); \
+relative paths start at the first write root. Settings tools change the window for this run \
+only. LIVE001 means no window listens (it is closed, or the person switched agents off): \
+say so and do not retry in a loop. LIVE002 means the person stopped the agents or closed \
+the window.";
+
+/// Where the calls run.
+enum Target {
+    /// A headless session of the server's own.
+    Headless(Box<Session>),
+    /// The person's open window.
+    Live(murmel_tools::live::Client),
+}
+
 enum Phase {
     Initialize,
     InitializedNotification,
@@ -39,10 +64,15 @@ enum Phase {
 }
 
 pub struct Server {
-    session: Session,
+    target: Target,
     roots: Roots,
     phase: Phase,
     shots: u32,
+}
+
+/// Whether an envelope says the call finished.
+fn finished(envelope: &Value) -> bool {
+    envelope["status"] == "finished"
 }
 
 pub fn rpc_error(id: Value, code: i32, message: &str) -> Value {
@@ -130,28 +160,38 @@ pub fn listing() -> Vec<Value> {
 
 impl Server {
     /// The session's config folder is dropped: the settings tools (which
-    /// write files but name none) change the session only over MCP. Files
-    /// named inside other files (a session's mesh) are kept to the roots.
+    /// write files but name none) change the session only over MCP.
     pub fn new(mut session: Session, roots: Roots) -> Self {
         session.config_dir = None;
-        session.read_roots = Some(
-            roots
-                .read_roots()
-                .iter()
-                .chain(roots.write_roots())
-                .cloned()
-                .collect(),
-        );
         Self {
-            session,
+            target: Target::Headless(Box::new(session)),
             roots,
             phase: Phase::Initialize,
             shots: 0,
         }
     }
 
-    pub fn session(&self) -> &Session {
-        &self.session
+    /// A server that drives the open window listening at `socket` (the
+    /// window keeps settings to the run, as the headless server does).
+    pub fn live(socket: std::path::PathBuf, roots: Roots) -> Self {
+        Self {
+            target: Target::Live(murmel_tools::live::Client::new(socket)),
+            roots,
+            phase: Phase::Initialize,
+            shots: 0,
+        }
+    }
+
+    /// The headless session (`None` for a live server).
+    pub fn session(&self) -> Option<&Session> {
+        match &self.target {
+            Target::Headless(s) => Some(s),
+            Target::Live(_) => None,
+        }
+    }
+
+    pub fn is_live(&self) -> bool {
+        matches!(self.target, Target::Live(_))
     }
 
     /// A free name for a screenshot without a path.
@@ -191,26 +231,61 @@ impl Server {
                 args.insert((*f).into(), json!(real));
             }
         }
+        if t.id == "session.load" {
+            self.confine_session_mesh(args)?;
+        }
         Ok(())
     }
 
-    fn call(&mut self, t: &'static Tool, args: Value) -> (Envelope, Option<PathBuf>) {
+    /// The mesh a session file names is a path inside a file, not in the
+    /// input: it must lie within the read roots too, for the headless and
+    /// the live server alike. A file that cannot be read or parsed, or a
+    /// mesh that does not exist, is left to `session.load` to report.
+    fn confine_session_mesh(&self, args: &Map<String, Value>) -> Result<(), Diagnostic> {
+        let Some(file) = args.get("path").and_then(Value::as_str).map(Path::new) else {
+            return Ok(());
+        };
+        let Some(mesh) = std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| SessionFile::parse(&t).ok())
+            .and_then(|f| f.mesh_path(file))
+        else {
+            return Ok(());
+        };
+        match self.roots.read(&mesh) {
+            Err(d) if d.code == "MCP001" => Err(Diagnostic::new(
+                "MCP001",
+                format!(
+                    "the session's mesh {} is outside the MCP server's read roots",
+                    mesh.display()
+                ),
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Run a call; its envelope as JSON, and the PNG to send back.
+    fn call(&mut self, t: &'static Tool, args: Value) -> (Value, Option<PathBuf>) {
+        let failed = |d| Envelope::failed(t.id, t.version, d).to_json();
         let mut args = match args {
             Value::Null => Map::new(),
             Value::Object(m) => m,
             _ => {
                 let d = Diagnostic::new("TOOL002", "arguments must be an object");
-                return (Envelope::failed(t.id, t.version, d), None);
+                return (failed(d), None);
             }
         };
         if let Err(d) = self.confine(t, &mut args) {
-            return (Envelope::failed(t.id, t.version, d), None);
+            return (failed(d), None);
         }
         let image = (t.id == "view.screenshot")
             .then(|| args.get("path").and_then(Value::as_str).map(PathBuf::from))
             .flatten();
-        let e = murmel_tools::call(t.id, Value::Object(args), &mut self.session);
-        let image = image.filter(|_| e.ok());
+        let e = match &mut self.target {
+            Target::Headless(s) => murmel_tools::call(t.id, Value::Object(args), s).to_json(),
+            Target::Live(c) => c.call(t.id, Value::Object(args)).unwrap_or_else(failed),
+        };
+        let image = image.filter(|_| finished(&e));
         (e, image)
     }
 
@@ -222,8 +297,7 @@ impl Server {
             return Err((-32602, format!("unknown tool {name}")));
         };
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
-        let (envelope, image) = self.call(tool, args);
-        let body = envelope.to_json();
+        let (body, image) = self.call(tool, args);
         let mut content = vec![json!({"type": "text", "text": body.to_string()})];
         if let Some(p) = image {
             match std::fs::metadata(&p) {
@@ -246,7 +320,7 @@ impl Server {
         Ok(json!({
             "content": content,
             "structuredContent": body,
-            "isError": !envelope.ok(),
+            "isError": !finished(&body),
         }))
     }
 
@@ -300,7 +374,7 @@ impl Server {
                         "title": "MurmelCraft",
                         "version": env!("CARGO_PKG_VERSION"),
                     },
-                    "instructions": INSTRUCTIONS,
+                    "instructions": if self.is_live() { LIVE_INSTRUCTIONS } else { INSTRUCTIONS },
                 })
             }
             "initialize" => return Some(rpc_error(id, -32600, "server is already initialized")),

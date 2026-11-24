@@ -5,7 +5,8 @@
 //! tool inputs are confined to read and write roots, `view.screenshot`
 //! returns its PNG as an MCP image, and the settings tools never write the
 //! person's config files. Every result is the registry's envelope
-//! (`murmelcraft.tool-result`) as text and as structured content.
+//! (`murmelcraft.tool-result`) as text and as structured content. With
+//! `--live` the same server drives the person's open window instead.
 //!
 //! The protocol is the MCP specification, revision 2025-11-25
 //! (<https://modelcontextprotocol.io/specification/2025-11-25>): JSON-RPC
@@ -31,21 +32,29 @@ pub use crate::server::{
 /// error and skipped.
 pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
 
-pub const USAGE: &str = "Usage: murmel mcp --read-root DIR [--read-root DIR ...] --write-root DIR [--write-root DIR ...]
+pub const USAGE: &str = "Usage: murmel mcp --read-root DIR [--read-root DIR ...] --write-root DIR [--write-root DIR ...] [--live]
        murmel mcp --root DIR          (the same as --read-root DIR --write-root DIR)
+       murmel mcp --live --root DIR   (drive the open MurmelCraft window)
        murmel-mcp ...                 (the same server as its own program)
 
 Runs the MCP server on standard input and output (one JSON-RPC message per
 line). Meshes are read below a read or a write root, screenshots are written
 below a write root; relative paths start at the first write root, and a
 screenshot without a path goes to screenshots/ there. Settings are read from
-MURMEL_CONFIG_DIR or the platform's config folder and never written.";
+MURMEL_CONFIG_DIR or the platform's config folder and never written.
+
+With --live the calls run in the person's open MurmelCraft window instead of
+a headless session (the window must allow agents: Settings > Agents); the
+roots are checked here all the same. The window listens at a private socket
+(MURMEL_LIVE_SOCKET names another).";
 
 /// The server's options.
 #[derive(Debug, Default, PartialEq)]
 pub struct Options {
     pub read_roots: Vec<PathBuf>,
     pub write_roots: Vec<PathBuf>,
+    /// Drive the open window instead of a headless session.
+    pub live: bool,
 }
 
 /// Parse the arguments; both kinds of root are required.
@@ -61,6 +70,7 @@ pub fn parse(args: &[OsString]) -> Result<Options, String> {
         match flag.to_str() {
             Some("--read-root") => o.read_roots.push(value()?),
             Some("--write-root") => o.write_roots.push(value()?),
+            Some("--live") => o.live = true,
             Some("--root") => {
                 let d = value()?;
                 o.read_roots.push(d.clone());
@@ -87,6 +97,7 @@ pub fn session() -> Result<Session, String> {
         s.theme = st.theme;
         s.navigation = nav;
         s.view_cube = st.view_cube;
+        s.agents = st.agents.enabled;
         if let Err(e) = s.set_colors(st.colors) {
             eprintln!("murmel mcp: warning: settings.toml colors: {e}");
         }
@@ -100,9 +111,16 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let started = parse(&args)
-        .and_then(|o| Roots::new(&o.read_roots, &o.write_roots))
-        .and_then(|roots| Ok(Server::new(session()?, roots)));
+    let started = parse(&args).and_then(|o| {
+        let roots = Roots::new(&o.read_roots, &o.write_roots)?;
+        if o.live {
+            let socket = murmel_tools::live::socket_path()
+                .ok_or("no folder for the live socket is known (set MURMEL_LIVE_SOCKET)")?;
+            Ok(Server::live(socket, roots))
+        } else {
+            Ok(Server::new(session()?, roots))
+        }
+    });
     let server = match started {
         Ok(s) => s,
         Err(e) => {
@@ -174,5 +192,9 @@ mod tests {
         let o = parse(&a(&["--root", "d"])).unwrap();
         assert_eq!(o.read_roots, vec![PathBuf::from("d")]);
         assert_eq!(o.write_roots, vec![PathBuf::from("d")]);
+        assert!(!o.live);
+        // --live still needs both roots
+        assert!(parse(&a(&["--live"])).is_err());
+        assert!(parse(&a(&["--live", "--root", "d"])).unwrap().live);
     }
 }

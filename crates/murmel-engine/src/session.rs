@@ -155,14 +155,12 @@ pub struct Session {
     pub viewport: [f64; 2],
     /// Bumped whenever the surface changes, so renderers re-upload.
     pub surface_revision: u64,
+    /// Whether the window lets agents drive it (`settings.set_agents`).
+    pub agents: bool,
     /// Where settings tools write; `None` disables them.
     pub config_dir: Option<PathBuf>,
     /// The undo and redo steps of the open mesh.
     pub journal: Journal,
-    /// Folders that files named inside other files (the mesh of a session
-    /// file) may be read from; the MCP server sets its roots here. `None`
-    /// allows any folder.
-    pub read_roots: Option<Vec<PathBuf>>,
 }
 
 impl Session {
@@ -178,9 +176,9 @@ impl Session {
             view_cube: CubeSettings::default(),
             viewport: [1280.0, 720.0],
             surface_revision: 0,
+            agents: true,
             config_dir: crate::settings::config_dir(),
             journal: Journal::default(),
-            read_roots: None,
         }
     }
 

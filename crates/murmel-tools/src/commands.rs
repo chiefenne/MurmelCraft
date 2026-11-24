@@ -601,6 +601,15 @@ pub fn commands() -> Vec<Command> {
         }),
     ));
     v.push(cmd(
+        "settings.set_agents",
+        "cmd-agents",
+        "settings",
+        &[],
+        Dynamic("settings.set_agents", |s| {
+            Some(json!({"enabled": !s.agents}))
+        }),
+    ));
+    v.push(cmd(
         "settings.set_colors:reset",
         "settings-reset-colors",
         "settings",

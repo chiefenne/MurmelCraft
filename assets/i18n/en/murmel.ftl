@@ -178,6 +178,10 @@ settings-view-cube = View cube
 settings-cube-auto-hide = Hide when the pointer is far away
 settings-cube-distance = Show within
 settings-cube-distance-unit = { " " }px
+settings-agents = Agents
+settings-agents-allow = Let agents drive this window
+settings-agents-listening = Listening for murmel mcp --live at { $path }
+settings-agents-off = Agents cannot drive this window.
 
 viewport-empty = Open a KoflCraft mesh (foehncraft.vtu) with Open or Ctrl + O, or drop it here.
 viewport-description = { $view }, { $cells } cells, { $faces } boundary faces, colour by { $colour }
@@ -214,6 +218,12 @@ status-error = { $code }: { $message }
 status-selected = Selected { $area } { $item }
 status-selected-many = { $count } selected
 status-cursor = { $x }, { $y }, { $z }
+status-agents = { $count ->
+    [one] Agent connected
+   *[other] { $count } agents connected
+}
+status-agents-stop = Stop
+status-agents-stop-tip = Stop agents driving this window (switch them on again in Settings)
 
 tool-system-info = Version
 tool-system-commands = Tool catalogue
@@ -253,6 +263,7 @@ tool-settings-set-theme = Theme
 tool-settings-set-colors = Mesh colours
 tool-settings-set-bindings = Mouse bindings
 tool-settings-set-view-cube = View cube placement
+tool-settings-set-agents = Let agents drive this window
 tool-session-save = Save session
 tool-session-load = Load session
 
@@ -392,6 +403,7 @@ cube-at-bottom_right = Bottom right
 cube-at-floating = Floating panel
 cube-at-hidden = Hidden
 cmd-cube-auto-hide = View cube: hide when the pointer is far away (on or off)
+cmd-agents = Agents: let them drive this window (on or off)
 menu-view-cube = View cube
 rotate-title = Rotate about a screen axis
 rotate-axis = Screen { $axis } axis
