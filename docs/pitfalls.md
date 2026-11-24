@@ -253,6 +253,11 @@ problem took more than a few minutes to understand.
   that `boundary::link` reads are a `FaceList`, not always `Polygons`.
   Code that needs the cell faces after reading takes them from the
   mesh's distinct faces, which are copied out as before.
+- **A span names what the window shows while a mesh opens.**
+  `profile::span` also sets the phase that the opening overlay shows
+  (`opening.rs`, `phase_message`), so a new span inside a reader needs
+  its name mapped there, or the window says "reading the file" while it
+  runs. The `topology.*` steps map to "matching the faces".
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,
