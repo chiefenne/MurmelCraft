@@ -1575,6 +1575,18 @@ impl Session {
     /// otherwise it opens as a new mesh does, but the camera stays. The
     /// series stays open either way.
     pub fn open_step(&mut self, path: &Path) -> Result<(), MeshError> {
+        self.step(path, false)
+    }
+
+    /// Open `path` as [`Session::open_step`] does, but only when it is
+    /// of the open mesh (its cells and points): another mesh is refused
+    /// (FIELD020) and the session stays as it was. For files written
+    /// for the open result, such as FoehnCraft's `derived.vtkhdf`.
+    pub fn open_same_step(&mut self, path: &Path) -> Result<(), MeshError> {
+        self.step(path, true)
+    }
+
+    fn step(&mut self, path: &Path, only_same: bool) -> Result<(), MeshError> {
         let fit = self.budget_fit();
         let mut l = match self.preloaded.take() {
             Some(l) if l.path == path && l.fit == fit && l.is_fresh() => l,
@@ -1588,6 +1600,12 @@ impl Session {
                 && m.overview.is_some() == l.overview.is_some()
                 && m.cells() == cells_of(&l.mesh, l.overview.as_ref())
         });
+        if !same && only_same {
+            return Err(MeshError::new(
+                "FIELD020",
+                format!("{} is not of the open mesh", path.display()),
+            ));
+        }
         if !same {
             let camera = self.camera.clone();
             self.install(l);

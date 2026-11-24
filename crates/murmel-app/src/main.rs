@@ -22,6 +22,7 @@ mod export_dialog;
 mod extracts;
 mod field;
 mod focus;
+mod foehn_rows;
 mod help_panel;
 mod i18n;
 mod measure;

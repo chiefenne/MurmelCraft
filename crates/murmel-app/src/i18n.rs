@@ -200,6 +200,9 @@ mod tests {
         for s in ["case", "defaults", "built_in", "edited"] {
             assert!(t.has(&format!("derived-from-{s}")));
         }
+        for m in murmel_engine::foehn::Model::ALL {
+            assert!(t.has(&format!("derived-foehn-{}", m.key())));
+        }
         for k in murmel_engine::derive::REFERENCE_KEYS {
             assert!(t.has(&format!("derived-ref-{k}")));
         }

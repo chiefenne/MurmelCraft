@@ -22,6 +22,7 @@ mod derive;
 mod diag;
 pub mod export;
 mod extract;
+pub mod foehn;
 pub mod live;
 mod markdown;
 pub mod menus;

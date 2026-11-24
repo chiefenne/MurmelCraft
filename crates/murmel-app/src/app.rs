@@ -133,6 +133,8 @@ pub struct MurmelApp {
     pub(crate) steps_range: crate::player::StepsRangeJob,
     /// The movie being made on its own thread, if one is.
     pub(crate) movie_job: Option<crate::movie_dialog::MovieJob>,
+    /// A `foehn post derive` the Derived fields window started.
+    pub(crate) foehn_job: Option<murmel_tools::foehn::Running>,
     /// The large mesh being read on its own thread, if one is.
     pub(crate) opening: Option<crate::opening::Opening>,
     /// Meshes of at least this many bytes are read on their own thread.
@@ -277,6 +279,7 @@ impl MurmelApp {
             movie: Default::default(),
             derived: Default::default(),
             movie_job: None,
+            foehn_job: None,
             history: Default::default(),
             steps_range: Default::default(),
             opening: None,
@@ -1643,6 +1646,7 @@ impl eframe::App for MurmelApp {
         self.derived_window(&ctx);
         self.convert_window(&ctx);
         self.poll_movie(&ctx);
+        self.poll_foehn(&ctx);
         self.poll_probe_history(&ctx);
         self.probe_history_window(&ctx);
         self.play_series(&ctx);

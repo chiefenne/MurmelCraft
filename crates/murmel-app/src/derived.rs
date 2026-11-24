@@ -60,6 +60,10 @@ pub struct DerivedWindow {
     pub focus_formula: bool,
     /// The derived quantities, or your formulas.
     pub formulas_tab: bool,
+    /// Whether FoehnCraft's foehn can run for the open result.
+    pub foehn: Option<crate::foehn_rows::FoehnReady>,
+    /// What the last foehn post derive did, or why it failed.
+    pub foehn_note: Option<String>,
 }
 
 /// The units of [`REFERENCE_KEYS`], as the window shows them.
@@ -72,6 +76,7 @@ impl MurmelApp {
         self.derived.reference = None;
         self.derived.rotation = None;
         self.derived.walls = None;
+        self.derived.foehn = None;
     }
 
     /// Open the window with the keyboard in the formula field (the
@@ -148,8 +153,10 @@ impl MurmelApp {
         }
         let p = self.palette(ctx).clone();
         let mut w = self.derived.clone();
+        self.foehn_ready(&mut w);
         let mut open = true;
         let mut calls: Vec<(&'static str, Value)> = Vec::new();
+        let mut ask = crate::foehn_rows::FoehnAsk::default();
         egui::Window::new(self.i18n.tr("derived-title"))
             .id(egui::Id::unique("derived-fields"))
             .open(&mut open)
@@ -243,6 +250,7 @@ impl MurmelApp {
                                 self.derived_row(ui, set, q, &mut w, secondary, &mut calls);
                                 ui.add_space(4.0);
                             }
+                            self.foehn_block(ui, set, group, &w, secondary, &mut ask);
                         });
                     ui.add_space(6.0);
                     ui.label(
@@ -254,8 +262,15 @@ impl MurmelApp {
             });
         let esc = !ctx.text_edit_focused()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-        w.open = open && !esc;
+        // Esc stops a running foehn first, then closes the window.
+        if esc && self.foehn_job.is_some() {
+            ask.cancel = true;
+            w.open = open;
+        } else {
+            w.open = open && !esc;
+        }
         self.derived = w;
+        self.foehn_act(ctx, ask);
         for (tool, input) in calls {
             let made = input.get("remove").is_none();
             let shown = match tool {

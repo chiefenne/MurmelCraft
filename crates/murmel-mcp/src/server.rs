@@ -217,6 +217,17 @@ impl Server {
             let p = self.next_shot()?;
             args.insert("path".into(), json!(p));
         }
+        // foehn writes beside the result when no output is named: a path
+        // the server could not check.
+        if t.id == "field.foehn_derive"
+            && !args.contains_key("output")
+            && !args.contains_key("file")
+        {
+            return Err(Diagnostic::new(
+                "MCP001",
+                "field.foehn_derive needs output (the file foehn writes, inside a write root) or file over MCP",
+            ));
+        }
         for (fields, write) in [(t.reads, false), (t.outputs, true)] {
             for f in fields {
                 let Some(v) = args.get(*f) else { continue };
