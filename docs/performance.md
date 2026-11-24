@@ -373,3 +373,42 @@ so), `murmel bench`:
 |---|---:|---:|
 | render.next, ms (with edges) | 473 | 513 |
 | render.next.faces, ms | 307 | 350 |
+
+## Surface buffers on all threads (2026-11-24)
+
+Filling the buffers was most of a surface build: every display change
+(a colour, a hidden zone, a selection, the exact cut after a clip drag)
+waited for it.
+
+- The colours of each polygon are worked out on all threads first, and
+  the place of each polygon's vertices and indices is counted before
+  anything is written. Each thread then fills its run of polygons, in
+  draw order, at the place the counts give: the buffers are the same,
+  bit for bit, as before and for any number of threads.
+- The edges are found on all threads too. Each edge goes to a shard by
+  its smaller end; each shard walks its edges in draw order and keeps
+  the first of each, so an edge keeps the colour of the first polygon
+  that has it (the selection's, when selected), as before. The kept
+  edges are then written run by run.
+- The sRGB to linear conversion of the colours is a table of the 256
+  values instead of a power per channel.
+- `murmel bench` reports the phases of every surface stage.
+
+polyMesh binary, same machine (4 threads), `--repeat 3`, old and new run
+one after the other:
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| surface | 106 (241) | 305 (586) |
+| surface.buffers (phase) | 39 (172) | 100 (460) |
+| surface.crinkle | 175 (268) | 701 (811) |
+| surface.flat | 300 (362) | 1,195 (1,362) |
+| surface.hidden_zone | 97 (145) | 355 (469) |
+| surface.cell_type | 108 (193) | 341 (531) |
+| surface.feature_edges | 232 (306) | 653 (848) |
+| clip.exact | 352 (443) | 929 (1,277) |
+
+What is left at 4 M cells: choosing and cutting the polygons is now
+most of a clipped surface (500 ms of the crinkle cut, 980 ms of the
+flat one, on one thread), and the feature edges spend 315 ms finding
+creases. Those are next.

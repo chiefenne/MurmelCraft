@@ -22,16 +22,22 @@ impl Rgb {
         Some(Rgb([(v >> 16) as u8, (v >> 8) as u8, v as u8]))
     }
 
-    /// Linear RGB, for the renderer.
+    /// Linear RGB, for the renderer: the sRGB transfer function, looked
+    /// up in a table of the 256 values (a surface asks for two colours
+    /// per polygon, millions of times).
     pub fn linear(self) -> [f32; 3] {
-        self.0.map(|c| {
-            let c = c as f32 / 255.0;
-            if c <= 0.04045 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        })
+        static TABLE: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
+        let table = TABLE.get_or_init(|| {
+            std::array::from_fn(|c| {
+                let c = c as f32 / 255.0;
+                if c <= 0.04045 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            })
+        });
+        self.0.map(|c| table[c as usize])
     }
 
     pub fn hex(self) -> String {

@@ -307,8 +307,13 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             },
         ),
     ] {
-        let s = st.time(name, r, || Surface::build(&mesh, &tokens, &d));
-        st.note(surface_note(&s));
+        let s = st.time(name, r, || {
+            murmel_mesh::profile::record(true);
+            Surface::build(&mesh, &tokens, &d)
+        });
+        let mut note = surface_note(&s);
+        note["phases"] = phases();
+        st.note(note);
     }
     st.time("quality", r, || Quality::compute(&mesh));
     // What the model tree and the legend ask of the mesh on every frame
