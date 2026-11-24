@@ -9,7 +9,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `system.info` | 1 | read | Version and platform of this build. |
 | `system.commands` | 1 | read | The catalogue of every tool with its input schema. |
 | `diag.codes` | 1 | read | The diagnostic codes with their severity, meaning and fix. |
-| `mesh.open` | 3 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). |
+| `mesh.open` | 4 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). In the window the SHA-256 of the files is taken after the mesh opens: until it is, `validity` is `checking` and `digest` and the files' `sha256` are empty. |
 | `mesh.close` | 1 | read | Drop the open mesh from the session. |
 | `mesh.info` | 1 | read | Counts, zones, patches, metadata and evidence of the open mesh. |
 | `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport. |

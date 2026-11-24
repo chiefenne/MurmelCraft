@@ -144,6 +144,12 @@ fn read_file(dir: &Path, name: &str) -> Result<Option<FileBytes>, MeshError> {
 /// Read the OpenFOAM mesh `path` names (see [`is_openfoam`]). The paths of
 /// the files read are in [`Mesh::files`].
 pub fn read_polymesh(path: &Path) -> Result<Mesh, MeshError> {
+    read_polymesh_with(path, true)
+}
+
+/// As [`read_polymesh`]; without `hash` no SHA-256 is taken
+/// (`Mesh::file_sha256` stays empty).
+pub(crate) fn read_polymesh_with(path: &Path, hash: bool) -> Result<Mesh, MeshError> {
     let dir = polymesh_dir(path)?;
     let io = crate::profile::span("read.file");
     let mut read: Vec<FileBytes> = Vec::new();
@@ -164,6 +170,7 @@ pub fn read_polymesh(path: &Path) -> Result<Mesh, MeshError> {
     let (mesh, digests) = std::thread::scope(|s| {
         let hashes: Vec<_> = all
             .iter()
+            .filter(|_| hash)
             .map(|f| s.spawn(|| crate::sha256_hex(&f.raw)))
             .collect();
         let [points, faces, owner, neighbour, boundary] = [0, 1, 2, 3, 4].map(|i| read[i].text());

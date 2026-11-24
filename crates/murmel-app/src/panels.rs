@@ -141,6 +141,7 @@ impl MurmelApp {
             Validity::Valid => (p.status_ok, "validity-tip-valid"),
             Validity::NoEvidence => (p.status_warn, "validity-tip-no_evidence"),
             Validity::Failed(_) => (p.status_error, "validity-tip-failed"),
+            Validity::Checking => (p.text_secondary, "validity-tip-checking"),
         };
         let mut badge_tip = self.i18n.tr(badge_key);
         if let Validity::Failed(why) = &m.validity {

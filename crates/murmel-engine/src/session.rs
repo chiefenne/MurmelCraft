@@ -2,6 +2,8 @@
 //! settings. Front ends read it and change it only through tools.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::SystemTime;
 
 use murmel_mesh::{Evidence, Mesh, MeshError};
@@ -40,12 +42,14 @@ pub struct OpenMesh {
 
 /// The validity badge (UI spec, Model tree): green when the evidence
 /// beside the mesh matches it, amber when there is none, red when a check
-/// fails.
+/// fails; grey while the SHA-256 of the files is still being taken after
+/// the mesh opened.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Validity {
     Valid,
     NoEvidence,
     Failed(Vec<String>),
+    Checking,
 }
 
 impl Validity {
@@ -54,6 +58,29 @@ impl Validity {
             Validity::Valid => "valid",
             Validity::NoEvidence => "no_evidence",
             Validity::Failed(_) => "failed",
+            Validity::Checking => "checking",
+        }
+    }
+
+    /// The badge of a mesh whose files are not hashed yet: the checks
+    /// that need no digest (the evidence's problem, its counts) can fail
+    /// already; otherwise it is checking, or has no evidence.
+    pub fn before_hash(
+        mesh: &Mesh,
+        evidence: Option<&Evidence>,
+        problem: Option<&MeshError>,
+    ) -> Validity {
+        if let Some(p) = problem {
+            return Validity::Failed(vec![format!("{}: {}", p.code, p.message)]);
+        }
+        let Some(e) = evidence else {
+            return Validity::NoEvidence;
+        };
+        let why = counts(mesh, e);
+        if why.is_empty() {
+            Validity::Checking
+        } else {
+            Validity::Failed(why)
         }
     }
 
@@ -92,24 +119,7 @@ impl Validity {
             let name = files.first().map_or("the mesh file", |f| f.0.as_str());
             why.push(format!("the evidence does not list {name}"));
         }
-        if let Some(c) = e.cells
-            && c as usize != mesh.cell_count()
-        {
-            why.push(format!("{} cells, evidence says {c}", mesh.cell_count()));
-        }
-        if let Some(b) = e.boundary_faces
-            && b as usize != mesh.boundary.len()
-        {
-            why.push(format!(
-                "{} boundary faces, evidence says {b}",
-                mesh.boundary.len()
-            ));
-        }
-        if let Some(n) = e.inverted_faces
-            && n > 0
-        {
-            why.push(format!("{n} inverted faces"));
-        }
+        why.extend(counts(mesh, e));
         if why.is_empty() {
             Validity::Valid
         } else {
@@ -118,11 +128,108 @@ impl Validity {
     }
 }
 
-/// SHA-256 of a file, hex; empty when it cannot be read.
+/// What the evidence's counts say against `mesh`.
+fn counts(mesh: &Mesh, e: &Evidence) -> Vec<String> {
+    let mut why = Vec::new();
+    if let Some(c) = e.cells
+        && c as usize != mesh.cell_count()
+    {
+        why.push(format!("{} cells, evidence says {c}", mesh.cell_count()));
+    }
+    if let Some(b) = e.boundary_faces
+        && b as usize != mesh.boundary.len()
+    {
+        why.push(format!(
+            "{} boundary faces, evidence says {b}",
+            mesh.boundary.len()
+        ));
+    }
+    if let Some(n) = e.inverted_faces
+        && n > 0
+    {
+        why.push(format!("{n} inverted faces"));
+    }
+    why
+}
+
+/// SHA-256 of a file, hex, read in pieces; empty when it cannot be read.
 pub fn sha256(path: &Path) -> String {
-    match std::fs::read(path) {
-        Ok(bytes) => sha256_bytes(&bytes),
-        Err(_) => String::new(),
+    murmel_mesh::sha256_file(path, &AtomicBool::new(false))
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// The digest of a mesh read from `files` (name and SHA-256 of each): the
+/// file's own, or for several files their listing as `sha256sum` prints
+/// it.
+fn combined(files: &[(String, String)]) -> String {
+    match files {
+        [(_, d)] => d.clone(),
+        _ => sha256_bytes(
+            files
+                .iter()
+                .map(|(n, d)| format!("{d}  {n}\n"))
+                .collect::<String>()
+                .as_bytes(),
+        ),
+    }
+}
+
+/// The name of a file, as `files` lists it.
+fn file_name(f: &Path) -> String {
+    f.file_name()
+        .map_or(String::new(), |n| n.to_string_lossy().into_owned())
+}
+
+/// The SHA-256 of an open mesh's files, taken on a thread of its own
+/// after the mesh opened (`Session::hash_after_open`). The open mesh
+/// shows meanwhile, its badge [`Validity::Checking`];
+/// [`Session::poll_digest`] or [`Session::wait_digest`] puts the
+/// digests in place.
+#[derive(Clone, Debug)]
+pub struct Hashing {
+    stop: Arc<AtomicBool>,
+    /// The digest of each file once all are taken (empty for a file that
+    /// could not be read).
+    done: Arc<(Mutex<Option<Vec<String>>>, Condvar)>,
+}
+
+impl Hashing {
+    fn start(files: Vec<PathBuf>) -> Hashing {
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new((Mutex::new(None), Condvar::new()));
+        let (s, d) = (stop.clone(), done.clone());
+        std::thread::spawn(move || {
+            let mut digests = Vec::with_capacity(files.len());
+            for f in &files {
+                match murmel_mesh::sha256_file(f, &s) {
+                    Ok(Some(h)) => digests.push(h),
+                    Ok(None) => return,
+                    Err(_) => digests.push(String::new()),
+                }
+            }
+            let (slot, ready) = &*d;
+            if let Ok(mut v) = slot.lock() {
+                *v = Some(digests);
+                ready.notify_all();
+            }
+        });
+        Hashing { stop, done }
+    }
+
+    /// The digests, if taken; `wait` blocks until they are.
+    fn take(&self, wait: bool) -> Option<Vec<String>> {
+        let (slot, ready) = &*self.done;
+        let mut v = slot.lock().ok()?;
+        while wait && v.is_none() {
+            v = ready.wait(v).ok()?;
+        }
+        v.take()
+    }
+
+    fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
     }
 }
 
@@ -215,6 +322,8 @@ pub struct Loaded {
     pub files: Vec<(String, String)>,
     pub digest: String,
     pub validity: Validity,
+    /// The files are not hashed yet (`load_with` without `hash`).
+    pub pending: bool,
     /// Each file read and the evidence beside them, as they were then.
     stamps: Vec<(PathBuf, Stamp)>,
     prepared: Option<Prepared>,
@@ -232,8 +341,15 @@ struct Prepared {
 
 /// Read a mesh, its fields and the evidence beside it, and hash its files.
 pub fn load(path: &Path) -> Result<Loaded, MeshError> {
+    load_with(path, true)
+}
+
+/// As [`load`]; without `hash` the files are not hashed: the digests stay
+/// empty and the badge checking until the session that opens the mesh has
+/// taken them ([`Hashing`]).
+pub fn load_with(path: &Path, hash: bool) -> Result<Loaded, MeshError> {
     let t = murmel_mesh::profile::span("open.read");
-    let (mut mesh, results) = murmel_mesh::read_results(path)?;
+    let (mut mesh, results) = murmel_mesh::read_results_with(path, hash)?;
     drop(t);
     let fields = FieldSet::new(results);
     // The evidence sits beside the mesh file: beside the .vtu, or in the
@@ -251,35 +367,27 @@ pub fn load(path: &Path) -> Result<Loaded, MeshError> {
         mesh.apply_evidence_roles(e);
     }
     // The readers hash the bytes they read; a file they did not hash is
-    // read again here.
+    // read again here. Without `hash`, the session hashes them later.
     let files: Vec<(String, String)> = mesh
         .files
         .iter()
         .enumerate()
         .map(|(i, f)| {
-            let name = f
-                .file_name()
-                .map_or(String::new(), |n| n.to_string_lossy().into_owned());
-            let digest = mesh
-                .file_sha256
-                .get(i)
-                .filter(|d| d.len() == 64)
-                .cloned()
-                .unwrap_or_else(|| sha256(f));
-            (name, digest)
+            let digest = match mesh.file_sha256.get(i).filter(|d| d.len() == 64) {
+                Some(d) => d.clone(),
+                None if hash => sha256(f),
+                None => String::new(),
+            };
+            (file_name(f), digest)
         })
         .collect();
-    let digest = match files.as_slice() {
-        [(_, d)] => d.clone(),
-        _ => sha256_bytes(
-            files
-                .iter()
-                .map(|(n, d)| format!("{d}  {n}\n"))
-                .collect::<String>()
-                .as_bytes(),
-        ),
+    let (digest, validity) = if hash {
+        let v = Validity::check(&files, &mesh, evidence.as_ref(), evidence_problem.as_ref());
+        (combined(&files), v)
+    } else {
+        let v = Validity::before_hash(&mesh, evidence.as_ref(), evidence_problem.as_ref());
+        (String::new(), v)
     };
-    let validity = Validity::check(&files, &mesh, evidence.as_ref(), evidence_problem.as_ref());
     let evidence_path = first.parent().map(|d| d.join("mesh-evidence.json"));
     let stamps = mesh
         .files
@@ -296,6 +404,7 @@ pub fn load(path: &Path) -> Result<Loaded, MeshError> {
         files,
         digest,
         validity,
+        pending: !hash,
         stamps,
         prepared: None,
     })
@@ -347,6 +456,13 @@ pub struct Session {
     /// A mesh read in advance (the window reads a large one on a thread
     /// of its own), which the next `mesh.open` of its path takes.
     pub preloaded: Option<Loaded>,
+    /// Open a mesh before the SHA-256 of its files is taken, and take it
+    /// on a thread of its own afterwards (the window: hashing a large
+    /// file can take longer than reading it). Off, `mesh.open` returns
+    /// with the digest, as the command line and agents expect.
+    pub hash_after_open: bool,
+    /// The SHA-256 of the open mesh's files being taken.
+    pub hashing: Option<Hashing>,
 }
 
 impl Session {
@@ -366,7 +482,46 @@ impl Session {
             config_dir: crate::settings::config_dir(),
             journal: Journal::default(),
             preloaded: None,
+            hash_after_open: false,
+            hashing: None,
         }
+    }
+
+    /// Put the digests of the open mesh's files in place once they are
+    /// taken (`hash_after_open`), with the badge they decide. True when
+    /// that happened now (the window draws the badge again).
+    pub fn poll_digest(&mut self) -> bool {
+        self.finish_digest(false)
+    }
+
+    /// Wait for the digests of the open mesh's files and put them in
+    /// place: for tools that need them (`session.save`, `session.load`).
+    pub fn wait_digest(&mut self) {
+        self.finish_digest(true);
+    }
+
+    fn finish_digest(&mut self, wait: bool) -> bool {
+        let Some(h) = &self.hashing else {
+            return false;
+        };
+        let Some(digests) = h.take(wait) else {
+            return false;
+        };
+        self.hashing = None;
+        let Some(m) = &mut self.mesh else {
+            return false;
+        };
+        for ((_, d), h) in m.files.iter_mut().zip(digests) {
+            *d = h;
+        }
+        m.digest = combined(&m.files);
+        m.validity = Validity::check(
+            &m.files,
+            &m.mesh,
+            m.evidence.as_ref(),
+            m.evidence_problem.as_ref(),
+        );
+        true
     }
 
     pub fn aspect(&self) -> f64 {
@@ -379,7 +534,7 @@ impl Session {
     pub fn open(&mut self, path: &Path) -> Result<&OpenMesh, MeshError> {
         let loaded = match self.preloaded.take() {
             Some(l) if l.path == path && l.is_fresh() => l,
-            _ => load(path)?,
+            _ => load_with(path, !self.hash_after_open)?,
         };
         Ok(self.install(loaded))
     }
@@ -389,6 +544,12 @@ impl Session {
     /// display and the tokens are still the ones it was built for.
     fn install(&mut self, mut l: Loaded) -> &OpenMesh {
         self.journal.clear();
+        if let Some(h) = self.hashing.take() {
+            h.stop();
+        }
+        if l.pending {
+            self.hashing = Some(Hashing::start(l.mesh.files.clone()));
+        }
         let base = display_for_new_mesh(&self.display, &l.fields);
         let (display, surface) = match l.prepared.take() {
             Some(p) if p.base == base && p.tokens == self.tokens => (p.display, p.surface),
@@ -414,6 +575,9 @@ impl Session {
 
     pub fn close(&mut self) {
         self.mesh = None;
+        if let Some(h) = self.hashing.take() {
+            h.stop();
+        }
         self.journal.clear();
         self.display.hidden.clear();
         self.display.selection.clear();
@@ -519,6 +683,67 @@ mod tests {
         assert!(matches!(stale, Validity::Failed(w) if w.len() == 1));
         let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
         assert_eq!(m.validity, Validity::NoEvidence);
+    }
+
+    /// Invariant: with `hash_after_open` a mesh opens before its files are
+    /// hashed: the badge is checking and the digest empty, and once the
+    /// digest is taken it is the one a direct open gives, with the same
+    /// badge. Counts the evidence contradicts fail at once, without the
+    /// hash; another open or a close drops the old hashing, so its digest
+    /// never lands on the next mesh. A digest put on the wrong mesh would
+    /// show green for a file never checked; the window test only checks
+    /// that the badge ends up set.
+    #[test]
+    fn hash_after_open() {
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let channel = fixture("channel/foehncraft.vtu");
+        let direct = s.open(&channel).unwrap().clone();
+        assert!(s.hashing.is_none());
+        s.hash_after_open = true;
+        let m = s.open(&channel).unwrap();
+        assert_eq!(m.validity, Validity::Checking);
+        assert!(m.digest.is_empty());
+        assert!(m.files.iter().all(|(_, d)| d.is_empty()));
+        assert!(s.hashing.is_some());
+        s.wait_digest();
+        let m = s.mesh.as_ref().unwrap();
+        assert_eq!(m.digest, direct.digest);
+        assert_eq!(m.files, direct.files);
+        assert_eq!(m.validity, Validity::Valid);
+        assert!(s.hashing.is_none());
+        assert!(!s.poll_digest(), "nothing left to put in place");
+
+        // Polled until done, as the window does.
+        s.open(&channel).unwrap();
+        while !s.poll_digest() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(s.mesh.as_ref().unwrap().validity, Validity::Valid);
+
+        // A count the evidence contradicts fails before the hash.
+        let mut wrong = direct.evidence.clone().unwrap();
+        wrong.cells = Some(1);
+        let early = Validity::before_hash(&direct.mesh, Some(&wrong), None);
+        assert!(matches!(early, Validity::Failed(w) if w.len() == 1));
+        assert_eq!(
+            Validity::before_hash(&direct.mesh, None, None),
+            Validity::NoEvidence
+        );
+
+        // The hashing of the channel ends with the next open.
+        s.open(&channel).unwrap();
+        let first = s.hashing.clone().unwrap();
+        let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
+        assert_eq!(m.validity, Validity::NoEvidence);
+        assert!(first.stop.load(Ordering::Relaxed));
+        s.wait_digest();
+        let m = s.mesh.as_ref().unwrap();
+        assert_eq!(m.digest, sha256(&fixture("box/foehncraft.vtu")));
+        s.open(&channel).unwrap();
+        let h = s.hashing.clone().unwrap();
+        s.close();
+        assert!(h.stop.load(Ordering::Relaxed) && s.hashing.is_none());
     }
 
     /// Invariant: KoflCraft's OpenFOAM export is checked file by file

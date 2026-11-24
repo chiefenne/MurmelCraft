@@ -168,6 +168,21 @@ problem took more than a few minutes to understand.
   read or built again. Meshes under 32 MiB open at once, which keeps the
   window tests synchronous; a test of the background path sets
   `background_bytes` to 0 and holds the reader with `opening_gate`.
+- **The `.vtu` reader streams; it never holds the file's text.** Each
+  array is parsed as it streams past, into the type its use needs, and
+  `vtu::kind_of` decides which arrays are parsed at all: an array it does
+  not name is passed over unread. A new array the reader uses goes into
+  `kind_of` first. A chunk can end anywhere (inside a number, a base64
+  group, a tag), so a change to the streaming path is tested with the
+  file handed over a few bytes at a time (`streams_in_any_pieces`).
+- **The window hashes a mesh after it opens** (`Session::hash_after_open`):
+  until the SHA-256 is taken on its own thread, `OpenMesh::digest` and the
+  files' digests are empty and the badge is `Validity::Checking`. A tool
+  that needs the digest (`session.save` writes it, `session.load` compares
+  it) calls `Session::wait_digest` first. The command line and agents on a
+  headless session hash while reading, as before, so `mesh.open` returns
+  the digest. A window test that tells meshes apart compares paths, not
+  digests.
 
 ## Serde
 

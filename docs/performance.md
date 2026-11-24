@@ -30,8 +30,9 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 |---|---|
 | `read` | the reader: file to mesh model, face topology included |
 | `digest` | SHA-256 of the mesh files (the validity badge needs it) |
-| `open` | `mesh.open` as the window does it: read, digest, evidence, first surface |
-| `surface` | the surface of the default display (boundary faces) |
+| `open` | `mesh.open` as the window does it: read, evidence, first surface (the files are hashed afterwards) |
+| `open.digest` | the wait, after `open`, until the SHA-256 of the files is in place (the validity badge) |
+| `surface` | the surface of the default display (boundary faces), with its phases: `surface.polygons` (which faces to draw), `surface.points` (corners and normals), `surface.buffers` (vertices, triangles, edges), `surface.extras` (slices, iso-surfaces, arrows) |
 | `surface.crinkle`, `surface.flat` | the surface with one clip plane through the centre |
 | `surface.hidden_zone` | one zone hidden, so the faces between zones lie open |
 | `surface.cell_type` | colour by cell type |
@@ -40,8 +41,8 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `pick.9` | nine picks over the iso view (the hover tooltip, a click, snapping) |
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
 
-and reports the peak resident memory (Linux only) and the size of the mesh
-model. `render.*` on a machine without a GPU runs on Mesa's software
+and reports the peak resident memory (Linux only; the `read` stage also
+reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
 rasteriser and says nothing about a real GPU; run it on the Mac for those.
 
 ## Baseline (2026-11-24, before any optimisation)
@@ -171,3 +172,104 @@ into cells.
 At 10 M cells the model takes about 4.7 GB instead of 6.5 GB. The ascii
 `.vtu` still peaks at about six times its model: the whole text is in
 memory while it is parsed (5 GB at 4 M cells, 12 GB at 10 M).
+
+## Streaming the `.vtu` (2026-11-24)
+
+The `.vtu` reader no longer holds the file's text. One thread reads the
+file ahead in chunks of 32 MiB, a second takes its SHA-256, and the parser
+takes each array as it streams past: the XML markup goes through the XML
+parser, and the text of each array is parsed in parallel, chunk by chunk,
+straight into the type its use needs (a number or base64 group cut by the
+end of a chunk waits for the next). Arrays the reader does not use are
+passed over. The points are grouped by three as soon as they are read, and
+when the cells are polyhedra and polygons only (as KoflCraft writes them),
+the faces' points are written over the face stream they come from instead
+of being copied.
+
+Same machine and meshes as above, `--no-render`; the reading stage.
+
+| | 1 M: vtu (1.18 GB) | 4 M: vtu (4.99 GB) |
+|---|---:|---:|
+| peak memory while reading, MiB (was) | 1,056 (2,228) | 3,954 (9,154) |
+| read, ms (was) | 2,226 (2,648) | 10,001 (11,630) |
+| open, ms (was) | 2,692 (2,895) | 10,181 (11,518) |
+| peak of the whole benchmark, MiB (was) | 1,712 (2,776) | 6,737 (11,049) |
+
+The phases at 4 M cells: streaming 7,267 ms (the SHA-256 beside it,
+7,145 ms), cells 683 ms (was 1,019, the faces are no longer copied),
+topology 2,030 ms.
+
+What it shows:
+
+- Reading now peaks at about twice the mesh model (4.0 GB for a 1.9 GB
+  model at 4 M cells), not five times. At 10 M cells that is about 10 GB
+  (estimated from the 4 M numbers), well inside the iMac's 32 GB.
+- **The SHA-256 sets the pace now.** The arrays parse as fast as the file
+  streams in, and the stream ends when the hash does. This machine hashes
+  with the CPU's SHA instructions (1.1 GB/s); the iMac's Core i9 (2019)
+  has none, and the portable code hashes 0.38 GB/s here. On the iMac the
+  hash of a 10 M cell ascii file (12 GB) would take longer than the
+  parsing, roughly 15 to 30 s (estimate). Taking it after the mesh is
+  open is the next step for opening speed.
+
+## Hashing after the mesh opens (2026-11-24)
+
+The maintainer's choice: the window opens a mesh as soon as it is read and
+takes the SHA-256 of its files afterwards, on a thread of its own
+(`Session::hash_after_open`). The validity badge says *Checking* until the
+digest is in place, then turns green, amber or red as before; counts the
+evidence contradicts turn it red at once. The command line and agents on
+a headless session still hash while reading, so `mesh.open` returns the
+digest there.
+
+`open` is the time until the mesh shows; `open.digest` the time from
+then until the badge is final. Same machine and meshes, `--no-render`.
+The second pair of columns is a build with the portable SHA-256
+(`sha2`'s `force-soft`), as on a CPU without SHA instructions such as
+the iMac's Core i9.
+
+| | 1 M: vtu | 4 M: vtu | 1 M: vtu, portable SHA | 4 M: vtu, portable SHA |
+|---|---:|---:|---:|---:|
+| open, ms (was) | 2,311 (2,692) | 9,596 (10,181) | 2,503 (4,021) | 9,350 (16,583) |
+| open.digest, ms | 371 | 2,676 | 2,798 | 12,566 |
+
+Without SHA instructions opening was bound by the hash (13 s of the
+16.6 s at 4 M cells); now the mesh shows in 9.4 s and the badge follows
+12.6 s later. With the instructions, the parsing sets the pace either
+way. A 10 M cell ascii `.vtu` on the iMac should show in about the time
+its parsing takes, with the badge some 15 to 30 s later (estimate).
+
+## Quality and surface on all threads (2026-11-24)
+
+- **Cell quality** (colour by quality) was one loop on one thread that
+  collected the points of every face into a new list, about five times
+  per face. Now the centroid and volume of each cell, and the values of
+  each distinct face, are computed on all threads (`murmel_mesh::par`),
+  and the face and cell geometry helpers walk a face's points without
+  collecting them. Faces go in blocks of 2^20; each block gives its
+  values to the cells in face order, so the result is the same for any
+  number of threads (a test compares 1, 2, 3, 5 and 8 threads and blocks
+  of 7 faces).
+- **Surface.** Filling the buffers was three quarters of a surface build,
+  and most of that was the set of edges already drawn, hashed with the
+  standard library's SipHash. The edge sets now use FxHash (the
+  multiply-rotate word hash of Firefox and rustc), and the buffers are
+  sized before they are filled. The bench reports the build's phases.
+
+polyMesh binary, same machine (4 threads). "was" is main at 204e509.
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| quality | 528 (2,118) | 2,050 (8,001) |
+| surface | 200 (443) | 562 (994) |
+| surface.crinkle | 245 (374) | 808 (1,245) |
+| surface.flat | 312 (458) | 1,081 (1,337) |
+| surface.hidden_zone | 162 (259) | 508 (699) |
+| surface.cell_type | 205 (433) | 691 (924) |
+| surface.feature_edges | 361 (756) | 1,189 (1,790) |
+
+At 4 M cells the default surface now spends about 110 ms choosing faces,
+60 ms on corners and normals and 340 ms filling buffers, 200 ms of it on
+the edge set. With 8 cores (the iMac) quality should take well under a
+second at 4 M cells (estimate). Picking (30 ms a pick at 4 M cells) and
+the clip modes' cutting are next.

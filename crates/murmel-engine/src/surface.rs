@@ -18,6 +18,8 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use crate::fasthash::{FastMap, FastSet, set_with_capacity};
+
 use murmel_mesh::{Bounds, Mesh, NO_CELL};
 
 use crate::clip::{Clip, ClipMode};
@@ -113,7 +115,7 @@ struct Plane<'a> {
 struct Cuts {
     pos: Vec<[f64; 3]>,
     plane: Vec<usize>,
-    ids: HashMap<(usize, V, V), u32>,
+    ids: FastMap<(usize, V, V), u32>,
     /// The edge each cut point lies on and where along it (0 at the
     /// first corner), so values interpolate like positions.
     along: Vec<(V, V, f64)>,
@@ -381,10 +383,13 @@ impl Surface {
             bounds: (!bounds.is_empty()).then_some(bounds),
             ..Surface::default()
         };
+        let phase = murmel_mesh::profile::span("surface.polygons");
         let cutter = Cutter::new(mesh, display);
         let shown = display.shown_cells(mesh);
         s.cells = shown.iter().filter(|&&v| v).count();
         let polys = polygons(mesh, tokens, display, &shown, cutter.as_ref());
+        drop(phase);
+        let phase = murmel_mesh::profile::span("surface.points");
 
         let pos = |v: V| -> [f64; 3] {
             let p = match (v, &cutter) {
@@ -410,7 +415,10 @@ impl Surface {
         s.faces = polys.iter().filter(|p| p.boundary != NO_CELL).count();
         s.open_faces = polys.len() - s.faces;
         let mut vb = Bounds::empty();
-        let mut seen: HashSet<(V, V)> = HashSet::new();
+        // Each corner starts one edge, and most edges are shared by two
+        // polygons.
+        let corners: usize = polys.iter().map(|p| p.verts.len()).sum();
+        let mut seen: FastSet<(V, V)> = set_with_capacity(corners / 2 + 16);
         let pts: Vec<Vec<[f64; 3]>> = polys
             .iter()
             .map(|p| p.verts.iter().map(|&v| pos(v)).collect())
@@ -454,6 +462,31 @@ impl Surface {
                 .collect(),
             None => Vec::new(),
         };
+        drop(phase);
+        let phase = murmel_mesh::profile::span("surface.buffers");
+        if mesh_triangles {
+            // A triangle is drawn as is; a larger polygon as a fan about
+            // its centre.
+            let (mut vertices, mut indices) = (0, 0);
+            for p in &polys {
+                let k = p.verts.len();
+                vertices += if k == 3 { 3 } else { k + 1 };
+                indices += if k == 3 { 3 } else { 3 * k };
+            }
+            s.positions.reserve(vertices);
+            s.normals.reserve(vertices);
+            s.colors.reserve(vertices);
+            s.values.reserve(vertices);
+            s.indices.reserve(indices);
+            s.tri_cell.reserve(indices / 3);
+            s.tri_face.reserve(indices / 3);
+        }
+        if features.is_none() {
+            // Feature edges are a few of the edges; the others are all
+            // drawn, each once.
+            s.edge_positions.reserve(corners);
+            s.edge_colors.reserve(corners);
+        }
         let mut drawn = Bounds1::default();
         // Lines alone are drawn in the face colour; over faces, darker.
         let lines_only = !display.render_mode.faces();
@@ -592,8 +625,10 @@ impl Surface {
                 }
             }
         }
+        drop(phase);
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
         s.field_range = drawn.range();
+        let _phase = murmel_mesh::profile::span("surface.extras");
         if extras {
             crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
         }
@@ -853,14 +888,14 @@ fn outline(mesh: &Mesh, display: &Display) -> Vec<(u32, u32)> {
 fn feature_edges<'a>(
     polys: impl Iterator<Item = (&'a [V], u32, [f32; 3])>,
     cos_max: f64,
-) -> HashSet<(V, V)> {
+) -> FastSet<(V, V)> {
     struct Seen {
         normal: [f32; 3],
         group: u32,
         count: u32,
         feature: bool,
     }
-    let mut edges: HashMap<(V, V), Seen> = HashMap::new();
+    let mut edges: FastMap<(V, V), Seen> = FastMap::default();
     for (face, group, n) in polys {
         for i in 0..face.len() {
             let (a, b) = (face[i], face[(i + 1) % face.len()]);
