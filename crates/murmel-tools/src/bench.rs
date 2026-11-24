@@ -204,12 +204,14 @@ fn phases() -> Value {
 /// The bytes of the mesh's arrays.
 pub fn mesh_bytes(m: &Mesh) -> usize {
     m.points.len() * 24
-        + (m.faces.start.len() + m.faces.nodes.len()) * 4
+        + (m.distinct.start.len() + m.distinct.nodes.len()) * 4
         + (m.boundary.start.len() + m.boundary.nodes.len()) * 4
-        + (m.cell_faces.len() + m.cell_zone.len() + m.cell_kind.len()) * 4
+        + (m.cell_faces.len() + m.cell_zone.len()) * 4
+        + m.cell_kind.len() * std::mem::size_of::<murmel_mesh::CellKind>()
         + (m.boundary_patch.len() + m.boundary_owner.len()) * 4
         + (m.cell_face_id.len() + m.face_owner.len() + m.face_neighbour.len()) * 4
-        + (m.face_first.len() + m.boundary_face_id.len() + m.face_boundary.len()) * 4
+        + m.cell_face_flip.len()
+        + (m.boundary_face_id.len() + m.face_boundary.len()) * 4
 }
 
 /// The bytes of a surface's arrays (CPU side).
@@ -348,8 +350,8 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             "cells": mesh.cell_count(),
             "points": mesh.points.len(),
             "faces": mesh.unique_faces,
-            "cell_faces": mesh.faces.len(),
-            "face_nodes": mesh.faces.nodes.len(),
+            "cell_faces": mesh.cell_face_id.len(),
+            "face_nodes": mesh.distinct.nodes.len(),
             "boundary_faces": mesh.boundary.len(),
             "mesh_mib": mib(mesh_bytes(&mesh)),
         },

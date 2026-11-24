@@ -166,13 +166,13 @@ pub fn honeycomb(n: usize) -> Mesh {
     let unit = 1.0 / f64::from(top.max(1));
     let mut ids: HashMap<[i32; 3], u32> = HashMap::with_capacity(cells * 7);
     let mut mesh = Mesh {
-        faces: Polygons::new(),
         boundary: Polygons::new(),
         cell_faces: vec![0],
         ..Mesh::default()
     };
-    mesh.faces.start.reserve(cells * 14);
-    mesh.faces.nodes.reserve(cells * 72);
+    let mut polys = Polygons::new();
+    polys.start.reserve(cells * 14);
+    polys.nodes.reserve(cells * 72);
     let mut bfaces: Vec<(u8, Vec<u32>)> = Vec::new();
     for &c in &centres {
         for (corners, across) in &faces {
@@ -205,9 +205,9 @@ pub fn honeycomb(n: usize) -> Mesh {
                 // outlet (x), front, back (y), bottom, top (z).
                 bfaces.push((side as u8, face.clone()));
             }
-            mesh.faces.push(face);
+            polys.push(face);
         }
-        mesh.cell_faces.push(mesh.faces.len() as u32);
+        mesh.cell_faces.push(polys.len() as u32);
         mesh.cell_zone.push(u32::from(2 * c[0] > top));
         mesh.cell_kind.push(CellKind::Polyhedron);
     }
@@ -226,7 +226,7 @@ pub fn honeycomb(n: usize) -> Mesh {
         .collect();
     mesh.metadata
         .insert("generator".into(), format!("murmel synth honeycomb n={n}"));
-    boundary::link(&mut mesh);
+    boundary::link(&mut mesh, polys);
     mesh
 }
 
@@ -381,7 +381,7 @@ pub fn write_vtu(mesh: &Mesh, path: &Path, enc: Encoding) -> io::Result<()> {
         stream.push((mesh.cell_faces[c + 1] - mesh.cell_faces[c]) as i64);
         for f in mesh.cell(c) {
             stream.push(f.len() as i64);
-            for &p in f {
+            for p in f.oriented() {
                 stream.push(i64::from(p));
                 if mark[p as usize] != c as u32 {
                     mark[p as usize] = c as u32;
@@ -669,11 +669,21 @@ mod tests {
     fn honeycomb_topology() {
         let m = honeycomb(4);
         assert_eq!(m.cell_count(), 64 + 27);
-        assert!(m.faces.iter().count() == 14 * m.cell_count());
+        assert!(m.cell_face_id.len() == 14 * m.cell_count());
         let boundary = m.face_neighbour.iter().filter(|&&n| n == NO_CELL).count();
         assert_eq!(boundary, m.boundary.len());
         assert!(m.boundary_face_id.iter().all(|&u| u != NO_CELL));
-        assert_eq!(2 * (m.unique_faces - boundary) + boundary, m.faces.len());
+        assert_eq!(
+            2 * (m.unique_faces - boundary) + boundary,
+            m.cell_face_id.len()
+        );
+        assert_eq!(m.distinct.len(), m.unique_faces);
+        let flipped = m.cell_face_flip.iter().filter(|&&f| f).count();
+        assert_eq!(
+            flipped,
+            m.unique_faces - boundary,
+            "one side of each interior face"
+        );
         assert_eq!(m.patches.len(), 6);
         let s = m.summary();
         assert!(s.patches.iter().all(|p| p.faces > 0), "{:?}", s.patches);

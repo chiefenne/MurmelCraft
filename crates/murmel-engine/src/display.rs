@@ -947,10 +947,8 @@ impl Display {
         let mut b = Bounds::empty();
         match item {
             Some(Item::Cell(c)) if (c as usize) < mesh.cell_count() => {
-                for f in mesh.cell(c as usize) {
-                    for &n in f {
-                        b.add(mesh.points[n as usize]);
-                    }
+                for n in mesh.cell_points(c as usize) {
+                    b.add(mesh.points[n as usize]);
                 }
                 return (!b.is_empty()).then_some(b);
             }
@@ -994,10 +992,8 @@ impl Display {
                 let p = self.probe(n)?;
                 b.add(p.at.point);
                 if let Some(c) = p.at.cell.filter(|&c| (c as usize) < mesh.cell_count()) {
-                    for f in mesh.cell(c as usize) {
-                        for &i in f {
-                            b.add(mesh.points[i as usize]);
-                        }
+                    for i in mesh.cell_points(c as usize) {
+                        b.add(mesh.points[i as usize]);
                     }
                 }
                 return Some(padded(b, mesh));

@@ -1111,69 +1111,22 @@ pub fn read_polymesh_bytes(files: PolyMeshFiles<'_>) -> Result<Mesh, MeshError> 
         points,
         cell_faces,
         // `Polygons::default()` has no leading 0; `new()` does.
-        faces: Polygons::new(),
         boundary: Polygons::new(),
         ..Mesh::default()
     };
-    // Each cell's faces laid out cell by cell: the node starts by a prefix
-    // sum of the face sizes, the nodes copied range by range of cells in
-    // parallel (a neighbour sees its face turned the other way).
+    // OpenFOAM stores each face once, turned outward from its owner (the
+    // lower cell): the distinct faces as they are, and the neighbour sees
+    // its face the other way round.
     let size = |f: u32| face_nodes.start[f as usize + 1] - face_nodes.start[f as usize];
-    let mut start = Vec::with_capacity(total + 1);
-    start.push(0u32);
-    let mut at = 0u32;
-    for &f in &slot_face {
-        at += size(f);
-        start.push(at);
-    }
-    mesh.face_first = vec![NO_CELL; n_faces];
-    for c in 0..n_cells {
-        for s in mesh.cell_faces[c]..mesh.cell_faces[c + 1] {
-            let f = slot_face[s as usize] as usize;
-            if own[f] as usize == c {
-                mesh.face_first[f] = s;
-            }
-        }
-    }
-    let mut nodes = vec![0u32; at as usize];
-    let ranges = crate::par::ranges(n_cells, 1 << 14);
-    let cuts: Vec<usize> = ranges
-        .iter()
-        .map(|r| start[mesh.cell_faces[r.start] as usize] as usize)
-        .chain([at as usize])
-        .collect();
-    let parts = crate::par::split_mut(&mut nodes, &cuts);
-    let (cf, own_ref) = (&mesh.cell_faces, &own);
-    let (slot_ref, start_ref, fnodes) = (&slot_face, &start, &face_nodes);
-    std::thread::scope(|sc| {
-        for (r, part) in ranges.iter().zip(parts) {
-            let first = start_ref[cf[r.start] as usize] as usize;
-            sc.spawn(move || {
-                for c in r.clone() {
-                    for s in cf[c] as usize..cf[c + 1] as usize {
-                        let f = slot_ref[s] as usize;
-                        let src = fnodes.get(f);
-                        let at = start_ref[s] as usize - first;
-                        let dst = &mut part[at..at + src.len()];
-                        if own_ref[f] as usize == c {
-                            dst.copy_from_slice(src);
-                        } else {
-                            dst[0] = src[0];
-                            for (d, &v) in dst[1..].iter_mut().zip(src[1..].iter().rev()) {
-                                *d = v;
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    });
-    mesh.faces = Polygons { start, nodes };
+    let cf = &mesh.cell_faces;
     mesh.cell_kind = crate::par::collect(n_cells, 1 << 14, |r| {
-        r.map(|c| {
-            CellKind::classify((cf_of(&mesh.cell_faces, c)).map(|s| size(slot_face[s]) as usize))
-        })
-        .collect()
+        r.map(|c| CellKind::classify(cf_of(cf, c).map(|s| size(slot_face[s]) as usize)))
+            .collect()
+    });
+    let (own_ref, slots) = (&own, &slot_face);
+    mesh.cell_face_flip = crate::par::collect(n_cells, 1 << 14, |r| {
+        r.flat_map(|c| cf_of(cf, c).map(move |s| own_ref[slots[s] as usize] as usize != c))
+            .collect()
     });
     mesh.cell_face_id = slot_face;
     mesh.unique_faces = n_faces;
@@ -1223,6 +1176,7 @@ pub fn read_polymesh_bytes(files: PolyMeshFiles<'_>) -> Result<Mesh, MeshError> 
         ));
     }
     mesh.face_boundary = boundary_of;
+    mesh.distinct = face_nodes;
 
     // Zones: cellZones in their order, cells in none in a zone "cells".
     let mut cell_zone = vec![NO_CELL; n_cells];
@@ -1298,9 +1252,9 @@ mod tests {
     fn closure(m: &Mesh, c: usize) -> f64 {
         let mut s = [0.0f64; 3];
         for face in m.cell(c) {
-            for (i, &a) in face.iter().enumerate() {
-                let p = m.points[a as usize];
-                let q = m.points[face[(i + 1) % face.len()] as usize];
+            for i in 0..face.len() {
+                let p = m.points[face.at(i) as usize];
+                let q = m.points[face.at((i + 1) % face.len()) as usize];
                 s[0] += (p[1] - q[1]) * (p[2] + q[2]);
                 s[1] += (p[2] - q[2]) * (p[0] + q[0]);
                 s[2] += (p[0] - q[0]) * (p[1] + q[1]);
@@ -1314,9 +1268,12 @@ mod tests {
     fn volume(m: &Mesh, c: usize) -> f64 {
         let mut v = 0.0;
         for face in m.cell(c) {
-            let a = m.points[face[0] as usize];
-            for w in face[1..].windows(2) {
-                let (b, d) = (m.points[w[0] as usize], m.points[w[1] as usize]);
+            let a = m.points[face.at(0) as usize];
+            for k in 1..face.len().saturating_sub(1) {
+                let (b, d) = (
+                    m.points[face.at(k) as usize],
+                    m.points[face.at(k + 1) as usize],
+                );
                 v += a[0] * (b[1] * d[2] - b[2] * d[1]) - a[1] * (b[0] * d[2] - b[2] * d[0])
                     + a[2] * (b[0] * d[1] - b[1] * d[0]);
             }
@@ -1344,7 +1301,7 @@ mod tests {
             }
         }
         let mut linked = m.clone();
-        crate::boundary::link(&mut linked);
+        crate::boundary::link(&mut linked, m.cell_polygons());
         assert_eq!(linked.unique_faces, m.unique_faces);
         assert_eq!(linked.boundary_owner, m.boundary_owner);
         for f in 0..m.cell_face_id.len() {
@@ -1418,7 +1375,8 @@ mod tests {
             b.metadata.get("openfoam_format").map(String::as_str),
             Some("binary")
         );
-        assert_eq!(a.faces, b.faces);
+        assert_eq!(a.distinct, b.distinct);
+        assert_eq!(a.cell_face_flip, b.cell_face_flip);
         assert_eq!(a.cell_zone, b.cell_zone);
         for (p, q) in a.points.iter().zip(&b.points) {
             for k in 0..3 {
@@ -1465,7 +1423,7 @@ mod tests {
         }
         let m = read_polymesh(&dir).unwrap();
         let b = read_polymesh(&src).unwrap();
-        assert_eq!(m.faces, b.faces);
+        assert_eq!(m.distinct, b.distinct);
         assert_eq!(m.points, b.points);
         assert_eq!(m.zones, b.zones);
         assert!(

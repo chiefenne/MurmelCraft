@@ -223,10 +223,7 @@ fn normalize(v: [f64; 3]) -> [f64; 3] {
 /// crosses).
 pub fn kept_cells(mesh: &Mesh, keeps_point: &[bool]) -> Vec<bool> {
     (0..mesh.cell_count())
-        .map(|c| {
-            mesh.cell(c)
-                .any(|f| f.iter().any(|&i| keeps_point[i as usize]))
-        })
+        .map(|c| mesh.cell_points(c).any(|i| keeps_point[i as usize]))
         .collect()
 }
 
