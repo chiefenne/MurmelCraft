@@ -449,3 +449,23 @@ A clip step built at once (the command line, agents) now takes 0.45 s
 at 4 M cells, and the exact cut after a drag follows in 0.86 s. Left
 in a flat cut: the sections of the crossed cells and the faces they
 clip, on one thread (cut points are named as found), about 0.3 s at 4 M.
+
+## Feature edges on all threads (2026-11-24)
+
+Finding the feature edges (render mode 4, and the faint outline of the
+mesh while slices or iso-surfaces show) walked every polygon edge into
+one map on one thread: 316 ms of a 650 ms surface at 4 M cells.
+
+- The edges go to shards by their smaller end (as the drawn edges do),
+  and each shard is walked on a thread of its own, in polygon order, so
+  each later face is judged against the same first face as before. The
+  shards stay as they are (`Features`) and the drawn edges look an edge
+  up in its shard; no set is built from them.
+
+Same machine (4 threads), `--repeat 3`, main at e8bc81d against this
+branch; in brackets the points phase, where the feature edges are found:
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| surface.feature_edges | 147 (237) | 442 (651) |
+| — points phase | 38 (127) | 93 (316) |

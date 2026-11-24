@@ -550,11 +550,11 @@ impl Surface {
         let extras = display.extracts_shown() || display.arrows_shown();
         let mesh_triangles = !(extras && !display.mesh_faces());
         let features = (display.render_mode == RenderMode::FeatureEdges || faint).then(|| {
+            let runs = murmel_mesh::par::ranges(polys.len(), 1 << 12);
             feature_edges(
-                polys
-                    .iter()
-                    .zip(&normals)
-                    .map(|(p, n)| (p.verts.as_slice(), p.group, *n)),
+                &polys,
+                &normals,
+                &runs,
                 FEATURE_ANGLE_DEG.to_radians().cos(),
             )
         });
@@ -969,7 +969,7 @@ struct Lines<'a> {
     polys: &'a [Poly],
     pts: &'a [Vec<[f64; 3]>],
     looks: &'a [Look],
-    features: Option<&'a FastSet<(V, V)>>,
+    features: Option<&'a Features>,
 }
 
 impl Lines<'_> {
@@ -989,14 +989,7 @@ impl Lines<'_> {
     /// threads too: each shard walks its edges in draw order, run by run.
     fn draw(&self, runs: &[std::ops::Range<usize>]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
         let shards = runs.len().max(1);
-        let shard = |k: (V, V)| -> usize {
-            let id = match k.0 {
-                V::Node(i) => u64::from(i),
-                V::Cut(i) => u64::from(i) | 1 << 32,
-            };
-            let mixed = id.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32;
-            ((mixed * shards as u64) >> 32) as usize
-        };
+        let shard = |k: (V, V)| shard_of(k, shards);
         // The edges of each run that are drawn at all, by shard, as the
         // polygon (its place in draw order) and the corner they start at.
         let by_run: Vec<Vec<Vec<(u32, u32)>>> = on_threads(runs.to_vec(), |r| {
@@ -1363,45 +1356,92 @@ fn outline(mesh: &Mesh, display: &Display) -> Vec<(u32, u32)> {
     out
 }
 
-/// The feature edges among `polys` (corners, feature group, normal): an
-/// edge whose two faces meet at a crease (the cosine of the angle between
-/// their normals below `cos_max`), whose faces lie in different groups
+/// The shard of edge `key` among `shards`, by its smaller end, so each
+/// thread can take the edges of one shard.
+fn shard_of(key: (V, V), shards: usize) -> usize {
+    let id = match key.0 {
+        V::Node(i) => u64::from(i),
+        V::Cut(i) => u64::from(i) | 1 << 32,
+    };
+    let mixed = id.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32;
+    ((mixed * shards as u64) >> 32) as usize
+}
+
+/// How the faces seen so far meet at an edge: the normal and group of
+/// the first, how many there are, and whether a later one makes a crease
+/// or a border of groups with the first.
+struct Seen {
+    normal: [f32; 3],
+    group: u32,
+    count: u32,
+    feature: bool,
+}
+
+/// The feature edges of a surface, in shards by [`shard_of`].
+struct Features {
+    shards: Vec<FastMap<(V, V), Seen>>,
+}
+
+impl Features {
+    fn contains(&self, key: &(V, V)) -> bool {
+        self.shards[shard_of(*key, self.shards.len())]
+            .get(key)
+            .is_some_and(|e| e.feature || e.count == 1)
+    }
+}
+
+/// The feature edges among `polys` (with their `normals`): an edge whose
+/// two faces meet at a crease (the cosine of the angle between their
+/// normals below `cos_max`), whose faces lie in different groups
 /// (patches, open faces, sections), or that has only one face drawn (an
 /// open border, also where hidden items were cut away). The normals'
 /// orientation is not trusted, so a crease is judged on the absolute
-/// cosine.
-fn feature_edges<'a>(
-    polys: impl Iterator<Item = (&'a [V], u32, [f32; 3])>,
+/// cosine. Each later face is judged against the first, in the order of
+/// `polys`; the polygons are split into `runs` and the edges into as many
+/// shards, each walked in that order on a thread of its own.
+fn feature_edges(
+    polys: &[Poly],
+    normals: &[[f32; 3]],
+    runs: &[std::ops::Range<usize>],
     cos_max: f64,
-) -> FastSet<(V, V)> {
-    struct Seen {
-        normal: [f32; 3],
-        group: u32,
-        count: u32,
-        feature: bool,
-    }
-    let mut edges: FastMap<(V, V), Seen> = FastMap::default();
-    for (face, group, n) in polys {
-        for i in 0..face.len() {
-            let (a, b) = (face[i], face[(i + 1) % face.len()]);
-            let e = edges.entry((a.min(b), a.max(b))).or_insert(Seen {
-                normal: n,
-                group,
-                count: 0,
-                feature: false,
-            });
-            if e.count > 0 {
-                let dot: f32 = (0..3).map(|k| e.normal[k] * n[k]).sum();
-                e.feature |= e.group != group || (dot.abs() as f64) < cos_max;
+) -> Features {
+    let shards = runs.len().max(1);
+    let by_run: Vec<Vec<Vec<(u32, u32)>>> = on_threads(runs.to_vec(), |r| {
+        let mut out = vec![Vec::new(); shards];
+        for i in r {
+            let face = &polys[i].verts;
+            for j in 0..face.len() {
+                let (a, b) = (face[j], face[(j + 1) % face.len()]);
+                out[shard_of((a.min(b), a.max(b)), shards)].push((i as u32, j as u32));
             }
-            e.count += 1;
         }
-    }
-    edges
-        .into_iter()
-        .filter(|(_, e)| e.feature || e.count == 1)
-        .map(|(k, _)| k)
-        .collect()
+        out
+    });
+    let shards = on_threads((0..shards).collect(), |k| {
+        let n: usize = by_run.iter().map(|r| r[k].len()).sum();
+        let mut edges: FastMap<(V, V), Seen> = FastMap::default();
+        edges.reserve(n / 2 + 16);
+        for run in &by_run {
+            for &(i, j) in &run[k] {
+                let (i, j) = (i as usize, j as usize);
+                let (face, group, n) = (&polys[i].verts, polys[i].group, normals[i]);
+                let (a, b) = (face[j], face[(j + 1) % face.len()]);
+                let e = edges.entry((a.min(b), a.max(b))).or_insert(Seen {
+                    normal: n,
+                    group,
+                    count: 0,
+                    feature: false,
+                });
+                if e.count > 0 {
+                    let dot: f32 = (0..3).map(|k| e.normal[k] * n[k]).sum();
+                    e.feature |= e.group != group || (dot.abs() as f64) < cos_max;
+                }
+                e.count += 1;
+            }
+        }
+        edges
+    });
+    Features { shards }
 }
 
 /// The unit normal of a polygon by Newell's method.
@@ -1771,13 +1811,22 @@ mod tests {
 
     /// Invariant: the buffers are the same however many threads fill
     /// them (each fills a run of polygons in draw order at the place the
-    /// counts before it give; the edges are drawn once, in draw order,
-    /// beside them), for faces with edges, a cut, a section, lines only,
-    /// feature edges and a selection. Breaks when a run starts at the
-    /// wrong place or the edges are taken in another order.
+    /// counts before it give; the edges are drawn once, in draw order;
+    /// a feature edge is judged against its first face in polygon order,
+    /// shard by shard), for faces with edges, a cut, a section, lines
+    /// only, feature edges and a selection, on a mesh that is all creases
+    /// and one that is mostly flat. Breaks when a run starts at the wrong
+    /// place or the edges or faces are taken in another order.
     #[test]
     fn threads_give_the_same_surface() {
-        let m = murmel_mesh::synth::honeycomb(6);
+        // The honeycomb's boundary is all creases; the channel's flat
+        // sides are not, so its feature edges are a few of its edges.
+        for m in [murmel_mesh::synth::honeycomb(6), channel()] {
+            same_surface_on_threads(&m);
+        }
+    }
+
+    fn same_surface_on_threads(m: &Mesh) {
         let t = Tokens::builtin().unwrap();
         let wire = Display {
             render_mode: RenderMode::Wireframe,
@@ -1805,16 +1854,16 @@ mod tests {
         };
         for (name, d) in [
             ("all", Display::default()),
-            ("crinkle", clip_y(&m, ClipMode::Crinkle)),
-            ("flat", clip_y(&m, ClipMode::Flat)),
+            ("crinkle", clip_y(m, ClipMode::Crinkle)),
+            ("flat", clip_y(m, ClipMode::Flat)),
             ("wireframe", wire),
             ("feature edges", feature),
             ("selection", sel),
         ] {
-            let one = murmel_mesh::par::with_threads(1, || key(&Surface::build(&m, &t, &d)));
+            let one = murmel_mesh::par::with_threads(1, || key(&Surface::build(m, &t, &d)));
             assert!(!one.0.is_empty(), "{name}");
             for n in [2, 3, 7] {
-                let many = murmel_mesh::par::with_threads(n, || key(&Surface::build(&m, &t, &d)));
+                let many = murmel_mesh::par::with_threads(n, || key(&Surface::build(m, &t, &d)));
                 assert!(one == many, "{name}: {n} threads");
             }
         }
