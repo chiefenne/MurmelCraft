@@ -243,11 +243,12 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
     murmel_mesh::sha256_hex(bytes)
 }
 
-/// Whether two displays are equal, with the values they colour by (the
-/// quality, the field's values) compared by allocation, not value by
-/// value: they are made once and shared by every copy of the display,
-/// and the preview compares displays on every frame, where comparing
-/// millions of values would cost more than the frame.
+/// Whether two displays are equal, with the values per cell they carry
+/// (the quality, the field's values, the cells of the regions) compared
+/// by allocation, not value by value: they are made once and shared by
+/// every copy of the display, and the preview compares displays on every
+/// frame, where comparing millions of values would cost more than the
+/// frame.
 fn same_display(a: &Display, b: &Display) -> bool {
     fn same<T>(x: &Option<Arc<T>>, y: &Option<Arc<T>>) -> bool {
         match (x, y) {
@@ -259,9 +260,13 @@ fn same_display(a: &Display, b: &Display) -> bool {
     let bare = |d: &Display| Display {
         quality: None,
         field_values: None,
+        region_cells: None,
         ..d.clone()
     };
-    same(&a.quality, &b.quality) && same(&a.field_values, &b.field_values) && bare(a) == bare(b)
+    same(&a.quality, &b.quality)
+        && same(&a.field_values, &b.field_values)
+        && same(&a.region_cells, &b.region_cells)
+        && bare(a) == bare(b)
 }
 
 /// The clip planes that move in `new` against `old` (their origin or
