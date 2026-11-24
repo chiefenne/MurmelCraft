@@ -491,6 +491,11 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             if let Some(o) = &open.overview {
                 v.push(row("blocks", o.blocks.len()));
             }
+            // The blocks read for the regions, and the halo read with them.
+            if let Some(b) = &open.blocks {
+                v.push(row("blocks_read", b.subset.blocks.len()));
+                v.push(row("halo_cells", b.halo_cells()));
+            }
             if m.cell_count() > 0 {
                 v.push(row(
                     "faces_interior",
@@ -562,7 +567,18 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 row("hidden", display.is_hidden(item)),
             ]
         }
-        Item::Cell(c) => cell_rows(m, display, c as usize),
+        Item::Cell(c) => {
+            let mut v = cell_rows(m, display, c as usize);
+            // A cell of an overview's blocks: its number in the file.
+            if let Some(id) = open
+                .blocks
+                .as_ref()
+                .and_then(|b| b.subset.file_cells.get(c as usize))
+            {
+                v.insert(v.len().min(1), row("file_cell", *id));
+            }
+            v
+        }
         Item::Clip(k) => {
             let Some(c) = display.clips.get(k as usize) else {
                 return Vec::new();
@@ -1059,6 +1075,7 @@ mod tests {
             fields: Default::default(),
             built_for: Display::default(),
             overview: None,
+            blocks: None,
         };
         let d = Display::default();
         let rows = rows(&open, &d, Item::Cell(0));

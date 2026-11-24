@@ -351,6 +351,8 @@ impl Builder {
         }
         let (mut cell_rows, mut point_rows) = (Vec::new(), Vec::new());
         for (&blk, plan) in blocks.iter().zip(plans) {
+            // a read in the background stops between blocks
+            crate::profile::check()?;
             let part = part_list[blk];
             // its points, joined to those of the blocks before
             let rows = part.point_at..part.point_at + part.points;

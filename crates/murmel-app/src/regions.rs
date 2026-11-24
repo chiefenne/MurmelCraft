@@ -63,7 +63,8 @@ impl MurmelApp {
         ui: &mut Ui,
         p: &murmel_engine::theme::Palette,
     ) -> Option<(&'static str, Value)> {
-        let mesh = &self.session.mesh.as_ref()?.mesh;
+        let open = self.session.mesh.as_ref()?;
+        let (mesh, overview) = (&open.mesh, open.overview.is_some());
         let d = &self.session.display;
         let secondary = color(p.text_secondary);
         let mut action = None;
@@ -157,8 +158,10 @@ impl MurmelApp {
                     "tree-region-new-slab",
                     ("region.set", json!({"new": true, "shape": "slab"})),
                 ),
+                // An overview's regions are shapes: they read the blocks
+                // they touch (a region of cells needs them all).
                 (
-                    room && !picked.is_empty(),
+                    room && !picked.is_empty() && !overview,
                     "tree-region-new-picked",
                     (
                         "region.set",

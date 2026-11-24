@@ -10,11 +10,43 @@ use serde_json::{Value, json};
 use crate::tools::{display_json, finite, need_mesh, object, parse};
 use crate::{Diagnostic, Run};
 
+/// The bounds of the whole domain (of an overview, not of the blocks
+/// shown for its regions), where a new region starts.
 fn bounds(s: &Session) -> murmel_mesh::Bounds {
     s.mesh
         .as_ref()
-        .map(|m| m.mesh.bounds())
+        .map(|m| m.domain().bounds())
         .unwrap_or_else(murmel_mesh::Bounds::empty)
+}
+
+/// On an overview: the blocks read for the regions, being read, or not
+/// read and why; `null` on a mesh read whole.
+pub(crate) fn blocks_json(s: &Session) -> Value {
+    let Some(m) = &s.mesh else {
+        return Value::Null;
+    };
+    let Some(o) = &m.overview else {
+        return Value::Null;
+    };
+    let read = m.blocks.as_ref();
+    json!({
+        "of": o.blocks.len(),
+        "read": read.map_or(Vec::new(), |b| b.subset.blocks.clone()),
+        "cells_read": read.map_or(0, |b| m.mesh.cell_count() - b.halo_cells()),
+        "halo_cells": read.map_or(0, |b| b.halo_cells()),
+        "reading": s.block_job.as_ref().map(|j| json!({
+            "blocks": j.blocks,
+            "cells": j.cells,
+            "seconds": (j.started.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+        })),
+        "not_read": s.blocks_problem.as_ref().map(|(b, e)| json!({
+            "blocks": b,
+            "why": e.as_ref().map_or_else(
+                || json!({"code": null, "message": "the read was stopped"}),
+                |e| json!(Diagnostic::new(e.code, e.message.clone())),
+            ),
+        })),
+    })
 }
 
 fn estimate_json(e: &Estimate) -> Value {
@@ -73,6 +105,7 @@ pub(crate) fn regions_json(s: &Session) -> Value {
     json!({
         "regions": (0..s.display.regions.len()).map(|k| region_json(s, k)).collect::<Vec<_>>(),
         "shown": union,
+        "blocks": blocks_json(s),
     })
 }
 
@@ -291,6 +324,15 @@ pub(crate) fn region_set(input: Value, s: &mut Session) -> Run {
     let Some(m) = &s.mesh else {
         return Err(Diagnostic::new("VIEW001", "no mesh is open"));
     };
+    if m.overview.is_some() && !shape.is_geometric() {
+        return Err(Diagnostic::new(
+            "REGION004",
+            format!(
+                "{} is open as an overview, whose cells are read by the blocks a box, sphere or slab touches; a {name} region needs the cells read whole",
+                m.path.display()
+            ),
+        ));
+    }
     if let Some(why) = shape.problem(&m.mesh) {
         let why = match &shape {
             Shape::Cells { cells, .. } if cells.is_empty() => {
@@ -314,6 +356,7 @@ pub(crate) fn region_set(input: Value, s: &mut Session) -> Run {
             ),
         ));
     }
+    let before = (s.display.regions.clone(), s.display.selection.clone());
     let mut region = old.unwrap_or_else(|| {
         crate::defaults::fresh(
             s,
@@ -341,7 +384,7 @@ pub(crate) fn region_set(input: Value, s: &mut Session) -> Run {
             s.display.regions.push(region);
         }
     }
-    done(s)
+    done_or_back(s, before)
 }
 
 #[derive(Deserialize)]
@@ -379,6 +422,20 @@ pub(crate) fn region_list(_: Value, s: &mut Session) -> Run {
 /// Redraw (which finds the regions' cells again), then the display.
 fn done(s: &mut Session) -> Run {
     s.redraw();
+    Ok(display_json(s))
+}
+
+/// As [`done`]; when the blocks the regions of an overview need cannot be
+/// read (beyond the memory budget, a broken file), the regions and the
+/// selection go back to `before` and the call fails.
+fn done_or_back(s: &mut Session, before: (Vec<Region>, Vec<Item>)) -> Run {
+    s.redraw();
+    if let Some((_, Some(e))) = &s.blocks_problem {
+        let d = Diagnostic::new(e.code, e.message.clone());
+        (s.display.regions, s.display.selection) = before;
+        s.redraw();
+        return Err(d);
+    }
     Ok(display_json(s))
 }
 
@@ -655,6 +712,88 @@ mod tests {
         assert!(e.ok(), "{:?}", e.diagnostics);
         assert_eq!(e.result["skipped"], json!(["region:2"]));
         assert_eq!(u.display.regions.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Invariant (the maintainer's card 1 of 2026-11-24): on a mesh open
+    /// as an overview, region.set with a box reads the blocks the box
+    /// touches and says so (`blocks.read`, the cells read and the halo),
+    /// mesh.info's overview tells the same; a zone, patch or cell region
+    /// is refused (REGION004); a box whose blocks need more than the
+    /// memory budget is refused (BLOCK006) and the regions stay as they
+    /// were; undo gives the overview back. Breaks when the tool returns
+    /// before the blocks are read, when a refused region stays, or when
+    /// the result does not tell the blocks. The engine tests do not go
+    /// through the tools.
+    #[test]
+    fn regions_on_an_overview_read_their_blocks() {
+        let dir = std::env::temp_dir().join(format!("murmel-region-tool-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+        let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+        let path = dir.join("blocked.vtkhdf");
+        murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let e = call(
+            "mesh.open",
+            json!({"path": path, "mode": "overview"}),
+            &mut s,
+        );
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        assert_eq!(e.result["overview"]["regions"]["read"], json!([]));
+
+        let e = call(
+            "region.set",
+            json!({"shape": "zone", "zone": "fluid"}),
+            &mut s,
+        );
+        assert_eq!(e.diagnostics[0].code, "REGION004");
+        assert!(s.display.regions.is_empty());
+
+        // A box near a corner of the 4 by 2 by 1 channel: two of its
+        // eight blocks.
+        let corner = json!({"shape": "box", "center": [0.4, 0.175, 0.1], "size": [0.4, 0.25, 0.1]});
+        let e = call("region.set", corner, &mut s);
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        let blocks = &e.result["regions"]["blocks"];
+        assert_eq!(blocks["of"], json!(8));
+        assert_eq!(blocks["read"], json!([0, 3]));
+        assert!(blocks["cells_read"].as_u64().unwrap() >= 176);
+        assert!(blocks["halo_cells"].as_u64().unwrap() > 0);
+        assert!(blocks["reading"].is_null() && blocks["not_read"].is_null());
+        let takes = e.result["regions"]["regions"][0]["takes"]["cells"]
+            .as_u64()
+            .unwrap();
+        assert!(takes > 0 && takes < 776, "{takes}");
+        let e = call("mesh.info", json!({}), &mut s);
+        assert_eq!(e.result["overview"]["regions"]["read"], json!([0, 3]));
+
+        // Beyond the budget: refused, and the box stays as it was.
+        s.memory_budget = Some(1e-9);
+        let before = s.display.regions.clone();
+        let e = call("region.set", json!({"size": [8.0, 4.0, 2.0]}), &mut s);
+        assert_eq!(e.diagnostics[0].code, "BLOCK006", "{:?}", e.diagnostics);
+        assert_eq!(s.display.regions, before);
+        let read = &s
+            .mesh
+            .as_ref()
+            .unwrap()
+            .blocks
+            .as_ref()
+            .unwrap()
+            .subset
+            .blocks;
+        assert_eq!(read, &[0, 3]);
+        s.memory_budget = None;
+
+        // Undo the box: the overview again.
+        assert!(call("journal.undo", json!({}), &mut s).ok());
+        assert!(s.display.regions.is_empty());
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.blocks.is_none());
+        assert_eq!(m.mesh.cell_count(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

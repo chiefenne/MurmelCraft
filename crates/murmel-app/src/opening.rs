@@ -151,6 +151,61 @@ impl MurmelApp {
         }
     }
 
+    /// Show the blocks read for an overview's regions once they are read,
+    /// or say why they could not be; keep looking while they are read.
+    pub(crate) fn poll_blocks(&mut self, ctx: &egui::Context) {
+        let Some(j) = &self.session.block_job else {
+            return;
+        };
+        if !j.is_done() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        self.session.poll_blocks();
+        if let Some((_, Some(e))) = &self.session.blocks_problem {
+            self.set_error(Some(Diagnostic::new(e.code, e.message.clone())));
+        }
+        ctx.request_repaint();
+    }
+
+    /// What the window says while blocks are read for the regions: how
+    /// many, their cells, the phase and the seconds so far.
+    pub(crate) fn blocks_text(&self) -> Option<String> {
+        let j = self.session.block_job.as_ref()?;
+        let phase = self.i18n.tr(phase_message(j.progress.phase()));
+        Some(self.i18n.tr_args(
+            "status-blocks",
+            &[
+                ("blocks", j.blocks.len().into()),
+                ("cells", (j.cells as f64).into()),
+                ("phase", phase.into()),
+                (
+                    "seconds",
+                    format!("{:.1}", j.started.elapsed().as_secs_f64()).into(),
+                ),
+            ],
+        ))
+    }
+
+    /// The status bar while blocks are read for the regions: what it
+    /// says and Cancel.
+    pub(crate) fn blocks_status(&mut self, ui: &mut Ui, said: &mut Vec<String>) -> bool {
+        let Some(text) = self.blocks_text() else {
+            return false;
+        };
+        let cancel = self.i18n.tr("status-loading-cancel");
+        let tip = self.i18n.tr("status-blocks-cancel-tip");
+        let b = ui.small_button(&cancel).on_hover_text(&tip);
+        let name = format!("{cancel}. {tip}");
+        b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+        if b.clicked() {
+            self.session.cancel_blocks();
+        }
+        ui.label(RichText::new(&text).small());
+        said.push(text);
+        true
+    }
+
     /// Show the badge the digests of the open mesh's files decide once
     /// they are taken; keep looking while they are.
     pub(crate) fn poll_digest(&mut self, ctx: &egui::Context) {
@@ -250,6 +305,7 @@ fn phase_message(phase: &str) -> &'static str {
         | "read.vtkhdf" => "loading-phase-numbers",
         "read.cells" => "loading-phase-cells",
         "read.overview" => "loading-phase-overview",
+        "read.blocks" => "loading-phase-blocks",
         p if p == "read.topology" || p.starts_with("topology.") => "loading-phase-topology",
         p if p == "open.surface" || p.starts_with("surface.") => "loading-phase-surface",
         _ => "loading-phase-file",

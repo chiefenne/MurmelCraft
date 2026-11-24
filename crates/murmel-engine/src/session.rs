@@ -52,6 +52,9 @@ pub struct OpenMesh {
     /// budget): `mesh` is the boundary only, and this tells what the
     /// volume holds.
     pub overview: Option<Arc<Overview>>,
+    /// The blocks of an overview read for its regions: `mesh` and
+    /// `fields` are theirs while they show ([`crate::blocks`]).
+    pub blocks: Option<crate::blocks::Blocks>,
 }
 
 impl OpenMesh {
@@ -59,6 +62,12 @@ impl OpenMesh {
     /// an overview.
     pub fn cells(&self) -> usize {
         cells_of(&self.mesh, self.overview.as_deref())
+    }
+
+    /// The mesh of the whole domain: the overview's boundary while blocks
+    /// of it show for the regions, else `mesh`.
+    pub fn domain(&self) -> &Mesh {
+        self.blocks.as_ref().map_or(&self.mesh, |b| &b.overview.0)
     }
 }
 
@@ -443,6 +452,61 @@ impl SurfaceJob {
     }
 }
 
+/// Find the regions' cells on the open mesh when they changed: on the
+/// blocks of an overview read for them, without their halo; an overview
+/// whose blocks are not read yet has no cells for them, and shows whole
+/// meanwhile.
+fn find_regions(display: &mut Display, m: &OpenMesh) {
+    match (&m.overview, &m.blocks) {
+        (Some(_), None) => display.region_cells = None,
+        (_, blocks) => crate::region::ensure_on(
+            display,
+            &m.mesh,
+            blocks.as_ref().map(|b| &b.subset.halo[..]),
+        ),
+    }
+}
+
+/// Forget what names the cells of the mesh shown before `mesh` (another
+/// set of an overview's blocks, or the overview): picked, hidden,
+/// isolated and coloured cells and faces, the quality, the values and
+/// streamlines found on them, the regions' cells; probes and measurements
+/// are pointed at `mesh` ([`anchor_to`]).
+fn forget_cells(d: &mut Display, mesh: &Mesh) {
+    let names_cells = |i: &Item| matches!(i, Item::Cell(_) | Item::Face(_));
+    d.selection.retain(|i| !names_cells(i));
+    d.isolated.retain(|i| !names_cells(i));
+    d.hidden.retain(|i| !names_cells(i));
+    d.colors.retain(|i, _| !names_cells(i));
+    d.quality = None;
+    d.field_values = None;
+    d.stream_traces = None;
+    d.region_cells = None;
+    anchor_to(d, mesh);
+}
+
+/// Point the probes and measurements of `display` at the cells of `mesh`
+/// (another set of an overview's blocks): each probe's cell is found
+/// again from its point, and the node, edge and face numbers, which were
+/// the other cells', are dropped.
+pub(crate) fn anchor_to(display: &mut Display, mesh: &Mesh) {
+    let clear = |a: &mut crate::measure::Anchor| {
+        a.node = None;
+        a.edge = None;
+        a.face = None;
+    };
+    for m in &mut display.measurements {
+        for a in &mut m.points {
+            clear(a);
+            a.cell = None;
+        }
+    }
+    for p in &mut display.probes {
+        clear(&mut p.at);
+        p.at.cell = crate::measure::locate(mesh, p.at.point);
+    }
+}
+
 /// Compute the cell quality of `mesh` the first time colour mode quality
 /// needs it; it is kept until another mesh opens.
 fn ensure_quality(display: &mut Display, mesh: &Mesh) {
@@ -661,11 +725,7 @@ pub fn load_checked(
     }
     // An overview's fields span the volume's range, from the block
     // ranges.
-    let ranges = overview.iter().flat_map(|o| {
-        o.fields
-            .iter()
-            .filter_map(|f| o.range(&f.name).map(|[a, b]| (f.name.clone(), (a, b))))
-    });
+    let ranges = overview.iter().flat_map(crate::blocks::volume_ranges);
     let fields = FieldSet::new(results).with_volume_ranges(ranges);
     // The evidence sits beside the mesh file: beside the .vtu, or in the
     // polyMesh folder among its files.
@@ -822,6 +882,19 @@ pub struct Session {
     /// The memory budget set, in GiB (`settings.set_memory`); `None`:
     /// half the computer's memory ([`crate::memory`]).
     pub memory_budget: Option<f64>,
+    /// Read the blocks an overview's regions need on a thread of their
+    /// own (the window): the overview shows until they are read, and
+    /// [`Session::poll_blocks`] puts them in place. Off, a change of the
+    /// regions reads them before it returns, as the command line and
+    /// agents expect.
+    pub defer_blocks: bool,
+    /// The blocks being read for the regions (`defer_blocks`).
+    pub block_job: Option<crate::blocks::BlockJob>,
+    /// The blocks the regions need that are not read, and why: the
+    /// memory budget, the read failed, or (`None`) the person stopped it.
+    /// Blocks that failed or were stopped are not read again until the
+    /// regions need others.
+    pub blocks_problem: Option<(Vec<usize>, Option<MeshError>)>,
 }
 
 impl Session {
@@ -852,6 +925,9 @@ impl Session {
             probe_history: crate::history::Cache::default(),
             charts: None,
             memory_budget: None,
+            defer_blocks: false,
+            block_job: None,
+            blocks_problem: None,
         }
     }
 
@@ -969,9 +1045,11 @@ impl Session {
     /// series stays open either way.
     pub fn open_step(&mut self, path: &Path) -> Result<(), MeshError> {
         let mut l = load_checked(path, !self.hash_after_open, None, self.budget_fit())?;
+        // An overview's step is like its overview, not the blocks shown.
         let same = self.mesh.as_ref().is_some_and(|m| {
-            m.mesh.cell_count() == l.mesh.cell_count()
-                && m.mesh.points.len() == l.mesh.points.len()
+            let shown = m.blocks.as_ref().map_or(&m.mesh, |b| &b.overview.0);
+            shown.cell_count() == l.mesh.cell_count()
+                && shown.points.len() == l.mesh.points.len()
                 && m.overview.is_some() == l.overview.is_some()
                 && m.cells() == cells_of(&l.mesh, l.overview.as_ref())
         });
@@ -994,6 +1072,7 @@ impl Session {
         if let Some(h) = self.hashing.take() {
             h.stop();
         }
+        self.stop_blocks();
         if l.pending {
             let dir = self.checked_dir().map(Path::to_path_buf);
             self.hashing = Some(Hashing::start(l.mesh.files.clone(), dir, l.hash));
@@ -1003,6 +1082,9 @@ impl Session {
         base.stream_traces = None;
         base.quality = None;
         base.region_cells = None;
+        if old.blocks.is_some() {
+            forget_cells(&mut base, &l.mesh);
+        }
         keep_field(&mut base, &l.fields);
         let (display, surface) = prepare(base, &l.mesh, &l.fields, &self.tokens);
         self.display = display;
@@ -1021,7 +1103,12 @@ impl Session {
             validity: l.validity,
             fields: Arc::new(l.fields),
             overview: l.overview.map(Arc::new),
+            blocks: None,
         });
+        // An overview's regions read the blocks of this step's file.
+        if self.mesh.as_ref().is_some_and(|m| m.overview.is_some()) {
+            self.redraw();
+        }
         Ok(())
     }
 
@@ -1033,6 +1120,7 @@ impl Session {
         if let Some(h) = self.hashing.take() {
             h.stop();
         }
+        self.stop_blocks();
         if l.pending {
             let dir = self.checked_dir().map(Path::to_path_buf);
             self.hashing = Some(Hashing::start(l.mesh.files.clone(), dir, l.hash));
@@ -1061,12 +1149,14 @@ impl Session {
             validity: l.validity,
             fields: Arc::new(l.fields),
             overview: l.overview.map(Arc::new),
+            blocks: None,
         })
     }
 
     pub fn close(&mut self) {
         self.mesh = None;
         self.preview = None;
+        self.stop_blocks();
         if let Some(h) = self.hashing.take() {
             h.stop();
         }
@@ -1109,16 +1199,18 @@ impl Session {
     /// [`Session::defer_clips`], a change that only moves or turns clip
     /// planes starts a [`ClipPreview`] instead and returns at once.
     pub fn redraw(&mut self) {
+        let swapped = self.sync_blocks();
         let Some(m) = &mut self.mesh else {
             self.preview = None;
             self.surface_revision += 1;
             return;
         };
-        crate::region::ensure(&mut self.display, &m.mesh);
+        find_regions(&mut self.display, m);
         ensure_quality(&mut self.display, &m.mesh);
         crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
         crate::stream::ensure(&mut self.display, &m.mesh, &m.fields);
         if self.defer_clips
+            && !swapped
             && let Some(moving) = clip_moves(&m.built_for, &self.display)
         {
             let p = self.preview.get_or_insert_with(ClipPreview::default);
@@ -1130,6 +1222,151 @@ impl Session {
         m.surface = Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
         m.built_for = self.display.clone();
         self.surface_revision += 1;
+    }
+
+    /// The blocks the enabled box, sphere and slab regions of the open
+    /// overview touch; `None` when the open mesh is not an overview.
+    pub fn blocks_wanted(&self) -> Option<Vec<usize>> {
+        let o = self.mesh.as_ref()?.overview.as_deref()?;
+        Some(crate::blocks::wanted(o, &self.display.regions))
+    }
+
+    /// Show the cells the regions of the open overview need: read the
+    /// blocks they touch that are not read (with `defer_blocks`, on a
+    /// thread of their own, put in place by a later call once read), or
+    /// show the overview again once no region needs a block. True when
+    /// the mesh shown changed.
+    fn sync_blocks(&mut self) -> bool {
+        let Some(m) = &self.mesh else {
+            return false;
+        };
+        let Some(o) = m.overview.clone() else {
+            return false;
+        };
+        let wanted = crate::blocks::wanted(&o, &self.display.regions);
+        let loaded: &[usize] = m.blocks.as_ref().map_or(&[], |b| &b.subset.blocks);
+        let running = self.block_job.take();
+        // The blocks read hold every cell the regions take: a region made
+        // smaller keeps them, none at all shows the overview again.
+        if crate::blocks::within(&wanted, loaded) {
+            if let Some(j) = running {
+                j.stop();
+            }
+            self.blocks_problem = None;
+            return wanted.is_empty() && m.blocks.is_some() && self.show_blocks(None);
+        }
+        let job = match running {
+            // A read of blocks that hold these goes on.
+            Some(j) if crate::blocks::within(&wanted, &j.blocks) => j,
+            other => {
+                if let Some(j) = other {
+                    j.stop();
+                }
+                if let Err(e) = crate::blocks::fits(&o, &wanted, self.budget_bytes()) {
+                    self.blocks_problem = Some((wanted, Some(e)));
+                    return false;
+                }
+                // Not again the read that failed or was stopped (beyond
+                // the budget, it was not tried).
+                if self.blocks_problem.as_ref().is_some_and(|(b, e)| {
+                    *b == wanted && e.as_ref().is_none_or(|e| e.code != "BLOCK006")
+                }) {
+                    return false;
+                }
+                self.blocks_problem = None;
+                let cells = crate::blocks::cells_of(&o, &wanted);
+                crate::blocks::BlockJob::start(
+                    m.path.clone(),
+                    wanted,
+                    cells,
+                    m.evidence.clone(),
+                    crate::blocks::volume_ranges(&o),
+                )
+            }
+        };
+        match job.take(!self.defer_blocks) {
+            None => {
+                self.block_job = Some(job);
+                false
+            }
+            Some(Ok(read)) => self.show_blocks(Some(read)),
+            Some(Err(e)) => {
+                let stopped = e.code == "MESH019";
+                self.blocks_problem = Some((job.blocks, (!stopped).then_some(e)));
+                false
+            }
+        }
+    }
+
+    /// Show the blocks `read`, or the overview again (`None`): the fields
+    /// derived and calculated are made again on the cells shown, and what
+    /// names cells of the mesh shown before (picked cells and faces, the
+    /// cells of probes, the quality, the values found) is dropped or found
+    /// again. True when the mesh shown changed.
+    fn show_blocks(&mut self, read: Option<crate::blocks::Read>) -> bool {
+        let Some(m) = &mut self.mesh else {
+            return false;
+        };
+        let (mesh, mut fields, blocks) = match read {
+            Some(r) => {
+                let overview = match &m.blocks {
+                    Some(b) => b.overview.clone(),
+                    None => (m.mesh.clone(), m.fields.clone()),
+                };
+                let blocks = crate::blocks::Blocks {
+                    subset: Arc::new(r.subset),
+                    overview,
+                };
+                (Arc::new(r.mesh), r.fields, Some(blocks))
+            }
+            None => match m.blocks.take() {
+                Some(b) => (b.overview.0, (*b.overview.1).clone(), None),
+                None => return false,
+            },
+        };
+        for made in m.fields.made() {
+            if let Ok((set, _)) = fields.remake(&mesh, made.clone()) {
+                fields = set;
+            }
+        }
+        let d = &mut self.display;
+        forget_cells(d, &mesh);
+        keep_field(d, &fields);
+        m.mesh = mesh;
+        m.fields = Arc::new(fields);
+        m.blocks = blocks;
+        self.preview = None;
+        true
+    }
+
+    /// Put the blocks read for the regions in place once they are read
+    /// (`defer_blocks`) and draw again. True while they are read, or when
+    /// they were put in place now (the window draws again).
+    pub fn poll_blocks(&mut self) -> bool {
+        match &self.block_job {
+            Some(j) if j.is_done() => {
+                self.redraw();
+                true
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Stop reading the blocks for the regions; the mesh shown stays, and
+    /// those blocks are not read again until the regions need others.
+    pub fn cancel_blocks(&mut self) {
+        if let Some(j) = self.block_job.take() {
+            j.stop();
+            self.blocks_problem = Some((j.blocks, None));
+        }
+    }
+
+    fn stop_blocks(&mut self) {
+        if let Some(j) = self.block_job.take() {
+            j.stop();
+        }
+        self.blocks_problem = None;
     }
 
     /// Compute the derived field of `recipe` ([`crate::derive`]) on the
@@ -1913,6 +2150,205 @@ mod tests {
         assert_eq!(e.code, "BLOCK004");
         let m = s.open_as(&path, s.fit_for(OpenMode::Overview)).unwrap();
         assert!(m.overview.is_some());
+        s.close();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A blocked copy of the channel (776 cells in blocks of 100) in a
+    /// folder of its own, with its evidence, the whole read of it, and a
+    /// session open on it as an overview.
+    fn overview_session(name: &str) -> (PathBuf, PathBuf, Mesh, Session) {
+        let dir = std::env::temp_dir().join(format!("murmel-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (mesh, results) =
+            murmel_mesh::read_results(&fixture("vtkhdf/channel_fields.vtkhdf")).unwrap();
+        let path = dir.join("blocked.vtkhdf");
+        murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+        std::fs::copy(
+            fixture("channel/mesh-evidence.json"),
+            dir.join("mesh-evidence.json"),
+        )
+        .unwrap();
+        let (whole, _) = murmel_mesh::read_results(&path).unwrap();
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        s.open_as(&path, Fit::Overview).unwrap();
+        (dir, path, whole, s)
+    }
+
+    /// A small box near a corner of the channel (x 0.2 to 0.6, y 0.05 to
+    /// 0.3, z 0.05 to 0.15 of 4 by 2 by 1), which touches two of its
+    /// eight blocks.
+    fn corner_box(m: &Mesh) -> crate::Region {
+        let b = m.bounds();
+        let e: [f64; 3] = std::array::from_fn(|k| b.max[k] - b.min[k]);
+        let at = [0.1, 0.0875, 0.1];
+        let size = [0.1, 0.125, 0.1];
+        crate::Region::new(crate::Shape::Box {
+            center: std::array::from_fn(|k| b.min[k] + at[k] * e[k]),
+            size: std::array::from_fn(|k| size[k] * e[k]),
+        })
+    }
+
+    /// Invariant (the maintainer's card 1 of 2026-11-24, overview plus
+    /// regions): a box drawn on an overview reads the blocks it touches,
+    /// with their halo, and shows the cells, surface and probe values the
+    /// whole mesh shows for it: the same cells (by their number in the
+    /// file), as many faces drawn, no halo cell among them, the volume's
+    /// cell count and colour range kept. A probe in the box finds its
+    /// cell. Turned off, the overview shows again; beyond the memory
+    /// budget the blocks are not read (BLOCK006), and within it they are.
+    /// Breaks when a block the box touches is not read (cells or faces
+    /// missing), when the box takes cells of another numbering, when the
+    /// probe keeps the overview's no cell, when the overview is not given
+    /// back, or when the budget is ignored or a refusal for it sticks. The
+    /// mesh tests read blocks but never choose them; the region test of
+    /// the halo covers what a halo cell would do.
+    #[test]
+    fn a_region_on_an_overview_reads_the_blocks_it_touches() {
+        let (dir, _path, whole, mut s) = overview_session("region-blocks");
+        let overview_faces = s.mesh.as_ref().unwrap().surface.faces;
+        let region = corner_box(&whole);
+        // A probe in the middle of the box, before its blocks are read.
+        let middle = match &region.shape {
+            crate::Shape::Box { center, .. } => *center,
+            _ => unreachable!(),
+        };
+        s.display.probes.push(crate::measure::Probe {
+            n: 1,
+            name: None,
+            at: crate::measure::Anchor::typed(middle),
+            visible: true,
+        });
+        s.display.regions.push(region.clone());
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        let o = m.overview.clone().unwrap();
+        let b = m.blocks.as_ref().expect("the box's blocks are read");
+        let wanted = crate::blocks::wanted(&o, &s.display.regions);
+        assert!(
+            !wanted.is_empty() && wanted.len() < o.blocks.len(),
+            "{wanted:?}"
+        );
+        assert_eq!(b.subset.blocks, wanted);
+        assert!(b.halo_cells() > 0);
+        assert_eq!(m.cells(), whole.cell_count());
+
+        // The same cells as on the whole mesh, by their number in the file.
+        let rc = s.display.region_cells.clone().unwrap();
+        let shown: std::collections::BTreeSet<u64> = (0..m.mesh.cell_count())
+            .filter(|&c| rc.contains(c))
+            .map(|c| b.subset.file_cells[c])
+            .collect();
+        let on_whole = crate::RegionCells::of(&whole, std::slice::from_ref(&region)).unwrap();
+        let expected: std::collections::BTreeSet<u64> = (0..whole.cell_count())
+            .filter(|&c| on_whole.contains(c))
+            .map(|c| c as u64)
+            .collect();
+        assert!(!expected.is_empty() && expected.len() < whole.cell_count());
+        assert_eq!(shown, expected);
+        assert!(
+            (0..m.mesh.cell_count()).all(|c| !(b.subset.halo[c] && rc.contains(c))),
+            "a halo cell shows"
+        );
+        // As many cells and faces drawn as the whole mesh draws for it.
+        let mut d = s.display.clone();
+        d.region_cells = Some(Arc::new(on_whole));
+        let full = FieldSet::new(murmel_mesh::read_results(&_path).unwrap().1);
+        let w = Surface::build_with(&whole, Some(&full), &s.tokens, &d);
+        assert_eq!((m.surface.cells, m.surface.faces), (w.cells, w.faces));
+        // The probe found its cell, the one the whole mesh has there.
+        let at = s.display.probes[0].at.cell.expect("the probe's cell");
+        assert_eq!(
+            Some(b.subset.file_cells[at as usize] as u32),
+            crate::measure::locate(&whole, middle)
+        );
+        // The colour range stays the volume's.
+        for f in &o.fields {
+            assert_eq!(
+                m.fields.volume_range(&f.name),
+                o.range(&f.name).map(|[a, b]| (a, b)),
+                "{}",
+                f.name
+            );
+        }
+
+        // Turned off: the overview again.
+        s.display.regions[0].enabled = false;
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.blocks.is_none());
+        assert_eq!(m.mesh.cell_count(), 0);
+        assert_eq!(m.surface.faces, overview_faces);
+        assert_eq!(s.display.probes[0].at.cell, None);
+
+        // Beyond the budget: not read, and why.
+        s.memory_budget = Some(1e-9);
+        s.display.regions[0].enabled = true;
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.blocks.is_none());
+        let (blocks, why) = s.blocks_problem.clone().unwrap();
+        assert_eq!(blocks, wanted);
+        assert_eq!(why.unwrap().code, "BLOCK006");
+        // A budget large enough reads them.
+        s.memory_budget = None;
+        s.redraw();
+        assert!(s.mesh.as_ref().unwrap().blocks.is_some());
+        assert!(s.blocks_problem.is_none());
+        s.close();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant: with `defer_blocks` (the window), a region on an
+    /// overview reads its blocks on a thread of its own: the overview
+    /// shows whole meanwhile (its regions have no cells yet), and
+    /// `poll_blocks` shows the blocks once read; a read stopped is not
+    /// started again until the regions need other blocks. Breaks when
+    /// the read blocks the call, when the overview goes blank while it
+    /// runs, or when a stopped read starts again on the next redraw. The
+    /// test above reads at once.
+    #[test]
+    fn the_window_reads_the_blocks_in_the_background() {
+        let (dir, _path, whole, mut s) = overview_session("region-blocks-bg");
+        s.defer_blocks = true;
+        let overview_faces = s.mesh.as_ref().unwrap().surface.faces;
+        s.display.regions.push(corner_box(&whole));
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.blocks.is_none());
+        assert!(s.display.region_cells.is_none());
+        assert_eq!(m.surface.faces, overview_faces);
+        let job = s.block_job.clone().expect("a read in the background");
+        let until = Instant::now() + Duration::from_secs(30);
+        while !job.is_done() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(s.poll_blocks());
+        assert!(s.block_job.is_none());
+        let m = s.mesh.as_ref().unwrap();
+        assert_eq!(m.blocks.as_ref().unwrap().subset.blocks, job.blocks);
+        assert!(s.display.region_cells.as_ref().unwrap().filtering());
+        assert!(!s.poll_blocks());
+
+        // Another box elsewhere: a new read, which is stopped.
+        let b = whole.bounds();
+        s.display.regions[0] = crate::Region::new(crate::Shape::Box {
+            center: b.min,
+            size: [1e-3; 3],
+        });
+        s.redraw();
+        let wanted = s.blocks_wanted().unwrap();
+        if crate::blocks::within(&wanted, &job.blocks) {
+            // The corner is in the blocks read: nothing to read.
+            assert!(s.block_job.is_none());
+        } else {
+            assert!(s.block_job.is_some());
+            s.cancel_blocks();
+            assert_eq!(s.blocks_problem, Some((wanted, None)));
+            s.redraw();
+            assert!(s.block_job.is_none(), "a stopped read starts again");
+        }
         s.close();
         std::fs::remove_dir_all(&dir).unwrap();
     }

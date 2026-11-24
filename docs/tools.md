@@ -3497,6 +3497,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `REGION001` | error | No region of interest has this number. | Regions count from 1 (region:1); region.list names them. |
 | `REGION002` | error | The region's shape is broken (a size, radius or thickness that is not positive, a zero normal, too many rings) or names a zone, patch or cell the mesh does not have. | mesh.info lists the zones and patches; cells count from 0 to the cell count minus one; sizes must be positive. |
 | `REGION003` | error | The display has the most regions it holds (16). | Remove a region with region.clear, or change one with region.set. |
+| `REGION004` | error | On a mesh open as an overview, regions are boxes, spheres and slabs: each reads the blocks it touches. A zone, patch or cell region needs the cells read whole. | Draw a box, sphere or slab around what you need, or open the mesh whole (mesh.open with mode whole) if the memory allows. |
 | `ARROW002` | error | The arrows' density is outside 4 to 200, or their scale is not above 0 and up to 100. | Give density 4 to 200 (arrows across the mesh's largest extent) and a scale above 0, up to 100. |
 | `PARCEL001` | error | No parcels are open. | Open a parcel file (FoehnCraft's spray/parcels_<step>.vtkhdf) with parcels.open. |
 | `PARCEL002` | error | The parcel file has no field of this name (to colour by, to size by diameter or to filter by diameter or injector). | The message lists the fields of the file; parcels.open's result lists them too. |
@@ -3573,6 +3574,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `BLOCK003` | error | The mesh has no volume cells to put in blocks. | Convert a volume mesh: a .vtu, an OpenFOAM polyMesh or a VTKHDF file. |
 | `BLOCK004` | error | The VTKHDF file has no block index, so it cannot open as an overview of a mesh beyond the memory budget. | Convert it once with `murmel blocks make` (or the blocks.make tool), or raise the memory budget to read it whole. |
 | `BLOCK005` | error | The blocked VTKHDF file has no such block, or no block was asked for. | Ask for blocks 0 to one less than the file's block count (the overview's `blocks`). |
+| `BLOCK006` | error | The regions drawn on a mesh open as an overview touch blocks whose cells need more memory than the budget. | Make the regions smaller or fewer (each reads the blocks its box, sphere or slab touches), or raise the memory budget (settings.set_memory). |
 | `MESH015` | error | The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces). | Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch. |
 | `RENDER001` | error | No GPU adapter was found (no driver, or no software renderer such as Mesa lavapipe). | Install a Vulkan, Metal or DirectX 12 driver; on a headless Linux machine install mesa-vulkan-drivers. |
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |
