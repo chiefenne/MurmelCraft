@@ -305,7 +305,7 @@ fn phase_message(phase: &str) -> &'static str {
         | "read.vtkhdf" => "loading-phase-numbers",
         "read.cells" => "loading-phase-cells",
         "read.overview" => "loading-phase-overview",
-        "read.blocks" => "loading-phase-blocks",
+        p if p.starts_with("read.blocks") => "loading-phase-blocks",
         p if p == "read.topology" || p.starts_with("topology.") => "loading-phase-topology",
         p if p == "open.surface" || p.starts_with("surface.") => "loading-phase-surface",
         _ => "loading-phase-file",
@@ -318,7 +318,9 @@ mod tests {
 
     /// Invariant: while the cell faces are linked, the window says
     /// "matching the faces" through every step of the linking
-    /// (`topology.*`), not only at its start. Dropping the `topology.` arm
+    /// (`topology.*`), not only at its start, and "reading the cells of
+    /// the blocks" through every step of a region's read
+    /// (`read.blocks.*`). Dropping the `topology.` arm
     /// would show "reading the file" for most of that time. The window test
     /// of a background open reads the text once, before the reader starts,
     /// so it would not notice.
@@ -328,5 +330,9 @@ mod tests {
             assert_eq!(phase_message(p), "loading-phase-topology", "{p}");
         }
         assert_eq!(phase_message("read.stream"), "loading-phase-file");
+        // and every step of reading a region's blocks as reading them
+        for p in ["read.blocks", "read.blocks.points", "read.blocks.join"] {
+            assert_eq!(phase_message(p), "loading-phase-blocks", "{p}");
+        }
     }
 }

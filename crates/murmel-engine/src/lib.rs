@@ -17,7 +17,6 @@ pub mod defaults;
 pub mod derive;
 pub mod display;
 pub mod extract;
-mod fasthash;
 pub mod field;
 pub mod glyph;
 mod gradient;

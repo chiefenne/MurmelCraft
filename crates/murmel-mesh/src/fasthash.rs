@@ -1,9 +1,10 @@
-//! A fast hash for the integer keys of the surface's edge sets (millions
-//! of point-id pairs per build): the multiply-rotate word hash Firefox
+//! A fast hash for integer keys: the surface's edge sets (millions of
+//! point-id pairs per build) and the global point ids the VTKHDF reader
+//! joins blocks by. It is the multiply-rotate word hash Firefox
 //! introduced and rustc uses ("FxHash": rotate the state left by 5, xor
 //! the word in, multiply by a fixed odd constant). It is not resistant to
 //! chosen keys, which is fine for ids from a mesh; the standard library's
-//! SipHash spends most of the edge pass hashing.
+//! SipHash spends most of the edge pass and of the join hashing.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -11,7 +12,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct FxHasher {
+pub struct FxHasher {
     hash: u64,
 }
 
@@ -59,12 +60,17 @@ impl Hasher for FxHasher {
     }
 }
 
-pub(crate) type FastSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
-pub(crate) type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub type FastSet<K> = HashSet<K, BuildHasherDefault<FxHasher>>;
+pub type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
 /// An empty set with room for `n` keys.
-pub(crate) fn set_with_capacity<K>(n: usize) -> FastSet<K> {
+pub fn set_with_capacity<K>(n: usize) -> FastSet<K> {
     FastSet::with_capacity_and_hasher(n, BuildHasherDefault::default())
+}
+
+/// An empty map with room for `n` keys.
+pub fn map_with_capacity<K, V>(n: usize) -> FastMap<K, V> {
+    FastMap::with_capacity_and_hasher(n, BuildHasherDefault::default())
 }
 
 #[cfg(test)]
