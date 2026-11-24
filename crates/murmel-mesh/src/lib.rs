@@ -183,6 +183,11 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "Convert it once with `murmel blocks make` (or the blocks.make tool), or raise the memory budget to read it whole.",
     ),
     (
+        "BLOCK005",
+        "The blocked VTKHDF file has no such block, or no block was asked for.",
+        "Ask for blocks 0 to one less than the file's block count (the overview's `blocks`).",
+    ),
+    (
         "MESH015",
         "The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces).",
         "Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch.",

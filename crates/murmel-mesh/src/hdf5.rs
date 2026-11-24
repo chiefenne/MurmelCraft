@@ -453,6 +453,21 @@ impl<'a> Values<'a> {
         Some(v)
     }
 
+    /// Values `first..` of a dataset of `len` unsigned bytes, made by a
+    /// reader rather than read (a mask of rows to leave out).
+    pub(crate) fn of_bytes_in(bytes: Vec<u8>, first: usize, len: usize) -> Values<'static> {
+        Values {
+            bytes: Cow::Owned(bytes),
+            num: Num::Int {
+                size: 1,
+                signed: false,
+                be: false,
+            },
+            len,
+            first,
+        }
+    }
+
     /// No values (of a dataset that is not there).
     pub(crate) fn none() -> Values<'static> {
         Values {

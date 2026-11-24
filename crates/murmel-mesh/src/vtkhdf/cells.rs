@@ -98,6 +98,9 @@ pub(super) enum PointMap {
     Offset(u32),
     /// Row `r` is point `rows[r]` (points joined by their global ids).
     Rows(Vec<u32>),
+    /// Row `from + i` is point `rows[i]`: the points of one partition,
+    /// read apart from the others (`vtkhdf::read_blocks`).
+    From(usize, Vec<u32>),
 }
 
 impl PointMap {
@@ -105,6 +108,7 @@ impl PointMap {
         match self {
             PointMap::Offset(base) => base + row as u32,
             PointMap::Rows(rows) => rows[row],
+            PointMap::From(from, rows) => rows[row - from],
         }
     }
 }
@@ -776,14 +780,36 @@ fn tally<const CHECK: bool>(
 /// Build the cells of the `total` rows of `grid`, reading the datasets
 /// from `sets` a unit at a time.
 pub(super) fn read(grid: &Grid, sets: &dyn Sets, total: usize) -> Result<Cells, MeshError> {
-    read_in(grid, sets, total, UNIT)
+    read_in(grid, sets, 0..total, UNIT)
 }
 
-/// [`read`] in units of `unit` cells.
-fn read_in(grid: &Grid, sets: &dyn Sets, total: usize, unit: usize) -> Result<Cells, MeshError> {
+/// [`read`] of the cells of rows `cells` alone, which `grid.parts` (the
+/// partitions they lie in, with where their rows start in the file)
+/// hold whole: the cells of some partitions read apart from the others.
+pub(super) fn read_rows(
+    grid: &Grid,
+    sets: &dyn Sets,
+    cells: Range<usize>,
+) -> Result<Cells, MeshError> {
+    read_in(grid, sets, cells, UNIT)
+}
+
+/// [`read`] of rows `cells` in units of `unit` cells.
+fn read_in(
+    grid: &Grid,
+    sets: &dyn Sets,
+    cells: Range<usize>,
+    unit: usize,
+) -> Result<Cells, MeshError> {
     let unit = unit.max(1);
-    let numbered: Vec<(usize, Range<usize>)> = (0..total.div_ceil(unit).max(1))
-        .map(|i| (i, (i * unit).min(total)..((i + 1) * unit).min(total)))
+    let (from, total) = (cells.start, cells.end.max(cells.start));
+    let numbered: Vec<(usize, Range<usize>)> = (0..(total - from).div_ceil(unit).max(1))
+        .map(|i| {
+            (
+                i,
+                (from + i * unit).min(total)..(from + (i + 1) * unit).min(total),
+            )
+        })
         .collect();
     let n = numbered.len();
     // The counts do not depend on the point ids, so the first pass reads
@@ -1099,7 +1125,7 @@ mod tests {
             whole: unit == 0,
         };
         let unit = if unit == 0 { usize::MAX } else { unit };
-        par::with_threads(threads, || read_in(&grid, &sets, g.total(), unit))
+        par::with_threads(threads, || read_in(&grid, &sets, 0..g.total(), unit))
             .map(|c| {
                 (
                     c.polys, c.least, c.cell_end, c.zone, c.kind, c.rows, c.boundary, c.zone_max,

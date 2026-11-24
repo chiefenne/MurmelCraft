@@ -983,3 +983,42 @@ shape (about 4.9 M boundary faces) should read in 2 to 3 s within about
 
 Not yet: the block boxes, the preview grid, and regions that read the
 blocks they touch.
+
+## Reading some blocks of a blocked file (2026-11-24)
+
+`vtkhdf::read_blocks(path, blocks, halo)` reads the cells of some blocks
+of a blocked VTKHDF file, the base for regions of a mesh beyond the
+memory budget (the maintainer's cards of 2026-11-24: overview plus
+regions, one hidden halo layer). Each block's partition is read apart
+from the others:
+
+- its rows of `Points` and `GlobalPointIds`, joined to the points of
+  the blocks before;
+- its cells, by the windowed reader over its rows alone
+  (`cells::read_rows`, `PointMap::From`);
+- with the halo, the ghost cells it holds (one layer of point
+  neighbours), each once: a ghost that a block read owns, or that a
+  block before already gave, is left out (`CellData/GlobalCellIds`);
+- the cell and point fields at its rows, read in runs;
+- the patch faces whose `OwnerCell` is a cell read.
+
+`Subset` gives each cell's file cell id and whether it is of the halo.
+Read with every block and no halo, the mesh and its fields are the whole
+read's, bit for bit: checked on the 14 VTKHDF files of the sections
+above, the KoflCraft blocked fixtures and the 1 M blocked file (16
+blocks). The whole read is unchanged, bit for bit at 1 and 4 threads.
+
+Same machine, 4 M blocked file (62 blocks of 65,536 cells), file in the
+page cache:
+
+| blocks | cells (halo) | boundary faces | time |
+|---|---:|---:|---:|
+| 1, no halo | 65,536 (0) | 5,984 | 0.20 s |
+| 1, halo | 76,670 (11,134) | 6,842 | 0.18 to 0.21 s |
+| 4, halo | 289,310 (27,166) | 40,055 | 0.70 to 0.79 s |
+
+From this machine's disk, not cached, one block took 2.1 to 5.3 s: the
+reads are many and small, so a fast SSD (the iMac's) matters more than
+it does for a whole read. The patches are still read whole to find
+their faces of the blocks (5 M boundary faces on a 100 M mesh).
+

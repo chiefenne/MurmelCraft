@@ -292,6 +292,14 @@ problem took more than a few minutes to understand.
   `FaceConnectivity` (`Points::Skip`): a check that needs the point ids
   belongs in the walk that writes, and the counting pass's error is
   reported only after a pass that reads the ids finds nothing before it.
+- **A partition read alone keeps the file's row numbers.**
+  `vtkhdf::read_blocks` reads each block with the windowed reader over
+  its own rows (`cells::read_rows`), so the datasets are read at the
+  file's rows and need no shifting; only the points are numbered from
+  the partition's first row (`PointMap::From`). The ghost rows come
+  from the block's plan (`Planned`), not from `vtkGhostType`: a ghost is
+  read when no block read owns it and no block before gave it. A check
+  of a partition must still go through `enter`.
 - **An overview has no cells, but its file has.** A mesh opened as an
   overview (`OpenMesh::overview`) is the boundary only, so
   `mesh.cell_count()` is 0; code that reports or checks the mesh's cells
