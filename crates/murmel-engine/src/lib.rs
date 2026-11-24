@@ -6,8 +6,10 @@
 
 pub mod camera;
 pub mod clip;
+pub mod colormap;
 pub mod cube;
 pub mod display;
+pub mod field;
 pub mod i18n;
 pub mod inspect;
 pub mod journal;
@@ -25,6 +27,7 @@ pub mod theme;
 pub use camera::{Camera, Projection, ScreenAxis, StandardView};
 pub use clip::{Clip, ClipMode};
 pub use cube::{CubeSettings, Placement};
+pub use field::{FieldChoice, FieldMode, FieldPaint, FieldSet, FieldStyle, RangeMode};
 pub use display::{ColorBy, Display, Item, PickTarget, RenderMode, Visibility};
 pub use journal::{Journal, Snapshot};
 pub use legend::Legend;

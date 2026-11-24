@@ -31,6 +31,9 @@ pub struct OpenMesh {
     pub files: Vec<(String, String)>,
     /// The validity badge of the tree root.
     pub validity: Validity,
+    /// The fields read with the mesh (a `.vtkhdf` result, the data
+    /// arrays of a `.vtu`); empty for a bare mesh.
+    pub fields: crate::field::FieldSet,
 }
 
 /// The validity badge (UI spec, Model tree): green when the evidence
@@ -188,7 +191,8 @@ impl Session {
 
     /// Read a mesh and its evidence, replace the open one and fit the view.
     pub fn open(&mut self, path: &Path) -> Result<&OpenMesh, MeshError> {
-        let mut mesh = murmel_mesh::read(path)?;
+        let (mut mesh, results) = murmel_mesh::read_results(path)?;
+        let fields = crate::field::FieldSet::new(results);
         // The evidence sits beside the mesh file: beside the .vtu, or in
         // the polyMesh folder among its files.
         let first = mesh
@@ -217,7 +221,20 @@ impl Session {
         self.display.views.clear();
         self.display.measurements.clear();
         self.display.probes.clear();
+        // The field colouring stays when the new mesh has the field (the
+        // next time step of the same case); else it falls back to solid.
+        self.display.field_values = None;
+        if self.display.field.as_ref().is_some_and(|c| fields.get(&c.name).is_none()) {
+            self.display.field = None;
+            if self.display.color_by == ColorBy::Field {
+                self.display.color_by = ColorBy::Solid;
+            }
+        }
+        if self.display.color_by == ColorBy::Field && self.display.field.is_none() {
+            self.display.color_by = ColorBy::Solid;
+        }
         ensure_quality(&mut self.display, &mesh);
+        crate::field::ensure_field(&mut self.display, &mesh, &fields);
         let surface = Surface::build(&mesh, &self.tokens, &self.display);
         let files: Vec<(String, String)> = mesh
             .files
@@ -253,6 +270,7 @@ impl Session {
             digest,
             files,
             validity,
+            fields,
         }))
     }
 
@@ -269,6 +287,7 @@ impl Session {
         self.display.views.clear();
         self.display.measurements.clear();
         self.display.probes.clear();
+        self.display.field_values = None;
         self.surface_revision += 1;
     }
 
@@ -286,6 +305,7 @@ impl Session {
     pub fn redraw(&mut self) {
         if let Some(m) = &mut self.mesh {
             ensure_quality(&mut self.display, &m.mesh);
+            crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
             m.surface = Surface::build(&m.mesh, &self.tokens, &self.display);
         }
         self.surface_revision += 1;

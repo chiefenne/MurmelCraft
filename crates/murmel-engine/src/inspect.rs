@@ -681,6 +681,7 @@ mod tests {
             digest: String::new(),
             files: Vec::new(),
             validity: Validity::NoEvidence,
+            fields: Default::default(),
         };
         let d = Display::default();
         let rows = rows(&open, &d, Item::Cell(0));

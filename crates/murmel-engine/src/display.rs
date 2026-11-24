@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
 use crate::clip::Clip;
+use crate::field::{FieldChoice, FieldStyle, FieldStyles, FieldValues};
 use crate::measure::{Measurement, Probe};
 use crate::quality::{Metric, Quality};
 use crate::theme::{Rgb, Tokens};
@@ -37,16 +38,19 @@ pub enum ColorBy {
     Zone,
     /// The cell quality metric `Display::metric`, on the quality ramp.
     Quality,
+    /// A field of the results (`Display::field`), on a colour map.
+    Field,
 }
 
 impl ColorBy {
-    pub const ALL: [ColorBy; 6] = [
+    pub const ALL: [ColorBy; 7] = [
         ColorBy::Solid,
         ColorBy::Patch,
         ColorBy::Role,
         ColorBy::CellType,
         ColorBy::Zone,
         ColorBy::Quality,
+        ColorBy::Field,
     ];
 
     pub fn key(self) -> &'static str {
@@ -57,6 +61,7 @@ impl ColorBy {
             ColorBy::CellType => "cell_type",
             ColorBy::Zone => "zone",
             ColorBy::Quality => "quality",
+            ColorBy::Field => "field",
         }
     }
 }
@@ -281,6 +286,15 @@ pub struct Display {
     /// Probes of the open mesh (`probe.add`), in the order they were
     /// made.
     pub probes: Vec<Probe>,
+    /// The field colour mode field shows (`display.color_by`), kept when
+    /// another mode is chosen.
+    pub field: Option<FieldChoice>,
+    /// How each field is drawn (`field.style`), by name; a field without
+    /// an entry takes the default style.
+    pub field_styles: FieldStyles,
+    /// The values of `field`, computed the first time colour mode field
+    /// shows it (`Session::redraw`).
+    pub field_values: Option<Arc<FieldValues>>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -469,6 +483,25 @@ impl Display {
             .map(|q| q.values(self.metric))
     }
 
+    /// The values of the field shown now: colour mode field, values
+    /// computed for the chosen field.
+    pub fn field_values(&self) -> Option<&FieldValues> {
+        if self.color_by != ColorBy::Field {
+            return None;
+        }
+        let (c, v) = (self.field.as_ref()?, self.field_values.as_deref()?);
+        (v.choice.name == c.name).then_some(v)
+    }
+
+    /// The style of the chosen field (the default style without one).
+    pub fn field_style(&self) -> FieldStyle {
+        self.field
+            .as_ref()
+            .and_then(|c| self.field_styles.get(&c.name))
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Whether the quality threshold hides cells now.
     pub fn thresholding(&self) -> bool {
         self.threshold.is_some() && self.quality_values().is_some()
@@ -533,6 +566,9 @@ impl Display {
                 .zip(self.quality_range())
                 .and_then(|(c, r)| self.quality_color(tokens, c, r))
                 .unwrap_or(tokens.mesh.role.unspecified),
+            // The GPU colours faces with a value; this is the colour of
+            // those without.
+            ColorBy::Field => tokens.mesh.field.none,
         }
     }
 
@@ -542,6 +578,9 @@ impl Display {
     /// solid colour.
     pub fn cell_color(&self, mesh: &Mesh, tokens: &Tokens, c: usize) -> Rgb {
         let set = |i: Item| self.colors.get(&i).copied();
+        if self.color_by == ColorBy::Field {
+            return tokens.mesh.field.none;
+        }
         if let Some(q) = self
             .quality_range()
             .and_then(|r| self.quality_color(tokens, c, r))

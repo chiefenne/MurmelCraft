@@ -17,7 +17,7 @@ use crate::session::Session;
 pub const MAX_STEPS: usize = 200;
 
 /// The undoable state of a session: camera and display, without the
-/// selection, the pick filter and the quality cache.
+/// selection, the pick filter and the quality and field value caches.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     pub camera: Camera,
@@ -30,6 +30,7 @@ impl Snapshot {
         display.selection.clear();
         display.pick = Default::default();
         display.quality = None;
+        display.field_values = None;
         Self {
             camera: s.camera.clone(),
             display,
@@ -51,6 +52,7 @@ impl Snapshot {
         d.selection = std::mem::take(&mut s.display.selection);
         d.pick = s.display.pick;
         d.quality = s.display.quality.take();
+        d.field_values = s.display.field_values.take();
         s.display = d;
         if redraw {
             s.redraw();
