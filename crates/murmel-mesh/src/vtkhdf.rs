@@ -906,7 +906,7 @@ impl Builder {
             })
             .collect();
         let _ = &self.zone_values;
-        boundary::link(mesh, std::mem::take(&mut self.polys));
+        boundary::link(mesh, std::mem::take(&mut self.polys), None);
         if mesh.cell_count() == 0 && mesh.boundary.is_empty() {
             return Err(MeshError::new(
                 "MESH010",

@@ -1308,7 +1308,7 @@ mod tests {
             }
         }
         let mut linked = m.clone();
-        crate::boundary::link(&mut linked, m.cell_polygons());
+        crate::boundary::link(&mut linked, m.cell_polygons(), None);
         assert_eq!(linked.unique_faces, m.unique_faces);
         assert_eq!(linked.boundary_owner, m.boundary_owner);
         for f in 0..m.cell_face_id.len() {

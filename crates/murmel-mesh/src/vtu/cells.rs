@@ -65,6 +65,9 @@ impl FaceList for InStream {
 /// What the cells became.
 pub(super) struct Cells {
     pub faces: Faces,
+    /// Each face's smallest point (`u32::MAX` for a face of none), found
+    /// while its points are at hand, for the linking that sorts by it.
+    pub least: Vec<u32>,
     /// 0, then where each volume cell's faces end among the faces.
     pub cell_faces: Vec<u32>,
     pub cell_zone: Vec<u32>,
@@ -270,6 +273,7 @@ struct Write<'a> {
     /// among the points copied out.
     in_stream: bool,
     face_end: &'a mut [u32],
+    least: &'a mut [u32],
     nodes: &'a mut [u32],
     cell_end: &'a mut [u32],
     zone: &'a mut [u32],
@@ -288,6 +292,7 @@ impl Write<'_> {
 
 impl Sink for Write<'_> {
     fn face(&mut self, at: usize, nodes: &[u32]) {
+        self.least[self.done.faces] = nodes.iter().copied().min().unwrap_or(u32::MAX);
         if self.in_stream {
             self.face_end[self.done.faces] = at as u32;
             self.done.faces += 1;
@@ -300,6 +305,8 @@ impl Sink for Write<'_> {
     }
 
     fn table_face(&mut self, nodes: &[u32], corners: &[usize]) {
+        let least = corners.iter().map(|&i| nodes[i]).min();
+        self.least[self.done.faces] = least.unwrap_or(u32::MAX);
         let at = self.done.nodes;
         for (out, &i) in self.nodes[at..at + corners.len()].iter_mut().zip(corners) {
             *out = nodes[i];
@@ -405,6 +412,7 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
     } else {
         (vec![0; total.faces + 1], vec![0; total.nodes])
     };
+    let mut least = vec![0; total.faces];
     let mut cell_faces = vec![0; total.cells + 1];
     let mut cell_zone = vec![0; total.cells];
     let mut cell_kind = vec![CellKind::Polyhedron; total.cells];
@@ -416,6 +424,7 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
 
     let skip = usize::from(!in_stream);
     let face_end = pieces(&mut face_list[skip..], base.iter().map(|b| b.faces));
+    let face_least = pieces(&mut least, base.iter().map(|b| b.faces));
     let node_at = base.iter().map(|b| if in_stream { 0 } else { b.nodes });
     let nodes = pieces(&mut face_nodes, node_at);
     let cell_end = pieces(&mut cell_faces[1..], base.iter().map(|b| b.cells));
@@ -427,6 +436,7 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
     let mut writes = Vec::with_capacity(jobs.len());
     let parts = face_end
         .into_iter()
+        .zip(face_least)
         .zip(nodes)
         .zip(cell_end)
         .zip(zone)
@@ -435,7 +445,10 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
         .zip(polygon_nodes)
         .zip(patch);
     for (
-        (((((((face_end, nodes), cell_end), zone), kind), polygon_end), polygon_nodes), patch),
+        (
+            (((((((face_end, least), nodes), cell_end), zone), kind), polygon_end), polygon_nodes),
+            patch,
+        ),
         (job, &base),
     ) in parts.zip(jobs.into_iter().zip(&base))
     {
@@ -444,6 +457,7 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
             done: Count::default(),
             in_stream,
             face_end,
+            least,
             nodes,
             cell_end,
             zone,
@@ -469,6 +483,7 @@ pub(super) fn read(input: Input) -> Result<Cells, MeshError> {
     };
     Ok(Cells {
         faces,
+        least,
         cell_faces,
         cell_zone,
         cell_kind,
@@ -599,6 +614,7 @@ mod tests {
         Vec<u32>,
         Option<u32>,
         Option<u32>,
+        Vec<u32>,
     );
 
     fn read_on(threads: usize, a: &Arrays) -> Result<Read, (&'static str, String)> {
@@ -613,6 +629,7 @@ mod tests {
                     c.boundary_patch,
                     c.zone_max,
                     c.patch_max,
+                    c.least,
                 )
             })
             .map_err(|e| (e.code, e.message))
@@ -623,9 +640,12 @@ mod tests {
     /// mixed, with each range starting at the right place of the
     /// connectivity and of the polyhedra's face stream, and the faces,
     /// cells and polygons of each range written after those of the ranges
-    /// before. Breaks when a range starts the stream at its own first
-    /// cell instead of after the last polyhedron before it, or writes its
-    /// face ends without the points before it. The reader tests on files
+    /// before; and each face's smallest point is the smallest of the
+    /// points it reads back with. Breaks when a range starts the stream at
+    /// its own first cell instead of after the last polyhedron before it,
+    /// writes its face ends without the points before it, or a standard
+    /// cell's face takes its smallest point from the cell's other corners
+    /// (linking would sort it into the wrong group). The reader tests on files
     /// read with the machine's threads only, and their fixtures hold only
     /// polyhedra and polygons.
     #[test]
@@ -638,6 +658,10 @@ mod tests {
             let one = read_on(1, &a).unwrap();
             assert_eq!(one.1.len(), one.2.len() + 1);
             assert_eq!(*one.1.last().unwrap() as usize, one.0.1.len());
+            let least: Vec<u32> = (0..one.0.1.len())
+                .map(|f| one.0.1.get(f).iter().copied().min().unwrap_or(u32::MAX))
+                .collect();
+            assert_eq!(one.8, least);
             for threads in 2..=7 {
                 assert_eq!(
                     read_on(threads, &a).unwrap(),
