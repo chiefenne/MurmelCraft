@@ -100,6 +100,23 @@ fn every_control_has_a_clean_name() {
     h.run_steps(3);
     assert_eq!(problems(&h), Vec::<String>::new(), "patch, clip, quality");
     h.get_by_label("Clip mode: Crinkle");
+    // A second clip plane: both rows are named, the current one says so.
+    h.state_mut()
+        .call("clip.set", serde_json::json!({"new": true, "axis": "y"}));
+    h.run_steps(2);
+    assert_eq!(problems(&h), Vec::<String>::new(), "two clip planes");
+    assert!(named(&h, "Clip 1: X · Crinkle"), "first plane");
+    let names: Vec<String> = h
+        .root()
+        .children_recursive()
+        .filter_map(|n| n.accesskit_node().label())
+        .filter(|l| l.starts_with("Clip 2"))
+        .collect();
+    assert!(
+        names.iter().any(|l| l.ends_with("Y · Crinkle, current")),
+        "current plane: {names:?}"
+    );
+    assert!(named(&h, "Add clip plane (Alt + C)"), "add button");
     // A saved view (Ctrl + B names it in the person's language), and its
     // name field while it is renamed.
     h.state_mut().save_view();

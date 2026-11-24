@@ -61,6 +61,18 @@ const OWN: &[Code] = &[
         fix: Some("Choose another name, or delete the other view first."),
     },
     Code {
+        code: "CLIP001",
+        severity: Severity::Error,
+        meaning: "No clip plane has this number.",
+        fix: Some("Clip planes count from 1 (clip:1); the clips list of the result names them."),
+    },
+    Code {
+        code: "CLIP002",
+        severity: Severity::Error,
+        meaning: "The display has the most clip planes it holds (8).",
+        fix: Some("Remove a clip plane with clip.clear, or change one with clip.set."),
+    },
+    Code {
         code: "MCP001",
         severity: Severity::Error,
         meaning: "The MCP server refused a path outside its read or write roots.",

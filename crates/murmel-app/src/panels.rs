@@ -73,7 +73,7 @@ impl MurmelApp {
                         )),
                     })
                 }
-                Item::Mesh | Item::Cell(_) | Item::Face(_) => {}
+                Item::Mesh | Item::Cell(_) | Item::Face(_) | Item::Clip(_) => {}
             }
         }
         patches.sort_by(|a, b| a.label.cmp(&b.label));
@@ -448,15 +448,19 @@ impl MurmelApp {
         action
     }
 
-    /// The clip plane's row under "Clip planes": the eye turns it on and
-    /// off, the context menu flips it, changes the cut or removes it.
+    /// "Clip planes": a row per plane (the eye turns it on and off, a
+    /// click selects it, so the toolbar and the handle act on it; the
+    /// context menu flips it, changes the cut, fits it or removes it) and
+    /// a button that adds one.
     fn clip_row(
         &self,
         ui: &mut Ui,
         p: &murmel_engine::theme::Palette,
     ) -> Option<(&'static str, Value)> {
-        let c = self.session.display.clip?;
+        let mesh = &self.session.mesh.as_ref()?.mesh;
+        let d = &self.session.display;
         let secondary = color(p.text_secondary);
+        let current = d.current_clip();
         let mut action = None;
         egui::CollapsingHeader::new(
             RichText::new(self.i18n.tr("tree-clip-planes").to_uppercase())
@@ -466,64 +470,130 @@ impl MurmelApp {
         .id_salt("tree-clip-planes")
         .default_open(true)
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let axis = ["x", "y", "z"]
-                    .into_iter()
-                    .zip(c.normal)
-                    .find(|(_, n)| n.abs() > 0.999)
-                    .map(|(a, n)| {
-                        format!("{}{}", if n < 0.0 { "−" } else { "" }, a.to_uppercase())
+            for (k, c) in d.clips.iter().enumerate() {
+                let item = Item::Clip(k as u32);
+                let id = item.id(mesh);
+                let plane = k + 1;
+                ui.horizontal(|ui| {
+                    let axis = ["x", "y", "z"]
+                        .into_iter()
+                        .zip(c.normal)
+                        .find(|(_, n)| n.abs() > 0.999)
+                        .map(|(a, n)| {
+                            format!("{}{}", if n < 0.0 { "−" } else { "" }, a.to_uppercase())
+                        });
+                    let label = self.i18n.tr_args(
+                        "tree-clip-label",
+                        &[
+                            ("n", plane.into()),
+                            (
+                                "normal",
+                                axis.unwrap_or_else(|| self.i18n.tr("tree-clip-oblique"))
+                                    .into(),
+                            ),
+                            (
+                                "mode",
+                                self.i18n.tr(&format!("clip-mode-{}", c.mode.key())).into(),
+                            ),
+                        ],
+                    );
+                    let eye = if c.enabled { icon::EYE } else { icon::EYE_OFF };
+                    let name = self.i18n.tr_args(
+                        if c.enabled { "tree-hide" } else { "tree-show" },
+                        &[("item", label.clone().into())],
+                    );
+                    let b = ui
+                        .add(
+                            egui::Button::new(RichText::new(eye).size(14.0).color(if c.enabled {
+                                color(p.text_primary)
+                            } else {
+                                secondary
+                            }))
+                            .frame(false)
+                            .min_size(egui::vec2(20.0, 20.0)),
+                        )
+                        .on_hover_text(&name);
+                    b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+                    if b.clicked() {
+                        action = Some(("clip.set", json!({"plane": plane, "enabled": !c.enabled})));
+                    }
+                    let selected = d.is_selected(item);
+                    let text = if c.enabled {
+                        RichText::new(&label)
+                    } else {
+                        RichText::new(&label).color(secondary)
+                    };
+                    let r = ui.selectable_label(selected, text);
+                    let row = if current == Some(k) {
+                        self.i18n
+                            .tr_args("tree-clip-current", &[("row", label.clone().into())])
+                    } else {
+                        label.clone()
+                    };
+                    r.widget_info(|| {
+                        WidgetInfo::selected(Role::Button, true, selected, row.clone())
                     });
-                let label = self.i18n.tr_args(
-                    "tree-clip-label",
-                    &[
-                        (
-                            "normal",
-                            axis.unwrap_or_else(|| self.i18n.tr("tree-clip-oblique"))
-                                .into(),
-                        ),
-                        (
-                            "mode",
-                            self.i18n.tr(&format!("clip-mode-{}", c.mode.key())).into(),
-                        ),
-                    ],
-                );
-                let eye = if c.enabled { icon::EYE } else { icon::EYE_OFF };
-                let name = self.i18n.tr_args(
-                    if c.enabled { "tree-hide" } else { "tree-show" },
-                    &[("item", label.clone().into())],
-                );
-                let b = ui
-                    .add(
-                        egui::Button::new(RichText::new(eye).size(14.0).color(if c.enabled {
-                            color(p.text_primary)
-                        } else {
-                            secondary
-                        }))
-                        .frame(false)
-                        .min_size(egui::vec2(20.0, 20.0)),
-                    )
-                    .on_hover_text(&name);
-                b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
-                if b.clicked() {
-                    action = Some(("clip.set", json!({"enabled": !c.enabled})));
-                }
-                let r = ui.selectable_label(false, &label);
-                r.context_menu(|ui| {
-                    for (key, call) in [
-                        ("cmd-clip-flip", ("clip.set", json!({"flip": true}))),
-                        ("cmd-clip-crinkle", ("clip.set", json!({"mode": "crinkle"}))),
-                        ("cmd-clip-flat", ("clip.set", json!({"mode": "flat"}))),
-                        ("cmd-clip-view", ("clip.set", json!({"axis": "view"}))),
-                        ("cmd-clip-clear", ("clip.clear", json!({}))),
-                    ] {
-                        if ui.button(self.i18n.tr(key)).clicked() {
-                            action = Some(call);
-                            ui.close();
+                    let r = r.on_hover_text(self.i18n.tr("tree-clip-tip"));
+                    if r.clicked() {
+                        action = Some(("select.item", json!({ "item": id })));
+                    }
+                    if r.double_clicked() {
+                        action = Some(("view.fit", json!({ "item": id })));
+                    }
+                    r.context_menu(|ui| {
+                        for (key, call) in [
+                            (
+                                "cmd-clip-flip",
+                                ("clip.set", json!({"plane": plane, "flip": true})),
+                            ),
+                            (
+                                "cmd-clip-crinkle",
+                                ("clip.set", json!({"plane": plane, "mode": "crinkle"})),
+                            ),
+                            (
+                                "cmd-clip-flat",
+                                ("clip.set", json!({"plane": plane, "mode": "flat"})),
+                            ),
+                            (
+                                "cmd-clip-view",
+                                ("clip.set", json!({"plane": plane, "axis": "view"})),
+                            ),
+                            ("tree-fit", ("view.fit", json!({ "item": id }))),
+                            (
+                                "tree-clip-remove",
+                                ("clip.clear", json!({ "plane": plane })),
+                            ),
+                        ] {
+                            if ui.button(self.i18n.tr(key)).clicked() {
+                                action = Some(call);
+                                ui.close();
+                            }
                         }
+                    });
+                    if current == Some(k) && d.clips.len() > 1 {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(self.i18n.tr("tree-clip-current-mark"))
+                                    .small()
+                                    .color(secondary),
+                            );
+                        });
                     }
                 });
-            });
+            }
+            if d.clips.len() < murmel_tools::MAX_CLIPS {
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    let b = ui
+                        .add(egui::Button::new(
+                            RichText::new(self.i18n.tr("tree-clip-new")).small(),
+                        ))
+                        .on_hover_text(self.i18n.tr("cmd-clip-new"));
+                    if b.clicked() {
+                        action = Some(("clip.set", json!({"new": true, "axis": "x"})));
+                    }
+                });
+            }
         });
         action
     }
@@ -568,6 +638,9 @@ impl MurmelApp {
             Some((area, name)) => {
                 let name = if area == "kind" {
                     self.i18n.tr(&format!("kind-{name}"))
+                } else if area == "clip" {
+                    self.i18n
+                        .tr_args("props-clip-name", &[("n", name.to_string().into())])
                 } else {
                     name.to_string()
                 };
@@ -657,6 +730,7 @@ impl MurmelApp {
             Value::String(s) => match key {
                 "validity" => self.i18n.tr(&format!("validity-{s}")),
                 "role" => self.i18n.tr(&format!("role-{s}")),
+                "mode" => self.i18n.tr(&format!("clip-mode-{s}")),
                 "type" => self.i18n.tr(&format!("kind-{s}")),
                 "name"
                     if self

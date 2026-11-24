@@ -31,8 +31,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
-| `clip.set` | 1 | read | Set the clip plane: its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). |
-| `clip.clear` | 1 | read | Remove the clip plane; the whole mesh shows again. |
+| `clip.set` | 2 | read | Set a clip plane (plane: its number, clip:1 is the first; left out: the current plane, the one selected last or else added last; new: add one, up to 8): its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). A cell shows when every enabled plane keeps it; flat planes slice in the order they were added. |
+| `clip.clear` | 2 | read | Remove a clip plane (plane: its number; left out: the current plane), or all of them (all); the planes after it move up one. |
 | `select.item` | 2 | read | Select an item by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>); add puts it beside the selection (Shift; again takes it out). Its faces are tinted, a cell or face is outlined, and inspect.item shows the last one selected. |
 | `select.pick` | 1 | read | Select the cell (or, with target face, the face) under a screen point ndc (-1..1, y up), as drawn now (clip and hidden items included); add keeps the selection (Shift). A section of a flat cut picks its cell. Nothing under the point clears the selection unless add. Returns hit and picked. |
 | `select.filter` | 1 | read | Choose what a click in the viewport picks: cell (the default) or face. |
@@ -675,6 +675,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "flat"
       ]
     },
+    "new": {
+      "type": "boolean"
+    },
     "normal": {
       "items": {
         "type": "number"
@@ -693,6 +696,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       "maxItems": 3,
       "minItems": 3,
       "type": "array"
+    },
+    "plane": {
+      "minimum": 1,
+      "type": "integer"
     }
   },
   "required": [],
@@ -705,7 +712,15 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
+  "properties": {
+    "all": {
+      "type": "boolean"
+    },
+    "plane": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
   "required": [],
   "type": "object"
 }
@@ -1202,6 +1217,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `VIEW002` | error | No item of the open mesh has this id. | Use `mesh`, `zone:<name>`, `kind:<cell type>` or `patch:<name>`; mesh.info lists the names. |
 | `VIEW003` | error | No saved view of the open mesh has this name. | views.list names the saved views. |
 | `VIEW004` | error | The view name is empty, longer than 64 characters, holds control characters, or another saved view has it. | Choose another name, or delete the other view first. |
+| `CLIP001` | error | No clip plane has this number. | Clip planes count from 1 (clip:1); the clips list of the result names them. |
+| `CLIP002` | error | The display has the most clip planes it holds (8). | Remove a clip plane with clip.clear, or change one with clip.set. |
 | `MCP001` | error | The MCP server refused a path outside its read or write roots. | Use a path below a --read-root (files read) or a --write-root (files written), or start the server with more roots. |
 | `MCP002` | error | The MCP server could not resolve a path (it does not exist, or its folder does not). | Check the path; relative paths resolve from the first --write-root. |
 | `LIVE001` | error | No MurmelCraft window listens for agents (none is open, agents are switched off in its Settings, or the platform has no live bridge yet). | Open MurmelCraft and switch on Settings > Agents > Let agents drive this window, or start the MCP server without --live for a headless session. |

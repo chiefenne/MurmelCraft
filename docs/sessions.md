@@ -15,7 +15,7 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
 ```json
 {
   "format": "murmelcraft.session",
-  "format_version": "1.1",
+  "format_version": "1.2",
   "mesh": {
     "path": "foehncraft.vtu",
     "absolute": "/cases/channel/foehncraft.vtu",
@@ -28,7 +28,10 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
     "pick": "cell",
     "hidden": ["patch:walls"], "isolated": [], "selection": ["patch:inlet", "cell:7"],
     "colors": {"patch:outlet": "#123456"},
-    "clip": {"origin": [2.01, 1, 0.5], "normal": [1, 0, 0], "mode": "flat", "enabled": true}
+    "clips": [
+      {"origin": [2.01, 1, 0.5], "normal": [1, 0, 0], "mode": "flat", "enabled": true},
+      {"origin": [2, 1, 0.5], "normal": [0, -1, 0], "mode": "crinkle", "enabled": false}
+    ]
   },
   "colors": {"solid": "#336699"},
   "view_cube": {"placement": "bottom_left", "auto_hide": false, "distance_px": 120, "position": null},
@@ -47,6 +50,9 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
 - **Items** are named by the ids of the tree and the tools (`patch:walls`,
   `zone:core`, `kind:prism`, `cell:7`, `face:12`), never by index, so a
   mesh written again with the same names keeps its view.
+- **Clip planes** (format 1.2) are `display.clips`, in the order they
+  were added; `clip:1` in `selection` is the first. A 1.0 or 1.1 file has
+  one plane in `display.clip`, which loads as `clip:1`.
 - **Saved views** (format 1.1) are the named cameras of the model tree's
   "Saved views" (`views.save`, `views.go`, `views.rename`,
   `views.delete`), in the order they were saved. A 1.0 file has none and

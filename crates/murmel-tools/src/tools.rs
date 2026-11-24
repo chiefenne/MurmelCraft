@@ -506,6 +506,7 @@ fn item(s: &Session, id: &str) -> Result<Item, Diagnostic> {
         .as_ref()
         .ok_or_else(|| Diagnostic::new("VIEW001", "no mesh is open"))?;
     Item::parse(id, &m.mesh)
+        .filter(|&i| s.display.has(i))
         .ok_or_else(|| Diagnostic::new("VIEW002", format!("no item {id} in the open mesh")))
 }
 
@@ -524,6 +525,7 @@ fn display_json(s: &Session) -> Value {
         "color_by": d.color_by,
         "render_mode": d.render_mode,
         "clip": clip_json(s),
+        "clips": (0..d.clips.len()).map(|k| plane_json(s, k)).collect::<Vec<_>>(),
         "hidden": d.hidden.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
         "selection": d.selection.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
         "isolated": d.isolated.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
@@ -668,6 +670,12 @@ struct SetColorInput {
 fn display_set_color(input: Value, s: &mut Session) -> Run {
     let i: SetColorInput = parse(input)?;
     let it = item(s, &i.item)?;
+    if matches!(it, Item::Clip(_)) {
+        return Err(Diagnostic::new(
+            "VIEW002",
+            "a clip plane has no colour; it cuts the mesh",
+        ));
+    }
     match i.color {
         Some(c) => s.display.colors.insert(it, c),
         None => s.display.colors.remove(&it),
@@ -849,12 +857,22 @@ fn inspect_item(input: Value, s: &mut Session) -> Run {
 
 // ---- clip plane ---------------------------------------------------------
 
+/// The current clip plane, or null.
 fn clip_json(s: &Session) -> Value {
-    let (Some(c), Some(m)) = (&s.display.clip, &s.mesh) else {
+    s.display
+        .current_clip()
+        .map_or(Value::Null, |k| plane_json(s, k))
+}
+
+/// Clip plane `k` (0-based) with its id and the counts of the cut.
+fn plane_json(s: &Session, k: usize) -> Value {
+    let (Some(c), Some(m)) = (s.display.clips.get(k), &s.mesh) else {
         return Value::Null;
     };
     let (offset, range) = c.offset(&m.mesh.bounds());
     json!({
+        "id": Item::Clip(k as u32).id(&m.mesh),
+        "plane": k + 1,
         "enabled": c.enabled,
         "mode": c.mode,
         "origin": c.origin,
@@ -886,6 +904,26 @@ struct ClipSet {
     #[serde(default)]
     flip: bool,
     enabled: Option<bool>,
+    /// The plane to change, counted from 1; the current one when left out.
+    plane: Option<u32>,
+    /// Add a plane instead of changing one.
+    #[serde(default)]
+    new: bool,
+}
+
+/// The index of plane `n` (counted from 1), or of the current plane.
+fn plane_index(s: &Session, n: Option<u32>) -> Result<Option<usize>, Diagnostic> {
+    match n {
+        None => Ok(s.display.current_clip()),
+        Some(n) if n >= 1 && (n as usize) <= s.display.clips.len() => Ok(Some(n as usize - 1)),
+        Some(n) => Err(Diagnostic::new(
+            "CLIP001",
+            format!(
+                "no clip plane {n}; there are {} (clip:1 is the first)",
+                s.display.clips.len()
+            ),
+        )),
+    }
 }
 
 fn clip_set(input: Value, s: &mut Session) -> Run {
@@ -908,15 +946,29 @@ fn clip_set(input: Value, s: &mut Session) -> Run {
         .as_ref()
         .map(|m| m.mesh.bounds())
         .unwrap_or_else(murmel_mesh::Bounds::empty);
-    let mut c = s.display.clip.unwrap_or(Clip {
+    if i.new && i.plane.is_some() {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "give either new or plane, not both",
+        ));
+    }
+    if i.new && s.display.clips.len() >= MAX_CLIPS {
+        return Err(Diagnostic::new(
+            "CLIP002",
+            format!("{MAX_CLIPS} clip planes are the most"),
+        ));
+    }
+    let at = if i.new {
+        None
+    } else {
+        plane_index(s, i.plane)?
+    };
+    let mut c = at.map(|k| s.display.clips[k]).unwrap_or(Clip {
         origin: bounds.center(),
         normal: [1.0, 0.0, 0.0],
         mode: ClipMode::Crinkle,
         enabled: true,
     });
-    if s.display.clip.is_none() {
-        c.enabled = true;
-    }
     if let Some(a) = i.axis {
         // The half nearer the eye is cut away, so the cut faces the
         // camera.
@@ -960,16 +1012,47 @@ fn clip_set(input: Value, s: &mut Session) -> Run {
     if let Some(e) = i.enabled {
         c.enabled = e;
     }
-    s.display.clip = Some(c);
+    match at {
+        Some(k) => s.display.clips[k] = c,
+        None => {
+            // The new plane becomes the current one: a clip plane
+            // selected before would stay current otherwise.
+            s.display.selection.retain(|i| !matches!(i, Item::Clip(_)));
+            s.display.clips.push(c);
+        }
+    }
     s.redraw();
     Ok(display_json(s))
 }
 
-fn clip_clear(_: Value, s: &mut Session) -> Run {
-    s.display.clip = None;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipClear {
+    plane: Option<u32>,
+    #[serde(default)]
+    all: bool,
+}
+
+fn clip_clear(input: Value, s: &mut Session) -> Run {
+    let i: ClipClear = parse(input)?;
+    if i.all {
+        if i.plane.is_some() {
+            return Err(Diagnostic::new(
+                "TOOL002",
+                "give either all or plane, not both",
+            ));
+        }
+        s.display.clips.clear();
+        s.display.selection.retain(|i| !matches!(i, Item::Clip(_)));
+    } else if let Some(k) = plane_index(s, i.plane)? {
+        s.display.remove_clip(k);
+    }
     s.redraw();
     Ok(display_json(s))
 }
+
+/// The most clip planes a display holds (each one walks the mesh).
+pub const MAX_CLIPS: usize = 8;
 
 // ---- settings -----------------------------------------------------------
 
@@ -1760,10 +1843,10 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "clip.set",
-        version: 1,
+        version: 2,
         action: Action::Read,
         label_key: "tool-clip-set",
-        summary: "Set the clip plane: its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle).",
+        summary: "Set a clip plane (plane: its number, clip:1 is the first; left out: the current plane, the one selected last or else added last; new: add one, up to 8): its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). A cell shows when every enabled plane keeps it; flat planes slice in the order they were added.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -1775,7 +1858,9 @@ pub static TOOLS: &[Tool] = &[
                     "offset": {"type": "number"},
                     "mode": {"enum": ["crinkle", "flat"]},
                     "flip": {"type": "boolean"},
-                    "enabled": {"type": "boolean"}
+                    "enabled": {"type": "boolean"},
+                    "plane": {"type": "integer", "minimum": 1},
+                    "new": {"type": "boolean"}
                 }),
                 &[],
             )
@@ -1784,13 +1869,18 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "clip.clear",
-        version: 1,
+        version: 2,
         action: Action::Read,
         label_key: "tool-clip-clear",
-        summary: "Remove the clip plane; the whole mesh shows again.",
+        summary: "Remove a clip plane (plane: its number; left out: the current plane), or all of them (all); the planes after it move up one.",
         outputs: &[],
         reads: &[],
-        input_schema: no_input,
+        input_schema: || {
+            object(
+                json!({"plane": {"type": "integer", "minimum": 1}, "all": {"type": "boolean"}}),
+                &[],
+            )
+        },
         run: clip_clear,
     },
     Tool {

@@ -672,7 +672,7 @@ impl MurmelApp {
     /// cut mode, flip and the plane's position.
     fn clip_group(&mut self, ui: &mut Ui, secondary: Color32) {
         self.group_label(ui, "clip", secondary);
-        let clip = self.session.display.clip;
+        let clip = self.session.display.clip().copied();
         let has_mesh = self.session.mesh.is_some();
         ui.add_enabled_ui(has_mesh, |ui| {
             let on = clip.is_some_and(|c| c.enabled);

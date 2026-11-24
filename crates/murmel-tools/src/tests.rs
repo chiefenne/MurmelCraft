@@ -443,7 +443,7 @@ fn clip_plane_tools() {
     assert!(call("mesh.open", json!({"path": ch}), &mut s).ok());
     let e = call("inspect.item", json!({}), &mut s);
     assert!(e.ok());
-    assert!(s.display.clip.is_none());
+    assert!(s.display.clips.is_empty());
 }
 
 /// Invariant: quality colouring and its threshold go through tools only.
@@ -1085,4 +1085,138 @@ fn colour_by_cell_zone() {
         s.display.item_color(m, &s.tokens, left).unwrap().hex(),
         "#102030"
     );
+}
+
+/// Invariant: a display holds several clip planes. clip.set with new adds
+/// one (it becomes the current plane), plane picks one by its number,
+/// and without plane the selected clip plane, else the last added,
+/// changes; every enabled plane cuts, so two planes show fewer cells
+/// than one; the eye (display.visibility) turns one plane off; clip.clear
+/// removes one plane and renumbers the rest; undo brings it back; at
+/// most MAX_CLIPS planes (CLIP002), unknown numbers are CLIP001 or
+/// VIEW002. Breaks when tools act on the wrong plane, when a plane stops
+/// cutting, or when removing one leaves the selection pointing at the
+/// wrong plane; the surface tests check the geometry, not the tools.
+#[test]
+fn several_clip_planes() {
+    let mut s = session();
+    let path = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    let all = s.mesh.as_ref().unwrap().mesh.cell_count();
+    let e = call("clip.set", json!({"axis": "x"}), &mut s);
+    let one = e.result["visible_cells"].as_u64().unwrap() as usize;
+    assert_eq!(e.result["clip"]["id"], "clip:1");
+    let e = call(
+        "clip.set",
+        json!({"new": true, "axis": "y", "mode": "flat"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["clips"].as_array().unwrap().len(), 2);
+    assert_eq!(e.result["clip"]["id"], "clip:2", "the new plane is current");
+    let two = e.result["visible_cells"].as_u64().unwrap() as usize;
+    assert!(two < one && one < all, "{two} < {one} < {all}");
+
+    // A selected plane is the current one.
+    assert!(call("select.item", json!({"item": "clip:1"}), &mut s).ok());
+    let n1 = s.display.clips[0].normal;
+    assert!(call("clip.set", json!({"flip": true}), &mut s).ok());
+    assert_eq!(s.display.clips[0].normal, n1.map(|v| -v));
+    assert_eq!(s.display.clips[1].mode, murmel_engine::ClipMode::Flat);
+    let e = call("clip.set", json!({"plane": 2, "mode": "crinkle"}), &mut s);
+    assert!(e.ok());
+    assert_eq!(s.display.clips[1].mode, murmel_engine::ClipMode::Crinkle);
+    assert_eq!(
+        call("clip.set", json!({"plane": 3}), &mut s).diagnostics[0].code,
+        "CLIP001"
+    );
+    assert_eq!(
+        call("select.item", json!({"item": "clip:5"}), &mut s).diagnostics[0].code,
+        "VIEW002"
+    );
+    let e = call("inspect.item", json!({"item": "clip:2"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(
+        e.result["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["key"] == "offset")
+    );
+    assert!(call("view.fit", json!({"item": "clip:2"}), &mut s).ok());
+
+    // The eye turns one plane off; the other still cuts.
+    let e = call(
+        "display.visibility",
+        json!({"action": "hide", "items": ["clip:2"]}),
+        &mut s,
+    );
+    assert!(!s.display.clips[1].enabled);
+    assert!(e.result["hidden"].as_array().unwrap().is_empty());
+    assert_eq!(e.result["visible_cells"].as_u64().unwrap() as usize, one);
+
+    // Removing plane 1 renumbers plane 2; the selection forgets plane 1.
+    assert!(call("clip.clear", json!({"plane": 1}), &mut s).ok());
+    assert_eq!(s.display.clips.len(), 1);
+    assert!(s.display.selection.is_empty());
+    assert!(
+        !s.display.clips[0].enabled,
+        "the old plane 2 is now plane 1"
+    );
+    let e = call("journal.undo", json!({}), &mut s);
+    assert_eq!(e.result["undone"], "clip.clear");
+    assert_eq!(s.display.clips.len(), 2);
+
+    for _ in 2..crate::tools::MAX_CLIPS {
+        assert!(call("clip.set", json!({"new": true}), &mut s).ok());
+    }
+    let e = call("clip.set", json!({"new": true}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "CLIP002");
+    assert!(call("clip.clear", json!({"all": true}), &mut s).ok());
+    assert!(s.display.clips.is_empty());
+}
+
+/// Invariant: session files keep every clip plane in order (format
+/// 1.2, `clips`), and a 1.1 file's single `clip` loads as plane 1.
+/// Breaks when only the current plane is saved, or when older files
+/// lose their plane; the round trip test saves one plane.
+#[test]
+fn sessions_keep_every_clip_plane() {
+    let dir = scratch("session-clips");
+    let mesh = channel_case(&dir.join("case"));
+    let file = dir.join("case/clips.murmel");
+    let mut s = session();
+    assert!(call("mesh.open", json!({"path": mesh}), &mut s).ok());
+    assert!(call("clip.set", json!({"axis": "x"}), &mut s).ok());
+    assert!(
+        call(
+            "clip.set",
+            json!({"new": true, "axis": "z", "mode": "flat"}),
+            &mut s
+        )
+        .ok()
+    );
+    assert!(call("select.item", json!({"item": "clip:1"}), &mut s).ok());
+    assert!(call("session.save", json!({"path": file}), &mut s).ok());
+    let mut t = session();
+    assert!(call("session.load", json!({"path": file}), &mut t).ok());
+    assert_eq!(t.display.clips, s.display.clips);
+    assert_eq!(t.display.current_clip(), Some(0));
+
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(v["format_version"], "1.2");
+    let first = v["display"]["clips"][0].clone();
+    let d = v["display"].as_object_mut().unwrap();
+    d.remove("clips");
+    d.insert("clip".into(), first);
+    d.insert("selection".into(), json!([]));
+    v["format_version"] = json!("1.1");
+    let old = dir.join("case/old.murmel");
+    std::fs::write(&old, v.to_string()).unwrap();
+    let mut u = session();
+    let e = call("session.load", json!({"path": old}), &mut u);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(u.display.clips, s.display.clips[..1]);
+    let _ = std::fs::remove_dir_all(&dir);
 }
