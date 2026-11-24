@@ -91,6 +91,7 @@ impl MurmelApp {
                     self.focus_filter = true;
                 }
                 "window.settings" => self.settings_open = true,
+                "window.save_view" => self.save_view(),
                 "window.next_region" => self.cycle_region(ctx, true),
                 "window.previous_region" => self.cycle_region(ctx, false),
                 "window.color_by" => {

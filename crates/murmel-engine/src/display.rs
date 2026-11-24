@@ -15,6 +15,7 @@ use std::sync::Arc;
 use murmel_mesh::{Bounds, CellKind, Mesh, NO_CELL};
 use serde::{Deserialize, Serialize};
 
+use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::quality::{Metric, Quality};
 use crate::theme::{Rgb, Tokens};
@@ -30,16 +31,20 @@ pub enum ColorBy {
     Patch,
     Role,
     CellType,
+    /// The cell zone of the face's cell (OpenFOAM `cellZones`, the VTU
+    /// `region`), on the patch palette.
+    Zone,
     /// The cell quality metric `Display::metric`, on the quality ramp.
     Quality,
 }
 
 impl ColorBy {
-    pub const ALL: [ColorBy; 5] = [
+    pub const ALL: [ColorBy; 6] = [
         ColorBy::Solid,
         ColorBy::Patch,
         ColorBy::Role,
         ColorBy::CellType,
+        ColorBy::Zone,
         ColorBy::Quality,
     ];
 
@@ -49,6 +54,7 @@ impl ColorBy {
             ColorBy::Patch => "patch",
             ColorBy::Role => "role",
             ColorBy::CellType => "cell_type",
+            ColorBy::Zone => "zone",
             ColorBy::Quality => "quality",
         }
     }
@@ -138,6 +144,7 @@ impl Item {
         if id == "mesh" {
             return Some(Item::Mesh);
         }
+
         let (area, name) = id.split_once(':')?;
         match area {
             "zone" => mesh
@@ -235,9 +242,45 @@ pub struct Display {
     /// The quality of the open mesh's cells, computed the first time
     /// colour mode quality is used (`Session::redraw`).
     pub quality: Option<Arc<Quality>>,
+    /// Named camera bookmarks of the open mesh (`views.save`), in the
+    /// order they were saved.
+    pub views: Vec<SavedView>,
+}
+
+/// A named camera (UI spec, model tree: "saved views"). The viewport
+/// size is the window's and is not part of it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedView {
+    pub name: String,
+    pub camera: Camera,
+}
+
+/// The longest name a saved view may have, in characters.
+pub const VIEW_NAME_MAX: usize = 64;
+
+/// A view name as given, trimmed; `None` when it is empty, too long or
+/// holds control characters.
+pub fn view_name(name: &str) -> Option<String> {
+    let n = name.trim();
+    (!n.is_empty() && n.chars().count() <= VIEW_NAME_MAX && !n.chars().any(char::is_control))
+        .then(|| n.to_string())
 }
 
 impl Display {
+    /// The saved view called `name`.
+    pub fn view(&self, name: &str) -> Option<&SavedView> {
+        self.views.iter().find(|v| v.name == name)
+    }
+
+    /// The first free name "View N" (`base` is the translated "View").
+    pub fn next_view_name(&self, base: &str) -> String {
+        (1..)
+            .map(|n| format!("{base} {n}"))
+            .find(|n| self.view(n).is_none())
+            .unwrap_or_default()
+    }
+
     pub fn is_hidden(&self, item: Item) -> bool {
         self.hidden.contains(&item)
     }
@@ -374,6 +417,10 @@ impl Display {
                 Some(k) => set(Item::Kind(k)).unwrap_or_else(|| tokens.kind_color(k)),
                 None => tokens.mesh.role.unspecified,
             },
+            ColorBy::Zone => match owner.and_then(|c| mesh.cell_zone.get(c).copied()) {
+                Some(z) => set(Item::Zone(z)).unwrap_or_else(|| tokens.patch_color(z as usize)),
+                None => tokens.mesh.role.unspecified,
+            },
             ColorBy::Quality => owner
                 .zip(self.quality_range())
                 .and_then(|(c, r)| self.quality_color(tokens, c, r))
@@ -397,6 +444,11 @@ impl Display {
             && let Some(&k) = mesh.cell_kind.get(c)
         {
             return set(Item::Kind(k)).unwrap_or_else(|| tokens.kind_color(k));
+        }
+        if self.color_by == ColorBy::Zone
+            && let Some(&z) = mesh.cell_zone.get(c)
+        {
+            return set(Item::Zone(z)).unwrap_or_else(|| tokens.patch_color(z as usize));
         }
         mesh.cell_zone
             .get(c)
@@ -440,6 +492,9 @@ impl Display {
                 .get(p as usize)
                 .map(|pa| tokens.role_color(pa.role)),
             (ColorBy::CellType, Item::Kind(k)) => Some(set.unwrap_or_else(|| tokens.kind_color(k))),
+            (ColorBy::Zone, Item::Zone(z)) => {
+                Some(set.unwrap_or_else(|| tokens.patch_color(z as usize)))
+            }
             _ => None,
         }
     }

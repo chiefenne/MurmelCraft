@@ -35,6 +35,9 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | `Shift + Right` | Pan right | `view.pan` (input from the session) |
 | `Shift + Up` | Pan up | `view.pan` (input from the session) |
 | `Shift + Down` | Pan down | `view.pan` (input from the session) |
+| `Ctrl + B` | Save the current view | window, then `views.save` |
+| `V` | Next saved view | `views.go` (input from the session) |
+| `Shift + V` | Previous saved view | `views.go` (input from the session) |
 | `Plus`, `Equals` | Zoom in | `view.zoom` `{"factor":0.8}` |
 | `Minus` | Zoom out | `view.zoom` `{"factor":1.25}` |
 | `1` | Shaded with edges | `display.render_mode` `{"mode":"shaded_edges"}` |
@@ -95,6 +98,7 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | palette | Colour by: patch | `display.color_by` `{"by":"patch"}` |
 | palette | Colour by: patch role | `display.color_by` `{"by":"role"}` |
 | palette | Colour by: cell type | `display.color_by` `{"by":"cell_type"}` |
+| palette | Colour by: cell zone | `display.color_by` `{"by":"zone"}` |
 | palette | Colour by: quality, non-orthogonality | `display.color_by` `{"by":"quality","metric":"non_orthogonality"}` |
 | palette | Colour by: quality, skewness | `display.color_by` `{"by":"quality","metric":"skewness"}` |
 | palette | Colour by: quality, volume ratio | `display.color_by` `{"by":"quality","metric":"volume_ratio"}` |

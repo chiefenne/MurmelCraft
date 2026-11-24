@@ -20,11 +20,16 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `view.fit` | 1 | read | Frame the faces shown, or the shown faces of one item (mesh, zone:<name>, kind:<cell type>, patch:<name>), from the current direction. |
 | `view.standard` | 1 | read | Go to one of the 26 view-cube views (faces like front, edges like front_top, corners like front_right_top; parts in any order), iso or home, and fit; the roll is reset, and face views snap to orthographic in perspective_ortho_faces. |
 | `view.rotate` | 1 | read | Rotate the scene by deg degrees about a screen axis (x right, y up, z towards the viewer; right-hand rule, so +90 about z turns it counter-clockwise on screen). The view cube's roll arrows send z ±90. |
+| `views.save` | 1 | read | Save the camera as a named view of the open mesh (a bookmark in the model tree); name left out takes the first free "View N", a name that exists gets the current camera. Saved views go into session files; opening another mesh drops them. |
+| `views.go` | 1 | read | Go to a saved view: its target, distance, angles, roll and projection (the window flies there). |
+| `views.rename` | 1 | read | Rename a saved view; the new name must be free. |
+| `views.delete` | 1 | read | Delete a saved view (undo brings it back). |
+| `views.list` | 1 | read | The saved views of the open mesh, in the order they were saved, with their cameras. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
-| `display.color_by` | 2 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold. |
+| `display.color_by` | 2 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
-| `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a patch colour in solid and patch, a cell-type colour in cell_type. |
+| `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
 | `clip.set` | 1 | read | Set the clip plane: its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). |
 | `clip.rotate` | 1 | read | Tilt the clip plane by deg degrees about an axis through pivot (right-hand rule). The axis is a screen axis (x right, y up, z towards the viewer, as in view.rotate) or a world vector; the pivot defaults to the centre of the plane inside the mesh's box, so the plane stays in the mesh. The window's tilt arcs and Alt + arrow keys call it. |
@@ -46,7 +51,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_agents` | 1 | write-files | Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
-| `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the mesh colours and the view cube placement. |
+| `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the mesh colours and the view cube placement. |
 | `session.load` | 1 | read | Load a .murmel session file: open its mesh unless that mesh is already open (tried relative to the file first, then at its absolute path), then restore the camera, the display, the selection and the clip plane; the mesh colours and the view cube placement apply to this session and are not written to settings.toml. A mesh changed since the save (SESS003) or items it no longer has (SESS004) give warnings. A new journal starts. |
 
 ## Inputs
@@ -347,6 +352,91 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `views.save`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `views.go`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+### `views.rename`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "to": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "to"
+  ],
+  "type": "object"
+}
+```
+
+### `views.delete`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
+### `views.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `view.screenshot`
 
 ```json
@@ -452,6 +542,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "patch",
         "role",
         "cell_type",
+        "zone",
         "quality"
       ]
     },
@@ -1155,6 +1246,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `TOOL002` | error | The input does not match the tool's input schema. | Compare the input with the schema in `murmel commands`. |
 | `VIEW001` | error | The tool needs an open mesh and none is open. | Call mesh.open first, or pass `mesh` to view.screenshot. |
 | `VIEW002` | error | No item of the open mesh has this id. | Use `mesh`, `zone:<name>`, `kind:<cell type>` or `patch:<name>`; mesh.info lists the names. |
+| `VIEW003` | error | No saved view of the open mesh has this name. | views.list names the saved views. |
+| `VIEW004` | error | The view name is empty, longer than 64 characters, holds control characters, or another saved view has it. | Choose another name, or delete the other view first. |
 | `MCP001` | error | The MCP server refused a path outside its read or write roots. | Use a path below a --read-root (files read) or a --write-root (files written), or start the server with more roots. |
 | `MCP002` | error | The MCP server could not resolve a path (it does not exist, or its folder does not). | Check the path; relative paths resolve from the first --write-root. |
 | `LIVE001` | error | No MurmelCraft window listens for agents (none is open, agents are switched off in its Settings, or the platform has no live bridge yet). | Open MurmelCraft and switch on Settings > Agents > Let agents drive this window, or start the MCP server without --live for a headless session. |

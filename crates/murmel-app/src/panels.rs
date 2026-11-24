@@ -180,6 +180,9 @@ impl MurmelApp {
                         }
                     });
                 }
+                if let Some(a) = self.views_section(ui, &p, &filter) {
+                    action = Some(a);
+                }
                 if let Some(a) = self.clip_row(ui, &p) {
                     action = Some(a);
                 }
@@ -273,7 +276,14 @@ impl MurmelApp {
                         ("display.visibility", json!({"action": "show_all"})),
                     ),
                     ("tree-fit", ("view.fit", json!({"item": id}))),
-                ] {
+                ]
+                .into_iter()
+                .chain(matches!(r.item, Item::Zone(_)).then(|| {
+                    (
+                        "tree-color-by-zone",
+                        ("display.color_by", json!({"by": "zone"})),
+                    )
+                })) {
                     if ui.button(self.i18n.tr(key)).clicked() {
                         action = Some(call);
                         ui.close();
@@ -295,6 +305,145 @@ impl MurmelApp {
                         .color(color(p.text_secondary)),
                 );
             });
+        });
+        action
+    }
+
+    /// Save the camera as a new view, named "View N" in the person's
+    /// language (Ctrl + B, the tree's button).
+    pub(crate) fn save_view(&mut self) {
+        if self.session.mesh.is_none() {
+            return;
+        }
+        let name = self
+            .session
+            .display
+            .next_view_name(&self.i18n.tr("view-name-base"));
+        self.call("views.save", json!({ "name": name }));
+    }
+
+    /// "Saved views": a row per named camera (click goes there,
+    /// double-click renames, the context menu updates, renames and
+    /// deletes) and a button that saves the current one.
+    fn views_section(
+        &mut self,
+        ui: &mut Ui,
+        p: &murmel_engine::theme::Palette,
+        filter: &str,
+    ) -> Option<(&'static str, Value)> {
+        let secondary = color(p.text_secondary);
+        let mut action = None;
+        let mut save = false;
+        let views: Vec<(String, bool)> = self
+            .session
+            .display
+            .views
+            .iter()
+            .filter(|v| filter.is_empty() || v.name.to_lowercase().contains(filter))
+            .map(|v| (v.name.clone(), v.camera == self.session.camera))
+            .collect();
+        egui::CollapsingHeader::new(
+            RichText::new(self.i18n.tr("tree-saved-views").to_uppercase())
+                .small()
+                .color(secondary),
+        )
+        .id_salt("tree-saved-views")
+        .default_open(true)
+        .show(ui, |ui| {
+            for (name, here) in &views {
+                let editing = self.view_edit.as_ref().is_some_and(|(n, _)| n == name);
+                if editing {
+                    if let Some(a) = self.view_name_edit(ui) {
+                        action = Some(a);
+                    }
+                    continue;
+                }
+                ui.horizontal(|ui| {
+                    ui.add_space(24.0);
+                    let r = ui.selectable_label(*here, name);
+                    let row = self
+                        .i18n
+                        .tr_args("tree-view-row", &[("item", name.clone().into())]);
+                    r.widget_info(|| WidgetInfo::selected(Role::Button, true, *here, row.clone()));
+                    let r = r.on_hover_text(self.i18n.tr("tree-view-tip"));
+                    if r.clicked() {
+                        action = Some(("views.go", json!({ "name": name })));
+                    }
+                    if r.double_clicked() {
+                        self.view_edit = Some((name.clone(), name.clone()));
+                    }
+                    r.context_menu(|ui| {
+                        for (key, call) in [
+                            ("tree-view-go", ("views.go", json!({ "name": name }))),
+                            ("tree-view-update", ("views.save", json!({ "name": name }))),
+                            (
+                                "tree-view-delete",
+                                ("views.delete", json!({ "name": name })),
+                            ),
+                        ] {
+                            if ui.button(self.i18n.tr(key)).clicked() {
+                                action = Some(call);
+                                ui.close();
+                            }
+                        }
+                        if ui.button(self.i18n.tr("tree-view-rename")).clicked() {
+                            self.view_edit = Some((name.clone(), name.clone()));
+                            ui.close();
+                        }
+                    });
+                });
+            }
+            if views.is_empty() && !filter.is_empty() {
+                return;
+            }
+            ui.horizontal(|ui| {
+                ui.add_space(24.0);
+                let b = ui
+                    .add(egui::Button::new(
+                        RichText::new(self.i18n.tr("tree-view-new")).small(),
+                    ))
+                    .on_hover_text(self.i18n.tr("tree-view-new-tip"));
+                if b.clicked() {
+                    save = true;
+                }
+            });
+        });
+        if save {
+            self.save_view();
+        }
+        action
+    }
+
+    /// The text field of a saved view being renamed: Enter or leaving it
+    /// renames, Escape keeps the old name.
+    fn view_name_edit(&mut self, ui: &mut Ui) -> Option<(&'static str, Value)> {
+        let (old, mut text) = self.view_edit.clone()?;
+        let mut action = None;
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            let r = ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .desired_width(f32::INFINITY)
+                    .char_limit(murmel_engine::display::VIEW_NAME_MAX),
+            );
+            let name = self
+                .i18n
+                .tr_args("tree-view-rename-field", &[("item", old.clone().into())]);
+            crate::focus::set_name(ui, r.id, &name);
+            if !r.has_focus() && !r.lost_focus() {
+                r.request_focus();
+            }
+            let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if escape {
+                self.view_edit = None;
+            } else if r.lost_focus() {
+                self.view_edit = None;
+                if text.trim() != old {
+                    action = Some(("views.rename", json!({ "name": old, "to": text })));
+                }
+            } else {
+                self.view_edit = Some((old.clone(), text.clone()));
+            }
         });
         action
     }
@@ -594,11 +743,13 @@ impl MurmelApp {
                 .into_iter()
                 .map(|r| (t.role_color(r), self.i18n.tr(&format!("role-{}", r.name()))))
                 .collect(),
-            ColorBy::Patch | ColorBy::CellType => murmel_engine::display::all_items(mesh)
-                .into_iter()
-                .filter(|&i| !d.is_hidden(i))
-                .filter_map(|i| d.item_color(mesh, t, i).map(|c| (c, name(i))))
-                .collect(),
+            ColorBy::Patch | ColorBy::CellType | ColorBy::Zone => {
+                murmel_engine::display::all_items(mesh)
+                    .into_iter()
+                    .filter(|&i| !d.is_hidden(i))
+                    .filter_map(|i| d.item_color(mesh, t, i).map(|c| (c, name(i))))
+                    .collect()
+            }
             // The quality legend (quality.rs) takes its place.
             ColorBy::Quality => Vec::new(),
         };

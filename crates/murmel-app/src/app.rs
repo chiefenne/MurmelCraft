@@ -32,6 +32,9 @@ pub struct MurmelApp {
     pub(crate) show_tree: bool,
     pub(crate) show_props: bool,
     pub(crate) tree_filter: String,
+    /// The saved view being renamed in the tree: its name and the text
+    /// typed so far.
+    pub(crate) view_edit: Option<(String, String)>,
     pub(crate) focus_filter: bool,
     pub(crate) props: Option<crate::panels::PropsCache>,
     /// The command table (keys, palette, shortcut sheet).
@@ -122,6 +125,7 @@ impl MurmelApp {
             show_tree: true,
             show_props: true,
             tree_filter: String::new(),
+            view_edit: None,
             focus_filter: false,
             props: None,
             commands: murmel_tools::commands::commands(),
@@ -178,7 +182,12 @@ impl MurmelApp {
         if e.ok()
             && matches!(
                 id,
-                "view.standard" | "view.rotate" | "view.fit" | "journal.undo" | "journal.redo"
+                "view.standard"
+                    | "view.rotate"
+                    | "view.fit"
+                    | "views.go"
+                    | "journal.undo"
+                    | "journal.redo"
             )
             && before != self.session.camera
         {

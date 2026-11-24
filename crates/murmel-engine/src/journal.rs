@@ -39,7 +39,10 @@ impl Snapshot {
     /// Put this state back into `s`, keeping its selection, pick filter
     /// and quality; the surface is rebuilt only when the display changed.
     fn restore(self, s: &mut Session) {
-        let redraw = Snapshot::of(s).display != self.display;
+        // Saved views are part of a step but not of the picture.
+        let mut now = Snapshot::of(s).display;
+        now.views.clone_from(&self.display.views);
+        let redraw = now != self.display;
         s.camera = self.camera;
         let mut d = self.display;
         d.selection = std::mem::take(&mut s.display.selection);
