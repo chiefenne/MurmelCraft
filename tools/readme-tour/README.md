@@ -1,7 +1,7 @@
 # The README slideshow
 
 `assets/readme/tour.webp` (the slideshow near the top of the README) and
-the stills of [docs/gallery.md](../../docs/gallery.md) are screenshots of
+its stills (assets/readme/tour/) are screenshots of
 the real window, made on Linux without a screen. To make them again, or
 to make the same for another project:
 

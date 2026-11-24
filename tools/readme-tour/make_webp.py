@@ -4,7 +4,7 @@
 
 Reads SHOTS_DIR/01-*.png ... (2x window captures, in name order) and writes
 OUT_DIR/tour.webp (1280 x 800, 4 s per slide, a 0.3 s crossfade, looping)
-and OUT_DIR/tour/NN-name.jpg (1440 x 900 stills for docs/gallery.md).
+and OUT_DIR/tour/NN-name.jpg (1440 x 900 stills).
 Needs Pillow with WebP support.
 """
 import pathlib
