@@ -1012,18 +1012,19 @@ fn points_in_range(ids: &[u32], points: usize) -> Result<(), MeshError> {
     }
 }
 
-/// The faces of the cells as the reader leaves them for linking.
+/// The faces of the cells as the reader leaves them for linking, with
+/// each face's smallest point when the reader found it.
 enum CellFaces {
-    Packed(Polygons),
-    InStream(cells::InStream),
+    Packed(Polygons, Vec<u32>),
+    InStream(cells::InStream, Vec<u32>),
 }
 
 impl CellFaces {
     /// Link the faces into `mesh`'s face topology.
     fn link(self, mesh: &mut Mesh) {
         match self {
-            CellFaces::Packed(p) => boundary::link(mesh, p),
-            CellFaces::InStream(s) => boundary::link(mesh, s),
+            CellFaces::Packed(p, least) => boundary::link(mesh, p, Some(least)),
+            CellFaces::InStream(s, least) => boundary::link(mesh, s, Some(least)),
         }
     }
 }
@@ -1111,9 +1112,11 @@ fn assemble(h: &Header, arrays: &mut [Array]) -> Result<(Mesh, CellFaces, Vec<Sl
     let polys = match read.faces {
         cells::Faces::Packed(p) => {
             drop(stream);
-            CellFaces::Packed(p)
+            CellFaces::Packed(p, read.least)
         }
-        cells::Faces::InStream(at) => CellFaces::InStream(cells::InStream { stream, at }),
+        cells::Faces::InStream(at) => {
+            CellFaces::InStream(cells::InStream { stream, at }, read.least)
+        }
     };
     mesh.cell_faces = read.cell_faces;
     mesh.cell_zone = read.cell_zone;

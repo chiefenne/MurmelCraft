@@ -258,6 +258,12 @@ problem took more than a few minutes to understand.
   (`opening.rs`, `phase_message`), so a new span inside a reader needs
   its name mapped there, or the window says "reading the file" while it
   runs. The `topology.*` steps map to "matching the faces".
+- **Linking trusts the smallest points a reader hands it.**
+  `boundary::link` sorts the faces by the smallest point that the `.vtu`
+  reader noted for each (`Cells::least`). A reader that changes a face's
+  points after noting them hands `None` instead, or the face lands in the
+  wrong group and loses its twin. Turning a face round keeps its points
+  and its smallest one.
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,
