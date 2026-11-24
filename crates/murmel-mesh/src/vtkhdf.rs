@@ -71,6 +71,7 @@ pub(crate) fn read_vtkhdf_with(path: &Path, hash: bool) -> Result<(Mesh, Results
             format!("{} is not a readable file", path.display()),
         ));
     }
+    // the file's structure; its datasets are read as they are needed
     let io = crate::profile::span("read.file");
     let h = H5::open(path)?;
     drop(io);
@@ -78,12 +79,24 @@ pub(crate) fn read_vtkhdf_with(path: &Path, hash: bool) -> Result<(Mesh, Results
     let t = crate::profile::span("read.vtkhdf");
     // Hash the file on another thread while it is read.
     let (read, digest) = std::thread::scope(|s| {
-        let digest = hash.then(|| s.spawn(|| crate::FileHash::Blake3.of_bytes(h.bytes())));
+        let digest = hash.then(|| {
+            s.spawn(|| {
+                let stop = std::sync::atomic::AtomicBool::new(false);
+                crate::FileHash::Blake3.of_file(path, &stop)
+            })
+        });
         let read = read_parts(&h);
-        (read, digest.map(|d| d.join().unwrap_or_default()))
+        let digest = digest.map(|d| {
+            d.join()
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+                .unwrap_or_default()
+        });
+        (read, digest)
     });
     drop(t);
-    // The faces are linked after the file's bytes are freed.
+    // The faces are linked after the datasets are freed.
     drop(h);
     let (mut mesh, results) = read?.finish()?;
     mesh.files = vec![path.to_path_buf()];
