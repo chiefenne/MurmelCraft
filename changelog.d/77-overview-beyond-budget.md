@@ -1,0 +1,3 @@
+### Added
+
+- A memory budget: a mesh opens whole up to half the computer's memory, or the budget set in Settings → Memory (`settings.set_memory`, `[memory] budget_gib` in settings.toml). A blocked VTKHDF file whose whole read needs more opens as an overview: its boundary, with each cell field shown as the value of the cell behind each face, and its block index, without reading the volume cells. A 4 M cell blocked file reads as an overview in 0.25 s within 134 MB instead of 4.2 s and 3.9 GB. The model tree says when a mesh is an overview and offers "Read the cells anyway"; `mesh.open` takes `mode` (`fit`, `whole` or `overview`).

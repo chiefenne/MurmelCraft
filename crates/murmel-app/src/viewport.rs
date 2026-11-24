@@ -150,11 +150,14 @@ impl MurmelApp {
     }
 
     fn describe(&self) -> String {
-        let (cells, faces) = self
-            .session
-            .mesh
-            .as_ref()
-            .map_or((0, 0), |m| (m.surface.cells, m.surface.faces));
+        let (cells, faces) = self.session.mesh.as_ref().map_or((0, 0), |m| {
+            // An overview draws no cells: it tells those of the file.
+            let cells = match &m.overview {
+                Some(_) => m.cells(),
+                None => m.surface.cells,
+            };
+            (cells, m.surface.faces)
+        });
         let view = match self.session.camera.standard() {
             Some(v) => self.i18n.tr(&format!("view-{}", v.name())),
             None => self.i18n.tr("viewport-view-custom"),

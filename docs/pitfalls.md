@@ -292,6 +292,18 @@ problem took more than a few minutes to understand.
   `FaceConnectivity` (`Points::Skip`): a check that needs the point ids
   belongs in the walk that writes, and the counting pass's error is
   reported only after a pass that reads the ids finds nothing before it.
+- **An overview has no cells, but its file has.** A mesh opened as an
+  overview (`OpenMesh::overview`) is the boundary only, so
+  `mesh.cell_count()` is 0; code that reports or checks the mesh's cells
+  (the badge against the evidence, the viewport's description, a time
+  step that keeps the display) asks `OpenMesh::cells()`, which gives the
+  file's. Code that needs the cells themselves (quality, regions, slices
+  of the volume) finds none, and the model tree hides the zones.
+- **A mesh loaded in advance is used only for the same fit.**
+  `Loaded::fit` must equal what `open_as` asks, or the session reads the
+  mesh again: a mesh read whole must not stand in for an overview, nor
+  the other way. The window loads with the fit it opens with
+  (`opening::Then::Mesh` carries the mode).
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,

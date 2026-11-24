@@ -88,6 +88,23 @@ fn diag_codes(_: Value, _: &mut Session) -> Run {
 #[serde(deny_unknown_fields)]
 struct OpenInput {
     path: PathBuf,
+    #[serde(default)]
+    mode: murmel_engine::OpenMode,
+}
+
+/// What an overview says of the volume it did not read.
+fn overview_json(s: &Session, o: &murmel_mesh::vtkhdf::Overview) -> Value {
+    use murmel_engine::memory::gib;
+    let (on, off): (Vec<_>, Vec<_>) = o.fields.iter().partition(|f| f.on_surface);
+    json!({
+        "cells": o.cells,
+        "blocks": o.blocks.len(),
+        "needs_gib": gib(o.size.open_bytes()),
+        "budget_gib": gib(s.budget_bytes()),
+        "fields_on_boundary": on.iter().map(|f| &f.name).collect::<Vec<_>>(),
+        "fields_not_shown": off.iter().map(|f| &f.name).collect::<Vec<_>>(),
+        "note": "the volume cells are not read: the mesh is its boundary, and each cell field shows on it as the value of the cell behind each face; open it with mode \"whole\" or raise the memory budget (settings.set_memory) to read the cells",
+    })
 }
 
 fn mesh_summary(s: &Session) -> Value {
@@ -117,13 +134,15 @@ fn mesh_summary(s: &Session) -> Value {
         "digest": m.digest,
         "items": std::iter::once(Item::Mesh).chain(all_items(&m.mesh)).map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
         "surface": {"triangles": m.surface.triangles(), "edges": m.surface.edges()},
+        "overview": m.overview.as_deref().map(|o| overview_json(s, o)),
         "warnings": warnings,
     })
 }
 
 fn mesh_open(input: Value, s: &mut Session) -> Run {
     let i: OpenInput = parse(input)?;
-    s.open(&i.path).map_err(mesh_err)?;
+    let fit = s.fit_for(i.mode);
+    s.open_as(&i.path, fit).map_err(mesh_err)?;
     Ok(mesh_summary(s))
 }
 
@@ -1216,6 +1235,9 @@ pub(crate) fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> 
             agents: Agents { enabled: s.agents },
             defaults: s.defaults.clone(),
             formulas: s.formulas.clone(),
+            memory: murmel_engine::memory::Memory {
+                budget_gib: s.memory_budget,
+            },
             ..Settings::default()
         },
     )
@@ -1378,8 +1400,51 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
         "defaults": s.defaults,
         "defaultable": crate::defaults::defaultable(),
         "formulas": s.formulas,
+        "memory": memory_json(s),
         "config_dir": s.config_dir,
     }))
+}
+
+fn memory_json(s: &Session) -> Value {
+    use murmel_engine::memory::{gib, system_bytes};
+    json!({
+        "budget_gib": gib(s.budget_bytes()),
+        "automatic": s.memory_budget.is_none(),
+        "system_gib": system_bytes().map(gib),
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetMemory {
+    budget_gib: Option<f64>,
+    automatic: Option<bool>,
+}
+
+fn settings_set_memory(input: Value, s: &mut Session) -> Run {
+    use murmel_engine::memory::{MAX_GIB, MIN_GIB};
+    let i: SetMemory = parse(input)?;
+    s.memory_budget = match (i.budget_gib, i.automatic) {
+        (Some(g), None | Some(false)) => {
+            let g = finite(g, "budget_gib")?;
+            if !(MIN_GIB..=MAX_GIB).contains(&g) {
+                return Err(Diagnostic::new(
+                    "TOOL002",
+                    format!("budget_gib must be {MIN_GIB} to {MAX_GIB}"),
+                ));
+            }
+            Some(g)
+        }
+        (None, Some(true)) => None,
+        _ => {
+            return Err(Diagnostic::new(
+                "TOOL002",
+                "give budget_gib, or automatic: true for half the computer's memory",
+            ));
+        }
+    };
+    let path = save_session_settings(s)?;
+    Ok(json!({"memory": memory_json(s), "files": [path]}))
 }
 
 // ---- session files ------------------------------------------------------
@@ -2247,6 +2312,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("settings.set_colors", "settings are files, not undone"),
     ("settings.set_view_cube", "settings are files, not undone"),
     ("settings.set_agents", "settings are files, not undone"),
+    ("settings.set_memory", "settings are files, not undone"),
     ("settings.set_bindings", "settings are files, not undone"),
     ("settings.set_default", "settings are files, not undone"),
     ("settings.reset_default", "settings are files, not undone"),
@@ -2384,15 +2450,18 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "mesh.open",
-        version: 4,
+        version: 5,
         action: Action::Read,
         label_key: "tool-mesh-open",
-        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty.",
+        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty. `mode` fit (the default) opens the mesh whole when it fits the memory budget (settings.set_memory) and a blocked VTKHDF file (murmel blocks make) that does not as an overview: its boundary only, each cell field on it as the value of the cell behind each face, and `overview` (cells, blocks, memory a whole read needs); whole reads it whole whatever it needs; overview asks for the overview.",
         outputs: &[],
         reads: &["path"],
         input_schema: || {
             object(
-                json!({"path": {"type": "string", "description": "A .vtu or .vtkhdf file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)"}}),
+                json!({
+                    "path": {"type": "string", "description": "A .vtu or .vtkhdf file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)"},
+                    "mode": {"type": "string", "enum": ["fit", "whole", "overview"], "description": "fit (default): whole within the memory budget, else an overview of a blocked VTKHDF file; whole; overview"}
+                }),
                 &["path"],
             )
         },
@@ -3405,6 +3474,25 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: || object(json!({"enabled": {"type": "boolean"}}), &["enabled"]),
         run: settings_set_agents,
+    },
+    Tool {
+        id: "settings.set_memory",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-set-memory",
+        summary: "Set the memory budget: a mesh whose whole read needs more (estimated from the file before reading) opens as an overview when it is a blocked VTKHDF file; others open whole. budget_gib (0.25 to 4096), or automatic: true for half the computer's memory (the default). Applies to the next mesh opened; writes settings.toml in the config folder.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "budget_gib": {"type": "number", "minimum": 0.25, "maximum": 4096},
+                    "automatic": {"type": "boolean"}
+                }),
+                &[],
+            )
+        },
+        run: settings_set_memory,
     },
     Tool {
         id: "settings.set_default",

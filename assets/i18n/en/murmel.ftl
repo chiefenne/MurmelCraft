@@ -410,6 +410,16 @@ settings-agents = Agents
 settings-agents-allow = Let agents drive this window
 settings-agents-listening = Listening for murmel mcp --live at { $path }
 settings-agents-off = Agents cannot drive this window.
+settings-memory = Memory
+settings-memory-half = Half of this computer's memory ({ $total } GB)
+settings-memory-half-unknown = Half of this computer's memory (16 GB if it cannot be found)
+settings-memory-budget = Budget
+settings-memory-note = A mesh that needs more than { $budget } GB opens as an overview if it is a blocked .vtkhdf file; others open whole.
+
+# A mesh beyond the memory budget, open as an overview (model tree).
+overview-note = Overview: the { $cells } cells in { $blocks } blocks are not read. Reading them needs about { $needs } GB, more than the memory budget of { $budget } GB. Cell fields show on the boundary as the value of the cell behind each face.
+overview-open-whole = Read the cells anyway
+overview-open-whole-tip = Opens the whole mesh, which needs more memory than the budget.
 
 viewport-empty = Open a KoflCraft mesh (foehncraft.vtu) with Open or { $ctrl } + O, or drop it here.
 viewport-description = { $view }, { $cells } cells, { $faces } boundary faces, colour by { $colour }
@@ -491,6 +501,7 @@ loading-phase-numbers = reading points and faces
 loading-phase-cells = assembling the cells
 loading-phase-topology = matching the faces
 loading-phase-surface = building the surface
+loading-phase-overview = reading the boundary for an overview
 status-error = { $code }: { $message }
 status-selected = Selected { $area } { $item }
 status-selected-many = { $count } selected
@@ -567,6 +578,7 @@ tool-settings-keep-formula = Keep a formula
 tool-settings-forget-formula = Forget a formula
 tool-settings-set-view-cube = View cube placement
 tool-settings-set-agents = Let agents drive this window
+tool-settings-set-memory = Memory budget
 tool-session-save = Save session
 tool-session-load = Load session
 

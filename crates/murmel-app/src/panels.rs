@@ -47,6 +47,8 @@ impl MurmelApp {
         let mut patches = Vec::new();
         for item in all_items(mesh) {
             match item {
+                // An overview has no cells to show by zone.
+                Item::Zone(_) if m.overview.is_some() => {}
                 Item::Zone(z) => zones.push(Row {
                     item,
                     label: mesh.zones[z as usize].clone(),
@@ -149,6 +151,19 @@ impl MurmelApp {
         if let Validity::Failed(why) = &m.validity {
             badge_tip = format!("{badge_tip}\n{}", why.join("\n"));
         }
+        // a mesh beyond the memory budget, open as an overview
+        let overview = m.overview.as_deref().map(|o| {
+            use murmel_engine::memory::gib;
+            self.i18n.tr_args(
+                "overview-note",
+                &[
+                    ("cells", (o.cells as f64).into()),
+                    ("blocks", (o.blocks.len() as f64).into()),
+                    ("needs", gib(o.size.open_bytes()).into()),
+                    ("budget", gib(self.session.budget_bytes()).into()),
+                ],
+            )
+        });
         let selection = self.session.display.selection.clone();
         let mut action: Option<(&'static str, Value)> = None;
         egui::ScrollArea::vertical()
@@ -172,6 +187,16 @@ impl MurmelApp {
                         action = Some(("view.fit", json!({})));
                     }
                 });
+                if let Some(note) = &overview {
+                    ui.label(RichText::new(note).small().color(color(p.status_warn)));
+                    let r = ui
+                        .small_button(self.i18n.tr("overview-open-whole"))
+                        .on_hover_text(self.i18n.tr("overview-open-whole-tip"));
+                    if r.clicked() {
+                        action = Some(("window.open_whole", json!({})));
+                    }
+                    ui.add_space(4.0);
+                }
                 let filter = self.tree_filter.to_lowercase();
                 for (section, rows) in self.rows() {
                     let rows: Vec<&Row> = rows
@@ -218,6 +243,11 @@ impl MurmelApp {
                 self.open_color_edit(&field("item"), &field("label"));
             }
             Some(("window.parcels_open", _)) => self.parcels_open_dialog(),
+            Some(("window.open_whole", _)) => {
+                if let Some(path) = self.session.mesh.as_ref().map(|m| m.path.clone()) {
+                    self.open_path_as(path, murmel_engine::OpenMode::Whole);
+                }
+            }
             Some((id, input)) => {
                 self.call(id, input);
             }

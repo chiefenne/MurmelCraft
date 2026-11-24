@@ -1,6 +1,6 @@
 //! The user's settings files: `settings.toml` (theme, mesh colours, view
 //! cube placement, whether agents may drive the window, the defaults new
-//! items start from, your formulas) and
+//! items start from, your formulas, the memory budget) and
 //! `navigation.toml` (mouse bindings), in the MurmelCraft config folder.
 //! `MURMEL_CONFIG_DIR` overrides the folder (tests, portable installs).
 
@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::calc::Formula;
 use crate::cube::CubeSettings;
 use crate::defaults::Defaults;
+use crate::memory::Memory;
 use crate::navigation::Navigation;
 use crate::theme::{MeshColors, Theme};
 
@@ -55,6 +56,9 @@ pub struct Settings {
     /// every result.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formulas: Vec<Formula>,
+    /// The memory budget (`[memory]`, [`crate::memory`]).
+    #[serde(default, skip_serializing_if = "Memory::is_default")]
+    pub memory: Memory,
 }
 
 /// `[agents]` in settings.toml: the window listens for `murmel mcp --live`
@@ -86,6 +90,7 @@ impl Default for Settings {
             agents: Agents::default(),
             defaults: Defaults::default(),
             formulas: Vec::new(),
+            memory: Memory::default(),
         }
     }
 }

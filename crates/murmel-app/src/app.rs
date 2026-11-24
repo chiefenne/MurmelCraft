@@ -74,6 +74,8 @@ pub struct MurmelApp {
     pub(crate) cube_busy: bool,
     /// The auto-hide distance while it is edited.
     pub(crate) cube_distance_edit: Option<f64>,
+    /// The memory budget being typed or dragged (GiB), set when done.
+    pub(crate) memory_edit: Option<f64>,
     /// Until when a run of wheel steps keeps its undo group open.
     wheel_until: f64,
     /// A drag of a clip plane handle under way.
@@ -164,6 +166,7 @@ impl MurmelApp {
             session.agents = st.agents.enabled;
             session.defaults = st.defaults;
             session.formulas = st.formulas;
+            session.memory_budget = st.memory.budget_gib;
             murmel_engine::defaults::start_view(&mut session);
             let mut problems = problems;
             if let Err(e) = session.set_colors(st.colors) {
@@ -208,6 +211,7 @@ impl MurmelApp {
             cube_move: None,
             cube_busy: false,
             cube_distance_edit: None,
+            memory_edit: None,
             wheel_until: 0.0,
             clip_drag: None,
             clip_spots: Vec::new(),
@@ -361,6 +365,11 @@ impl MurmelApp {
     /// Open a mesh, or load a session file (`*.murmel`). A large mesh (a
     /// session's too) is read on a thread of its own first.
     pub(crate) fn open_path(&mut self, path: PathBuf) {
+        self.open_path_as(path, murmel_engine::OpenMode::Fit);
+    }
+
+    /// [`MurmelApp::open_path`], a mesh opening as `mode` asks.
+    pub(crate) fn open_path_as(&mut self, path: PathBuf, mode: murmel_engine::OpenMode) {
         use crate::opening::Then;
         let session = path
             .extension()
@@ -376,8 +385,8 @@ impl MurmelApp {
             if !background {
                 self.open_now(Then::Session(path));
             }
-        } else if !self.open_in_background(path.clone(), Then::Mesh(path.clone())) {
-            self.open_now(Then::Mesh(path));
+        } else if !self.open_in_background(path.clone(), Then::Mesh(path.clone(), mode)) {
+            self.open_now(Then::Mesh(path, mode));
         }
     }
 
@@ -1204,6 +1213,8 @@ impl MurmelApp {
                 }
                 ui.add_space(8.0);
                 self.defaults_settings(ui);
+                ui.add_space(8.0);
+                self.memory_settings(ui);
                 if let Some(d) = &self.session.config_dir {
                     ui.add_space(8.0);
                     ui.label(
@@ -1222,6 +1233,62 @@ impl MurmelApp {
 }
 
 impl MurmelApp {
+    /// The memory budget: half the computer's memory, or one you set. A
+    /// blocked mesh that needs more opens as an overview.
+    fn memory_settings(&mut self, ui: &mut Ui) {
+        use murmel_engine::memory::{MAX_GIB, MIN_GIB, gib, system_bytes};
+        ui.heading(self.i18n.tr("settings-memory"));
+        let mut automatic = self.session.memory_budget.is_none();
+        let label = match system_bytes() {
+            Some(b) => self
+                .i18n
+                .tr_args("settings-memory-half", &[("total", gib(b).into())]),
+            None => self.i18n.tr("settings-memory-half-unknown"),
+        };
+        if ui.checkbox(&mut automatic, label).changed() {
+            let input = if automatic {
+                json!({ "automatic": true })
+            } else {
+                json!({ "budget_gib": gib(self.session.budget_bytes()).max(MIN_GIB) })
+            };
+            self.call("settings.set_memory", input);
+        }
+        if self.session.memory_budget.is_some() {
+            let name = self.i18n.tr("settings-memory-budget");
+            let mut g = self
+                .memory_edit
+                .or(self.session.memory_budget)
+                .unwrap_or(MIN_GIB);
+            ui.horizontal(|ui| {
+                ui.label(&name);
+                let r = ui.add(
+                    egui::DragValue::new(&mut g)
+                        .range(MIN_GIB..=MAX_GIB)
+                        .speed(0.25)
+                        .suffix(" GB")
+                        .max_decimals(2),
+                );
+                r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name.clone()));
+                if r.changed() {
+                    self.memory_edit = Some(g);
+                }
+                let done = r.drag_stopped()
+                    || (r.changed() && !r.dragged() && !r.has_focus())
+                    || r.lost_focus();
+                if done && let Some(v) = self.memory_edit.take() {
+                    self.call("settings.set_memory", json!({ "budget_gib": v }));
+                }
+            });
+        }
+        ui.label(
+            RichText::new(self.i18n.tr_args(
+                "settings-memory-note",
+                &[("budget", gib(self.session.budget_bytes()).into())],
+            ))
+            .small(),
+        );
+    }
+
     /// Name the pane `ui` is drawn in and remember where it is (F6).
     fn region(&mut self, ui: &Ui, region: Region) {
         crate::focus::name_pane(ui, &self.i18n.tr(region.key()));
