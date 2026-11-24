@@ -27,6 +27,8 @@ mod tests {
             include_str!("field.rs"),
             include_str!("extracts.rs"),
             include_str!("clip_handle.rs"),
+            include_str!("streams.rs"),
+            include_str!("stream_handle.rs"),
         ];
         for s in src {
             for part in s
@@ -76,7 +78,7 @@ mod tests {
         }
         for a in [
             "mesh", "zone", "kind", "patch", "cell", "face", "clip", "measure", "probe", "slice",
-            "iso", "region",
+            "iso", "arrows", "stream", "region",
         ] {
             assert!(t.has(&format!("props-area-{a}")));
         }
@@ -85,6 +87,17 @@ mod tests {
         }
         for k in murmel_engine::region::Shape::KINDS {
             assert!(t.has(&format!("region-shape-{k}")));
+        }
+        for k in murmel_engine::Seed::KINDS {
+            assert!(t.has(&format!("stream-seed-{k}")));
+            assert!(t.has(&format!("tree-stream-from-{k}")));
+            assert!(t.has(&format!("stream-seed-kind-{k}")));
+        }
+        for d in murmel_engine::Direction::ALL {
+            assert!(t.has(&format!("stream-direction-{}", d.key())));
+        }
+        for l in [murmel_engine::Look::Lines, murmel_engine::Look::Tubes] {
+            assert!(t.has(&format!("stream-look-{}", l.key())));
         }
         // Every property row of every item of the channel mesh, of a
         // region of every shape, and of its field results with a slice
@@ -131,6 +144,22 @@ mod tests {
                         serde_json::json!({"new": true, "field": "pressure"}),
                     ),
                     ("arrows.set", serde_json::json!({})),
+                    (
+                        "stream.set",
+                        serde_json::json!({"new": true, "seed": "line", "count": 4, "look": "tubes"}),
+                    ),
+                    (
+                        "stream.set",
+                        serde_json::json!({"new": true, "seed": "sphere", "color": "field"}),
+                    ),
+                    (
+                        "stream.set",
+                        serde_json::json!({"new": true, "seed": "patch"}),
+                    ),
+                    (
+                        "stream.set",
+                        serde_json::json!({"new": true, "seed": "plane", "count": 9}),
+                    ),
                 ] {
                     let e = murmel_tools::call(tool, input, &mut s);
                     assert!(e.ok(), "{tool}: {:?}", e.diagnostics);
@@ -139,6 +168,10 @@ mod tests {
                     murmel_engine::Item::Slice(0),
                     murmel_engine::Item::Iso(0),
                     murmel_engine::Item::Arrows,
+                    murmel_engine::Item::Stream(0),
+                    murmel_engine::Item::Stream(1),
+                    murmel_engine::Item::Stream(2),
+                    murmel_engine::Item::Stream(3),
                 ]);
             }
             let (Some(m), d) = (&s.mesh, &s.display) else {

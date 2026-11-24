@@ -98,6 +98,74 @@ impl Legend {
             body: Body::Categories(entries),
         })
     }
+
+    /// The colour bars of the streamlines coloured by a field (decided
+    /// 2026-11-24: their own field and their own colour bar), each with
+    /// the sets it explains: one bar per field, component and range, and
+    /// none that would repeat the mesh's field legend. Hidden sets and
+    /// sets not traced yet have none.
+    pub fn streams(s: &Session) -> Vec<(Vec<usize>, Legend)> {
+        let Some(m) = s.mesh.as_ref() else {
+            return Vec::new();
+        };
+        let d = &s.display;
+        let shown = Legend::of(s);
+        let mut out: Vec<(Vec<usize>, Legend)> = Vec::new();
+        for (k, st) in d.streams.iter().enumerate() {
+            let Some(choice) = st.color.as_ref().filter(|_| st.enabled) else {
+                continue;
+            };
+            let Some((lo, hi)) = crate::stream::color_range(d, &m.mesh, Some(&m.fields), k) else {
+                continue;
+            };
+            let style = d.style_of(&choice.name);
+            let Some(map) = crate::field::map_for(&style, (lo, hi)) else {
+                continue;
+            };
+            let f = m.fields.get(&choice.name);
+            let legend = Legend {
+                title: Label::Text(choice.title(f.is_some_and(|f| f.is_vector()))),
+                body: Body::Ramp(Ramp {
+                    stops: map.legend_stops(style.reverse),
+                    lo,
+                    hi,
+                    ticks: ticks(lo, hi, MAX_TICKS),
+                    unit: f.and_then(|f| f.unit.clone()),
+                    bands: (style.mode == crate::field::FieldMode::Banded).then_some(
+                        style
+                            .bands
+                            .clamp(crate::field::MIN_BANDS, crate::field::MAX_BANDS)
+                            as usize,
+                    ),
+                    contours: Vec::new(),
+                    threshold: None,
+                }),
+            };
+            if shown.as_ref().is_some_and(|l| same_bar(l, &legend)) {
+                continue;
+            }
+            match out.iter_mut().find(|(_, l)| *l == legend) {
+                Some((sets, _)) => sets.push(k),
+                None => out.push((vec![k], legend)),
+            }
+        }
+        out
+    }
+}
+
+/// Whether two legends show the same bar (the field legend's contour
+/// marks aside, which streamlines do not draw).
+fn same_bar(a: &Legend, b: &Legend) -> bool {
+    match (&a.body, &b.body) {
+        (Body::Ramp(x), Body::Ramp(y)) => {
+            a.title == b.title
+                && Ramp {
+                    contours: Vec::new(),
+                    ..x.clone()
+                } == *y
+        }
+        _ => false,
+    }
 }
 
 /// The swatches of colour modes other than quality, as the window has
@@ -506,5 +574,58 @@ mod tests {
         assert_eq!(r.sample(0.0), s.tokens.quality_color(0.0));
         let i18n = I18n::english().unwrap();
         assert_eq!(title.text(&i18n), "Non-orthogonality");
+    }
+
+    /// Invariant: streamlines coloured by a field get their own bar, one
+    /// per field and range whatever the number of sets, in that field's
+    /// style; solid or hidden sets get none, and neither does a set whose
+    /// bar the mesh's field legend already shows.
+    #[test]
+    fn stream_bars() {
+        use crate::field::{Component, FieldChoice};
+        use crate::stream::{Seed, Stream};
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+        s.open(&path).unwrap();
+        let mesh = s.mesh.as_ref().unwrap().mesh.clone();
+        let line = Seed::default_for("line", &mesh).unwrap();
+        let mut a = Stream::new("velocity", line.clone());
+        a.count = 6;
+        let mut b = a.clone();
+        b.seed = Seed::default_for("sphere", &mesh).unwrap();
+        let mut c = a.clone();
+        c.color = None;
+        s.display.streams = vec![a, b, c];
+        s.redraw();
+        let bars = Legend::streams(&s);
+        assert_eq!(bars.len(), 1, "{bars:?}");
+        assert_eq!(bars[0].0, vec![0, 1]);
+        assert_eq!(bars[0].1.title, Label::Text("|velocity|".into()));
+        let Body::Ramp(r) = &bars[0].1.body else {
+            panic!("no ramp")
+        };
+        assert!(r.hi > r.lo && !r.ticks.is_empty());
+
+        // Another field: a second bar; hidden: none.
+        s.display.streams[1].color = Some(FieldChoice {
+            name: "pressure".into(),
+            component: Component::Magnitude,
+        });
+        s.redraw();
+        assert_eq!(Legend::streams(&s).len(), 2);
+        s.display.streams[1].enabled = false;
+        s.redraw();
+        assert_eq!(Legend::streams(&s).len(), 1);
+
+        // The mesh shows the same bar: no second one.
+        s.display.color_by = ColorBy::Field;
+        s.display.field = Some(FieldChoice {
+            name: "velocity".into(),
+            component: Component::Magnitude,
+        });
+        s.redraw();
+        assert!(Legend::streams(&s).is_empty());
     }
 }

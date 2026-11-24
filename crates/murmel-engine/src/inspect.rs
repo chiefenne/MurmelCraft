@@ -383,6 +383,80 @@ fn region_rows(display: &Display, k: usize) -> Vec<Row> {
     v
 }
 
+/// The rows of streamline set `k`: what it traces from where, and how
+/// its lines ended.
+fn stream_rows(open: &OpenMesh, display: &Display, k: usize) -> Vec<Row> {
+    use crate::stream::{Look, Seed};
+    let m = &open.mesh;
+    let Some(st) = display.streams.get(k) else {
+        return Vec::new();
+    };
+    let p3 = |p: [f64; 3]| -> Vec<f64> { p.iter().map(|&x| round(x, 6)).collect() };
+    let mut v = vec![
+        row("name", format!("{}", k + 1)),
+        row("field", st.field.clone()),
+        row("enabled", st.enabled),
+        row("seed", st.seed.key()),
+    ];
+    match &st.seed {
+        Seed::Line { from, to } => {
+            v.push(unit("seed_from", p3(*from), "m"));
+            v.push(unit("seed_to", p3(*to), "m"));
+        }
+        Seed::Sphere { centre, radius } => {
+            v.push(unit("centre", p3(*centre), "m"));
+            v.push(unit("radius", round(*radius, 6), "m"));
+        }
+        Seed::Patch { patch } => v.push(row("patch", patch.clone())),
+        Seed::Plane { origin, normal } => {
+            v.push(unit("origin", p3(*origin), "m"));
+            v.push(row("normal", p3(*normal)));
+        }
+    }
+    v.extend([
+        row("seeds_wanted", st.count),
+        row("direction", st.direction.key()),
+        unit("length_limit", round(st.length_limit(m), 6), "m"),
+        row("look", st.look.key()),
+    ]);
+    if st.look == Look::Tubes {
+        v.push(unit("tube_radius", round(st.tube_radius(m), 6), "m"));
+    }
+    v.push(row("arrowheads", st.arrowheads));
+    v.push(match &st.color {
+        None => row("color", "solid"),
+        Some(c) => {
+            let vector = open.fields.get(&c.name).is_some_and(|f| f.is_vector());
+            row("color_by", c.title(vector))
+        }
+    });
+    let traced = display
+        .stream_traces
+        .as_ref()
+        .and_then(|t| t.0.get(k).cloned().flatten())
+        .filter(|t| t.fits(st));
+    if let Some(t) = traced {
+        if let Some(p) = &t.problem {
+            v.push(row("problem", p.clone()));
+        }
+        v.extend([
+            row("seeds_placed", t.seeds),
+            row("seeds_outside", t.outside),
+            row("lines", t.lines.len()),
+            row("points", t.points),
+            row("ended_left", t.ends.left),
+            row("ended_slow", t.ends.slow),
+            row("ended_length", t.ends.length),
+            row("ended_steps", t.ends.steps),
+        ]);
+        if t.ends.lost > 0 {
+            v.push(row("ended_lost", t.ends.lost));
+        }
+    }
+    v.push(row("current_stream", display.current_stream() == Some(k)));
+    v
+}
+
 /// The rows of `item` in the open mesh.
 pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
     let m = &open.mesh;
@@ -582,6 +656,7 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             v.push(row("color", a.color.key()));
             v
         }
+        Item::Stream(k) => stream_rows(open, display, k as usize),
         Item::Face(u) => face_rows(m, display, u as usize),
         Item::Measure(n) => display.measurement(n).map_or_else(Vec::new, measure_rows),
         Item::Probe(n) => {

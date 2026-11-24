@@ -89,6 +89,9 @@ outline = "#7A8089"
 # Vector arrows drawn in a solid colour: a light cool grey that stands
 # out against the dark viewport and against the coloured slices.
 arrow = "#E8ECF2"
+# Streamlines drawn in a solid colour: a clear cyan, apart from the
+# arrows' grey and the role colours, readable on both viewports.
+stream = "#36B7C4"
 
 # Patch roles (UI spec, Colour by): wall grey, inlet blue, outlet orange,
 # symmetry green, interface violet, unspecified sand. Searched in OKLCH

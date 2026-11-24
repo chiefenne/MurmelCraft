@@ -80,6 +80,21 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   colour is in `colors` as `arrows`). Arrows of a field the result does
   not have, or of a scalar, are skipped as `field:<name>`. The arrows are
   computed again on loading, never stored.
+- **Streamlines** (format 1.9) are `display.streams`, in the order they
+  were added (`stream:1` is the first): `{"field": "velocity", "seed":
+  {"shape": "line", "from": [0.2, 0.1, 0.5], "to": [0.2, 1.9, 0.5]},
+  "enabled": true, "count": 50, "color": {"name": "velocity",
+  "component": "magnitude"}}`. The seed shapes are `line` (`from`,
+  `to`), `sphere` (`centre`, `radius`), `patch` (`patch`, a patch's name)
+  and `plane` (`origin`, unit `normal`); `count` runs from 1 to 1000.
+  Left out for their defaults: `direction` (`forward`, `backward`, or
+  `both` by default), `max_length` (three times the mesh's diagonal),
+  `look` (`lines`, or `tubes`), `radius` (the tubes', a 400th of the
+  diagonal), `arrowheads` (false) and `color` (left out for the solid
+  colour; an own colour is in `colors` as `stream:1`). At most 8. A set
+  traced through a field the result does not have or a scalar, coloured
+  by a missing field, or seeded on a missing patch is skipped as
+  `stream:<n>`. The lines are traced again on loading, never stored.
 - **Regions of interest** (format 1.7) are `display.regions`, in the
   order they were added (`region:1` is the first): `{"shape": {"kind":
   "box", "center": [2, 1, 0.5], "size": [1, 1, 1]}, "enabled": true}`.

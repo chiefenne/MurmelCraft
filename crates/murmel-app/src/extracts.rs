@@ -6,8 +6,9 @@
 //! the mesh draws as its faint outline or with its faces (decided
 //! 2026-11-24). The colour bar's part (a click places an iso-surface,
 //! marks at their values) is here too. The vector arrows (stage 3) have a
-//! row of their own, with their density and length below it. Every change
-//! calls a tool.
+//! row of their own, with their density and length below it; the
+//! streamlines (stage 4) a row per set (`streams.rs`). Every change calls
+//! a tool.
 
 use egui::{Align, Layout, Pos2, Rect, RichText, Role, Sense, Stroke, Ui, WidgetInfo};
 use murmel_engine::Item;
@@ -453,6 +454,9 @@ impl MurmelApp {
                     });
                 }
             }
+            if let Some(a) = self.stream_rows(ui, p, ramp_ends) {
+                action = Some(a);
+            }
             // One button per line, indented like the rows' labels.
             let adds = [
                 (
@@ -487,6 +491,9 @@ impl MurmelApp {
                         action = Some(call);
                     }
                 });
+            }
+            if let Some(a) = self.stream_add(ui) {
+                action = Some(a);
             }
             if d.extracts_shown() {
                 ui.horizontal(|ui| {

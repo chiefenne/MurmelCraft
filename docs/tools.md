@@ -33,7 +33,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
 | `field.style` | 1 | read | Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values by inverse distance weighting, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes viridis, or cool_warm for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
-| `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>, iso:<n>, arrows), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type, an iso-surface's and the arrows' colours when they are solid. |
+| `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>, iso:<n>, arrows, stream:<n>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type, an iso-surface's, the arrows' and a streamline set's colours when they are solid. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
 | `clip.set` | 2 | read | Set a clip plane (plane: its number, clip:1 is the first; left out: the current plane, the one selected last or else added last; new: add one, up to 8): its normal by axis (x, y, z or view; the half nearer the eye is cut away, so the cut faces the camera) or as a vector, its place by origin or by offset along the normal from the centre of the mesh, the mode (crinkle keeps whole cells, flat slices them), flip (swap the side cut away) and enabled. The side the normal points to is cut away; fields left out keep their value (a new plane: x through the centre, crinkle). A cell shows when every enabled plane keeps it; flat planes slice in the order they were added. |
 | `clip.rotate` | 1 | read | Tilt a clip plane (plane: its number; left out: the current plane) by deg degrees about an axis through pivot (right-hand rule). The axis is a screen axis (x right, y up, z towards the viewer, as in view.rotate) or a world vector; the pivot defaults to the centre of the plane inside the mesh's box, so the plane stays in the mesh. The window's tilt arcs and Alt + arrow keys call it. |
@@ -45,6 +45,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `iso.clear` | 1 | read | Remove an iso-surface (iso: its number; left out: the current one), or all of them (all); those after it move up one. |
 | `arrows.set` | 1 | read | Show or change the vector arrows: shaded 3D arrows of a vector field (field: left out, their own, else the field shown if it is a vector, else the file's first vector) on every slice shown, on an even square grid anchored at the mesh's centre, and on the mesh surface shown when surface is true (one boundary face per cube of the grid). density is the arrows across the mesh's largest extent (4 to 200, 25 by default); the length follows the magnitude, the field's largest being 0.9 of a spacing times scale (above 0, up to 100). in_plane draws only the part of the vector in each slice's plane, the longest of those then 0.9 of a spacing. color solid gives them a colour of their own (display.set_color on arrows), field the colour of the field on the colour bar there. enabled false keeps the settings and draws none. At most 10 000 are drawn (capped in the result). |
 | `arrows.clear` | 1 | read | Remove the vector arrows and their settings. |
+| `stream.set` | 1 | read | Add or change a set of streamlines (stream: its number, stream:1 is the first; left out: the current set, the one selected last or else added last; new: add one, up to 8). The lines follow a vector field (field: left out, the set's own, else the field shown if it is a vector, else the file's first vector) through the cells' tetrahedra (the field slices show) by fourth-order Runge-Kutta in arc length, a quarter of a cell per step, forward, backward or both ways from each seed (direction, both by default), and stop where they leave the mesh (or the regions shown), where the speed falls below 0.1 % of the field's largest, at max_length (a length, or null for three mesh diagonals) or after 10 000 steps. seed: line (from, to: count seeds evenly, ends included; a new line lies across the mesh near the low end of its longest side), sphere (centre, radius: its centre and Halton points through the ball), patch (patch: a boundary patch's name, its faces thinned evenly to about count; a new one takes the first inlet), plane (origin, normal: an even grid of about count points inside the mesh). Values of another shape than the set's are refused unless seed names that shape. count: seeds wanted, 1 to 1000 (50 by default); seeds outside the mesh are left out. look: lines (thin lines, the default) or tubes (shaded, tube_radius a length or null for 1/400 of the mesh diagonal); arrowheads: cones pointing downstream along the lines. color: field (the default: color_field and component, left out the traced field's magnitude, with a colour bar of its own in that field's style, field.style) or solid (display.set_color on stream:<n>). enabled false keeps the settings and draws none. While streamlines show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's stream says how many seeds were placed and how the lines ended. |
+| `stream.clear` | 1 | read | Remove a set of streamlines (stream: its number; left out: the current set), or all of them (all); those after it move up one. |
 | `region.set` | 1 | read | Add or change a region of interest (region: its number, region:1 is the first; left out: the current region, the one selected last or else added last; new: add one, up to 16). While a region is enabled, only the cells of the enabled regions show and slices, iso-surfaces, arrows and quality are computed only there; several enabled regions show their union. shape: box (center, size: full lengths along x, y, z; a new one is half the mesh's box), sphere (center, radius), slab (the cells between two planes thickness apart, the middle one through origin with normal), zone (zone: a cell zone's name), patch (patch: its name, layers: the cells along it and layers - 1 rings further in, 1 to 64), cells (cells: ids, left out: the cells picked now; rings: rings of face neighbours added, 0 to 64). A cell belongs to a box, sphere or slab when its bounding box touches the shape, so the shape is fully covered (also when it is thinner than a cell) and the border shows whole cells. cut: crinkle (the default, whole cells) or flat (box, sphere and slab only: the border cells are clipped to the shape and closed by their sections, as a flat clip plane cuts; a box's and a slab's cut is exact, a sphere's follows it to within a cell, and a sphere with no mesh node inside shows whole cells, with a note; a cell a whole-cell region takes stays whole, and where flat regions overlap a cell is cut by the one its centre lies deepest in). Changing shape replaces the region's shape; fields of another shape are refused. enabled false keeps the region but shows the whole mesh. The result lists each region with the cells it takes, its halo (the cells around it a mesh read in pieces also loads) and the size of that part of the mesh model. |
 | `region.clear` | 1 | read | Remove a region (region: its number; left out: the current region), or all of them (all); the regions after it move up one. With no region enabled the whole mesh shows. |
 | `region.list` | 1 | read | The regions of interest: each with its shape, whether it is enabled, and what it takes (cells, halo cells, points and the size of that part of the mesh model in MiB); shown is what the enabled regions take together (null while none is enabled and the whole mesh shows). |
@@ -1331,6 +1333,165 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `stream.set`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "arrowheads": {
+      "type": "boolean"
+    },
+    "centre": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "color": {
+      "enum": [
+        "solid",
+        "field"
+      ]
+    },
+    "color_field": {
+      "type": "string"
+    },
+    "component": {
+      "enum": [
+        "magnitude",
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "count": {
+      "maximum": 1000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "direction": {
+      "enum": [
+        "forward",
+        "backward",
+        "both"
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "field": {
+      "type": "string"
+    },
+    "from": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "look": {
+      "enum": [
+        "lines",
+        "tubes"
+      ]
+    },
+    "max_length": {
+      "oneOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "new": {
+      "type": "boolean"
+    },
+    "normal": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "origin": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "patch": {
+      "type": "string"
+    },
+    "radius": {
+      "exclusiveMinimum": 0,
+      "type": "number"
+    },
+    "seed": {
+      "enum": [
+        "line",
+        "sphere",
+        "patch",
+        "plane"
+      ]
+    },
+    "stream": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "to": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    },
+    "tube_radius": {
+      "oneOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `stream.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "all": {
+      "type": "boolean"
+    },
+    "stream": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `region.set`
 
 ```json
@@ -2573,6 +2734,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `REGION002` | error | The region's shape is broken (a size, radius or thickness that is not positive, a zero normal, too many rings) or names a zone, patch or cell the mesh does not have. | mesh.info lists the zones and patches; cells count from 0 to the cell count minus one; sizes must be positive. |
 | `REGION003` | error | The display has the most regions it holds (16). | Remove a region with region.clear, or change one with region.set. |
 | `ARROW002` | error | The arrows' density is outside 4 to 200, or their scale is not above 0 and up to 100. | Give density 4 to 200 (arrows across the mesh's largest extent) and a scale above 0, up to 100. |
+| `STREAM001` | error | No streamline set has this number, or the display has the most it holds (8). | Sets count from 1 (stream:1); the streams list of the result names them. Remove one with stream.clear to add another. |
+| `STREAM002` | error | A streamline setting is out of range (count outside 1 to 1000, a length or radius not above 0, a line of one point, a zero normal), names a patch the mesh does not have, or belongs to another seed shape than the set's. | Give count 1 to 1000 and positive lengths; mesh.info lists the patches; name the shape with seed to change it (line: from, to; sphere: centre, radius; patch: patch; plane: origin, normal). |
+| `STREAM003` | error | Streamlines follow a vector field (one with x, y and z components), and the field named or the open mesh has none. | Name a vector field (field.list shows each field's components), or open a result with velocity. |
 | `MCP001` | error | The MCP server refused a path outside its read or write roots. | Use a path below a --read-root (files read) or a --write-root (files written), or start the server with more roots. |
 | `MCP002` | error | The MCP server could not resolve a path (it does not exist, or its folder does not). | Check the path; relative paths resolve from the first --write-root. |
 | `LIVE001` | error | No MurmelCraft window listens for agents (none is open, agents are switched off in its Settings, or the platform has no live bridge yet). | Open MurmelCraft and switch on Settings > Agents > Let agents drive this window, or start the MCP server without --live for a headless session. |

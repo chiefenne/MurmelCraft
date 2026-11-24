@@ -854,38 +854,10 @@ fn level_set(
     if !iso.is_finite() {
         return Vec::new();
     }
-    let node_of = |f: &FieldValues, i: u32| f.node.get(i as usize).copied().unwrap_or(f64::NAN);
-    let centroid = |c: usize| match fields {
-        Some(f) => f.centroid(mesh, c),
-        None => crate::inspect::cell_centroid(mesh, c),
-    };
-    // The value at the centre `fc` of distinct face `u`: between the two
-    // cells' values by their centroids' distances to it, or for a
-    // boundary face (or a cell without a value) the mean of its nodes.
+    let node_of = crate::tets::node_value;
+    let centroid = |c: usize| crate::tets::centroid(mesh, fields, c);
     let face_value = |f: &FieldValues, u: u32, face: &[u32], fc: [f64; 3]| -> f64 {
-        let nodes = || face.iter().map(|&n| node_of(f, n)).sum::<f64>() / face.len() as f64;
-        let (Some(&o), Some(&n)) = (
-            mesh.face_owner.get(u as usize),
-            mesh.face_neighbour.get(u as usize),
-        ) else {
-            return nodes();
-        };
-        if o == NO_CELL || n == NO_CELL {
-            return nodes();
-        }
-        let (vo, vn) = (
-            f.cell.get(o as usize).copied().unwrap_or(f64::NAN),
-            f.cell.get(n as usize).copied().unwrap_or(f64::NAN),
-        );
-        let dist = |c: u32| {
-            let x = centroid(c as usize);
-            (0..3).map(|d| (x[d] - fc[d]).powi(2)).sum::<f64>().sqrt()
-        };
-        let (d_o, d_n) = (dist(o), dist(n));
-        if !(vo.is_finite() && vn.is_finite()) || d_o + d_n <= 0.0 {
-            return nodes();
-        }
-        (d_n * vo + d_o * vn) / (d_o + d_n)
+        crate::tets::face_value(mesh, fields, f, u, face, fc)
     };
     let node_level = |n: u32| match level {
         Level::Field(v, _) => node_of(v, n),
@@ -938,14 +910,7 @@ fn level_set(
                 continue;
             }
             let u = f.id;
-            let k = f.len() as f64;
-            let fc = [0, 1, 2].map(|d| {
-                f.nodes
-                    .iter()
-                    .map(|&n| mesh.points[n as usize][d])
-                    .sum::<f64>()
-                    / k
-            });
+            let fc = crate::tets::face_centre(mesh, f.nodes);
             let vf = match level {
                 Level::Field(v, _) => face_value(v, u, f.nodes, fc),
                 Level::Plane(p) => p.distance(fc),

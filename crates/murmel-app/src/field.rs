@@ -31,12 +31,15 @@ const FOOTER: f32 = 22.0;
 
 impl MurmelApp {
     /// The legend of colour mode field, at the right edge of `rect`.
-    pub(crate) fn field_legend(&mut self, ui: &mut Ui, rect: Rect, dark: bool) {
+    /// Returns the right edge left for the next legend (the
+    /// streamlines' bars).
+    pub(crate) fn field_legend(&mut self, ui: &mut Ui, rect: Rect, dark: bool) -> f32 {
+        let free = rect.right() - 16.0;
         let Some(legend) = Legend::of(&self.session) else {
-            return;
+            return free;
         };
         let Body::Ramp(ramp) = &legend.body else {
-            return;
+            return free;
         };
         let p = self.session.tokens.palette(dark).clone();
         let line = self.session.tokens.mesh.field.line;
@@ -155,6 +158,7 @@ impl MurmelApp {
         if let Some((tool, input)) = click {
             self.call(tool, input);
         }
+        area.left() - 8.0
     }
 
     /// The field's settings, in the legend's menu.
@@ -164,7 +168,7 @@ impl MurmelApp {
         };
         let (name, vector, comp) = (v.choice.name.clone(), v.vector, v.choice.component);
         let st = self.session.field_style();
-        let mut calls: Vec<(&str, Value)> = Vec::new();
+        let mut calls: Vec<(&'static str, Value)> = Vec::new();
         ui.set_min_width(220.0);
         // The field and, for a vector, its component.
         let names: Vec<String> = self
@@ -198,6 +202,29 @@ impl MurmelApp {
             });
         }
         ui.separator();
+        let range = self.session.field_range();
+        self.style_menu(ui, &st, range, true, &mut calls);
+        for (tool, mut input) in calls {
+            if tool == "field.style" {
+                input["field"] = json!(name);
+            }
+            self.call(tool, input);
+        }
+    }
+
+    /// The settings of a field's style, shared by the field legend and the
+    /// streamlines' colour bars: colouring and bands, contour lines (when
+    /// `lines`), the colour map and its direction, and the range; `range`
+    /// is the range shown, for the automatic map's name. Pushes the
+    /// `field.style` calls (the caller names the field).
+    pub(crate) fn style_menu(
+        &self,
+        ui: &mut Ui,
+        st: &murmel_engine::FieldStyle,
+        range: Option<(f64, f64)>,
+        lines: bool,
+        calls: &mut Vec<(&'static str, Value)>,
+    ) {
         // Colouring, bands and contour lines.
         ui.label(RichText::new(self.i18n.tr("field-mode")).small());
         ui.horizontal(|ui| {
@@ -226,31 +253,31 @@ impl MurmelApp {
                 calls.push(("field.style", json!({ "bands": b })));
             }
         }
-        ui.horizontal(|ui| {
-            let mut on = st.lines;
-            let label = self.i18n.tr("field-lines");
-            if ui
-                .checkbox(&mut on, &label)
-                .on_hover_text(self.i18n.tr("field-lines-tip"))
-                .changed()
-            {
-                calls.push(("field.style", json!({ "lines": on })));
-            }
-            if st.lines {
-                let mut n = st.line_count;
-                let label = self.i18n.tr("field-line-count");
-                let r = ui.add(egui::DragValue::new(&mut n).range(1..=field::MAX_LINES));
-                r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, label.clone()));
-                if n != st.line_count {
-                    calls.push(("field.style", json!({ "line_count": n })));
+        if lines {
+            ui.horizontal(|ui| {
+                let mut on = st.lines;
+                let label = self.i18n.tr("field-lines");
+                if ui
+                    .checkbox(&mut on, &label)
+                    .on_hover_text(self.i18n.tr("field-lines-tip"))
+                    .changed()
+                {
+                    calls.push(("field.style", json!({ "lines": on })));
                 }
-            }
-        });
+                if st.lines {
+                    let mut n = st.line_count;
+                    let label = self.i18n.tr("field-line-count");
+                    let r = ui.add(egui::DragValue::new(&mut n).range(1..=field::MAX_LINES));
+                    r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, label.clone()));
+                    if n != st.line_count {
+                        calls.push(("field.style", json!({ "line_count": n })));
+                    }
+                }
+            });
+        }
         ui.separator();
         // The colour map and its direction.
-        let auto_map = self
-            .session
-            .field_range()
+        let auto_map = range
             .and_then(|r| {
                 let auto = murmel_engine::FieldStyle {
                     map: None,
@@ -338,18 +365,12 @@ impl MurmelApp {
         if ui.button(self.i18n.tr("field-reset")).clicked() {
             calls.push(("field.style", json!({"reset": true})));
         }
-        for (tool, mut input) in calls {
-            if tool == "field.style" {
-                input["field"] = json!(name);
-            }
-            self.call(tool, input);
-        }
     }
 }
 
 /// The colour bar: the map from the low end (bottom) to the high end, in
 /// flat bands for banded colouring, with a mark at each contour line.
-fn paint_bar(painter: &egui::Painter, bar: Rect, ramp: &Ramp, line: Color32) {
+pub(crate) fn paint_bar(painter: &egui::Painter, bar: Rect, ramp: &Ramp, line: Color32) {
     let y_of = |t: f64| bar.bottom() - t as f32 * bar.height();
     match ramp.bands {
         Some(n) if n > 0 => {

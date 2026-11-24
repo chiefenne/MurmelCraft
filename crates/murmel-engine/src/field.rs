@@ -370,6 +370,8 @@ type ValueCache = Arc<Mutex<HashMap<(String, Component), Arc<FieldValues>>>>;
 pub struct FieldSet {
     pub results: Results,
     topology: OnceLock<Arc<Topology>>,
+    /// The cells' centroids on a bucket grid (streamline seeds).
+    grid: OnceLock<Arc<crate::stream::CellGrid>>,
     /// Values made once per field and component (colour mode field and
     /// every iso-surface ask for them again on each redraw).
     cache: ValueCache,
@@ -380,6 +382,7 @@ impl FieldSet {
         Self {
             results,
             topology: OnceLock::new(),
+            grid: OnceLock::new(),
             cache: ValueCache::default(),
         }
     }
@@ -408,6 +411,12 @@ impl FieldSet {
             .unwrap_or_else(PoisonError::into_inner)
             .insert(key, v.clone());
         Some(v)
+    }
+
+    /// The cells' centroids on a bucket grid, made once.
+    pub(crate) fn cell_grid(&self, mesh: &Mesh) -> &crate::stream::CellGrid {
+        self.grid
+            .get_or_init(|| Arc::new(crate::stream::CellGrid::build(mesh, self)))
     }
 
     /// The volume centroid of cell `c`.

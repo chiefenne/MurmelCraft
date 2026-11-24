@@ -34,10 +34,15 @@ const BAR: f64 = 160.0;
 const BAR_W: f64 = 14.0;
 /// Opacity of the legend's panel, as in the window.
 const PANEL_ALPHA: f32 = 0.92;
+/// Room between two legends side by side, points.
+const LEGEND_GAP: f64 = 8.0;
 
 /// What to draw over a picture.
 pub struct Overlays<'a> {
     pub legend: Option<&'a Legend>,
+    /// The streamlines' own colour bars ([`Legend::streams`]), right of
+    /// the legend, each titled "Streamlines · field".
+    pub streams: &'a [Legend],
     /// The camera whose axes the triad shows (bottom left).
     pub triad: Option<&'a Camera>,
     pub i18n: &'a I18n,
@@ -49,7 +54,7 @@ pub struct Overlays<'a> {
 
 impl Overlays<'_> {
     pub fn is_empty(&self) -> bool {
-        self.legend.is_none() && self.triad.is_none()
+        self.legend.is_none() && self.streams.is_empty() && self.triad.is_none()
     }
 }
 
@@ -80,11 +85,20 @@ pub fn draw(rgba: &mut [u8], width: u32, height: u32, o: &Overlays<'_>) -> Resul
         scale: o.scale.max(0.05) as f64,
     };
     let palette = o.tokens.palette(o.dark);
+    let mut x = LEGEND_AT.0;
     if let Some(l) = o.legend {
         let title = l.title.text(o.i18n);
-        match &l.body {
+        x += match &l.body {
             Body::Categories(e) => p.categories(&title, e, o, palette),
-            Body::Ramp(r) => p.ramp(&title, r, palette),
+            Body::Ramp(r) => p.ramp(&title, r, palette, x),
+        } + LEGEND_GAP;
+    }
+    for l in o.streams {
+        if let Body::Ramp(r) = &l.body {
+            let title = o
+                .i18n
+                .tr_args("legend-streams", &[("field", l.title.text(o.i18n).into())]);
+            x += p.ramp(&title, r, palette, x) + LEGEND_GAP;
         }
     }
     if let Some(cam) = o.triad {
@@ -205,14 +219,14 @@ impl Painter<'_> {
     }
 
     /// The window's legend of categories: a title, then one row per
-    /// entry with a 10-point swatch, 18 points apart.
+    /// entry with a 10-point swatch, 18 points apart. Returns its width.
     fn categories(
         &mut self,
         title: &str,
         entries: &[Entry],
         o: &Overlays<'_>,
         palette: &murmel_engine::theme::Palette,
-    ) {
+    ) -> f64 {
         let names: Vec<String> = entries.iter().map(|e| e.label.text(o.i18n)).collect();
         let line = 18.0;
         let widest = names
@@ -243,12 +257,19 @@ impl Painter<'_> {
             );
             self.label(name, TEXT, x + 28.0, top, paint(palette.text_primary, 1.0));
         }
+        widest + 20.0
     }
 
     /// A vertical colour bar, high values on top, with the ticks to its
     /// right; flat bands when the ramp is banded, marks for contour
     /// levels and the quality threshold.
-    fn ramp(&mut self, title: &str, r: &Ramp, palette: &murmel_engine::theme::Palette) {
+    fn ramp(
+        &mut self,
+        title: &str,
+        r: &Ramp,
+        palette: &murmel_engine::theme::Palette,
+        x: f64,
+    ) -> f64 {
         let title = match &r.unit {
             Some(u) if !u.is_empty() => format!("{title} ({u})"),
             _ => title.to_string(),
@@ -260,7 +281,7 @@ impl Painter<'_> {
             .fold(0.0, f64::max);
         let pad = 10.0;
         let width = (BAR_W + 8.0 + label_w).max(self.text_width(&title, TEXT)) + 2.0 * pad;
-        let (x, y) = LEGEND_AT;
+        let y = LEGEND_AT.1;
         let bar_top = y + pad + 22.0;
         let height = 22.0 + BAR + 2.0 * pad + 6.0;
         self.rounded(
@@ -326,6 +347,7 @@ impl Painter<'_> {
             self.line((bx1, yy), (bx1 + 4.0, yy), 1.0, ink);
             self.text(l, SMALL, bx1 + 8.0, yy + cap / 2.0, ink);
         }
+        width
     }
 
     /// The window's axis triad: 28 points long from 48 points inside the

@@ -932,6 +932,158 @@ pub fn commands() -> Vec<Command> {
             s.display.arrows.as_ref().map(|_| json!({}))
         }),
     ));
+    // Streamlines: Alt + L adds a seed line across the mesh near the low
+    // end of its longest side (where a duct's inlet usually is), or turns
+    // the current set on and off.
+    v.push(cmd(
+        "stream.set:toggle",
+        "cmd-stream-toggle",
+        "slice",
+        &["Alt+L"],
+        Dynamic("stream.set", |s| {
+            let m = s.mesh.as_ref()?;
+            match s.display.current_stream() {
+                Some(k) => Some(json!({
+                    "stream": k + 1,
+                    "enabled": !s.display.streams[k].enabled,
+                })),
+                None => {
+                    let vector = m
+                        .fields
+                        .names()
+                        .iter()
+                        .any(|n| m.fields.get(n).is_some_and(|f| f.is_vector()));
+                    vector.then(|| json!({"new": true, "seed": "line"}))
+                }
+            }
+        }),
+    ));
+    for kind in murmel_engine::Seed::KINDS {
+        v.push(cmd(
+            format!("stream.set:new_{kind}"),
+            format!("cmd-stream-new-{kind}"),
+            "slice",
+            &[],
+            match kind {
+                "line" => Dynamic("stream.set", |s| new_stream(s, "line")),
+                "sphere" => Dynamic("stream.set", |s| new_stream(s, "sphere")),
+                "patch" => Dynamic("stream.set", |s| new_stream(s, "patch")),
+                _ => Dynamic("stream.set", |s| new_stream(s, "plane")),
+            },
+        ));
+    }
+    for d in murmel_engine::Direction::ALL {
+        v.push(cmd(
+            format!("stream.set:{}", d.key()),
+            format!("cmd-stream-{}", d.key()),
+            "slice",
+            &[],
+            match d {
+                murmel_engine::Direction::Forward => Dynamic("stream.set", |s| {
+                    s.display
+                        .current_stream()
+                        .map(|_| json!({"direction": "forward"}))
+                }),
+                murmel_engine::Direction::Backward => Dynamic("stream.set", |s| {
+                    s.display
+                        .current_stream()
+                        .map(|_| json!({"direction": "backward"}))
+                }),
+                murmel_engine::Direction::Both => Dynamic("stream.set", |s| {
+                    s.display
+                        .current_stream()
+                        .map(|_| json!({"direction": "both"}))
+                }),
+            },
+        ));
+    }
+    v.push(cmd(
+        "stream.set:tubes",
+        "cmd-stream-tubes",
+        "slice",
+        &[],
+        Dynamic("stream.set", |s| {
+            let k = s.display.current_stream()?;
+            Some(json!({"look": match s.display.streams[k].look {
+                murmel_engine::Look::Lines => "tubes",
+                murmel_engine::Look::Tubes => "lines",
+            }}))
+        }),
+    ));
+    v.push(cmd(
+        "stream.set:arrowheads",
+        "cmd-stream-arrowheads",
+        "slice",
+        &[],
+        Dynamic("stream.set", |s| {
+            let k = s.display.current_stream()?;
+            Some(json!({"arrowheads": !s.display.streams[k].arrowheads}))
+        }),
+    ));
+    v.push(cmd(
+        "stream.set:more",
+        "cmd-stream-more",
+        "slice",
+        &[],
+        Dynamic("stream.set", |s| {
+            let k = s.display.current_stream()?;
+            let n = s.display.streams[k].count;
+            let more = (n * 3 / 2).max(n + 1).min(murmel_engine::stream::MAX_COUNT);
+            (more != n).then(|| json!({"count": more}))
+        }),
+    ));
+    v.push(cmd(
+        "stream.set:fewer",
+        "cmd-stream-fewer",
+        "slice",
+        &[],
+        Dynamic("stream.set", |s| {
+            let k = s.display.current_stream()?;
+            let n = s.display.streams[k].count;
+            let fewer = (n * 2 / 3).max(murmel_engine::stream::MIN_COUNT);
+            (fewer != n).then(|| json!({"count": fewer}))
+        }),
+    ));
+    v.push(cmd(
+        "stream.set:solid",
+        "cmd-stream-solid",
+        "slice",
+        &[],
+        Dynamic("stream.set", |s| {
+            s.display
+                .current_stream()
+                .map(|_| json!({"color": "solid"}))
+        }),
+    ));
+    v.push(cmd(
+        "stream.set:field",
+        "cmd-stream-field",
+        "slice",
+        &[],
+        Dynamic("stream.set", |s| {
+            s.display
+                .current_stream()
+                .map(|_| json!({"color": "field"}))
+        }),
+    ));
+    v.push(cmd(
+        "stream.clear",
+        "cmd-stream-clear",
+        "slice",
+        &[],
+        Dynamic("stream.clear", |s| {
+            s.display.current_stream().map(|_| json!({}))
+        }),
+    ));
+    v.push(cmd(
+        "stream.clear:all",
+        "cmd-stream-clear-all",
+        "slice",
+        &[],
+        Dynamic("stream.clear", |s| {
+            (!s.display.streams.is_empty()).then(|| json!({"all": true}))
+        }),
+    ));
     for l in murmel_engine::MeshLook::ALL {
         v.push(cmd(
             format!("display.mesh_look:{}", l.key()),
@@ -1256,6 +1408,21 @@ pub fn commands() -> Vec<Command> {
         Tool("settings.set_colors", json!({"reset": true})),
     ));
     v
+}
+
+/// A new streamline set seeded on `kind`, when the open mesh has a
+/// vector field and room for another set.
+fn new_stream(s: &Session, kind: &str) -> Option<Value> {
+    let m = s.mesh.as_ref()?;
+    let vector = m
+        .fields
+        .names()
+        .iter()
+        .any(|n| m.fields.get(n).is_some_and(|f| f.is_vector()));
+    (vector
+        && s.display.streams.len() < murmel_engine::stream::MAX_STREAMS
+        && murmel_engine::Seed::default_for(kind, &m.mesh).is_some())
+    .then(|| json!({"new": true, "seed": kind}))
 }
 
 /// Tools no command calls, and why: they answer questions whose answers

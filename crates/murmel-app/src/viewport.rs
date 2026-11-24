@@ -90,12 +90,20 @@ impl MurmelApp {
             .filter(|_| resp.hovered() && self.drag.is_none())
             .map(|p| (p, alt));
         self.measure_overlay(ui, rect, &cam, dark, pointer);
-        match self.session.display.color_by {
-            murmel_engine::ColorBy::Quality => self.quality_legend(ui, rect, dark),
+        let free = match self.session.display.color_by {
+            murmel_engine::ColorBy::Quality => {
+                self.quality_legend(ui, rect, dark);
+                rect.right() - 16.0
+            }
             murmel_engine::ColorBy::Field => self.field_legend(ui, rect, dark),
-            _ => self.legend(ui, rect, dark),
-        }
+            _ => {
+                self.legend(ui, rect, dark);
+                rect.right() - 16.0
+            }
+        };
+        self.stream_legends(ui, rect, dark, free);
         self.clip_handles(ui, rect, &cam, dark);
+        self.stream_handles(ui, rect, &cam, dark);
         self.view_cube(ui, rect, &cam, dark);
 
         let desc = self.describe();

@@ -26,7 +26,9 @@ pub mod region;
 pub mod session;
 pub mod session_file;
 pub mod settings;
+pub mod stream;
 pub mod surface;
+mod tets;
 pub mod theme;
 
 pub use camera::{Camera, Projection, ScreenAxis, StandardView};
@@ -44,5 +46,6 @@ pub use quality::{Metric, Quality};
 pub use region::{Region, RegionCells, Shape};
 pub use session::{Loaded, OpenMesh, Session, Validity, load, load_with};
 pub use session_file::SessionFile;
+pub use stream::{Direction, Look, Seed, Stream};
 pub use surface::Surface;
 pub use theme::{MeshColors, Rgb, Theme, Tokens};
