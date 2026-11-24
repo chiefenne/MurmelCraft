@@ -396,9 +396,14 @@ pub struct Mesh {
 /// SHA-256 of `bytes`, lowercase hex.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
+    hex(&Sha256::digest(bytes))
+}
+
+/// `bytes` as lowercase hex.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
-    let mut out = String::with_capacity(64);
-    for b in Sha256::digest(bytes) {
+    let mut out = String::with_capacity(2 * bytes.len());
+    for b in bytes {
         let _ = write!(out, "{b:02x}");
     }
     out

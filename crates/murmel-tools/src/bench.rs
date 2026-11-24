@@ -244,9 +244,11 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             murmel_mesh::read_results(path)
         })
         .map_err(|e| e.to_string())?;
+    // Reading is the first stage: the peak so far is the reader's.
     st.note(json!({
         "file_bytes": mesh.files.iter().map(|f| bytes_of(f)).sum::<u64>(),
         "phases": phases(),
+        "peak_rss_mib": peak_rss_mib(),
     }));
     let files: Vec<PathBuf> = mesh.files.clone();
     st.time("digest", r, || {

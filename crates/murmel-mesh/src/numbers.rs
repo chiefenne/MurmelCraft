@@ -145,49 +145,62 @@ fn parse_into<T: Number>(text: &[u8], sep: &Sep, out: &mut [T]) -> Result<(), St
 /// Parse every token of `text` (tokens between `sep` characters). A token
 /// that is not a `T` is returned as the error.
 pub(crate) fn parse<T: Number>(text: &[u8], sep: &Sep) -> Result<Vec<T>, String> {
+    let mut out = Vec::new();
+    parse_append(text, sep, &mut out)?;
+    Ok(out)
+}
+
+/// Parse every token of `text` onto the end of `out` (a streaming reader
+/// hands its text over piece by piece, each ending at a separator). A
+/// token that is not a `T` is returned as the error.
+pub(crate) fn parse_append<T: Number>(
+    text: &[u8],
+    sep: &Sep,
+    out: &mut Vec<T>,
+) -> Result<(), String> {
     let ps = pieces(text, sep);
     let sizes: Vec<usize> = par::collect(ps.len(), 1, |r| {
         r.map(|i| count_tokens(&text[ps[i].clone()], sep)).collect()
     });
-    let mut out = vec![T::default(); sizes.iter().sum()];
+    let at = out.len();
+    out.resize(at + sizes.iter().sum::<usize>(), T::default());
     // Each piece parses into its own part of `out`.
     let mut parts: Vec<(&[u8], &mut [T])> = Vec::with_capacity(ps.len());
-    let mut rest: &mut [T] = &mut out;
+    let mut rest: &mut [T] = &mut out[at..];
     for (r, &k) in ps.iter().zip(&sizes) {
         let (head, tail) = rest.split_at_mut(k);
         rest = tail;
         parts.push((&text[r.clone()], head));
     }
-    let results: Vec<Result<(), String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = parts
+    // One piece (a short array, or one thread) is parsed here.
+    let results: Vec<Result<(), String>> = if parts.len() <= 1 {
+        parts
             .into_iter()
-            .map(|(piece, slot)| s.spawn(move || parse_into(piece, sep, slot)))
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+            .map(|(piece, slot)| parse_into(piece, sep, slot))
             .collect()
-    });
+    } else {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = parts
+                .into_iter()
+                .map(|(piece, slot)| s.spawn(move || parse_into(piece, sep, slot)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+                .collect()
+        })
+    };
     for r in results {
         r?;
     }
-    Ok(out)
+    Ok(())
 }
 
-/// Decode base64 `text` (whitespace around and inside it allowed).
-pub(crate) fn base64(text: &str) -> Result<Vec<u8>, String> {
-    let trimmed = text.trim();
-    let cleaned;
-    let b = if trimmed.bytes().any(|c| SPACE.has(c)) {
-        cleaned = trimmed
-            .bytes()
-            .filter(|&c| !SPACE.has(c))
-            .collect::<Vec<u8>>();
-        cleaned.as_slice()
-    } else {
-        trimmed.as_bytes()
-    };
-    if b.len() % 4 != 0 {
+/// Decode base64 `b` (no whitespace, whole groups of four characters)
+/// onto the end of `out`, and say how many bytes it wrote. Only the last
+/// group may hold padding.
+pub(crate) fn base64_append(b: &[u8], out: &mut Vec<u8>) -> Result<usize, String> {
+    if !b.len().is_multiple_of(4) {
         return Err(format!(
             "{} base64 characters, not a multiple of 4",
             b.len()
@@ -195,27 +208,35 @@ pub(crate) fn base64(text: &str) -> Result<Vec<u8>, String> {
     }
     let quads = b.len() / 4;
     let ranges = par::ranges(quads, 1 << 18);
-    let mut out = vec![0u8; quads * 3];
+    let at = out.len();
+    out.resize(at + quads * 3, 0);
     let mut parts: Vec<(&[u8], &mut [u8])> = Vec::with_capacity(ranges.len());
-    let mut rest: &mut [u8] = &mut out;
+    let mut rest: &mut [u8] = &mut out[at..];
     for r in &ranges {
         let (head, tail) = rest.split_at_mut(r.len() * 3);
         rest = tail;
         parts.push((&b[r.start * 4..r.end * 4], head));
     }
     let engine = &base64::engine::general_purpose::STANDARD;
-    let written: Vec<Result<usize, String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = parts
+    let decode =
+        |src: &[u8], dst: &mut [u8]| engine.decode_slice(src, dst).map_err(|e| e.to_string());
+    let written: Vec<Result<usize, String>> = if parts.len() <= 1 {
+        parts
             .into_iter()
-            .map(|(src, dst)| {
-                s.spawn(move || engine.decode_slice(src, dst).map_err(|e| e.to_string()))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+            .map(|(src, dst)| decode(src, dst))
             .collect()
-    });
+    } else {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = parts
+                .into_iter()
+                .map(|(src, dst)| s.spawn(move || decode(src, dst)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+                .collect()
+        })
+    };
     let mut total = 0;
     for (i, w) in written.into_iter().enumerate() {
         let w = w?;
@@ -225,8 +246,8 @@ pub(crate) fn base64(text: &str) -> Result<Vec<u8>, String> {
         }
         total += w;
     }
-    out.truncate(total);
-    Ok(out)
+    out.truncate(at + total);
+    Ok(total)
 }
 
 /// The little-endian values of `bytes`, each `size` bytes, converted by
@@ -282,22 +303,30 @@ mod tests {
         assert_eq!(i64::parse(b"3.0"), None);
     }
 
-    /// Invariant: base64 decodes in pieces to what one decode gives, with
-    /// and without whitespace inside, and its padding only at the end.
+    /// Invariant: base64 decodes in pieces to what one decode gives, piece
+    /// after piece onto the same vector, with its padding only at the
+    /// end. A piece decoded into the wrong part of the result, or padding
+    /// accepted inside the data, would change the bytes.
     #[test]
     fn base64_in_pieces() {
         let data: Vec<u8> = (0..100_001u32).map(|i| (i * 31 % 251) as u8).collect();
         let text = base64::engine::general_purpose::STANDARD.encode(&data);
-        let broken: String = text
-            .as_bytes()
-            .chunks(76)
-            .map(|c| format!("  {}\n", String::from_utf8_lossy(c)))
-            .collect();
         for threads in [1, 5] {
             par::with_threads(threads, || {
-                assert_eq!(base64(&text).unwrap(), data);
-                assert_eq!(base64(&broken).unwrap(), data);
-                assert!(base64("QUJD=QUJD").is_err());
+                let mut out = Vec::new();
+                assert_eq!(
+                    base64_append(text.as_bytes(), &mut out).unwrap(),
+                    data.len()
+                );
+                assert_eq!(out, data);
+                let mut out = vec![7u8];
+                let cut = 4 * 1001;
+                base64_append(&text.as_bytes()[..cut], &mut out).unwrap();
+                base64_append(&text.as_bytes()[cut..], &mut out).unwrap();
+                assert_eq!(out[1..], data);
+                assert!(base64_append(b"QUJD=QUJD", &mut out).is_err());
+                assert!(base64_append(b"QUJ=QUJD", &mut out).is_err());
+                assert!(base64_append(b"QUJDQ", &mut out).is_err());
             });
         }
         let v = le(&[1, 0, 0, 0, 2, 0, 0, 0], 4, |c| {
