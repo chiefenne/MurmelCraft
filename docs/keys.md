@@ -116,4 +116,5 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | palette | View cube: floating panel | `settings.set_view_cube` `{"placement":"floating"}` |
 | palette | View cube: hidden | `settings.set_view_cube` `{"placement":"hidden"}` |
 | palette | View cube: hide when the pointer is far away (on or off) | `settings.set_view_cube` (input from the session) |
+| palette | Agents: let them drive this window (on or off) | `settings.set_agents` (input from the session) |
 | palette | Reset to the built-in colours | `settings.set_colors` `{"reset":true}` |

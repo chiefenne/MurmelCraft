@@ -1,5 +1,5 @@
 //! The user's settings files: `settings.toml` (theme, mesh colours, view
-//! cube placement) and
+//! cube placement, whether agents may drive the window) and
 //! `navigation.toml` (mouse bindings), in the MurmelCraft config folder.
 //! `MURMEL_CONFIG_DIR` overrides the folder (tests, portable installs).
 
@@ -42,6 +42,28 @@ pub struct Settings {
     /// Where the view cube is and whether it hides itself.
     #[serde(default)]
     pub view_cube: CubeSettings,
+    /// Whether the window lets agents drive it (the live bridge).
+    #[serde(default)]
+    pub agents: Agents,
+}
+
+/// `[agents]` in settings.toml: the window listens for `murmel mcp --live`
+/// while `enabled` (the default; the maintainer's choice of 2026-11-24).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Agents {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for Agents {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 impl Default for Settings {
@@ -51,6 +73,7 @@ impl Default for Settings {
             theme: Theme::default(),
             colors: MeshColors::default(),
             view_cube: CubeSettings::default(),
+            agents: Agents::default(),
         }
     }
 }

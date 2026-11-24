@@ -175,3 +175,17 @@ problem took more than a few minutes to understand.
 - **Clippy in integration tests.** `allow-unwrap-in-tests` covers `#[test]`
   functions and `#[cfg(test)]` modules, not helpers in a `tests/*.rs` file;
   those files allow `clippy::unwrap_used` at the top (as `render.rs` does).
+- **The live bridge runs calls on the window's thread.** Agents' calls
+  queue in the listener and run at the start of the next frame
+  (`MurmelApp::serve_agents`); the connection thread only wakes the window
+  (`request_repaint`). A window that does not draw (minimised on macOS)
+  does not answer until it draws again, so the client waits at most two
+  minutes (`LIVE002`).
+- **The window's session has a config folder.** Over the bridge the
+  settings tools must not write the person's files, so the window takes
+  `config_dir` away for the call and puts it back (as the headless server
+  drops it); a tool that reads the config folder sees none there.
+- **A window test listens on its own socket.** `MurmelApp::new` sets the
+  default socket path; window tests set `bridge_path` to `None` (or to a
+  scratch path), or two test runs, or a test and a real window, fight over
+  one socket (`LIVE003`).
