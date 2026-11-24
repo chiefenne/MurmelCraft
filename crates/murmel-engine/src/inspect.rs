@@ -486,7 +486,11 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             if let Validity::Failed(why) = &open.validity {
                 v.push(row("validity_problems", why.join("; ")));
             }
-            v.push(row("cells", m.cell_count()));
+            // An overview's cells are the file's, in its blocks.
+            v.push(row("cells", open.cells()));
+            if let Some(o) = &open.overview {
+                v.push(row("blocks", o.blocks.len()));
+            }
             if m.cell_count() > 0 {
                 v.push(row(
                     "faces_interior",

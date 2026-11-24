@@ -437,6 +437,11 @@ pub struct FieldSet {
     /// fields it reads ([`crate::derive`], [`crate::calc`]); their
     /// fields are in `results` with the file's.
     derived: Vec<Made>,
+    /// The smallest and largest value of a field over the whole volume,
+    /// as the file says, by field: the block ranges of a blocked VTKHDF
+    /// file opened as an overview, whose fields hold only the boundary's
+    /// values (a scalar's value, a vector's magnitude).
+    volume_ranges: HashMap<String, (f64, f64)>,
 }
 
 impl FieldSet {
@@ -447,7 +452,28 @@ impl FieldSet {
             grid: OnceLock::new(),
             cache: ValueCache::default(),
             derived: Vec::new(),
+            volume_ranges: HashMap::new(),
         }
+    }
+
+    /// These fields with the ranges of some over the whole volume, which
+    /// their colour range then spans ([`FieldValues::range`]).
+    pub fn with_volume_ranges(
+        mut self,
+        ranges: impl IntoIterator<Item = (String, (f64, f64))>,
+    ) -> Self {
+        self.volume_ranges.extend(
+            ranges
+                .into_iter()
+                .filter(|(_, (a, b))| a.is_finite() && b.is_finite() && a <= b),
+        );
+        self
+    }
+
+    /// The range of field `name` over the whole volume, when the file
+    /// gave one.
+    pub fn volume_range(&self, name: &str) -> Option<(f64, f64)> {
+        self.volume_ranges.get(name).copied()
     }
 
     /// How derived field `name` was made; `None` for a field of the file
@@ -1361,6 +1387,14 @@ impl FieldSet {
                 (vec![f64::NAN; nc], b, r)
             }
         };
+        // Over the whole volume when the file says (an overview's
+        // fields hold the boundary's values): a scalar or a magnitude.
+        let range = match (component, self.volume_range(&choice.name)) {
+            (Component::Magnitude, Some((a, b))) => {
+                Some(range.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))))
+            }
+            _ => range,
+        };
         let origin = range.map_or(0.0, |(a, b)| 0.5 * (a + b));
         Some(FieldValues {
             choice: FieldChoice {
@@ -1398,7 +1432,8 @@ pub struct FieldValues {
     /// on the cells.
     pub grad: Vec<[f32; 3]>,
     /// The smallest and largest finite value the file has: over the
-    /// cells, the points or the boundary faces.
+    /// cells, the points or the boundary faces, and over the whole
+    /// volume when the file says ([`FieldSet::volume_range`]).
     pub range: Option<(f64, f64)>,
     /// Values reach the GPU relative to this.
     pub origin: f64,
