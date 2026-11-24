@@ -121,6 +121,26 @@ const OWN: &[Code] = &[
         fix: Some("Give each gesture, button and modifier combination one action."),
     },
     Code {
+        code: "MEAS001",
+        severity: Severity::Error,
+        meaning: "Nothing of the mesh lies under the screen point, so there is no point to measure from.",
+        fix: Some(
+            "Point at a face of the mesh, or give typed coordinates (point), a node, a face or a cell.",
+        ),
+    },
+    Code {
+        code: "MEAS002",
+        severity: Severity::Error,
+        meaning: "The open mesh has no node, face or cell with this number.",
+        fix: Some("mesh.info gives the counts; numbers start at 0."),
+    },
+    Code {
+        code: "MEAS003",
+        severity: Severity::Error,
+        meaning: "The name of a measurement or probe is empty, longer than 64 characters or holds control characters.",
+        fix: None,
+    },
+    Code {
         code: "SESS001",
         severity: Severity::Error,
         meaning: "A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values.",

@@ -15,6 +15,7 @@ mod commands;
 mod cube;
 mod focus;
 mod i18n;
+mod measure;
 mod panels;
 mod quality;
 mod style;

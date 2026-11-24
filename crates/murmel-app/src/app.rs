@@ -92,6 +92,20 @@ pub struct MurmelApp {
     pub(crate) bridge: Option<murmel_tools::live::Listener>,
     pub(crate) bridge_problem: Option<Diagnostic>,
     pub(crate) bridge_tried: bool,
+    /// The measure mode (M, Shift + M, Shift + P) while it is on.
+    pub(crate) measuring: Option<crate::measure::Measuring>,
+    /// What measure points snap to (the toolbar's Snap menu).
+    pub(crate) snap_kinds: Vec<murmel_engine::SnapKind>,
+    /// The snap under the pointer, while nothing moves.
+    pub(crate) snap_hover: Option<crate::measure::SnapHover>,
+    /// Where the labels of measurements and probes were drawn last frame.
+    pub(crate) measure_labels: Vec<crate::measure::Label>,
+    /// The measurement or probe being renamed in the tree: its id and
+    /// the text typed so far.
+    pub(crate) measure_edit: Option<(String, String)>,
+    /// Where the viewport was drawn last frame, for the window tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) viewport_rect: egui::Rect,
 }
 
 /// A pause of the wheel this long (seconds) ends its undo step.
@@ -161,6 +175,12 @@ impl MurmelApp {
             bridge: None,
             bridge_problem: None,
             bridge_tried: false,
+            measuring: None,
+            snap_kinds: murmel_engine::SnapKind::DEFAULT.to_vec(),
+            snap_hover: None,
+            measure_labels: Vec::new(),
+            measure_edit: None,
+            viewport_rect: egui::Rect::NOTHING,
             logo: style::logo_rgba(128).map(|(w, h, rgba)| {
                 cc.egui_ctx.load_texture(
                     "murmelcraft-logo",
@@ -212,6 +232,12 @@ impl MurmelApp {
         if e.ok() {
             if id == "mesh.open" {
                 self.error = None;
+            }
+            // Points placed on another mesh mean nothing on this one.
+            if matches!(id, "mesh.open" | "mesh.close" | "session.load") {
+                self.measuring = None;
+                self.snap_hover = None;
+                self.measure_edit = None;
             }
             if id == "session.load" {
                 // The first warning (a changed mesh, skipped items) shows
@@ -665,6 +691,8 @@ impl MurmelApp {
         ui.separator();
         self.clip_group(ui, secondary);
         ui.separator();
+        self.measure_group(ui);
+        ui.separator();
         self.select_group(ui, secondary);
     }
 
@@ -779,6 +807,9 @@ impl MurmelApp {
 
     fn hint(&self) -> String {
         use murmel_engine::navigation::{Action, Button, Gesture};
+        if let Some(h) = self.measure_hint() {
+            return h;
+        }
         let nav = &self.session.navigation;
         let describe = |action: Action| -> Option<String> {
             let b = nav.of(action).next()?;

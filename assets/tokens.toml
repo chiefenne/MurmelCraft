@@ -114,3 +114,20 @@ tilt = "#B384EB"
 [gizmo.light]
 slide = "#AD3285"
 tilt = "#8348BE"
+
+# Measurements and probes, drawn over the viewport (thread "Measure and
+# probe the mesh", 2026-11-24). Lines take an amber, probes a sky blue,
+# OKLCH hues 80 and 230, both away from the green mesh (hue 140), the
+# magenta accent and the violet tilt arcs; dark L 0.82, light L 0.55, so
+# each reads on its theme's viewport. The halo is drawn under them, so
+# they also read on a face of their own colour. Users change them with
+# settings.set_colors, "measure".
+[measure.dark]
+line = "#F2BE4A"
+probe = "#5EC4F2"
+halo = "#101214"
+
+[measure.light]
+line = "#A06A00"
+probe = "#1C7BB0"
+halo = "#FFFFFF"

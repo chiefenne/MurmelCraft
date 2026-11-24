@@ -204,8 +204,8 @@ impl Session {
             mesh.apply_evidence_roles(e);
         }
         // A new mesh starts with everything shown, nothing selected and
-        // no saved views (they are cameras in its coordinates); the
-        // colouring stays. Its journal starts empty.
+        // no saved views, measurements or probes (they are in its
+        // coordinates); the colouring stays. Its journal starts empty.
         self.journal.clear();
         self.display.hidden.clear();
         self.display.selection.clear();
@@ -215,6 +215,8 @@ impl Session {
         self.display.threshold = None;
         self.display.quality = None;
         self.display.views.clear();
+        self.display.measurements.clear();
+        self.display.probes.clear();
         ensure_quality(&mut self.display, &mesh);
         let surface = Surface::build(&mesh, &self.tokens, &self.display);
         let files: Vec<(String, String)> = mesh
@@ -265,6 +267,8 @@ impl Session {
         self.display.threshold = None;
         self.display.quality = None;
         self.display.views.clear();
+        self.display.measurements.clear();
+        self.display.probes.clear();
         self.surface_revision += 1;
     }
 
