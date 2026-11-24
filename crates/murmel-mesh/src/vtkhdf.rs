@@ -32,6 +32,9 @@ use crate::hdf5::{Dataset, H5, Object, Target, Value, Values};
 use crate::{Mesh, MeshError, Patch, Polygons, boundary, par};
 
 mod cells;
+mod overview;
+
+pub use overview::{Block, Overview, Size, VolumeField, read_overview, size_of};
 
 /// No mesh point yet for a global point id.
 const NO_POINT: u32 = u32::MAX;
@@ -121,7 +124,12 @@ struct Parts {
     vtk_attrs: Vec<(String, String)>,
 }
 
-fn read_parts(h: &H5) -> Result<Parts, MeshError> {
+/// The volume blocks (UnstructuredGrid) and the patches (PolyData) of a
+/// file, each with its name, in the order of their `Index`.
+type Blocks = (Vec<(String, Object)>, Vec<(String, Object)>);
+
+/// `/VTKHDF` and its blocks.
+fn blocks_of(h: &H5) -> Result<(Object, Blocks), MeshError> {
     let vtk = h
         .path("/VTKHDF")
         .map_err(|_| bad("the file has no /VTKHDF group: it is HDF5 but not VTKHDF"))?;
@@ -170,59 +178,49 @@ fn read_parts(h: &H5) -> Result<Parts, MeshError> {
     if volumes.is_empty() && patches.is_empty() {
         return Err(bad("the file has no UnstructuredGrid or PolyData block"));
     }
+    Ok((vtk, (volumes, patches)))
+}
 
-    let mut b = Builder::default();
-    let mut cell_fields: Vec<Vec<Field>> = Vec::new();
-    let mut point_fields: Vec<Vec<Field>> = Vec::new();
-    let multi = volumes.len() > 1;
-    let mut roles: BTreeMap<usize, String> = BTreeMap::new();
-    for (zone, (name, obj)) in volumes.iter().enumerate() {
-        let read = b.grid(h, obj, multi.then_some(zone as u32))?;
-        if multi {
-            b.zone_names.insert(zone as u32, name.clone());
-        } else {
-            if let Some(z) = read.zones {
-                b.zone_values = Some(z);
-            }
-            // zone names and patch roles as field-data strings (§ 8)
-            if let Some(fd) = h.child(obj, "FieldData")? {
-                for (key, table) in [("zone_names", 0), ("boundary_roles", 1)] {
-                    let Some(o) = h.child(&fd, key)? else {
-                        continue;
-                    };
-                    let ds = h.dataset(&o)?;
-                    let Ok(entries) = h.read_strings(&ds) else {
-                        continue;
-                    };
-                    for (id, text) in crate::vtu::id_table(&entries) {
-                        if table == 0 {
-                            b.zone_names.insert(id as u32, text);
-                        } else {
-                            roles.insert(id, text);
-                        }
-                    }
-                }
+/// The zone names and patch roles a volume block keeps as field-data
+/// strings (§ 8).
+fn names_of(
+    h: &H5,
+    obj: &Object,
+    b: &mut Builder,
+    roles: &mut BTreeMap<usize, String>,
+) -> Result<(), MeshError> {
+    let Some(fd) = h.child(obj, "FieldData")? else {
+        return Ok(());
+    };
+    for (key, table) in [("zone_names", 0), ("boundary_roles", 1)] {
+        let Some(o) = h.child(&fd, key)? else {
+            continue;
+        };
+        let ds = h.dataset(&o)?;
+        let Ok(entries) = h.read_strings(&ds) else {
+            continue;
+        };
+        for (id, text) in crate::vtu::id_table(&entries) {
+            if table == 0 {
+                b.zone_names.insert(id as u32, text);
+            } else {
+                roles.insert(id, text);
             }
         }
-        cell_fields.push(data_fields(
-            h,
-            obj,
-            "CellData",
-            Location::Cell,
-            (read.cell_rows_total, read.cell_rows.as_deref()),
-            &["zone", "vtkGhostType", "GlobalCellIds", "OriginalCellIds"],
-        )?);
-        point_fields.push(data_fields(
-            h,
-            obj,
-            "PointData",
-            Location::Point,
-            (read.point_rows_total, read.point_rows.as_deref()),
-            &["vtkGhostType", "GlobalPointIds"],
-        )?);
     }
+    Ok(())
+}
+
+/// Read the patches into `b`, each with its cell data as boundary fields
+/// (and its first face).
+fn read_patches(
+    h: &H5,
+    b: &mut Builder,
+    patches: &[(String, Object)],
+    roles: &BTreeMap<usize, String>,
+) -> Result<Vec<(usize, Vec<Field>)>, MeshError> {
     let mut boundary_fields: Vec<(usize, Vec<Field>)> = Vec::new();
-    for (name, obj) in &patches {
+    for (name, obj) in patches {
         let p = b.mesh.patches.len() as u32;
         let before = b.mesh.boundary.len();
         b.poly_data(h, obj, p)?;
@@ -247,6 +245,14 @@ fn read_parts(h: &H5) -> Result<Parts, MeshError> {
             )?,
         ));
     }
+    Ok(boundary_fields)
+}
+
+/// The text attributes of the root group and of `/VTKHDF` (but its type
+/// and version).
+type Attrs = (BTreeMap<String, String>, Vec<(String, String)>);
+
+fn text_attrs(h: &H5, vtk: &Object) -> Result<Attrs, MeshError> {
     let root = h.root()?;
     let mut attrs = BTreeMap::new();
     for (k, v) in h.attrs(&root)? {
@@ -255,7 +261,7 @@ fn read_parts(h: &H5) -> Result<Parts, MeshError> {
         }
     }
     let mut vtk_attrs = Vec::new();
-    for (k, v) in h.attrs(&vtk)? {
+    for (k, v) in h.attrs(vtk)? {
         if k == "Type" || k == "Version" {
             continue;
         }
@@ -263,6 +269,45 @@ fn read_parts(h: &H5) -> Result<Parts, MeshError> {
             vtk_attrs.push((k, t));
         }
     }
+    Ok((attrs, vtk_attrs))
+}
+
+fn read_parts(h: &H5) -> Result<Parts, MeshError> {
+    let (vtk, (volumes, patches)) = blocks_of(h)?;
+    let mut b = Builder::default();
+    let mut cell_fields: Vec<Vec<Field>> = Vec::new();
+    let mut point_fields: Vec<Vec<Field>> = Vec::new();
+    let multi = volumes.len() > 1;
+    let mut roles: BTreeMap<usize, String> = BTreeMap::new();
+    for (zone, (name, obj)) in volumes.iter().enumerate() {
+        let read = b.grid(h, obj, multi.then_some(zone as u32))?;
+        if multi {
+            b.zone_names.insert(zone as u32, name.clone());
+        } else {
+            if let Some(z) = read.zones {
+                b.zone_values = Some(z);
+            }
+            names_of(h, obj, &mut b, &mut roles)?;
+        }
+        cell_fields.push(data_fields(
+            h,
+            obj,
+            "CellData",
+            Location::Cell,
+            (read.cell_rows_total, read.cell_rows.as_deref()),
+            &["zone", "vtkGhostType", "GlobalCellIds", "OriginalCellIds"],
+        )?);
+        point_fields.push(data_fields(
+            h,
+            obj,
+            "PointData",
+            Location::Point,
+            (read.point_rows_total, read.point_rows.as_deref()),
+            &["vtkGhostType", "GlobalPointIds"],
+        )?);
+    }
+    let boundary_fields = read_patches(h, &mut b, &patches, &roles)?;
+    let (attrs, vtk_attrs) = text_attrs(h, &vtk)?;
     Ok(Parts {
         b,
         cell_fields,
@@ -382,44 +427,55 @@ fn data_fields(
         ) {
             continue;
         }
-        let comps = match ds.dims.as_slice() {
-            [rows] if *rows as usize == n => 1,
-            [rows, k] if *rows as usize == n && (1..=9).contains(k) => *k as usize,
-            _ => {
-                return Err(MeshError::new(
-                    "MESH005",
-                    format!(
-                        "{group}/{} has shape {:?} for {n} {}s",
-                        link.name,
-                        ds.dims,
-                        location.name()
-                    ),
-                ));
-            }
+        let Some(comps) = components(&ds, n) else {
+            return Err(MeshError::new(
+                "MESH005",
+                format!(
+                    "{group}/{} has shape {:?} for {n} {}s",
+                    link.name,
+                    ds.dims,
+                    location.name()
+                ),
+            ));
         };
         let values = gather(&h.values(&ds)?, comps, keep);
-        if comps == 1 || comps == 3 {
-            out.push(Field {
-                name: link.name.clone(),
-                unit: None,
-                location,
-                components: comps,
-                values,
-            });
-        } else {
-            // other tuples (tensors) as scalars name_0, name_1, …
-            for k in 0..comps {
-                out.push(Field {
-                    name: format!("{}_{k}", link.name),
-                    unit: None,
-                    location,
-                    components: 1,
-                    values: values.iter().skip(k).step_by(comps).copied().collect(),
-                });
-            }
-        }
+        out.extend(as_fields(&link.name, location, comps, values));
     }
     Ok(out)
+}
+
+/// The values per row of a dataset of `n` rows (1 to 9), if its shape
+/// fits.
+fn components(ds: &Dataset, n: usize) -> Option<usize> {
+    match ds.dims.as_slice() {
+        [rows] if *rows as usize == n => Some(1),
+        [rows, k] if *rows as usize == n && (1..=9).contains(k) => Some(*k as usize),
+        _ => None,
+    }
+}
+
+/// The values of dataset `name` (`comps` per row) as fields: scalars and
+/// vectors as they are, other tuples (tensors) as scalars `name_0`,
+/// `name_1`, …
+fn as_fields(name: &str, location: Location, comps: usize, values: Vec<f64>) -> Vec<Field> {
+    if comps == 1 || comps == 3 {
+        return vec![Field {
+            name: name.to_string(),
+            unit: None,
+            location,
+            components: comps,
+            values,
+        }];
+    }
+    (0..comps)
+        .map(|k| Field {
+            name: format!("{name}_{k}"),
+            unit: None,
+            location,
+            components: 1,
+            values: values.iter().skip(k).step_by(comps).copied().collect(),
+        })
+        .collect()
 }
 
 /// The values of a field of `comps` components, of the rows `keep`
@@ -570,6 +626,8 @@ struct Builder {
     lookup: Option<HashMap<[u64; 3], u32>>,
     /// Volume points by their `GlobalPointIds`, when the file has them.
     gids: Option<Gids>,
+    /// Without volume cells: the patch points by their `GlobalPointIds`.
+    surface_gids: Option<HashMap<i64, u32>>,
 }
 
 /// What [`Builder::grid`] read besides the mesh: the `zone` cell data, and
@@ -1040,6 +1098,24 @@ impl Builder {
                         "patch {p} has the global point {id}, which no volume cell uses"
                     ))
                 })?);
+            }
+        }
+        // without volume cells (an overview), the patches join among
+        // themselves by GlobalPointIds when they have them
+        if ids.is_empty()
+            && self.gids.is_none()
+            && self.mesh.cell_count() == 0
+            && let Some(gp) = optional_ints(h, g, "PointData", "GlobalPointIds")?
+            && gp.len() == total
+        {
+            let map = self.surface_gids.get_or_insert_with(HashMap::new);
+            for (id, q) in gp.into_iter().zip(xyz.as_chunks::<3>().0) {
+                let next = self.mesh.points.len() as u32;
+                let i = *map.entry(id).or_insert(next);
+                if i == next {
+                    self.mesh.points.push(*q);
+                }
+                ids.push(i);
             }
         }
         if ids.len() < total && self.lookup.is_none() {

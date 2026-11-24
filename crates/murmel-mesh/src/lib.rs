@@ -178,6 +178,11 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "Convert a volume mesh: a .vtu, an OpenFOAM polyMesh or a VTKHDF file.",
     ),
     (
+        "BLOCK004",
+        "The VTKHDF file has no block index, so it cannot open as an overview of a mesh beyond the memory budget.",
+        "Convert it once with `murmel blocks make` (or the blocks.make tool), or raise the memory budget to read it whole.",
+    ),
+    (
         "MESH015",
         "The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces).",
         "Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch.",
