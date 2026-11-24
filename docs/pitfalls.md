@@ -37,6 +37,18 @@ problem took more than a few minutes to understand.
   maps `Numpad1` and `Digit1` to the same `Key::Num1`, so the keypad views
   of the spec (1, 3, 7) clash with the render modes 1 to 4. The views take
   Alt (Ctrl + Alt for the opposite view), decided 2026-11-23.
+- **Option + a digit types a character on a Mac.** winit reports the
+  character as the logical key (Option + 7 is `|` on a German layout, so
+  egui's key is `Pipe`), and `consume_shortcut` matches the logical key
+  only, so Alt + 7 never fired there. The window matches shortcuts with
+  Alt by the physical key too (`commands::consume`). Strings that name
+  keys take `{ $ctrl }` and `{ $alt }`, which say Cmd and Option on
+  macOS.
+- **A colour button inside a context menu.** egui's
+  `color_edit_button_srgb` opens its picker as a popup of the menu; the
+  click into the picker lands outside the menu, the menu closes and the
+  picker with it, so the colour entry seemed to do nothing. The tree's
+  Colour entry closes the menu and opens a window of its own.
 - **`Color32::gamma_multiply` scales alpha too.** `gamma_multiply(0.8)
   .to_opaque()` turns a colour dark and dull, not dimmer; mix two token
   colours instead (the view cube's `lerp`).

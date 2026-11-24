@@ -288,3 +288,81 @@ fn clip_handles_drag_and_undo() {
         h.run_steps(2);
     }
 }
+
+/// Invariant (the maintainer's Mac test, 2026-11-24): the tree's
+/// right-click Colour… opens a colour window whose controls all have
+/// names, and a code typed into its hex field colours the zone through
+/// display.set_color. Breaks if the colour entry goes back into the menu
+/// (its picker closed with the menu, so a click did nothing) or the
+/// window stops calling the tool; the tool tests do not click.
+#[test]
+fn tree_colour_entry_opens_a_picker() {
+    let mut h = harness();
+    h.get_by_label("fluid, 776 cells").click_secondary();
+    h.run_steps(3);
+    h.get_by_label("Colour…").click();
+    h.run_steps(3);
+    assert!(h.state().color_edit.is_some(), "the window is open");
+    assert!(
+        h.state().session.display.colors.is_empty(),
+        "opening the window changes no colour"
+    );
+    assert!(named(&h, "Colour of fluid"), "the window has a title");
+    let issues = problems(&h);
+    assert!(issues.is_empty(), "{issues:#?}");
+    h.get_by_role_and_label(Role::TextInput, "Hex code").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::TextInput, "Hex code")
+        .type_text("12AB34");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let m = h.state().session.mesh.as_ref().unwrap();
+    let zone = murmel_engine::Item::parse("zone:fluid", &m.mesh).unwrap();
+    assert_eq!(
+        h.state().session.display.colors.get(&zone).map(|c| c.hex()),
+        Some("#12AB34".to_string())
+    );
+    h.get_by_label("Done").click();
+    h.run_steps(3);
+    assert!(h.state().color_edit.is_none(), "Done closes it");
+}
+
+/// Invariant (the maintainer's Mac test, 2026-11-24): the rotation plane
+/// shows while a tilt arc is hovered, and not for the slide arrow or
+/// with the pointer away. Breaks if the plane is drawn always, never, or
+/// for the arrow; the drag test only checks what the drag does.
+#[test]
+fn rotation_plane_shows_on_hover() {
+    use crate::clip_handle::Handle;
+    let mut h = harness();
+    h.state_mut()
+        .call("clip.set", serde_json::json!({"axis": "x"}));
+    h.run_steps(3);
+    let spot = |h: &Harness<'_, MurmelApp>, k: Handle| {
+        h.state()
+            .clip_spots
+            .iter()
+            .find(|s| s.handle == k)
+            .unwrap()
+            .at
+    };
+    assert_eq!(h.state().rotation_plane, None);
+    for (k, want) in [
+        (Handle::TiltU, Some(Handle::TiltU)),
+        (Handle::Slide, None),
+        (Handle::TiltV, Some(Handle::TiltV)),
+    ] {
+        let at = spot(&h, k);
+        h.input_mut().events.push(egui::Event::PointerMoved(at));
+        h.run_steps(3);
+        assert_eq!(h.state().rotation_plane, want, "{k:?}");
+    }
+    h.input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(5.0, 450.0)));
+    h.run_steps(3);
+    assert_eq!(h.state().rotation_plane, None, "pointer away");
+}

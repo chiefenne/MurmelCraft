@@ -47,7 +47,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `journal.list` | 1 | read | The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
-| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
+| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
 | `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_agents` | 1 | write-files | Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
@@ -1015,6 +1015,38 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       "maximum": 1,
       "minimum": 0,
       "type": "number"
+    },
+    "gizmo": {
+      "additionalProperties": false,
+      "properties": {
+        "dark": {
+          "additionalProperties": {
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "type": "string"
+          },
+          "propertyNames": {
+            "enum": [
+              "slide",
+              "tilt"
+            ]
+          },
+          "type": "object"
+        },
+        "light": {
+          "additionalProperties": {
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "type": "string"
+          },
+          "propertyNames": {
+            "enum": [
+              "slide",
+              "tilt"
+            ]
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "kind": {
       "additionalProperties": {

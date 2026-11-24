@@ -10,6 +10,7 @@ mod a11y_tests;
 mod agents;
 mod app;
 mod clip_handle;
+mod color_edit;
 mod commands;
 mod cube;
 mod focus;

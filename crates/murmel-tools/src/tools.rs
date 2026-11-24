@@ -2157,7 +2157,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-settings-set-colors",
-        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad); reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
+        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs); reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -2169,6 +2169,10 @@ pub static TOOLS: &[Tool] = &[
                     "kind": {"type": "object", "propertyNames": {"enum": ["polyhedron", "prism", "hexahedron", "tetrahedron", "pyramid"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
                     "edge_darken": {"type": "number", "minimum": 0, "maximum": 1},
                     "quality": {"type": "array", "items": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}, "minItems": 2},
+                    "gizmo": {"type": "object", "additionalProperties": false, "properties": {
+                        "dark": {"type": "object", "propertyNames": {"enum": ["slide", "tilt"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
+                        "light": {"type": "object", "propertyNames": {"enum": ["slide", "tilt"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}}
+                    }},
                     "reset": {"type": "boolean"}
                 }),
                 &[],

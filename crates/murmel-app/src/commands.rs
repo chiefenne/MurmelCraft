@@ -26,13 +26,36 @@ pub fn shortcut(key: &str) -> Option<KeyboardShortcut> {
     Some(KeyboardShortcut::new(m, k))
 }
 
+/// Take a press of `s` from this frame's input. A shortcut with Alt
+/// (Option on macOS) also matches by the key's place on the keyboard:
+/// Option + a digit types a character on a Mac (Option + 7 is `|` on a
+/// German layout), and egui reports that character as the key, so a
+/// logical match alone missed the views (docs/pitfalls.md).
+pub fn consume(i: &mut egui::InputState, s: &KeyboardShortcut) -> bool {
+    if !s.modifiers.alt {
+        return i.consume_shortcut(s);
+    }
+    let mut hit = false;
+    i.events.retain(|e| {
+        let m = matches!(
+            e,
+            egui::Event::Key { key, physical_key, pressed: true, modifiers, .. }
+                if (*key == s.logical_key || *physical_key == Some(s.logical_key))
+                    && modifiers.matches_logically(s.modifiers)
+        );
+        hit |= m;
+        !m
+    });
+    hit
+}
+
 /// A key as shown to the user: `Ctrl + K`, `Cmd + K` on macOS.
 pub fn key_text(key: &str) -> String {
-    let mac = cfg!(target_os = "macos");
+    let (ctrl, alt) = crate::i18n::modifier_names();
     key.split('+')
         .map(|p| match p {
-            "Ctrl" if mac => "Cmd",
-            "Alt" if mac => "Option",
+            "Ctrl" => ctrl,
+            "Alt" => alt,
             "Plus" => "+",
             "Minus" => "−",
             "Equals" => "=",
@@ -161,7 +184,7 @@ impl MurmelApp {
             if self.palette.is_some() && c.id != "window.palette" {
                 continue;
             }
-            if ctx.input_mut(|i| i.consume_shortcut(&s)) {
+            if ctx.input_mut(|i| consume(i, &s)) {
                 if c.id == "window.palette" && self.palette.is_some() {
                     self.palette = None;
                 } else {
@@ -371,6 +394,41 @@ mod tests {
         }
         let s = shortcut("Ctrl+Alt+1").unwrap();
         assert!(s.modifiers.command && s.modifiers.alt && s.logical_key == Key::Num1);
+    }
+
+    /// Invariant: Option + 7 on a Mac keyboard whose layout types a
+    /// character there (`|` on a German layout: egui's key is Pipe, the
+    /// physical key Num7) runs Alt + 7, while a plain 7 shortcut does not
+    /// take it. Breaks if the views match only the logical key again
+    /// (the maintainer's Mac test, 2026-11-24); no other test sends a key
+    /// whose logical and physical keys differ.
+    #[test]
+    fn option_digit_matches_by_place() {
+        let press = |key, physical| egui::Event::Key {
+            key,
+            physical_key: Some(physical),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::ALT,
+        };
+        let run = |event: egui::Event, s: KeyboardShortcut| {
+            let ctx = egui::Context::default();
+            let mut hit = false;
+            let raw = egui::RawInput {
+                events: vec![event],
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                hit = ui.ctx().input_mut(|i| consume(i, &s));
+            });
+            out.textures_delta.clear();
+            hit
+        };
+        let alt7 = shortcut("Alt+7").unwrap();
+        assert!(run(press(Key::Pipe, Key::Num7), alt7));
+        assert!(run(press(Key::Num7, Key::Num7), alt7), "US layout");
+        assert!(!run(press(Key::Pipe, Key::Num7), shortcut("7").unwrap()));
+        assert!(!run(press(Key::Pipe, Key::Num3), alt7));
     }
 
     #[test]
