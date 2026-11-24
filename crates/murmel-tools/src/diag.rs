@@ -49,6 +49,18 @@ const OWN: &[Code] = &[
         ),
     },
     Code {
+        code: "VIEW003",
+        severity: Severity::Error,
+        meaning: "No saved view of the open mesh has this name.",
+        fix: Some("views.list names the saved views."),
+    },
+    Code {
+        code: "VIEW004",
+        severity: Severity::Error,
+        meaning: "The view name is empty, longer than 64 characters, holds control characters, or another saved view has it.",
+        fix: Some("Choose another name, or delete the other view first."),
+    },
+    Code {
         code: "MCP001",
         severity: Severity::Error,
         meaning: "The MCP server refused a path outside its read or write roots.",

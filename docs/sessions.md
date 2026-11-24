@@ -15,7 +15,7 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
 ```json
 {
   "format": "murmelcraft.session",
-  "format_version": "1.0",
+  "format_version": "1.1",
   "mesh": {
     "path": "foehncraft.vtu",
     "absolute": "/cases/channel/foehncraft.vtu",
@@ -31,7 +31,11 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
     "clip": {"origin": [2.01, 1, 0.5], "normal": [1, 0, 0], "mode": "flat", "enabled": true}
   },
   "colors": {"solid": "#336699"},
-  "view_cube": {"placement": "bottom_left", "auto_hide": false, "distance_px": 120, "position": null}
+  "view_cube": {"placement": "bottom_left", "auto_hide": false, "distance_px": 120, "position": null},
+  "views": [
+    {"name": "Inlet close up", "camera": {"target": [0, 1, 0.5], "distance": 2.4, "yaw_deg": -40,
+      "pitch_deg": 15, "projection": "perspective_ortho_faces", "fov_deg": 30, "snapped": false, "roll_deg": 0}}
+  ]
 }
 ```
 
@@ -43,6 +47,11 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
 - **Items** are named by the ids of the tree and the tools (`patch:walls`,
   `zone:core`, `kind:prism`, `cell:7`, `face:12`), never by index, so a
   mesh written again with the same names keeps its view.
+- **Saved views** (format 1.1) are the named cameras of the model tree's
+  "Saved views" (`views.save`, `views.go`, `views.rename`,
+  `views.delete`), in the order they were saved. A 1.0 file has none and
+  still loads; a file without views leaves the key out. Names are 1 to 64
+  characters, unique, without control characters.
 - **Colours and the view cube** (`colors`, `view_cube`) are the user's
   settings when the session was saved. Loading applies them to this
   session only; `settings.toml` is not written (decided 2026-11-24). A
@@ -55,7 +64,8 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
 
 `session.load` checks the whole file first (the format, a 1.x version,
 finite numbers, a positive camera distance, a non-zero clip normal,
-colours the tokens take) and fails with `SESS001` without changing
+colours the tokens take, saved views with valid unique names and valid
+cameras) and fails with `SESS001` without changing
 anything. Then it opens the mesh, unless the same mesh with the same
 SHA-256 is already open, and restores the rest. It still finishes, with a
 warning in `warnings`, when:

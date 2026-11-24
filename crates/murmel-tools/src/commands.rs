@@ -132,6 +132,22 @@ fn clip_step(s: &Session, share: f64) -> Option<Value> {
     Some(json!({"offset": (off - share * (hi - lo)).clamp(lo, hi)}))
 }
 
+/// The saved view `by` places after the one the camera is at (the first
+/// or the last when it is at none), wrapping round.
+fn step_view(s: &Session, by: isize) -> Option<Value> {
+    let views = &s.display.views;
+    if views.is_empty() || s.mesh.is_none() {
+        return None;
+    }
+    let n = views.len() as isize;
+    let k = match views.iter().position(|v| v.camera == s.camera) {
+        Some(at) => (at as isize + by).rem_euclid(n),
+        None if by > 0 => 0,
+        None => n - 1,
+    };
+    Some(json!({"name": views[k as usize].name}))
+}
+
 fn cmd(
     id: impl Into<String>,
     label_key: impl Into<String>,
@@ -341,6 +357,28 @@ pub fn commands() -> Vec<Command> {
             Dynamic("view.pan", f),
         ));
     }
+    v.push(cmd(
+        "window.save_view",
+        "cmd-views-save",
+        "view",
+        &["Ctrl+B"],
+        // The window names the view in the person's language.
+        Window(Some("views.save")),
+    ));
+    v.push(cmd(
+        "views.go:next",
+        "cmd-views-next",
+        "view",
+        &["V"],
+        Dynamic("views.go", |s| step_view(s, 1)),
+    ));
+    v.push(cmd(
+        "views.go:previous",
+        "cmd-views-previous",
+        "view",
+        &["Shift+V"],
+        Dynamic("views.go", |s| step_view(s, -1)),
+    ));
     v.push(cmd(
         "view.zoom:in",
         "cmd-zoom-in",
@@ -635,6 +673,15 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "the status bar shows a diagnostic with its fix",
     ),
     ("mesh.info", "the Properties panel shows it"),
+    ("views.list", "the model tree shows the saved views"),
+    (
+        "views.rename",
+        "needs a new name: the model tree renames (double-click or the context menu)",
+    ),
+    (
+        "views.delete",
+        "needs a view: the model tree's context menu deletes one",
+    ),
     ("view.get_camera", "the view note and the cube show it"),
     ("inspect.item", "the Properties panel shows it"),
     ("settings.get", "the Settings window shows it"),
@@ -799,6 +846,8 @@ mod tests {
         let open = |s: &mut Session| {
             assert!(crate::call("mesh.open", json!({"path": channel}), s).ok());
             assert!(crate::call("select.item", json!({"item": "patch:inlet"}), s).ok());
+            // A saved view, so the commands that step through them apply.
+            assert!(crate::call("views.save", json!({}), s).ok());
         };
         open(&mut s);
         for c in commands() {

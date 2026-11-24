@@ -5,8 +5,8 @@
 //! mesh by its path and SHA-256 and holds the camera, the display (colour
 //! mode, render mode, quality metric and threshold, pick target, the
 //! hidden, isolated and selected items and the colours set on items, all
-//! by their tree ids), the clip plane, the user's mesh colours and the
-//! view cube placement. Loading puts all of it back; the colours and the
+//! by their tree ids), the clip plane, the saved views (named cameras,
+//! since format 1.1), the user's mesh colours and the view cube placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
 //! `settings.toml` (decided 2026-11-24).
 //!
@@ -22,13 +22,13 @@ use serde::{Deserialize, Serialize};
 use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
-use crate::display::{ColorBy, Item, PickTarget, RenderMode};
+use crate::display::{ColorBy, Item, PickTarget, RenderMode, SavedView};
 use crate::quality::Metric;
 use crate::session::Session;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.0";
+pub const SESSION_VERSION: &str = "1.1";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -77,6 +77,9 @@ pub struct SessionFile {
     pub colors: MeshColors,
     #[serde(default)]
     pub view_cube: CubeSettings,
+    /// The saved views of the mesh, in the order they were saved (1.1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<SavedView>,
 }
 
 /// `path` made absolute from the working folder, without touching the
@@ -167,6 +170,11 @@ impl SessionFile {
             },
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
+            views: if s.mesh.is_some() {
+                d.views.clone()
+            } else {
+                Vec::new()
+            },
         }
     }
 
@@ -190,18 +198,27 @@ impl SessionFile {
         }
         let mut f: SessionFile =
             serde_json::from_value(probe).map_err(|e| Refused(e.to_string()))?;
-        let c = &mut f.camera;
-        let finite = c.target.iter().all(|v| v.is_finite())
-            && [c.distance, c.yaw_deg, c.pitch_deg, c.fov_deg, c.roll_deg]
-                .iter()
-                .all(|v| v.is_finite());
-        if !finite || c.distance <= 0.0 {
-            return Err(Refused(
-                "the camera needs finite numbers and a positive distance".into(),
-            ));
+        check_camera(&mut f.camera).map_err(|()| {
+            Refused("the camera needs finite numbers and a positive distance".into())
+        })?;
+        let mut names = Vec::new();
+        for v in &mut f.views {
+            let name = crate::display::view_name(&v.name)
+                .filter(|n| !names.contains(n))
+                .ok_or_else(|| {
+                    Refused(format!(
+                        "saved view name {:?} is empty, too long or given twice",
+                        v.name
+                    ))
+                })?;
+            check_camera(&mut v.camera).map_err(|()| {
+                Refused(format!(
+                    "saved view {name:?}: the camera needs finite numbers and a positive distance"
+                ))
+            })?;
+            v.name = name.clone();
+            names.push(name);
         }
-        c.pitch_deg = c.pitch_deg.clamp(-90.0, 90.0);
-        c.fov_deg = c.fov_deg.clamp(1.0, 120.0);
         if let Some(clip) = &mut f.display.clip {
             if !clip.origin.iter().all(|v| v.is_finite()) {
                 return Err(Refused("the clip origin needs finite numbers".into()));
@@ -244,6 +261,20 @@ impl SessionFile {
     }
 }
 
+/// Check a camera read from a file and clamp its angles into range.
+fn check_camera(c: &mut Camera) -> Result<(), ()> {
+    let finite = c.target.iter().all(|v| v.is_finite())
+        && [c.distance, c.yaw_deg, c.pitch_deg, c.fov_deg, c.roll_deg]
+            .iter()
+            .all(|v| v.is_finite());
+    if !finite || c.distance <= 0.0 {
+        return Err(());
+    }
+    c.pitch_deg = c.pitch_deg.clamp(-90.0, 90.0);
+    c.fov_deg = c.fov_deg.clamp(1.0, 120.0);
+    Ok(())
+}
+
 impl Session {
     /// Put the camera, the display and the settings of `f` back on the
     /// open mesh (the caller opened the right one). Ids the mesh does not
@@ -272,6 +303,7 @@ impl Session {
         d.selection.clear();
         d.colors.clear();
         d.clip = None;
+        d.views.clear();
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
                 let i = Item::parse(id, &m.mesh);
@@ -295,6 +327,7 @@ impl Session {
                 .filter_map(|(id, c)| find(id).map(|i| (i, *c)))
                 .collect();
             d.clip = s.clip;
+            d.views = f.views;
         }
         self.journal.clear();
         self.redraw();
@@ -333,6 +366,10 @@ mod tests {
             display: DisplayState::default(),
             colors: MeshColors::default(),
             view_cube: CubeSettings::default(),
+            views: vec![SavedView {
+                name: "Inlet".into(),
+                camera: Camera::default(),
+            }],
         };
         assert!(SessionFile::parse(&ok.to_json()).is_ok());
         let with = |f: &dyn Fn(&mut serde_json::Value)| {
@@ -350,6 +387,23 @@ mod tests {
                 "origin": [0, 0, 0], "normal": [0, 0, 0], "mode": "flat", "enabled": true
             }))
             .is_err()
+        );
+        assert!(with(&|v| v["views"][0]["camera"]["distance"] = (-1.0).into()).is_err());
+        assert!(with(&|v| v["views"][0]["name"] = " ".into()).is_err());
+        assert!(
+            with(&|v| v["views"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({"name": "Inlet", "camera": Camera::default()})))
+            .is_err()
+        );
+        // A 1.0 file has no views and still loads.
+        assert!(
+            with(&|v| {
+                v["format_version"] = "1.0".into();
+                v.as_object_mut().unwrap().remove("views");
+            })
+            .is_ok()
         );
         assert!(with(&|v| v["colors"]["role"] = serde_json::json!({"lava": "#FF0000"})).is_err());
         assert!(SessionFile::parse("{").is_err());
