@@ -215,15 +215,20 @@ pub fn iso_color(display: &Display, tokens: &Tokens, k: usize) -> Rgb {
 }
 
 /// A corner of a polygon to draw: where it is, its node value (NaN when
-/// none), its normal, and for an edge's cut point the edge (so the
-/// outlines of neighbouring sections are drawn once).
+/// none), its normal, for an edge's cut point the edge (so the outlines
+/// of neighbouring sections are drawn once), and the vector of the
+/// arrows there (NaN when none).
 #[derive(Clone, Copy, Debug)]
-struct Vx {
-    p: [f64; 3],
-    v: f64,
-    n: [f64; 3],
-    key: Option<(u32, u32)>,
+pub(crate) struct Vx {
+    pub(crate) p: [f64; 3],
+    pub(crate) v: f64,
+    pub(crate) n: [f64; 3],
+    pub(crate) key: Option<(u32, u32)>,
+    pub(crate) w: [f64; 3],
 }
+
+/// No vector.
+pub(crate) const NO_VECTOR: [f64; 3] = [f64::NAN; 3];
 
 fn lerp3(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
     [0, 1, 2].map(|k| a[k] + t * (b[k] - a[k]))
@@ -281,6 +286,7 @@ fn clip_flat(poly: Vec<Vx>, planes: &[&Clip]) -> Vec<Vx> {
                     v: lerp(a.v, b.v, t),
                     n: unit(lerp3(a.n, b.n, t)),
                     key: None,
+                    w: lerp3(a.w, b.w, t),
                 });
             }
         }
@@ -388,6 +394,48 @@ impl Out<'_> {
         if let Some(ec) = paint.edge {
             self.outline(verts, ec);
         }
+    }
+
+    /// Indexed triangles (an arrow) in one colour and value `value`
+    /// (NaN: none).
+    fn mesh(
+        &mut self,
+        verts: &[([f64; 3], [f64; 3])],
+        tris: &[[u32; 3]],
+        value: f64,
+        paint: &Paint,
+    ) {
+        let o = self.s.origin;
+        let vo = self.s.value_origin;
+        let valued = paint.flat.filter(|_| value.is_finite()).map(|_| value);
+        let val = match valued {
+            Some(f) => {
+                self.span.add(f);
+                [(f - vo) as f32, (f - vo) as f32, paint.sel_mix, 1.0]
+            }
+            None => [0.0, 0.0, paint.sel_mix, 0.0],
+        };
+        let base = self.s.positions.len() as u32;
+        let mut vb = self.s.visible_bounds.unwrap_or_else(Bounds::empty);
+        for (p, n) in verts {
+            self.s
+                .positions
+                .push([0, 1, 2].map(|k| (p[k] - o[k]) as f32));
+            self.s.normals.push(n.map(|x| x as f32));
+            self.s.colors.push(paint.color);
+            self.s.values.push(val);
+            vb.add(*p);
+        }
+        self.s.visible_bounds = Some(vb);
+        for t in tris {
+            self.s.indices.extend(t.map(|i| base + i));
+        }
+        self.s
+            .tri_cell
+            .extend(std::iter::repeat_n(paint.cell, tris.len()));
+        self.s
+            .tri_face
+            .extend(std::iter::repeat_n(NO_CELL, tris.len()));
     }
 
     /// The outline of a polygon; an edge between two cut points of the
@@ -512,6 +560,29 @@ pub fn append(
         span: Span(None),
         seen: HashSet::new(),
     };
+    // The arrows' field (its three components and magnitude), their grid
+    // spacing and where they go.
+    let arrows = display.arrows.as_ref().filter(|a| a.enabled).and_then(|a| {
+        let fields = fields?;
+        let comp = |component| {
+            fields.values_cached(
+                mesh,
+                &FieldChoice {
+                    name: a.field.clone(),
+                    component,
+                },
+            )
+        };
+        let vector = [
+            comp(Component::X)?,
+            comp(Component::Y)?,
+            comp(Component::Z)?,
+        ];
+        let longest = comp(Component::Magnitude)?.range?.1;
+        Some((a, vector, longest, a.spacing(mesh)))
+    });
+    let mut samples: Vec<crate::glyph::Sample> = Vec::new();
+    let anchor = mesh.bounds().center();
     for (k, slice) in display.slices.iter().enumerate() {
         if !slice.enabled {
             continue;
@@ -552,7 +623,9 @@ pub fn append(
             // The faces: the plane through the cells' tetrahedra, so the
             // values inside a cell follow its own value (as for
             // iso-surfaces), not only its nodes'.
-            for t in level_set(mesh, fields, Level::Plane(&plane), field, shown) {
+            let vector = arrows.as_ref().map(|a| &a.1);
+            let mut pieces: Vec<(u32, Vec<Vx>)> = Vec::new();
+            for t in level_set(mesh, fields, Level::Plane(&plane), field, vector, shown) {
                 let verts: Vec<Vx> = t.verts.iter().map(|v| Vx { n: normal, ..*v }).collect();
                 let verts = clip_flat(verts, &flat);
                 out.poly(
@@ -562,6 +635,12 @@ pub fn append(
                         ..paint(t.cell as usize)
                     },
                 );
+                if arrows.is_some() {
+                    pieces.push((t.cell, verts));
+                }
+            }
+            if let Some((a, _, _, h)) = &arrows {
+                crate::glyph::on_plane(&mut samples, &plane, anchor, *h, a.in_plane, &pieces);
             }
             // The outlines of the cells' sections.
             if !edges {
@@ -584,6 +663,7 @@ pub fn append(
                                 v: f64::NAN,
                                 n: normal,
                                 key: Some((a, b)),
+                                w: NO_VECTOR,
                             }
                         })
                         .collect();
@@ -617,6 +697,7 @@ pub fn append(
                 Some(fields),
                 Level::Field(&values, iso.value),
                 colour,
+                None,
                 shown,
             );
             for t in tris {
@@ -631,6 +712,72 @@ pub fn append(
                 out.poly(&verts, &paint);
             }
         }
+    }
+    if let Some((a, vector, longest, h)) = &arrows {
+        if a.surface {
+            let v = [&*vector[0], &*vector[1], &*vector[2]];
+            crate::glyph::on_surface(&mut samples, mesh, display, shown, *h, v, field);
+        }
+        let picked = selected(display, Item::Arrows);
+        let colour = match a.color {
+            IsoColor::Field => field,
+            IsoColor::Solid => None,
+        };
+        let rgb = if colour.is_some() {
+            tokens.mesh.field.none
+        } else {
+            display
+                .colors
+                .get(&Item::Arrows)
+                .copied()
+                .unwrap_or(tokens.mesh.field.arrow)
+        };
+        let face = if picked { mixed(rgb, sel, mix) } else { rgb };
+        let full = 0.9 * h * a.scale;
+        let size = |w: [f64; 3]| dot(w, w).sqrt();
+        // The magnitude drawn 0.9 of a spacing long: the field's largest,
+        // so the arrows keep their length while a slice moves; with the
+        // part in the plane only, the largest of the arrows drawn (the
+        // part in a plane is often a small fraction of the whole).
+        let longest = if a.in_plane {
+            samples
+                .iter()
+                .map(|x| size(x.w))
+                .filter(|m| m.is_finite())
+                .fold(0.0, f64::max)
+        } else {
+            *longest
+        };
+        out.s.arrow_longest = longest;
+        let mut drawn = 0;
+        for x in &samples {
+            let m = size(x.w);
+            let len = if longest > 0.0 {
+                m / longest * full
+            } else {
+                0.0
+            };
+            // Too short to see (or no value).
+            if len.is_nan() || len <= 0.02 * h {
+                continue;
+            }
+            if drawn == crate::glyph::MAX_ARROWS {
+                out.s.arrows_capped = true;
+                break;
+            }
+            let dir = x.w.map(|c| c / m);
+            let (verts, tris) = crate::glyph::arrow(x.centre(dir, len, *h), dir, len, *h);
+            let paint = Paint {
+                color: face.linear(),
+                edge: None,
+                flat: colour.map(|_| x.v),
+                sel_mix: if picked { mix } else { 0.0 },
+                cell: x.cell,
+            };
+            out.mesh(&verts, &tris, x.v, &paint);
+            drawn += 1;
+        }
+        out.s.arrows = drawn;
     }
     let span = out.span.0;
     if let Some((lo, hi)) = span {
@@ -681,8 +828,17 @@ fn level_set(
     fields: Option<&FieldSet>,
     level: Level<'_>,
     colour: Option<&FieldValues>,
+    vector: Option<&[std::sync::Arc<FieldValues>; 3]>,
     shown: &[bool],
 ) -> Vec<Tri> {
+    // The values carried to the surface's points: the colour, then the
+    // vector's components (NaN where none).
+    let chans: [Option<&FieldValues>; 4] = [
+        colour,
+        vector.map(|v| &*v[0]),
+        vector.map(|v| &*v[1]),
+        vector.map(|v| &*v[2]),
+    ];
     let iso = match level {
         Level::Field(_, v) => v,
         Level::Plane(_) => 0.0,
@@ -730,7 +886,7 @@ fn level_set(
     // A point of the surface on the segment between two tetrahedron
     // points, made once: (position, colour value).
     let mut made: HashMap<(Pt, Pt), u32> = HashMap::new();
-    let mut points: Vec<([f64; 3], f64)> = Vec::new();
+    let mut points: Vec<([f64; 3], [f64; 4])> = Vec::new();
     let mut normals: Vec<[f64; 3]> = Vec::new();
     // Triangles by point index, with their cell.
     let mut tris: Vec<([u32; 3], u32)> = Vec::new();
@@ -770,7 +926,8 @@ fn level_set(
             Level::Plane(p) => p.distance(centre),
             Level::Field(..) => vc,
         };
-        let cc = colour.map_or(f64::NAN, |f| f.cell.get(c).copied().unwrap_or(f64::NAN));
+        let cc =
+            chans.map(|ch| ch.map_or(f64::NAN, |f| f.cell.get(c).copied().unwrap_or(f64::NAN)));
         for i in range {
             let f = mesh.faces.get(i);
             if f.len() < 3 {
@@ -784,7 +941,7 @@ fn level_set(
                 Level::Field(v, _) => face_value(v, u, f, fc),
                 Level::Plane(p) => p.distance(fc),
             };
-            let cf = colour.map_or(f64::NAN, |cv| face_value(cv, u, f, fc));
+            let cf = chans.map(|ch| ch.map_or(f64::NAN, |cv| face_value(cv, u, f, fc)));
             // A face without a distinct id (should not happen) is made
             // per cell.
             let fpt = if u == NO_CELL {
@@ -801,13 +958,13 @@ fn level_set(
                         Pt::Node(a),
                         mesh.points[a as usize],
                         node_level(a),
-                        colour.map_or(f64::NAN, |cv| node_of(cv, a)),
+                        chans.map(|ch| ch.map_or(f64::NAN, |cv| node_of(cv, a))),
                     ),
                     (
                         Pt::Node(b),
                         mesh.points[b as usize],
                         node_level(b),
-                        colour.map_or(f64::NAN, |cv| node_of(cv, b)),
+                        chans.map(|ch| ch.map_or(f64::NAN, |cv| node_of(cv, b))),
                     ),
                 ];
                 if tet.iter().any(|t| !t.2.is_finite()) {
@@ -828,9 +985,10 @@ fn level_set(
                             (iso - vl) / (vh - vl)
                         };
                         let t = t.clamp(0.0, 1.0);
+                        let (a, b) = (tet[lo].3, tet[hi].3);
                         points.push((
                             lerp3(tet[lo].1, tet[hi].1, t),
-                            lerp(tet[lo].3, tet[hi].3, t),
+                            std::array::from_fn(|k| lerp(a[k], b[k], t)),
                         ));
                         normals.push([0.0; 3]);
                         (points.len() - 1) as u32
@@ -891,9 +1049,10 @@ fn level_set(
                 let (p, v) = points[i as usize];
                 Vx {
                     p,
-                    v,
+                    v: v[0],
                     n: unit(normals[i as usize]),
                     key: None,
+                    w: [v[1], v[2], v[3]],
                 }
             }),
         })
@@ -1213,6 +1372,256 @@ mod tests {
         let s = build(&m, &set, &d);
         let first = s.indices.len() / 3 - extract_tris(&s).len();
         assert_eq!(s.values[s.indices[3 * first] as usize][3], 1.0);
+    }
+
+    /// The arrows of `s` (drawn last, one block of vertices each) as
+    /// (tail, tip) world points.
+    fn arrows_of(s: &Surface) -> Vec<([f64; 3], [f64; 3])> {
+        let each = crate::glyph::arrow([0.0; 3], [1.0, 0.0, 0.0], 1.0, 1.0)
+            .0
+            .len();
+        // The cone's first triangle ends at the tip.
+        let tip = each - 3 * 8 + 2;
+        let world = |i: usize| {
+            let p = s.positions[i];
+            [0, 1, 2].map(|k| p[k] as f64 + s.origin[k])
+        };
+        let first = s.positions.len() - s.arrows * each;
+        (0..s.arrows)
+            .map(|k| (world(first + k * each), world(first + k * each + tip)))
+            .collect()
+    }
+
+    fn velocity_arrows() -> crate::glyph::Arrows {
+        crate::glyph::Arrows::new("velocity")
+    }
+
+    /// Invariant: arrows on a slice sit on the even grid of the plane
+    /// (anchored at the mesh's centre, one spacing apart), one per grid
+    /// point, centred on it; their length is the magnitude over the
+    /// field's largest, times 0.9 of a spacing times the scale; they
+    /// point along the vector (the duct's flow, along x). Breaks when
+    /// arrows follow the cells (crowding where the mesh is fine), when a
+    /// grid point is drawn twice (it lies on an edge between two cells'
+    /// pieces) or when the length stops following the magnitude.
+    #[test]
+    fn arrows_on_a_slice_follow_the_grid_and_the_magnitude() {
+        let (m, set) = channel();
+        let b = m.bounds();
+        let mut d = by_field(&m, &set, "speed");
+        let mut slice = Slice::new(b.center(), [0.0, 0.0, 1.0]);
+        slice.origin[2] += 0.013;
+        d.slices.push(slice);
+        d.arrows = Some(velocity_arrows());
+        let s = build(&m, &set, &d);
+        let a = d.arrows.clone().unwrap();
+        let h = a.spacing(&m);
+        assert!((h - 4.0 / 25.0).abs() < 1e-12);
+        let arrows = arrows_of(&s);
+        // 25 + 1 columns over x, 12 + 1 rows over y, a few left out at
+        // the walls (too short to see).
+        assert!(
+            (200..=26 * 13).contains(&arrows.len()),
+            "{} arrows",
+            arrows.len()
+        );
+        assert!(!s.arrows_capped);
+        let (u, v) = crate::clip::plane_axes([0.0, 0.0, 1.0]);
+        let anchor = b.center();
+        let mut seen = HashSet::new();
+        let mut longest: f64 = 0.0;
+        for (tail, tip) in &arrows {
+            let c = [0, 1, 2].map(|k| 0.5 * (tail[k] + tip[k]));
+            assert!(
+                (c[2] - slice.origin[2]).abs() < 1e-4,
+                "off the plane: {c:?}"
+            );
+            let g = [u, v].map(|e| dot(sub(c, anchor), e) / h);
+            for x in g {
+                assert!((x - x.round()).abs() < 1e-3, "off the grid: {g:?}");
+            }
+            assert!(seen.insert(g.map(|x| x.round() as i64)), "twice: {g:?}");
+            let d = sub(*tip, *tail);
+            let len = dot(d, d).sqrt();
+            assert!(len <= 0.9 * h * (1.0 + 1e-4), "{len}");
+            if len > longest {
+                longest = len;
+                assert!(d[0] / len > 0.99, "not along the flow: {d:?}");
+            }
+        }
+        assert!(longest > 0.75 * 0.9 * h, "{longest}");
+        // Twice the scale, twice the length.
+        d.arrows.as_mut().unwrap().scale = 2.0;
+        let s2 = build(&m, &set, &d);
+        let longest2 = arrows_of(&s2)
+            .iter()
+            .map(|(a, b)| dot(sub(*b, *a), sub(*b, *a)).sqrt())
+            .fold(0.0, f64::max);
+        assert!((longest2 - 2.0 * longest).abs() < 1e-4, "{longest2}");
+        // Off: none.
+        d.arrows.as_mut().unwrap().enabled = false;
+        assert_eq!(build(&m, &set, &d).arrows, 0);
+    }
+
+    /// Invariant: arrows of the part in the plane lie in the slice and
+    /// point along that part (across the duct, y), the longest of them
+    /// 0.9 of a spacing; the full vector on the same slice points along
+    /// the flow (x). Breaks when the projection is lost or in-plane
+    /// arrows keep the full field's scale (the duct's cross flow is 2 %
+    /// of its speed, too short to see).
+    #[test]
+    fn in_plane_arrows_lie_in_the_slice() {
+        let (m, set) = channel();
+        let b = m.bounds();
+        let mut d = by_field(&m, &set, "speed");
+        let mut slice = Slice::new(b.center(), [1.0, 0.0, 0.0]);
+        slice.origin[0] += 0.013;
+        d.slices.push(slice);
+        let mut a = velocity_arrows();
+        a.density = 100;
+        a.in_plane = true;
+        d.arrows = Some(a.clone());
+        let h = a.spacing(&m);
+        let s = build(&m, &set, &d);
+        let arrows = arrows_of(&s);
+        assert!(arrows.len() > 50, "{}", arrows.len());
+        let mut longest: f64 = 0.0;
+        for (tail, tip) in &arrows {
+            assert!((tail[0] - slice.origin[0]).abs() < 1e-4);
+            assert!((tip[0] - slice.origin[0]).abs() < 1e-4);
+            let d = sub(*tip, *tail);
+            let len = dot(d, d).sqrt();
+            longest = longest.max(len);
+            assert!(d[1] / len > 0.99, "not across the duct: {d:?}");
+        }
+        assert!((longest - 0.9 * h).abs() < 1e-4, "{longest}");
+        assert!(s.arrow_longest > 0.0 && s.arrow_longest < 0.1);
+        d.arrows.as_mut().unwrap().in_plane = false;
+        let full = arrows_of(&build(&m, &set, &d));
+        assert!(full.iter().all(|(a, b)| b[0] - a[0] > 0.0));
+    }
+
+    /// Invariant: on the surface, arrows go at the centres of boundary
+    /// faces shown, at most one per cube of the grid, with the face's
+    /// cell value (the outlet's core flow, not the node values a coarse
+    /// mesh pulls down to a third); each arrow lies outside the mesh, off
+    /// the face, starting at the outlet and ending at the inlet; a coarser
+    /// grid gives fewer and a hidden patch none. Breaks when every face
+    /// gets an arrow (a fine boundary layer turns black with them),
+    /// arrows sink half into the mesh, or hidden patches keep theirs.
+    #[test]
+    fn surface_arrows_thin_to_one_per_cube() {
+        let (m, set) = channel();
+        let b = m.bounds();
+        let mut d = by_field(&m, &set, "speed");
+        let mut a = velocity_arrows();
+        a.surface = true;
+        a.density = 10;
+        d.arrows = Some(a.clone());
+        let h = a.spacing(&m);
+        let shown = vec![true; m.cell_count()];
+        let comp = |c| {
+            set.values_cached(
+                &m,
+                &FieldChoice {
+                    name: "velocity".into(),
+                    component: c,
+                },
+            )
+            .unwrap()
+        };
+        let v = [comp(Component::X), comp(Component::Y), comp(Component::Z)];
+        let vs = [&*v[0], &*v[1], &*v[2]];
+        let mut samples = Vec::new();
+        crate::glyph::on_surface(&mut samples, &m, &d, &shown, h, vs, None);
+        assert!(!samples.is_empty() && samples.len() < m.boundary.len());
+        let mut cubes = HashSet::new();
+        for x in &samples {
+            let on = (0..3).find(|&k| x.p[k] == b.min[k] || x.p[k] == b.max[k]);
+            let Some(k) = on else {
+                panic!("not on the boundary: {:?}", x.p);
+            };
+            let n = x.out.unwrap();
+            let sign = if x.p[k] == b.max[k] { 1.0 } else { -1.0 };
+            assert!(
+                (n[k] - sign).abs() < 1e-9,
+                "inward normal {n:?} at {:?}",
+                x.p
+            );
+            let key = [0, 1, 2].map(|k| ((x.p[k] - b.min[k]) / h).floor() as i64);
+            assert!(cubes.insert(key), "two arrows in cube {key:?}");
+            assert_eq!(x.w, [0, 1, 2].map(|k| v[k].cell[x.cell as usize]));
+        }
+        // The outlet's middle arrow carries its cell's speed.
+        let core = v[0].cell.iter().copied().fold(0.0, f64::max);
+        let outlet = samples
+            .iter()
+            .filter(|x| x.p[0] == b.max[0])
+            .map(|x| x.w[0])
+            .fold(0.0, f64::max);
+        assert!(outlet > 0.8 * core, "{outlet} vs {core}");
+        // Drawn: outside the box, off the face. The mesh keeps its faces:
+        // arrows alone do not turn it into its outline.
+        let s = build(&m, &set, &d);
+        assert!(s.tri_face.iter().any(|&f| f != NO_CELL));
+        let arrows = arrows_of(&s);
+        // All but those too short to see (in the corners).
+        let longest = s.arrow_longest;
+        let seen = samples
+            .iter()
+            .filter(|x| dot(x.w, x.w).sqrt() / longest * 0.9 > 0.02)
+            .count();
+        assert_eq!(arrows.len(), seen);
+        assert!(seen * 2 > samples.len(), "{seen} of {}", samples.len());
+        let inside = |p: [f64; 3]| (0..3).all(|k| p[k] > b.min[k] + 1e-4 && p[k] < b.max[k] - 1e-4);
+        for (tail, tip) in &arrows {
+            assert!(!inside(*tail) && !inside(*tip), "{tail:?} {tip:?}");
+        }
+        // Out of the outlet (x = 4), into the inlet (x = 0).
+        let lift = 0.12 * h;
+        assert!(
+            arrows
+                .iter()
+                .any(|(t, _)| (t[0] - b.max[0] - lift).abs() < 1e-4)
+        );
+        assert!(
+            arrows
+                .iter()
+                .any(|(_, p)| (p[0] - b.min[0] + lift).abs() < 1e-4)
+        );
+        d.arrows.as_mut().unwrap().density = 4;
+        let coarse = build(&m, &set, &d).arrows;
+        assert!(coarse < arrows.len(), "{coarse} vs {}", arrows.len());
+        // A hidden patch has none: only the inlet and outlet keep theirs.
+        let walls = m.patches.iter().position(|p| p.name == "walls").unwrap();
+        d.hidden.insert(Item::Patch(walls as u32));
+        let mut left = Vec::new();
+        crate::glyph::on_surface(&mut left, &m, &d, &shown, h, vs, None);
+        assert!(!left.is_empty());
+        assert!(
+            left.iter()
+                .all(|x| x.p[0] == b.min[0] || x.p[0] == b.max[0])
+        );
+    }
+
+    /// Invariant: no more than [`crate::glyph::MAX_ARROWS`] arrows are
+    /// drawn, and the surface says so when more were wanted. Breaks when
+    /// a dense grid on a large slice builds hundreds of thousands of
+    /// arrows and stalls the window.
+    #[test]
+    fn arrows_are_capped() {
+        let (m, set) = channel();
+        let b = m.bounds();
+        let mut d = by_field(&m, &set, "speed");
+        let mut slice = Slice::new(b.center(), [0.0, 0.0, 1.0]);
+        slice.origin[2] += 0.013;
+        d.slices.push(slice);
+        let mut a = velocity_arrows();
+        a.density = crate::glyph::MAX_DENSITY;
+        d.arrows = Some(a);
+        let s = build(&m, &set, &d);
+        assert_eq!(s.arrows, crate::glyph::MAX_ARROWS);
+        assert!(s.arrows_capped);
     }
 
     /// Invariant: removing a slice or an iso-surface keeps the selection

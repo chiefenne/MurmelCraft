@@ -683,3 +683,75 @@ fn slices_and_iso_surfaces_in_the_window() {
     assert!(!h.state().session.display.outline_mesh());
     assert_eq!(problems(&h), Vec::<String>::new(), "mesh faces");
 }
+
+/// Whether some text of the tree reads `text` (a label's text is its
+/// value).
+fn shows(h: &Harness<'_, MurmelApp>, text: &str) -> bool {
+    h.root()
+        .children_recursive()
+        .any(|n| n.accesskit_node().value().as_deref() == Some(text))
+}
+
+/// Invariant (stage 3 of field results, the maintainer's cards of
+/// 2026-11-24): the tree's "Add vector arrows" adds arrows of the
+/// velocity, which say where they need to go until a slice shows; the
+/// row is named after the field and selecting it shows the arrows'
+/// Properties; the density and length boxes are named spin buttons that
+/// change them through the tool; every control keeps a clean name.
+/// Breaks if the add button calls nothing, the row or a box loses its
+/// name, or the boxes change the display behind the tools' back; the
+/// tool tests do not click.
+#[test]
+fn vector_arrows_in_the_window() {
+    let mut h = harness();
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.state_mut().call(
+        "display.color_by",
+        serde_json::json!({"by": "field", "field": "speed"}),
+    );
+    h.run_steps(3);
+    h.get_by_label("Add vector arrows (Alt + V)").click();
+    h.run_steps(3);
+    let a = h.state().session.display.arrows.clone().expect("arrows");
+    assert_eq!(a.field, "velocity");
+    assert!(named(&h, "Arrows: velocity"), "arrows row");
+    let nowhere = "Add a slice, or put them on the surface, to see them";
+    assert!(shows(&h, nowhere), "the hint");
+    assert_eq!(problems(&h), Vec::<String>::new(), "arrows without a slice");
+
+    h.get_by_label("Add slice (Alt + S)").click();
+    h.run_steps(3);
+    let drawn = h.state().session.mesh.as_ref().unwrap().surface.arrows;
+    assert!(drawn > 0, "arrows on the slice");
+    assert!(!shows(&h, nowhere), "no hint with a slice");
+
+    // Selected, the Properties show them.
+    h.get_by_label("Arrows: velocity").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.selection,
+        [murmel_engine::Item::Arrows]
+    );
+    assert!(shows(&h, "Vector arrows"), "Properties heading");
+
+    // The density box changes them through arrows.set (one undo step).
+    let before = h.state().session.journal.undo.len();
+    h.get_by_role_and_label(Role::SpinButton, "Across").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.get_by_role_and_label(Role::SpinButton, "Across")
+        .type_text("40");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.arrows.as_ref().unwrap().density,
+        40
+    );
+    assert_eq!(h.state().session.journal.undo.len(), before + 1);
+    assert!(named(&h, "Length"), "length box");
+    assert_eq!(problems(&h), Vec::<String>::new(), "arrows on a slice");
+}

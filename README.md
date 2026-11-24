@@ -31,6 +31,11 @@ tool that the window, the command line and the MCP server share.
   (typed, or clicked on the colour bar), solid or coloured by the field
   shown, by marching tetrahedra. The mesh shows as a faint outline
   meanwhile, its faces one click away.
+- Vector arrows (`arrows.set`, Alt + V): shaded 3D arrows of the velocity
+  (or another vector field) on every slice, on an even grid with a
+  density setting, and on the mesh surface on request; as long as the
+  magnitude (with a length factor), the full vector or only its part in
+  the slice, solid or coloured by the field shown.
 - Shaded with edges, patch colours, orbit, pan, zoom to the cursor, fit,
   home, the three projection modes (default: perspective with orthographic
   faces), dark and light themes switched live.

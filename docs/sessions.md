@@ -73,6 +73,13 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   planes in a series. An iso-surface of a field the result does not have
   is skipped as `field:<name>`. The geometry is computed again on
   loading, never stored.
+- **Vector arrows** (format 1.6) are `display.arrows` (`{"field":
+  "velocity", "enabled": true}`, plus `surface` and `in_plane` when on,
+  `density` (4 to 200, left out for 25), `scale` (above 0 up to 100, left
+  out for 1) and `color` (`solid`, the default, or `field`); an own
+  colour is in `colors` as `arrows`). Arrows of a field the result does
+  not have, or of a scalar, are skipped as `field:<name>`. The arrows are
+  computed again on loading, never stored.
 - **Saved views** (format 1.1) are the named cameras of the model tree's
   "Saved views" (`views.save`, `views.go`, `views.rename`,
   `views.delete`), in the order they were saved. A 1.0 file has none and

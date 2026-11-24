@@ -550,6 +550,7 @@ pub(crate) fn display_json(s: &Session) -> Value {
         "slices": (0..d.slices.len()).map(|k| crate::extract::slice_json(s, k)).collect::<Vec<_>>(),
         "isos": (0..d.isos.len()).map(|k| crate::extract::iso_json(s, k)).collect::<Vec<_>>(),
         "mesh_look": d.mesh_look,
+        "arrows": crate::extract::arrows_json(s),
     })
 }
 
@@ -2123,6 +2124,8 @@ pub const JOURNALED: &[&str] = &[
     "slice.clear",
     "iso.set",
     "iso.clear",
+    "arrows.set",
+    "arrows.clear",
     "display.mesh_look",
     "display.set_color",
     "display.visibility",
@@ -2663,7 +2666,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-display-set-color",
-        summary: "Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type.",
+        summary: "Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>, iso:<n>, arrows), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type, an iso-surface's and the arrows' colours when they are solid.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -2816,6 +2819,28 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::extract::iso_clear_schema,
         run: crate::extract::iso_clear,
+    },
+    Tool {
+        id: "arrows.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-arrows-set",
+        summary: "Show or change the vector arrows: shaded 3D arrows of a vector field (field: left out, their own, else the field shown if it is a vector, else the file's first vector) on every slice shown, on an even square grid anchored at the mesh's centre, and on the mesh surface shown when surface is true (one boundary face per cube of the grid). density is the arrows across the mesh's largest extent (4 to 200, 25 by default); the length follows the magnitude, the field's largest being 0.9 of a spacing times scale (above 0, up to 100). in_plane draws only the part of the vector in each slice's plane, the longest of those then 0.9 of a spacing. color solid gives them a colour of their own (display.set_color on arrows), field the colour of the field on the colour bar there. enabled false keeps the settings and draws none. At most 10 000 are drawn (capped in the result).",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::extract::arrows_set_schema,
+        run: crate::extract::arrows_set,
+    },
+    Tool {
+        id: "arrows.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-arrows-clear",
+        summary: "Remove the vector arrows and their settings.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::extract::arrows_clear_schema,
+        run: crate::extract::arrows_clear,
     },
     Tool {
         id: "display.mesh_look",

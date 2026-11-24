@@ -19,6 +19,7 @@ use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, FieldStyles, FieldValues};
+use crate::glyph::Arrows;
 use crate::measure::{Measurement, Probe};
 use crate::quality::{Metric, Quality};
 use crate::theme::{Rgb, Tokens};
@@ -130,6 +131,8 @@ pub enum Item {
     Slice(u32),
     /// An iso-surface, by index into `Display::isos` (`iso:1`).
     Iso(u32),
+    /// The vector arrows (`arrows`), when `Display::arrows` is set.
+    Arrows,
 }
 
 impl Item {
@@ -155,6 +158,7 @@ impl Item {
             Item::Probe(n) => format!("probe:{n}"),
             Item::Slice(i) => format!("slice:{}", i + 1),
             Item::Iso(i) => format!("iso:{}", i + 1),
+            Item::Arrows => "arrows".into(),
         }
     }
 
@@ -167,6 +171,9 @@ impl Item {
     pub fn parse(id: &str, mesh: &Mesh) -> Option<Item> {
         if id == "mesh" {
             return Some(Item::Mesh);
+        }
+        if id == "arrows" {
+            return Some(Item::Arrows);
         }
 
         let (area, name) = id.split_once(':')?;
@@ -320,6 +327,8 @@ pub struct Display {
     pub isos: Vec<Iso>,
     /// What the mesh looks like while slices or iso-surfaces show.
     pub mesh_look: MeshLook,
+    /// The vector arrows on slices and the surface (`arrows.set`).
+    pub arrows: Option<Arrows>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -417,6 +426,11 @@ impl Display {
                         c.enabled = on;
                     }
                 }
+                (Item::Arrows, Some(on)) => {
+                    if let Some(a) = &mut self.arrows {
+                        a.enabled = on;
+                    }
+                }
                 (Item::Measure(n), Some(on)) => {
                     for m in self.measurements.iter_mut().filter(|m| m.n == n) {
                         m.visible = on;
@@ -449,6 +463,7 @@ impl Display {
                         | Item::Probe(_)
                         | Item::Slice(_)
                         | Item::Iso(_)
+                        | Item::Arrows
                 )
             })
             .collect();
@@ -688,6 +703,7 @@ impl Display {
             Item::Clip(k) => (k as usize) < self.clips.len(),
             Item::Slice(k) => (k as usize) < self.slices.len(),
             Item::Iso(k) => (k as usize) < self.isos.len(),
+            Item::Arrows => self.arrows.is_some(),
             Item::Measure(n) => self.measurement(n).is_some(),
             Item::Probe(n) => self.probe(n).is_some(),
             _ => true,
@@ -815,10 +831,15 @@ impl Display {
         self.render_mode.faces() && !self.outline_mesh()
     }
 
-    /// Whether the renderer draws faces (the mesh's, or slices and
-    /// iso-surfaces, which always show theirs) and edge lines.
+    /// Whether vector arrows are drawn.
+    pub fn arrows_shown(&self) -> bool {
+        self.arrows.as_ref().is_some_and(|a| a.enabled)
+    }
+
+    /// Whether the renderer draws faces (the mesh's, or slices,
+    /// iso-surfaces and arrows, which always show theirs) and edge lines.
     pub fn draw_faces(&self) -> bool {
-        self.render_mode.faces() || self.extracts_shown()
+        self.render_mode.faces() || self.extracts_shown() || self.arrows_shown()
     }
 
     pub fn draw_edges(&self) -> bool {
@@ -865,6 +886,11 @@ impl Display {
             }
             // An iso-surface's solid colour, in every mode.
             (_, Item::Iso(k)) => Some(crate::extract::iso_color(self, tokens, k as usize)),
+            // The arrows' solid colour, in every mode.
+            (_, Item::Arrows) => self
+                .arrows
+                .as_ref()
+                .map(|_| set.unwrap_or(tokens.mesh.field.arrow)),
             _ => None,
         }
     }
@@ -928,9 +954,12 @@ impl Display {
             Item::Kind(k) => owner.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
             Item::Cell(c) => owner == Some(c as usize),
             Item::Face(u) => mesh.boundary_face_id.get(f) == Some(&u),
-            Item::Clip(_) | Item::Measure(_) | Item::Probe(_) | Item::Slice(_) | Item::Iso(_) => {
-                false
-            }
+            Item::Clip(_)
+            | Item::Measure(_)
+            | Item::Probe(_)
+            | Item::Slice(_)
+            | Item::Iso(_)
+            | Item::Arrows => false,
         }
     }
 

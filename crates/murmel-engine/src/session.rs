@@ -223,6 +223,7 @@ impl Session {
         self.display.probes.clear();
         self.display.slices.clear();
         self.display.isos.clear();
+        self.display.arrows = None;
         // The field colouring stays when the new mesh has the field (the
         // next time step of the same case); else it falls back to solid.
         self.display.field_values = None;
@@ -296,6 +297,7 @@ impl Session {
         self.display.probes.clear();
         self.display.slices.clear();
         self.display.isos.clear();
+        self.display.arrows = None;
         self.display.field_values = None;
         self.surface_revision += 1;
     }

@@ -100,6 +100,8 @@ pub struct FieldTokens {
     pub line_mix: f32,
     /// The mesh's faint outline while slices or iso-surfaces show.
     pub outline: Rgb,
+    /// Vector arrows in their own colour.
+    pub arrow: Rgb,
 }
 
 /// Colours of the patch roles.
@@ -406,6 +408,7 @@ impl Tokens {
                 "edge" => &mut f.edge,
                 "line" => &mut f.line,
                 "outline" => &mut f.outline,
+                "arrow" => &mut f.arrow,
                 _ => return Err(format!("unknown field colour {name}")),
             } = rgb;
         }

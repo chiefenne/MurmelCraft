@@ -1,9 +1,11 @@
 //! The tools of slices and iso-surfaces (field results, stage 2):
 //! `slice.set`, `slice.rotate`, `slice.clear`, `iso.set`, `iso.clear`
-//! and `display.mesh_look`. The geometry is the engine's
-//! ([`murmel_engine::extract`]).
+//! and `display.mesh_look`; and of vector arrows (stage 3): `arrows.set`
+//! and `arrows.clear`. The geometry is the engine's
+//! ([`murmel_engine::extract`], [`murmel_engine::glyph`]).
 
 use murmel_engine::extract::{IsoColor, MAX_ISOS, MAX_SERIES, MAX_SLICES, MeshLook};
+use murmel_engine::glyph::{Arrows, MAX_DENSITY, MAX_SCALE, MIN_DENSITY};
 use murmel_engine::{Item, ScreenAxis, Session};
 use murmel_mesh::Component;
 use serde::Deserialize;
@@ -434,6 +436,160 @@ pub(crate) fn mesh_look(input: Value, s: &mut Session) -> Run {
     done(s)
 }
 
+/// The arrows with their id, grid spacing and what the last build drew
+/// (null without arrows).
+pub(crate) fn arrows_json(s: &Session) -> Value {
+    let (Some(a), Some(m)) = (s.display.arrows.as_ref(), &s.mesh) else {
+        return Value::Null;
+    };
+    let unit = m.fields.get(&a.field).and_then(|f| f.unit.clone());
+    let surface = &m.surface;
+    json!({
+        "id": Item::Arrows.id(&m.mesh),
+        "field": a.field,
+        "enabled": a.enabled,
+        "surface": a.surface,
+        "in_plane": a.in_plane,
+        "density": a.density,
+        "spacing": a.spacing(&m.mesh),
+        "scale": a.scale,
+        "color": a.color,
+        "solid": s.display.item_color(&m.mesh, &s.tokens, Item::Arrows).map(|c| c.hex()),
+        "unit": unit,
+        "drawn": surface.arrows,
+        "capped": surface.arrows_capped,
+        "longest": (surface.arrow_longest > 0.0).then_some(surface.arrow_longest),
+        "slices_shown": s.display.slices.iter().filter(|x| x.enabled).count(),
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArrowsSet {
+    field: Option<String>,
+    enabled: Option<bool>,
+    surface: Option<bool>,
+    in_plane: Option<bool>,
+    density: Option<u32>,
+    scale: Option<f64>,
+    color: Option<IsoColor>,
+}
+
+/// The vector field the arrows draw: the one named, else their own, else
+/// the field shown when it is a vector, else the file's first vector.
+fn arrow_field(s: &Session, name: Option<&str>) -> Result<String, Diagnostic> {
+    let set = need_fields(s)?;
+    let vectors: Vec<&str> = set
+        .names()
+        .into_iter()
+        .filter(|n| set.get(n).is_some_and(|f| f.is_vector()))
+        .collect();
+    let name = name
+        .map(str::to_string)
+        .or_else(|| s.display.arrows.as_ref().map(|a| a.field.clone()))
+        .or_else(|| {
+            s.display
+                .field
+                .as_ref()
+                .map(|c| c.name.clone())
+                .filter(|n| vectors.contains(&n.as_str()))
+        })
+        .or_else(|| vectors.first().map(|n| n.to_string()));
+    let Some(name) = name else {
+        return Err(Diagnostic::new(
+            "ARROW001",
+            format!(
+                "the open mesh has no vector field (one with x, y and z components); it has {}",
+                set.names().join(", ")
+            ),
+        ));
+    };
+    match set.get(&name) {
+        Some(f) if f.is_vector() => Ok(name),
+        Some(_) => Err(Diagnostic::new(
+            "ARROW001",
+            format!(
+                "{name} is a scalar; arrows need a vector field ({})",
+                if vectors.is_empty() {
+                    "the open mesh has none".to_string()
+                } else {
+                    vectors.join(", ")
+                }
+            ),
+        )),
+        None => Err(Diagnostic::new(
+            "FIELD002",
+            format!(
+                "no field {name}; the open mesh has {}",
+                set.names().join(", ")
+            ),
+        )),
+    }
+}
+
+pub(crate) fn arrows_set(input: Value, s: &mut Session) -> Run {
+    let i: ArrowsSet = parse(input)?;
+    need_fields(s)?;
+    let field = arrow_field(s, i.field.as_deref())?;
+    if let Some(d) = i.density
+        && !(MIN_DENSITY..=MAX_DENSITY).contains(&d)
+    {
+        return Err(Diagnostic::new(
+            "ARROW002",
+            format!("density {d} is outside {MIN_DENSITY} to {MAX_DENSITY}"),
+        ));
+    }
+    if let Some(x) = i.scale
+        && !(x.is_finite() && x > 0.0 && x <= MAX_SCALE)
+    {
+        return Err(Diagnostic::new(
+            "ARROW002",
+            format!("scale {x} is outside 0 (not included) to {MAX_SCALE}"),
+        ));
+    }
+    let mut a = s
+        .display
+        .arrows
+        .clone()
+        .unwrap_or_else(|| Arrows::new(field.clone()));
+    a.field = field;
+    if let Some(x) = i.enabled {
+        a.enabled = x;
+    }
+    if let Some(x) = i.surface {
+        a.surface = x;
+    }
+    if let Some(x) = i.in_plane {
+        a.in_plane = x;
+    }
+    if let Some(x) = i.density {
+        a.density = x;
+    }
+    if let Some(x) = i.scale {
+        a.scale = x;
+    }
+    if let Some(x) = i.color {
+        a.color = x;
+    }
+    s.display.arrows = Some(a);
+    s.redraw();
+    let mut out = display_json(s);
+    out["arrows"] = arrows_json(s);
+    Ok(out)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArrowsClear {}
+
+pub(crate) fn arrows_clear(input: Value, s: &mut Session) -> Run {
+    let ArrowsClear {} = parse(input)?;
+    s.display.arrows = None;
+    s.display.selection.retain(|&i| i != Item::Arrows);
+    s.display.colors.remove(&Item::Arrows);
+    done(s)
+}
+
 // ---- schemas ------------------------------------------------------------
 
 fn vec3_schema() -> Value {
@@ -497,6 +653,25 @@ pub(crate) fn iso_clear_schema() -> Value {
         json!({"iso": {"type": "integer", "minimum": 1}, "all": {"type": "boolean"}}),
         &[],
     )
+}
+
+pub(crate) fn arrows_set_schema() -> Value {
+    object(
+        json!({
+            "field": {"type": "string"},
+            "enabled": {"type": "boolean"},
+            "surface": {"type": "boolean"},
+            "in_plane": {"type": "boolean"},
+            "density": {"type": "integer", "minimum": MIN_DENSITY, "maximum": MAX_DENSITY},
+            "scale": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_SCALE},
+            "color": {"enum": ["solid", "field"]}
+        }),
+        &[],
+    )
+}
+
+pub(crate) fn arrows_clear_schema() -> Value {
+    object(json!({}), &[])
 }
 
 pub(crate) fn mesh_look_schema() -> Value {
