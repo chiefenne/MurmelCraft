@@ -117,6 +117,7 @@ field-location-point = point values
 field-location-boundary = boundary values
 colormap-rainbow_desaturated = Rainbow desaturated
 colormap-inferno = Inferno
+colormap-rainbow_uniform = Rainbow uniform
 colormap-cool_warm = Cool to warm
 colormap-viridis = Viridis
 colormap-plasma = Plasma

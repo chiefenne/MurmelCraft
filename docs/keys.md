@@ -131,6 +131,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Colour map: automatic | `field.style` `{"map":"auto"}` |
 | palette | Rainbow desaturated | `field.style` `{"map":"rainbow_desaturated"}` |
 | palette | Inferno | `field.style` `{"map":"inferno"}` |
+| palette | Rainbow uniform | `field.style` `{"map":"rainbow_uniform"}` |
 | palette | Cool to warm | `field.style` `{"map":"cool_warm"}` |
 | palette | Viridis | `field.style` `{"map":"viridis"}` |
 | palette | Plasma | `field.style` `{"map":"plasma"}` |
