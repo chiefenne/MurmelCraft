@@ -58,7 +58,12 @@ fn parse(text: &str) -> Result<Vec<Colormap>, String> {
     // Keep the order of the file: read the table names in order first.
     let order: Vec<String> = text
         .lines()
-        .filter_map(|l| l.trim().strip_prefix('[')?.strip_suffix(']').map(str::to_string))
+        .filter_map(|l| {
+            l.trim()
+                .strip_prefix('[')?
+                .strip_suffix(']')
+                .map(str::to_string)
+        })
         .collect();
     let mut table: BTreeMap<String, Entry> =
         toml::from_str(text).map_err(|e| format!("colormaps.toml: {e}"))?;
@@ -92,7 +97,11 @@ impl Colormap {
     /// The colour at `t` (0 low end, 1 high end; clamped), turned end
     /// for end when `reverse`.
     pub fn sample(&self, t: f64, reverse: bool) -> Rgb {
-        let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let t = if reverse { 1.0 - t } else { t };
         let n = self.stops.len() - 1;
         let x = t * n as f64;
@@ -140,7 +149,16 @@ mod tests {
         let ids = ids();
         assert_eq!(
             ids,
-            ["viridis", "cool_warm", "plasma", "magma", "inferno", "turbo", "rainbow", "grey"]
+            [
+                "viridis",
+                "cool_warm",
+                "plasma",
+                "magma",
+                "inferno",
+                "turbo",
+                "rainbow",
+                "grey"
+            ]
         );
         let v = get(DEFAULT).unwrap();
         assert_eq!(v.sample(0.0, false), Rgb([0x44, 0x01, 0x54]));

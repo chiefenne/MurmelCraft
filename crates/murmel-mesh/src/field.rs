@@ -51,7 +51,12 @@ pub enum Component {
 }
 
 impl Component {
-    pub const ALL: [Component; 4] = [Component::Magnitude, Component::X, Component::Y, Component::Z];
+    pub const ALL: [Component; 4] = [
+        Component::Magnitude,
+        Component::X,
+        Component::Y,
+        Component::Z,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {

@@ -302,7 +302,10 @@ impl SessionFile {
             };
             let ok = (crate::field::MIN_BANDS..=crate::field::MAX_BANDS).contains(&st.bands)
                 && (1..=crate::field::MAX_LINES).contains(&st.line_count)
-                && st.map.as_deref().is_none_or(|m| crate::colormap::get(m).is_some())
+                && st
+                    .map
+                    .as_deref()
+                    .is_none_or(|m| crate::colormap::get(m).is_some())
                 && fixed_ok;
             if !ok {
                 return Err(Refused(format!(
@@ -505,8 +508,9 @@ mod tests {
             serde_json::json!({"range": {"fixed": {"min": 1.0, "max": 1.0}}}),
         ] {
             assert!(
-                with(&|v| v["display"]["field_styles"] = serde_json::json!({ "pressure": bad.clone() }))
-                    .is_err(),
+                with(&|v| v["display"]["field_styles"] =
+                    serde_json::json!({ "pressure": bad.clone() }))
+                .is_err(),
                 "{bad}"
             );
         }

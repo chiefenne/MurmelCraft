@@ -224,7 +224,12 @@ impl Session {
         // The field colouring stays when the new mesh has the field (the
         // next time step of the same case); else it falls back to solid.
         self.display.field_values = None;
-        if self.display.field.as_ref().is_some_and(|c| fields.get(&c.name).is_none()) {
+        if self
+            .display
+            .field
+            .as_ref()
+            .is_some_and(|c| fields.get(&c.name).is_none())
+        {
             self.display.field = None;
             if self.display.color_by == ColorBy::Field {
                 self.display.color_by = ColorBy::Solid;

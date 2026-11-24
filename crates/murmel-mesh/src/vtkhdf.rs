@@ -102,7 +102,9 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
         t => {
             return Err(MeshError::new(
                 "MESH017",
-                format!("VTKHDF type {t} (supported: UnstructuredGrid, PartitionedDataSetCollection)"),
+                format!(
+                    "VTKHDF type {t} (supported: UnstructuredGrid, PartitionedDataSetCollection)"
+                ),
             ));
         }
     }
@@ -123,8 +125,22 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
         } else if let Some(z) = zones {
             b.zone_values = Some(z);
         }
-        cell_fields.push(data_fields(h, obj, "CellData", Location::Cell, cells, &["zone"])?);
-        point_fields.push(data_fields(h, obj, "PointData", Location::Point, points, &[])?);
+        cell_fields.push(data_fields(
+            h,
+            obj,
+            "CellData",
+            Location::Cell,
+            cells,
+            &["zone"],
+        )?);
+        point_fields.push(data_fields(
+            h,
+            obj,
+            "PointData",
+            Location::Point,
+            points,
+            &[],
+        )?);
     }
     let mut boundary_fields: Vec<(usize, Vec<Field>)> = Vec::new();
     for (name, obj) in &patches {
@@ -156,7 +172,10 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
             attrs.insert(k, t);
         }
     }
-    let units = attrs.get("units").map(|u| parse_units(u)).unwrap_or_default();
+    let units = attrs
+        .get("units")
+        .map(|u| parse_units(u))
+        .unwrap_or_default();
     for f in &mut fields {
         f.unit = units.get(&f.name).cloned();
     }
@@ -364,16 +383,26 @@ struct Builder {
 impl Builder {
     /// Read an UnstructuredGrid block (all its partitions); returns its
     /// `zone` cell data when it has one.
-    fn grid(&mut self, h: &H5, g: &Object, zone: Option<u32>) -> Result<Option<Vec<u32>>, MeshError> {
+    fn grid(
+        &mut self,
+        h: &H5,
+        g: &Object,
+        zone: Option<u32>,
+    ) -> Result<Option<Vec<u32>>, MeshError> {
         let np = ints(h, g, "NumberOfPoints")?;
         let nc = ints(h, g, "NumberOfCells")?;
         let ncon = ints(h, g, "NumberOfConnectivityIds")?;
         let parts = np.len();
         if nc.len() != parts || ncon.len() != parts {
-            return Err(bad("NumberOfPoints, NumberOfCells and NumberOfConnectivityIds differ in length"));
+            return Err(bad(
+                "NumberOfPoints, NumberOfCells and NumberOfConnectivityIds differ in length",
+            ));
         }
         let (xyz, dims) = floats(h, g, "Points")?;
-        let total_points: usize = np.iter().map(|&n| count(n, "points")).sum::<Result<_, _>>()?;
+        let total_points: usize = np
+            .iter()
+            .map(|&n| count(n, "points"))
+            .sum::<Result<_, _>>()?;
         if dims.last() != Some(&3) || xyz.len() != 3 * total_points {
             return Err(MeshError::new(
                 "MESH005",
@@ -405,7 +434,9 @@ impl Builder {
             None => None,
         };
         let point_base = self.mesh.points.len();
-        self.mesh.points.extend(xyz.as_chunks::<3>().0.iter().copied());
+        self.mesh
+            .points
+            .extend(xyz.as_chunks::<3>().0.iter().copied());
         if self.mesh.cell_faces.is_empty() {
             self.mesh.cell_faces.push(0);
             self.mesh.faces = Polygons::new();
@@ -454,7 +485,9 @@ impl Builder {
                     .ok()
                     .filter(|&v| v < npart)
                     .and_then(|v| u32::try_from(v + pb).ok())
-                    .ok_or_else(|| MeshError::new("MESH006", format!("point {v} is out of range 0..{npart}")))
+                    .ok_or_else(|| {
+                        MeshError::new("MESH006", format!("point {v} is out of range 0..{npart}"))
+                    })
             };
             for c in 0..ncell {
                 let (s, e) = (offs[c], offs[c + 1]);
@@ -463,7 +496,9 @@ impl Builder {
                     .zip(usize::try_from(e).ok())
                     .filter(|(s, e)| s <= e && *e <= cn.len())
                     .map(|(s, e)| &cn[s..e])
-                    .ok_or_else(|| MeshError::new("MESH006", format!("cell {c}: offsets {s}..{e}")))?;
+                    .ok_or_else(|| {
+                        MeshError::new("MESH006", format!("cell {c}: offsets {s}..{e}"))
+                    })?;
                 let z = match (zone, &zone_data) {
                     (Some(z), _) => z,
                     (None, Some(zd)) => {
@@ -475,7 +510,7 @@ impl Builder {
                     }
                     (None, None) => 0,
                 };
-                let t = tys[c] as i64;
+                let t = tys[c];
                 let table = match t {
                     TETRA => Some(TETRA_FACES),
                     HEXAHEDRON => Some(HEX_FACES),
@@ -484,55 +519,87 @@ impl Builder {
                     _ => None,
                 };
                 if let Some(table) = table {
-                    let need = table.iter().flat_map(|f| f.iter()).max().map_or(0, |m| m + 1);
+                    let need = table
+                        .iter()
+                        .flat_map(|f| f.iter())
+                        .max()
+                        .map_or(0, |m| m + 1);
                     if nodes.len() != need {
                         return Err(MeshError::new(
                             "MESH006",
                             format!("cell {c}: type {t} with {} points", nodes.len()),
                         ));
                     }
-                    let ids: Vec<u32> = nodes.iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
+                    let ids: Vec<u32> =
+                        nodes.iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
                     let mut sizes = Vec::with_capacity(table.len());
                     for f in table {
                         self.mesh.faces.push(f.iter().map(|&i| ids[i]));
                         sizes.push(f.len());
                     }
-                    push_cell(&mut self.mesh, z, CellKind::classify(sizes), &mut self.zone_max);
+                    push_cell(
+                        &mut self.mesh,
+                        z,
+                        CellKind::classify(sizes),
+                        &mut self.zone_max,
+                    );
                     orient_last(&mut self.mesh);
                     zones_out.push(z);
                 } else if t == POLYHEDRON {
                     let (a, b) = (po.get(c), po.get(c + 1));
                     let range = a
                         .zip(b)
-                        .and_then(|(&a, &b)| Some(usize::try_from(a).ok()?..usize::try_from(b).ok()?))
+                        .and_then(|(&a, &b)| {
+                            Some(usize::try_from(a).ok()?..usize::try_from(b).ok()?)
+                        })
                         .filter(|r| r.start < r.end && r.end <= pf.len())
-                        .ok_or_else(|| MeshError::new("MESH009", format!("cell {c}: PolyhedronOffsets")))?;
+                        .ok_or_else(|| {
+                            MeshError::new("MESH009", format!("cell {c}: PolyhedronOffsets"))
+                        })?;
                     let mut sizes = Vec::with_capacity(range.len());
                     for &face in &pf[range] {
                         let fr = usize::try_from(face)
                             .ok()
                             .filter(|&f| f + 1 < fo.len())
                             .and_then(|f| {
-                                Some(usize::try_from(fo[f]).ok()?..usize::try_from(fo[f + 1]).ok()?)
+                                Some(
+                                    usize::try_from(fo[f]).ok()?
+                                        ..usize::try_from(fo[f + 1]).ok()?,
+                                )
                             })
                             .filter(|r| r.end >= r.start + 3 && r.end <= fc.len())
-                            .ok_or_else(|| MeshError::new("MESH009", format!("cell {c}: face {face}")))?;
-                        let ids: Vec<u32> = fc[fr].iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
+                            .ok_or_else(|| {
+                                MeshError::new("MESH009", format!("cell {c}: face {face}"))
+                            })?;
+                        let ids: Vec<u32> =
+                            fc[fr].iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
                         sizes.push(ids.len());
                         self.mesh.faces.push(ids);
                     }
-                    push_cell(&mut self.mesh, z, CellKind::classify(sizes), &mut self.zone_max);
+                    push_cell(
+                        &mut self.mesh,
+                        z,
+                        CellKind::classify(sizes),
+                        &mut self.zone_max,
+                    );
                     orient_last(&mut self.mesh);
                     zones_out.push(z);
                 } else if matches!(t, TRIANGLE | POLYGON | QUAD) {
                     if nodes.len() < 3 {
-                        return Err(MeshError::new("MESH006", format!("cell {c}: polygon with {} points", nodes.len())));
+                        return Err(MeshError::new(
+                            "MESH006",
+                            format!("cell {c}: polygon with {} points", nodes.len()),
+                        ));
                     }
-                    let ids: Vec<u32> = nodes.iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
+                    let ids: Vec<u32> =
+                        nodes.iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
                     self.mesh.boundary.push(ids);
                     self.mesh.boundary_patch.push(u32::MAX);
                 } else {
-                    return Err(MeshError::new("MESH008", format!("cell {c} has VTK type {t}")));
+                    return Err(MeshError::new(
+                        "MESH008",
+                        format!("cell {c} has VTK type {t}"),
+                    ));
                 }
             }
             pb += npart;
@@ -547,9 +614,15 @@ impl Builder {
     fn poly_data(&mut self, h: &H5, g: &Object, p: u32) -> Result<(), MeshError> {
         let np = ints(h, g, "NumberOfPoints")?;
         let (xyz, _) = floats(h, g, "Points")?;
-        let total: usize = np.iter().map(|&n| count(n, "points")).sum::<Result<_, _>>()?;
+        let total: usize = np
+            .iter()
+            .map(|&n| count(n, "points"))
+            .sum::<Result<_, _>>()?;
         if xyz.len() != 3 * total {
-            return Err(MeshError::new("MESH005", "PolyData Points do not match NumberOfPoints"));
+            return Err(MeshError::new(
+                "MESH005",
+                "PolyData Points do not match NumberOfPoints",
+            ));
         }
         let Some(polys) = h.child(g, "Polygons")? else {
             return Ok(());
@@ -606,7 +679,9 @@ impl Builder {
                             .ok()
                             .filter(|&v| v < npart)
                             .and_then(|v| ids.get(pb + v).copied())
-                            .ok_or_else(|| MeshError::new("MESH006", format!("polygon {c}: point {v}")))
+                            .ok_or_else(|| {
+                                MeshError::new("MESH006", format!("polygon {c}: point {v}"))
+                            })
                     })
                     .collect::<Result<_, _>>()?;
                 self.mesh.boundary.push(face);
@@ -637,10 +712,12 @@ impl Builder {
                 role: crate::PatchRole::Unspecified,
             });
         }
-        let zones = self
-            .zone_max
-            .map_or(0, |m| m as usize + 1)
-            .max(self.zone_names.keys().next_back().map_or(0, |&k| k as usize + 1));
+        let zones = self.zone_max.map_or(0, |m| m as usize + 1).max(
+            self.zone_names
+                .keys()
+                .next_back()
+                .map_or(0, |&k| k as usize + 1),
+        );
         mesh.zones = (0..zones as u32)
             .map(|i| {
                 self.zone_names.get(&i).cloned().unwrap_or_else(|| {
@@ -655,7 +732,10 @@ impl Builder {
         let _ = &self.zone_values;
         boundary::link(mesh);
         if mesh.cell_count() == 0 && mesh.boundary.is_empty() {
-            return Err(MeshError::new("MESH010", "no volume cells and no boundary faces"));
+            return Err(MeshError::new(
+                "MESH010",
+                "no volume cells and no boundary faces",
+            ));
         }
         Ok(self.mesh)
     }
@@ -675,14 +755,20 @@ fn orient_last(mesh: &mut Mesh) {
         let face = mesh.faces.get(f);
         let p0 = mesh.points[face[0] as usize];
         for k in 1..face.len().saturating_sub(1) {
-            let (a, b) = (mesh.points[face[k] as usize], mesh.points[face[k + 1] as usize]);
+            let (a, b) = (
+                mesh.points[face[k] as usize],
+                mesh.points[face[k + 1] as usize],
+            );
             v += p0[0] * (a[1] * b[2] - a[2] * b[1]) - p0[1] * (a[0] * b[2] - a[2] * b[0])
                 + p0[2] * (a[0] * b[1] - a[1] * b[0]);
         }
     }
     if v < 0.0 {
         for f in range {
-            let (s, e) = (mesh.faces.start[f] as usize, mesh.faces.start[f + 1] as usize);
+            let (s, e) = (
+                mesh.faces.start[f] as usize,
+                mesh.faces.start[f + 1] as usize,
+            );
             mesh.faces.nodes[s..e].reverse();
         }
     }
@@ -690,7 +776,10 @@ fn orient_last(mesh: &mut Mesh) {
 
 /// The text of attribute `name`, if it has one.
 pub fn attr_text(h: &H5, obj: &Object, name: &str) -> Option<String> {
-    h.attr(obj, name).ok().flatten().and_then(|v: Value| v.text())
+    h.attr(obj, name)
+        .ok()
+        .flatten()
+        .and_then(|v: Value| v.text())
 }
 
 #[cfg(test)]
@@ -733,7 +822,11 @@ mod tests {
         assert_eq!(m.cell_count(), 776);
         assert_eq!(m.summary().cell_kinds, v.summary().cell_kinds);
         assert_eq!(m.boundary.len(), 426);
-        let names: Vec<_> = m.patches.iter().map(|p| (p.name.as_str(), p.role)).collect();
+        let names: Vec<_> = m
+            .patches
+            .iter()
+            .map(|p| (p.name.as_str(), p.role))
+            .collect();
         assert_eq!(
             names,
             [
@@ -752,13 +845,23 @@ mod tests {
         let names: Vec<_> = r.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(
             names,
-            ["velocity", "speed", "pressure", "k", "omega", "nu_t", "wall_shear_stress", "y_plus"]
+            [
+                "velocity",
+                "speed",
+                "pressure",
+                "k",
+                "omega",
+                "nu_t",
+                "wall_shear_stress",
+                "y_plus"
+            ]
         );
         let u = r.get("velocity").unwrap();
         assert_eq!((u.components, u.unit.as_deref()), (3, Some("m/s")));
         let speed = r.get("speed").unwrap();
-        for c in 0..m.cell_count() {
-            assert!((u.scalar(c, Component::Magnitude) - speed.values[c]).abs() < 1e-12);
+        assert_eq!(speed.values.len(), m.cell_count());
+        for (c, s) in speed.values.iter().enumerate() {
+            assert!((u.scalar(c, Component::Magnitude) - s).abs() < 1e-12);
         }
         let p = r.get("pressure").unwrap();
         assert_eq!(p.unit.as_deref(), Some("Pa"));

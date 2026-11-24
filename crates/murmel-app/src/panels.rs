@@ -20,6 +20,8 @@ pub struct PropsCache {
     pub key: (u64, Option<Item>, String),
     pub item: String,
     pub rows: Vec<Value>,
+    /// The field values of the item (a cell, a face, a probe).
+    pub fields: Vec<Value>,
 }
 
 /// A tree row: what it names, its label, count and swatch.
@@ -649,6 +651,7 @@ impl MurmelApp {
             key,
             item: e.result["item"].as_str().unwrap_or("mesh").to_string(),
             rows: e.result["rows"].as_array().cloned().unwrap_or_default(),
+            fields: e.result["fields"].as_array().cloned().unwrap_or_default(),
         });
     }
 
@@ -699,65 +702,139 @@ impl MurmelApp {
             );
         }
         ui.add_space(4.0);
-        let out = egui::ScrollArea::vertical()
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                // Label and value columns of fixed shares of the panel,
-                // both cut with an ellipsis (full text on hover), so long
-                // values never widen the panel.
-                let width = ui.available_width();
-                let label_w = (width * 0.48).round();
-                let mut first: Option<egui::Response> = None;
-                for r in &c.rows {
-                    let key = r["key"].as_str().unwrap_or("");
-                    let mut label = self.i18n.tr(&format!("prop-{key}"));
-                    if let Some(u) = r["unit"].as_str() {
-                        label = format!("{label} ({u})");
-                    }
-                    let value = self.format_value(key, &r["value"]);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(label_w - 12.0, 20.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.set_width(label_w - 12.0);
-                                ui.add(
-                                    egui::Label::new(RichText::new(&label).color(secondary))
-                                        .truncate(),
-                                )
-                                .on_hover_text(&label);
-                            },
-                        );
-                        let resp = ui
-                            .add(
-                                egui::Label::new(RichText::new(&value).monospace())
-                                    .truncate()
-                                    .sense(Sense::click()),
-                            )
-                            .on_hover_text(
-                                self.i18n
-                                    .tr_args("props-copy", &[("value", value.clone().into())]),
-                            );
-                        // Read as "Cells: 776", and the first row is where
-                        // F6 lands.
-                        let name = self.i18n.tr_args(
-                            "prop-row-name",
-                            &[
-                                ("label", label.clone().into()),
-                                ("value", value.clone().into()),
-                            ],
-                        );
-                        crate::focus::set_name(ui, resp.id, &name);
-                        first.get_or_insert(resp.clone());
-                        if resp.clicked() {
-                            ui.ctx().copy_text(value.clone());
+        let out =
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    // Label and value columns of fixed shares of the panel,
+                    // both cut with an ellipsis (full text on hover), so long
+                    // values never widen the panel.
+                    let width = ui.available_width();
+                    let label_w = (width * 0.48).round();
+                    let mut first: Option<egui::Response> = None;
+                    for r in &c.rows {
+                        let key = r["key"].as_str().unwrap_or("");
+                        let mut label = self.i18n.tr(&format!("prop-{key}"));
+                        if let Some(u) = r["unit"].as_str() {
+                            label = format!("{label} ({u})");
                         }
-                    });
-                    ui.add_space(2.0);
-                }
-                first
-            });
+                        let value = self.format_value(key, &r["value"]);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 12.0;
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(label_w - 12.0, 20.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_width(label_w - 12.0);
+                                    ui.add(
+                                        egui::Label::new(RichText::new(&label).color(secondary))
+                                            .truncate(),
+                                    )
+                                    .on_hover_text(&label);
+                                },
+                            );
+                            let resp = ui
+                                .add(
+                                    egui::Label::new(RichText::new(&value).monospace())
+                                        .truncate()
+                                        .sense(Sense::click()),
+                                )
+                                .on_hover_text(
+                                    self.i18n
+                                        .tr_args("props-copy", &[("value", value.clone().into())]),
+                                );
+                            // Read as "Cells: 776", and the first row is where
+                            // F6 lands.
+                            let name = self.i18n.tr_args(
+                                "prop-row-name",
+                                &[
+                                    ("label", label.clone().into()),
+                                    ("value", value.clone().into()),
+                                ],
+                            );
+                            crate::focus::set_name(ui, resp.id, &name);
+                            first.get_or_insert(resp.clone());
+                            if resp.clicked() {
+                                ui.ctx().copy_text(value.clone());
+                            }
+                        });
+                        ui.add_space(2.0);
+                    }
+                    // The field values: a scalar's value, a vector's
+                    // components and its length.
+                    if !c.fields.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new(self.i18n.tr("props-fields"))
+                                .small()
+                                .strong()
+                                .color(secondary),
+                        );
+                        for f in &c.fields {
+                            let name = f["name"].as_str().unwrap_or("");
+                            let unit = f["unit"].as_str();
+                            let vals: Vec<f64> = f["value"]
+                                .as_array()
+                                .map(|a| a.iter().filter_map(Value::as_f64).collect())
+                                .unwrap_or_default();
+                            let mut lines = Vec::new();
+                            let with_unit = |l: String| match unit {
+                                Some(u) => format!("{l} ({u})"),
+                                None => l,
+                            };
+                            if vals.len() == 1 {
+                                lines.push((with_unit(name.to_string()), number(vals[0])));
+                            } else {
+                                let parts: Vec<String> = vals.iter().map(|&x| number(x)).collect();
+                                lines.push((with_unit(name.to_string()), parts.join(", ")));
+                                let mag = vals.iter().map(|x| x * x).sum::<f64>().sqrt();
+                                lines.push((with_unit(format!("|{name}|")), number(mag)));
+                            }
+                            for (label, value) in lines {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 12.0;
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(label_w - 12.0, 20.0),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.set_width(label_w - 12.0);
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(&label).color(secondary),
+                                                )
+                                                .truncate(),
+                                            )
+                                            .on_hover_text(&label);
+                                        },
+                                    );
+                                    let resp = ui
+                                        .add(
+                                            egui::Label::new(RichText::new(&value).monospace())
+                                                .truncate()
+                                                .sense(Sense::click()),
+                                        )
+                                        .on_hover_text(self.i18n.tr_args(
+                                            "props-copy",
+                                            &[("value", value.clone().into())],
+                                        ));
+                                    let name = self.i18n.tr_args(
+                                        "prop-row-name",
+                                        &[
+                                            ("label", label.clone().into()),
+                                            ("value", value.clone().into()),
+                                        ],
+                                    );
+                                    crate::focus::set_name(ui, resp.id, &name);
+                                    if resp.clicked() {
+                                        ui.ctx().copy_text(value.clone());
+                                    }
+                                });
+                                ui.add_space(2.0);
+                            }
+                        }
+                    }
+                    first
+                });
         if let Some(r) = out.inner {
             self.focus.offer(crate::focus::Region::Properties, &r);
         }

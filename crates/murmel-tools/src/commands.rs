@@ -870,7 +870,10 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "the status bar shows a diagnostic with its fix",
     ),
     ("mesh.info", "the Properties panel shows it"),
-    ("field.list", "the colour-by menu and the legend show the fields"),
+    (
+        "field.list",
+        "the colour-by menu and the legend show the fields",
+    ),
     ("views.list", "the model tree shows the saved views"),
     (
         "views.rename",

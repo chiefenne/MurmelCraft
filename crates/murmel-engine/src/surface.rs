@@ -452,7 +452,11 @@ impl Surface {
             }
             let sel_mix = if unselected { 0.0 } else { mix };
             let (color, ec) = if field.is_some() {
-                let face = if valued.is_some() { rgb } else { tokens.mesh.field.none };
+                let face = if valued.is_some() {
+                    rgb
+                } else {
+                    tokens.mesh.field.none
+                };
                 let face = if unselected {
                     face
                 } else {
@@ -501,9 +505,8 @@ impl Surface {
                     None => [0.0, 0.0, 0.0, 0.0],
                 }
             };
-            let corner = |j: usize| -> f64 {
-                valued.map_or(0.0, |(_, c)| c.get(j).copied().unwrap_or(0.0))
-            };
+            let corner =
+                |j: usize| -> f64 { valued.map_or(0.0, |(_, c)| c.get(j).copied().unwrap_or(0.0)) };
             let push = |s: &mut Surface, p: [f64; 3], v: [f32; 4]| {
                 s.positions.push(p.map(|v| v as f32));
                 s.normals.push(n);

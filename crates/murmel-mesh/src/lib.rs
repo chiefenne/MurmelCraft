@@ -27,8 +27,8 @@ use serde::Serialize;
 
 pub use boundary::NO_CELL;
 pub use evidence::{Evidence, EvidencePatch};
-pub use polymesh::{PolyMeshFiles, read_polymesh, read_polymesh_bytes};
 pub use field::{Component, Field, Location, Results};
+pub use polymesh::{PolyMeshFiles, read_polymesh, read_polymesh_bytes};
 pub use vtkhdf::read_vtkhdf;
 pub use vtu::{read_vtu, read_vtu_str};
 

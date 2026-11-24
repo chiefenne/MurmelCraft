@@ -484,7 +484,11 @@ pub fn probe_rows(m: &Mesh, at: &Anchor) -> Vec<Row> {
 /// a cell's own values, a boundary face's boundary values and its cell's
 /// values, a probe's values interpolated at its point. Empty for other
 /// items and for a mesh without fields.
-pub fn field_values(open: &OpenMesh, display: &Display, item: Item) -> Vec<crate::field::FieldValue> {
+pub fn field_values(
+    open: &OpenMesh,
+    display: &Display,
+    item: Item,
+) -> Vec<crate::field::FieldValue> {
     let (m, f) = (&open.mesh, &open.fields);
     if f.is_empty() {
         return Vec::new();

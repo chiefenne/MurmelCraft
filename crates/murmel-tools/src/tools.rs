@@ -1849,7 +1849,10 @@ fn field_choice(
     let Some(f) = set.get(&name) else {
         return Err(Diagnostic::new(
             "FIELD002",
-            format!("no field {name}; the open mesh has {}", set.names().join(", ")),
+            format!(
+                "no field {name}; the open mesh has {}",
+                set.names().join(", ")
+            ),
         ));
     };
     let component = match component {
@@ -1902,12 +1905,7 @@ fn field_list(_: Value, s: &mut Session) -> Run {
             };
             let ranges: serde_json::Map<String, Value> = comps
                 .iter()
-                .map(|&c| {
-                    (
-                        c.name().to_string(),
-                        json!(f.range(c).map(|(a, b)| [a, b])),
-                    )
-                })
+                .map(|&c| (c.name().to_string(), json!(f.range(c).map(|(a, b)| [a, b]))))
                 .collect();
             json!({
                 "name": f.name,
@@ -1976,7 +1974,11 @@ struct FieldStyleInput {
 fn field_style(input: Value, s: &mut Session) -> Run {
     let i: FieldStyleInput = parse(input)?;
     let set = need_fields(s)?;
-    let name = match i.field.clone().or_else(|| s.display.field.as_ref().map(|c| c.name.clone())) {
+    let name = match i
+        .field
+        .clone()
+        .or_else(|| s.display.field.as_ref().map(|c| c.name.clone()))
+    {
         Some(n) => n,
         None => {
             return Err(Diagnostic::new(
@@ -1988,21 +1990,32 @@ fn field_style(input: Value, s: &mut Session) -> Run {
     if set.get(&name).is_none() {
         return Err(Diagnostic::new(
             "FIELD002",
-            format!("no field {name}; the open mesh has {}", set.names().join(", ")),
+            format!(
+                "no field {name}; the open mesh has {}",
+                set.names().join(", ")
+            ),
         ));
     }
     let bad = |m: String| Err(Diagnostic::new("FIELD004", m));
     let mut st = if i.reset {
         FieldStyle::default()
     } else {
-        s.display.field_styles.get(&name).cloned().unwrap_or_default()
+        s.display
+            .field_styles
+            .get(&name)
+            .cloned()
+            .unwrap_or_default()
     };
     if let Some(m) = i.mode {
         st.mode = m;
     }
     if let Some(b) = i.bands {
         if !(field::MIN_BANDS..=field::MAX_BANDS).contains(&b) {
-            return bad(format!("bands {b} is not between {} and {}", field::MIN_BANDS, field::MAX_BANDS));
+            return bad(format!(
+                "bands {b} is not between {} and {}",
+                field::MIN_BANDS,
+                field::MAX_BANDS
+            ));
         }
         st.bands = b;
     }
@@ -2011,7 +2024,10 @@ fn field_style(input: Value, s: &mut Session) -> Run {
     }
     if let Some(n) = i.line_count {
         if !(1..=field::MAX_LINES).contains(&n) {
-            return bad(format!("line_count {n} is not between 1 and {}", field::MAX_LINES));
+            return bad(format!(
+                "line_count {n} is not between 1 and {}",
+                field::MAX_LINES
+            ));
         }
         st.line_count = n;
     }
@@ -2052,7 +2068,9 @@ fn field_style(input: Value, s: &mut Session) -> Run {
                 _ => return bad("give min and max of the fixed range".into()),
             };
             if !(min.is_finite() && max.is_finite() && min < max) {
-                return bad(format!("the fixed range {min} to {max} needs finite min < max"));
+                return bad(format!(
+                    "the fixed range {min} to {max} needs finite min < max"
+                ));
             }
             st.range = RangeMode::Fixed { min, max };
         }

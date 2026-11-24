@@ -183,8 +183,12 @@ fn field(s: &Session) -> Option<Legend> {
             hi,
             ticks: ticks(lo, hi, MAX_TICKS),
             unit: v.unit.clone(),
-            bands: (style.mode == crate::field::FieldMode::Banded)
-                .then_some(style.bands.clamp(crate::field::MIN_BANDS, crate::field::MAX_BANDS) as usize),
+            bands: (style.mode == crate::field::FieldMode::Banded).then_some(
+                style
+                    .bands
+                    .clamp(crate::field::MIN_BANDS, crate::field::MAX_BANDS)
+                    as usize,
+            ),
             contours: style.contours((lo, hi)),
             threshold: None,
         }),

@@ -1319,7 +1319,7 @@ fn sessions_keep_every_clip_plane() {
 
     let mut v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    assert_eq!(v["format_version"], "1.3");
+    assert_eq!(v["format_version"], murmel_engine::session_file::SESSION_VERSION);
     let first = v["display"]["clips"][0].clone();
     let d = v["display"].as_object_mut().unwrap();
     d.remove("clips");
@@ -1536,20 +1536,40 @@ fn field_tools() {
     assert_eq!(e.result["field"]["field"], "velocity");
     assert_eq!(e.result["field"]["title"], "|velocity|");
     assert_eq!(e.result["field"]["style"]["mode"], "smooth");
-    let e = call("display.color_by", json!({"by": "field", "component": "x"}), &mut s);
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "component": "x"}),
+        &mut s,
+    );
     assert_eq!(e.result["field"]["title"], "velocity_x");
     let e = call("display.color_by", json!({"by": "solid"}), &mut s);
     assert!(e.result["field"].is_null());
     // Back to the field: the component chosen before stays.
     let e = call("display.color_by", json!({"by": "field"}), &mut s);
     assert_eq!(e.result["field"]["component"], "x");
-    let e = call("display.color_by", json!({"by": "field", "field": "pressure", "component": "y"}), &mut s);
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "field": "pressure", "component": "y"}),
+        &mut s,
+    );
     assert_eq!(e.diagnostics[0].code, "FIELD003");
-    let e = call("display.color_by", json!({"by": "field", "field": "nope"}), &mut s);
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "field": "nope"}),
+        &mut s,
+    );
     assert_eq!(e.diagnostics[0].code, "FIELD002");
-    let e = call("display.color_by", json!({"by": "patch", "field": "pressure"}), &mut s);
+    let e = call(
+        "display.color_by",
+        json!({"by": "patch", "field": "pressure"}),
+        &mut s,
+    );
     assert_eq!(e.diagnostics[0].code, "TOOL002");
-    let e = call("display.color_by", json!({"by": "field", "field": "pressure"}), &mut s);
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "field": "pressure"}),
+        &mut s,
+    );
     assert_eq!(e.result["field"]["title"], "pressure");
     let whole = e.result["field"]["range"].clone();
 
@@ -1592,7 +1612,11 @@ fn field_tools() {
         .unwrap()
         .clone();
     assert_eq!(k["style"]["mode"], "flat");
-    let e = call("field.style", json!({"field": "nope", "mode": "flat"}), &mut s);
+    let e = call(
+        "field.style",
+        json!({"field": "nope", "mode": "flat"}),
+        &mut s,
+    );
     assert_eq!(e.diagnostics[0].code, "FIELD002");
     let e = call("journal.undo", json!({}), &mut s);
     assert_eq!(e.result["undone"], "field.style");
@@ -1609,13 +1633,20 @@ fn field_tools() {
         .iter()
         .filter_map(|f| f["name"].as_str())
         .collect();
-    assert_eq!(names, ["velocity", "speed", "pressure", "k", "omega", "nu_t"]);
+    assert_eq!(
+        names,
+        ["velocity", "speed", "pressure", "k", "omega", "nu_t"]
+    );
     let e = call("probe.at", json!({"at": {"cell": 3}}), &mut s);
     assert_eq!(e.result["fields"].as_array().unwrap().len(), 6);
     assert_eq!(e.result["fields"][0]["value"].as_array().unwrap().len(), 3);
     let m = s.mesh.as_ref().unwrap();
     let wall = m.mesh.boundary_face_id[0];
-    let e = call("inspect.item", json!({"item": format!("face:{wall}")}), &mut s);
+    let e = call(
+        "inspect.item",
+        json!({"item": format!("face:{wall}")}),
+        &mut s,
+    );
     assert!(
         e.result["fields"]
             .as_array()
@@ -1643,7 +1674,8 @@ fn field_sessions_round_trip() {
     assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
     let by = json!({"by": "field", "field": "velocity", "component": "z"});
     assert!(call("display.color_by", by, &mut s).ok());
-    let style = json!({"mode": "banded", "bands": 6, "lines": true, "map": "magma", "range": "symmetric"});
+    let style =
+        json!({"mode": "banded", "bands": 6, "lines": true, "map": "magma", "range": "symmetric"});
     assert!(call("field.style", style, &mut s).ok());
     let k = json!({"field": "k", "range": "fixed", "min": 0.0, "max": 0.5});
     assert!(call("field.style", k, &mut s).ok());

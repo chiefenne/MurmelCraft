@@ -448,3 +448,43 @@ fn measure_mode_clicks() {
         "the tree row names the distance and its value"
     );
 }
+
+/// Invariant (stage 1 of field results): a FoehnCraft result coloured
+/// by a field shows the legend at the right edge with a named settings
+/// button and a described colour bar, every control of its settings
+/// menu has a clean name, and the menu's controls call field.style
+/// (banded colouring and contour lines here) and stay open for the next
+/// change. Breaks when the legend or a menu control loses its name, or
+/// the menu stops calling the tool; the tool tests do not click.
+#[test]
+fn field_legend_and_settings() {
+    let mut h = harness();
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.state_mut().call(
+        "display.color_by",
+        serde_json::json!({"by": "field", "field": "pressure"}),
+    );
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "field legend");
+    let bar: Vec<String> = h
+        .root()
+        .children_recursive()
+        .filter_map(|n| n.accesskit_node().label())
+        .filter(|l| l.starts_with("Colour bar of pressure, from "))
+        .collect();
+    assert_eq!(bar.len(), 1, "{bar:?}");
+    h.get_by_label("Field settings: pressure").click();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "field settings menu");
+    h.get_by_label("Banded").click();
+    h.run_steps(3);
+    h.get_by_label("Contour lines").click();
+    h.run_steps(3);
+    let st = h.state().session.field_style();
+    assert_eq!(st.mode, murmel_engine::FieldMode::Banded);
+    assert!(st.lines);
+    assert!(named(&h, "Bands"), "the menu stays open with the bands");
+    assert_eq!(problems(&h), Vec::<String>::new(), "banded with lines");
+}

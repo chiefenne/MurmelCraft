@@ -266,7 +266,11 @@ fn data_fields(
         }
         let k = a.components.max(1);
         let v = floats(a, h.header64)?;
-        let n = if location == Location::Point { h.points } else { h.cells };
+        let n = if location == Location::Point {
+            h.points
+        } else {
+            h.cells
+        };
         if v.len() != n * k {
             return Err(err(
                 "MESH005",

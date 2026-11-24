@@ -332,7 +332,13 @@ fn idw(at: [f64; 3], ids: &[u32], centres: &[[f64; 3]], values: &[f64]) -> f64 {
 /// Scalar `c` of a field whose entities have the values `comps` (one
 /// list per component).
 fn combine(comps: &[Vec<f64>], i: usize, c: Component) -> f64 {
-    let at = |k: usize| comps.get(k).and_then(|v| v.get(i)).copied().unwrap_or(f64::NAN);
+    let at = |k: usize| {
+        comps
+            .get(k)
+            .and_then(|v| v.get(i))
+            .copied()
+            .unwrap_or(f64::NAN)
+    };
     match (comps.len(), c) {
         (1, _) => at(0),
         (_, Component::Magnitude) => (0..comps.len()).map(|k| at(k).powi(2)).sum::<f64>().sqrt(),
@@ -422,7 +428,8 @@ impl FieldSet {
     }
 
     fn topology(&self, mesh: &Mesh) -> &Topology {
-        self.topology.get_or_init(|| Arc::new(Topology::build(mesh)))
+        self.topology
+            .get_or_init(|| Arc::new(Topology::build(mesh)))
     }
 
     /// Every field's value in cell `c`, in file order: cell fields as
@@ -527,7 +534,14 @@ impl FieldSet {
     }
 
     /// The node value of each component of field `f` at point `p`.
-    fn node_components(&self, mesh: &Mesh, f: &Field, comps: &[Vec<f64>], boundary: Option<&[Vec<f64>]>, p: usize) -> Vec<f64> {
+    fn node_components(
+        &self,
+        mesh: &Mesh,
+        f: &Field,
+        comps: &[Vec<f64>],
+        boundary: Option<&[Vec<f64>]>,
+        p: usize,
+    ) -> Vec<f64> {
         let t = self.topology(mesh);
         let at = mesh.points[p];
         match f.location {
@@ -579,7 +593,12 @@ impl FieldSet {
         let twin = self.boundary_twin(mesh, f);
         Some(
             (0..mesh.points.len())
-                .map(|p| pick(&self.node_components(mesh, f, &comps, twin.as_deref(), p), component))
+                .map(|p| {
+                    pick(
+                        &self.node_components(mesh, f, &comps, twin.as_deref(), p),
+                        component,
+                    )
+                })
                 .collect(),
         )
     }
@@ -611,7 +630,8 @@ impl FieldSet {
                     .iter()
                     .map(|&n| self.node_components(mesh, f, &comps, twin.as_deref(), n as usize))
                     .collect();
-                let centres: Vec<[f64; 3]> = nodes.iter().map(|&n| mesh.points[n as usize]).collect();
+                let centres: Vec<[f64; 3]> =
+                    nodes.iter().map(|&n| mesh.points[n as usize]).collect();
                 let ids: Vec<u32> = (0..nodes.len() as u32).collect();
                 let k = comps.len();
                 let at: Vec<f64> = (0..k)
@@ -876,10 +896,9 @@ pub(crate) fn ensure_field(display: &mut crate::display::Display, mesh: &Mesh, f
         display.field_values = None;
         return;
     };
-    let fresh = display
-        .field_values
-        .as_ref()
-        .is_some_and(|v| v.choice.name == choice.name && (!v.vector || v.choice.component == choice.component));
+    let fresh = display.field_values.as_ref().is_some_and(|v| {
+        v.choice.name == choice.name && (!v.vector || v.choice.component == choice.component)
+    });
     if !fresh {
         display.field_values = fields.values(mesh, &choice).map(Arc::new);
     }
@@ -926,7 +945,9 @@ mod tests {
             }
         }
         let flat = FieldSet::new(r);
-        let n = flat.node_values(&m, "pressure", Component::Magnitude).unwrap();
+        let n = flat
+            .node_values(&m, "pressure", Component::Magnitude)
+            .unwrap();
         assert!(n.iter().all(|&x| (x - 7.5).abs() < 1e-12));
     }
 
@@ -938,10 +959,22 @@ mod tests {
     fn vectors_and_components() {
         let (m, set) = channel();
         let mag = set
-            .values(&m, &FieldChoice { name: "velocity".into(), component: Component::Magnitude })
+            .values(
+                &m,
+                &FieldChoice {
+                    name: "velocity".into(),
+                    component: Component::Magnitude,
+                },
+            )
             .unwrap();
         let x = set
-            .values(&m, &FieldChoice { name: "velocity".into(), component: Component::X })
+            .values(
+                &m,
+                &FieldChoice {
+                    name: "velocity".into(),
+                    component: Component::X,
+                },
+            )
             .unwrap();
         let y = set.node_values(&m, "velocity", Component::Y).unwrap();
         let z = set.node_values(&m, "velocity", Component::Z).unwrap();
@@ -953,7 +986,13 @@ mod tests {
         assert_eq!(mag.choice.title(true), "|velocity|");
         assert_eq!(x.choice.title(true), "velocity_x");
         let p = set
-            .values(&m, &FieldChoice { name: "pressure".into(), component: Component::Y })
+            .values(
+                &m,
+                &FieldChoice {
+                    name: "pressure".into(),
+                    component: Component::Y,
+                },
+            )
             .unwrap();
         assert_eq!(p.choice.component, Component::Magnitude);
         assert_eq!(p.choice.title(false), "pressure");
@@ -968,7 +1007,13 @@ mod tests {
     fn boundary_fields_cells_and_samples() {
         let (m, set) = channel();
         let y = set
-            .values(&m, &FieldChoice { name: "y_plus".into(), component: Component::Magnitude })
+            .values(
+                &m,
+                &FieldChoice {
+                    name: "y_plus".into(),
+                    component: Component::Magnitude,
+                },
+            )
             .unwrap();
         assert_eq!(y.location, Location::Boundary);
         assert_eq!(y.boundary.len(), m.boundary.len());
@@ -980,7 +1025,10 @@ mod tests {
         }
         let rows = set.cell_values(&m, 3);
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, ["velocity", "speed", "pressure", "k", "omega", "nu_t"]);
+        assert_eq!(
+            names,
+            ["velocity", "speed", "pressure", "k", "omega", "nu_t"]
+        );
         assert_eq!(rows[0].value.len(), 3);
         assert_eq!(rows[0].unit.as_deref(), Some("m/s"));
         let pressure = set.get("pressure").unwrap().scalar(3, Component::Magnitude);
@@ -989,10 +1037,19 @@ mod tests {
             set.sample(&m, "pressure", Component::Magnitude, 3, c, Interp::Cell),
             Some(pressure)
         );
-        let n = set.node_values(&m, "pressure", Component::Magnitude).unwrap();
+        let n = set
+            .node_values(&m, "pressure", Component::Magnitude)
+            .unwrap();
         let node = m.cell(3).next().unwrap()[0] as usize;
         let at_node = set
-            .sample(&m, "pressure", Component::Magnitude, 3, m.points[node], Interp::Nodes)
+            .sample(
+                &m,
+                "pressure",
+                Component::Magnitude,
+                3,
+                m.points[node],
+                Interp::Nodes,
+            )
             .unwrap();
         assert!((at_node - n[node]).abs() < 1e-12);
     }

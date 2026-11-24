@@ -101,7 +101,11 @@ impl<'a> Cur<'a> {
     fn addr(&mut self) -> Result<Option<u64>, MeshError> {
         let o = self.o;
         let v = self.uint(o)?;
-        let undef = if o >= 8 { u64::MAX } else { (1u64 << (8 * o)) - 1 };
+        let undef = if o >= 8 {
+            u64::MAX
+        } else {
+            (1u64 << (8 * o)) - 1
+        };
         Ok((v != undef).then_some(v))
     }
 
@@ -134,9 +138,18 @@ pub struct H5 {
 /// A datatype the reader converts.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dtype {
-    Int { size: usize, signed: bool, be: bool },
-    Float { size: usize, be: bool },
-    FixedString { size: usize },
+    Int {
+        size: usize,
+        signed: bool,
+        be: bool,
+    },
+    Float {
+        size: usize,
+        be: bool,
+    },
+    FixedString {
+        size: usize,
+    },
     VarString,
     /// Any other class (compound, array, reference, …), by class number.
     Other(u8),
@@ -343,8 +356,9 @@ impl H5 {
     }
 
     pub fn open(path: &std::path::Path) -> Result<H5, MeshError> {
-        let data = std::fs::read(path)
-            .map_err(|e| MeshError::new("MESH001", format!("cannot read {}: {e}", path.display())))?;
+        let data = std::fs::read(path).map_err(|e| {
+            MeshError::new("MESH001", format!("cannot read {}: {e}", path.display()))
+        })?;
         H5::from_bytes(data)
     }
 
@@ -443,10 +457,15 @@ impl H5 {
                 count += 1;
                 if ty == 0x10 {
                     let mut k = self.msg_cur(&(at..at + len));
-                    let a = k.addr()?.ok_or_else(|| broken("continuation without address"))?;
+                    let a = k
+                        .addr()?
+                        .ok_or_else(|| broken("continuation without address"))?;
                     let n = k.len()?;
                     let a = self.cur(a)?.p;
-                    blocks.push((a, usize::try_from(n).map_err(|_| broken("continuation size"))?));
+                    blocks.push((
+                        a,
+                        usize::try_from(n).map_err(|_| broken("continuation size"))?,
+                    ));
                 } else {
                     msgs.push(Msg {
                         ty,
@@ -501,7 +520,9 @@ impl H5 {
                 m.skip(len)?;
                 if ty == 0x10 {
                     let mut k = self.msg_cur(&(at..at + len));
-                    let a = k.addr()?.ok_or_else(|| broken("continuation without address"))?;
+                    let a = k
+                        .addr()?
+                        .ok_or_else(|| broken("continuation without address"))?;
                     let n = usize::try_from(k.len()?).map_err(|_| broken("continuation size"))?;
                     let mut b = self.cur(a)?;
                     b.sig(b"OCHK")?;
@@ -534,7 +555,9 @@ impl H5 {
         if let Some(r) = self.first(obj, 0x11) {
             let mut c = self.msg_cur(&r);
             let tree = c.addr()?;
-            let heap = c.addr()?.ok_or_else(|| broken("symbol table without heap"))?;
+            let heap = c
+                .addr()?
+                .ok_or_else(|| broken("symbol table without heap"))?;
             if let Some(tree) = tree {
                 self.symbol_table(tree, heap, &mut out)?;
             }
@@ -592,7 +615,10 @@ impl H5 {
         let n = c.uint(1 << (flags & 3))? as usize;
         let name = String::from_utf8_lossy(c.bytes(n)?).into_owned();
         let target = match kind {
-            0 => Target::Hard(c.addr()?.ok_or_else(|| broken("hard link without address"))?),
+            0 => Target::Hard(
+                c.addr()?
+                    .ok_or_else(|| broken("hard link without address"))?,
+            ),
             1 => {
                 let n = c.u16()? as usize;
                 Target::Soft(String::from_utf8_lossy(c.bytes(n)?).into_owned())
@@ -634,7 +660,10 @@ impl H5 {
             let mut children = Vec::with_capacity(used.min(4096));
             for _ in 0..used {
                 c.len()?; // key
-                children.push(c.addr()?.ok_or_else(|| broken("B-tree child without address"))?);
+                children.push(
+                    c.addr()?
+                        .ok_or_else(|| broken("B-tree child without address"))?,
+                );
             }
             if level > 0 {
                 stack.extend(children.into_iter().rev());
@@ -714,7 +743,9 @@ impl H5 {
             if let (Some(heap), Some(names)) = (heap, names) {
                 let heap = self.fractal_heap(heap)?;
                 for rec in self.btree2_records(names)? {
-                    let id = rec.get(..8).ok_or_else(|| broken("attribute record too short"))?;
+                    let id = rec
+                        .get(..8)
+                        .ok_or_else(|| broken("attribute record too short"))?;
                     let bytes = self.heap_object(&heap, id)?;
                     if let Some(a) = self.attr_msg(&bytes)? {
                         out.push(a);
@@ -758,14 +789,20 @@ impl H5 {
         }
         let name = c.bytes(pad(name_size))?;
         let name = name.get(..name_size).unwrap_or(name);
-        let name = String::from_utf8_lossy(name.split(|&x| x == 0).next().unwrap_or(&[]))
-            .into_owned();
+        let name =
+            String::from_utf8_lossy(name.split(|&x| x == 0).next().unwrap_or(&[])).into_owned();
         let dt_at = c.p;
         c.skip(pad(dt_size))?;
         let ds_at = c.p;
         c.skip(pad(ds_size))?;
-        let dtype = parse_dtype(&mut Cur { p: dt_at, ..c.clone() })?;
-        let (dims, null) = parse_space(&mut Cur { p: ds_at, ..c.clone() })?;
+        let dtype = parse_dtype(&mut Cur {
+            p: dt_at,
+            ..c.clone()
+        })?;
+        let (dims, null) = parse_space(&mut Cur {
+            p: ds_at,
+            ..c.clone()
+        })?;
         let n: u64 = if null { 0 } else { dims.iter().product() };
         let rest = &d[c.p.min(d.len())..];
         let value = self.convert_value(&dtype, n, rest)?;
@@ -782,7 +819,9 @@ impl H5 {
             Dtype::Float { .. } => Value::Float(floats(dtype, &raw[..n * dtype.size()])),
             Dtype::FixedString { size } => {
                 let need = n * size;
-                let b = raw.get(..need).ok_or_else(|| broken("attribute data too short"))?;
+                let b = raw
+                    .get(..need)
+                    .ok_or_else(|| broken("attribute data too short"))?;
                 Value::Str(
                     b.chunks(*size.max(&1))
                         .map(|s| {
@@ -857,9 +896,9 @@ impl H5 {
 
     /// The dataset description of an object.
     pub fn dataset(&self, obj: &Object) -> Result<Dataset, MeshError> {
-        let dt = self
-            .first(obj, 0x03)
-            .ok_or_else(|| MeshError::new("MESH018", "the object is not a dataset (no datatype)"))?;
+        let dt = self.first(obj, 0x03).ok_or_else(|| {
+            MeshError::new("MESH018", "the object is not a dataset (no datatype)")
+        })?;
         let dtype = parse_dtype(&mut self.msg_cur(&dt))?;
         let ds = self
             .first(obj, 0x01)
@@ -1014,7 +1053,10 @@ impl H5 {
         if total > limit {
             return Err(MeshError::new(
                 "MESH004",
-                format!("a dataset of {total} bytes cannot come from a file of {} bytes", self.data.len()),
+                format!(
+                    "a dataset of {total} bytes cannot come from a file of {} bytes",
+                    self.data.len()
+                ),
             ));
         }
         let total = total as usize;
@@ -1127,7 +1169,11 @@ impl H5 {
                 let n: u64 = grid.iter().product();
                 for i in 0..n {
                     let at = a + i * chunk_bytes as u64;
-                    chunks.push((offsets_of(i), self.slice(at, chunk_bytes as u64)?.to_vec(), 0));
+                    chunks.push((
+                        offsets_of(i),
+                        self.slice(at, chunk_bytes as u64)?.to_vec(),
+                        0,
+                    ));
                 }
             }
             ChunkIndex::FixedArray(Some(a)) => {
@@ -1216,8 +1262,13 @@ impl H5 {
         let raw = self.raw(ds)?;
         match ds.dtype {
             Dtype::Float { .. } => Ok(floats(&ds.dtype, &raw)),
-            Dtype::Int { .. } => Ok(ints(&ds.dtype, &raw).into_iter().map(|v| v as f64).collect()),
-            _ => Err(unsupported("a non-numeric dataset where numbers are expected")),
+            Dtype::Int { .. } => Ok(ints(&ds.dtype, &raw)
+                .into_iter()
+                .map(|v| v as f64)
+                .collect()),
+            _ => Err(unsupported(
+                "a non-numeric dataset where numbers are expected",
+            )),
         }
     }
 
@@ -1226,8 +1277,13 @@ impl H5 {
         let raw = self.raw(ds)?;
         match ds.dtype {
             Dtype::Int { .. } => Ok(ints(&ds.dtype, &raw)),
-            Dtype::Float { .. } => Ok(floats(&ds.dtype, &raw).into_iter().map(|v| v as i64).collect()),
-            _ => Err(unsupported("a non-numeric dataset where integers are expected")),
+            Dtype::Float { .. } => Ok(floats(&ds.dtype, &raw)
+                .into_iter()
+                .map(|v| v as i64)
+                .collect()),
+            _ => Err(unsupported(
+                "a non-numeric dataset where integers are expected",
+            )),
         }
     }
 
@@ -1261,7 +1317,11 @@ impl H5 {
         let (Some(sb), Some(md)) = (log2_exact(start), log2_exact(max_direct)) else {
             return Err(broken("fractal heap block sizes are not powers of two"));
         };
-        if width == 0 || !width.is_power_of_two() || md < sb || max_heap_bits == 0 || max_heap_bits > 64
+        if width == 0
+            || !width.is_power_of_two()
+            || md < sb
+            || max_heap_bits == 0
+            || max_heap_bits > 64
         {
             return Err(broken("fractal heap table"));
         }
@@ -1290,7 +1350,11 @@ impl H5 {
                     l: self.l,
                 };
                 let off = c.uint(h.off_bytes)?;
-                let rest = id.len().min(h.id_len).saturating_sub(1 + h.off_bytes).min(8);
+                let rest = id
+                    .len()
+                    .min(h.id_len)
+                    .saturating_sub(1 + h.off_bytes)
+                    .min(8);
                 let len = c.uint(rest)?;
                 self.managed(h, off, len)
             }
@@ -1301,7 +1365,8 @@ impl H5 {
                         .map(<[u8]>::to_vec)
                         .ok_or_else(|| broken("tiny heap object"))
                 } else {
-                    let n = (((first & 0x0F) as usize) << 8 | *id.get(1).unwrap_or(&0) as usize) + 1;
+                    let n =
+                        (((first & 0x0F) as usize) << 8 | *id.get(1).unwrap_or(&0) as usize) + 1;
                     id.get(2..2 + n)
                         .map(<[u8]>::to_vec)
                         .ok_or_else(|| broken("tiny heap object"))
@@ -1323,7 +1388,11 @@ impl H5 {
     fn managed(&self, h: &Heap, off: u64, len: u64) -> Result<Vec<u8>, MeshError> {
         let root = h.root.ok_or_else(|| broken("empty fractal heap"))?;
         if h.rows == 0 {
-            return Ok(self.slice(root.checked_add(off).ok_or_else(|| broken("heap offset"))?, len)?
+            return Ok(self
+                .slice(
+                    root.checked_add(off).ok_or_else(|| broken("heap offset"))?,
+                    len,
+                )?
                 .to_vec());
         }
         let (mut block, mut rows, mut base) = (root, h.rows, 0u64);
@@ -1340,7 +1409,8 @@ impl H5 {
                 for _ in 0..h.width {
                     let child = c.addr()?;
                     if off < at.saturating_add(size) && off >= at {
-                        let child = child.ok_or_else(|| broken("heap object in a missing block"))?;
+                        let child =
+                            child.ok_or_else(|| broken("heap object in a missing block"))?;
                         if r < h.max_direct_rows {
                             let a = child + (off - at);
                             return Ok(self.slice(a, len)?.to_vec());
@@ -1376,7 +1446,9 @@ impl H5 {
         c.skip(2)?;
         let root = c.addr()?;
         let root_n = c.u16()? as usize;
-        let Some(root) = root else { return Ok(Vec::new()) };
+        let Some(root) = root else {
+            return Ok(Vec::new());
+        };
         if rec == 0 || node_size < 16 || depth > 32 {
             return Err(broken("version 2 B-tree header"));
         }
@@ -1385,9 +1457,7 @@ impl H5 {
         let mut cum = vec![max[0]];
         let mut ptr = vec![0usize];
         for d in 1..=depth {
-            let p = self.o
-                + enc_size(max[d - 1])
-                + if d > 1 { enc_size(cum[d - 1]) } else { 0 };
+            let p = self.o + enc_size(max[d - 1]) + if d > 1 { enc_size(cum[d - 1]) } else { 0 };
             let m = node_size.saturating_sub(10 + p as u64) / (rec + p) as u64;
             ptr.push(p);
             max.push(m);
@@ -1432,7 +1502,9 @@ impl H5 {
         }
         let mut kids = Vec::with_capacity(n + 1);
         for _ in 0..=n {
-            let a = c.addr()?.ok_or_else(|| broken("B-tree child without address"))?;
+            let a = c
+                .addr()?
+                .ok_or_else(|| broken("B-tree child without address"))?;
             let k = c.uint(enc_size(max[depth - 1]))? as usize;
             if depth > 1 {
                 c.uint(enc_size(cum[depth - 1]))?;
@@ -1562,17 +1634,22 @@ fn parse_filters(c: &mut Cur<'_>) -> Result<Vec<Filter>, MeshError> {
 fn floats(dt: &Dtype, raw: &[u8]) -> Vec<f64> {
     match *dt {
         Dtype::Float { size: 4, be } => raw
-            .chunks_exact(4)
-            .map(|b| {
-                let a = [b[0], b[1], b[2], b[3]];
-                (if be { f32::from_be_bytes(a) } else { f32::from_le_bytes(a) }) as f64
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|&a| {
+                (if be {
+                    f32::from_be_bytes(a)
+                } else {
+                    f32::from_le_bytes(a)
+                }) as f64
             })
             .collect(),
         Dtype::Float { size: 8, be } => raw
-            .chunks_exact(8)
-            .map(|b| {
-                let mut a = [0u8; 8];
-                a.copy_from_slice(b);
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|&a| {
                 if be {
                     f64::from_be_bytes(a)
                 } else {
@@ -1691,19 +1768,37 @@ mod tests {
             Some("foehncraft-fields")
         );
         assert_eq!(get("iteration").and_then(|v| v.number()), Some(250.0));
-        assert!(get("units").and_then(|v| v.text()).unwrap().starts_with("coordinates m;"));
+        assert!(
+            get("units")
+                .and_then(|v| v.text())
+                .unwrap()
+                .starts_with("coordinates m;")
+        );
         let vtk = h.path("/VTKHDF").unwrap();
         let names: Vec<String> = h.links(&vtk).unwrap().into_iter().map(|l| l.name).collect();
         assert_eq!(names, ["internal", "Assembly", "inlet", "outlet", "walls"]);
         assert_eq!(
-            h.attr(&vtk, "Type").unwrap().and_then(|v| v.text()).as_deref(),
+            h.attr(&vtk, "Type")
+                .unwrap()
+                .and_then(|v| v.text())
+                .as_deref(),
             Some("PartitionedDataSetCollection")
         );
         let cd = h.path("/VTKHDF/internal/CellData").unwrap();
         let names: Vec<String> = h.links(&cd).unwrap().into_iter().map(|l| l.name).collect();
         assert_eq!(
             names,
-            ["velocity_x", "velocity_y", "velocity_z", "speed", "pressure", "k", "omega", "nu_t", "zone"]
+            [
+                "velocity_x",
+                "velocity_y",
+                "velocity_z",
+                "speed",
+                "pressure",
+                "k",
+                "omega",
+                "nu_t",
+                "zone"
+            ]
         );
         let p = h.path("/VTKHDF/internal/CellData/pressure").unwrap();
         let ds = h.dataset(&p).unwrap();
@@ -1716,7 +1811,10 @@ mod tests {
         // soft links of the assembly resolve to the blocks
         let a = h.path("/VTKHDF/Assembly/boundary/walls").unwrap();
         assert_eq!(
-            h.attr(&a, "Type").unwrap().and_then(|v| v.text()).as_deref(),
+            h.attr(&a, "Type")
+                .unwrap()
+                .and_then(|v| v.text())
+                .as_deref(),
             Some("PolyData")
         );
     }
@@ -1759,13 +1857,30 @@ mod tests {
             let o = h.path(&format!("/VTKHDF/internal/{n}")).unwrap();
             h.read_f64(&h.dataset(&o).unwrap()).unwrap()
         };
-        for n in ["Points", "CellData/s0", "CellData/s1", "CellData/s2", "CellData/s3", "CellData/pressure", "Offsets", "FaceConnectivity"] {
+        for n in [
+            "Points",
+            "CellData/s0",
+            "CellData/s1",
+            "CellData/s2",
+            "CellData/s3",
+            "CellData/pressure",
+            "Offsets",
+            "FaceConnectivity",
+        ] {
             assert_eq!(read(&old, n), read(&new, n), "{n}");
         }
         let attrs = new.attrs(&new.root().unwrap()).unwrap();
         assert_eq!(attrs.len(), 13);
-        assert!(attrs.iter().any(|(k, v)| k == "note_5" && v.text().as_deref() == Some("attribute 5")));
-        assert!(attrs.iter().any(|(k, v)| k == "time" && v.number() == Some(0.25)));
+        assert!(
+            attrs
+                .iter()
+                .any(|(k, v)| k == "note_5" && v.text().as_deref() == Some("attribute 5"))
+        );
+        assert!(
+            attrs
+                .iter()
+                .any(|(k, v)| k == "time" && v.number() == Some(0.25))
+        );
     }
 
     /// Invariant: broken files give a diagnostic and never panic: every
@@ -1778,7 +1893,9 @@ mod tests {
         let bytes = std::fs::read(p).unwrap();
         let walk = |b: Vec<u8>| {
             let Ok(h) = H5::from_bytes(b) else { return };
-            let Ok(o) = h.path("/VTKHDF/internal/CellData") else { return };
+            let Ok(o) = h.path("/VTKHDF/internal/CellData") else {
+                return;
+            };
             if let Ok(links) = h.links(&o) {
                 for l in links {
                     if let Ok(Some(c)) = h.child(&o, &l.name)
@@ -1805,7 +1922,10 @@ mod tests {
             }
             walk(b);
         }
-        assert_eq!(H5::from_bytes(b"not hdf5".to_vec()).err().map(|e| e.code), Some("MESH018"));
+        assert_eq!(
+            H5::from_bytes(b"not hdf5".to_vec()).err().map(|e| e.code),
+            Some("MESH018")
+        );
     }
 
     /// Invariant: the shuffle filter puts byte b of element i back from
