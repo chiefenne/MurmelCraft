@@ -55,9 +55,20 @@ pub fn read_vtkhdf(path: &Path) -> Result<(Mesh, Results), MeshError> {
             format!("{} is not a readable file", path.display()),
         ));
     }
+    let io = crate::profile::span("read.file");
     let h = H5::open(path)?;
-    let (mut mesh, results) = read_h5(&h)?;
+    drop(io);
+    crate::profile::check()?;
+    let _t = crate::profile::span("read.vtkhdf");
+    // Hash the file on another thread while it is read.
+    let (read, digest) = std::thread::scope(|s| {
+        let hash = s.spawn(|| crate::sha256_hex(h.bytes()));
+        let read = read_h5(&h);
+        (read, hash.join().unwrap_or_default())
+    });
+    let (mut mesh, results) = read?;
     mesh.files = vec![path.to_path_buf()];
+    mesh.file_sha256 = vec![digest];
     Ok((mesh, results))
 }
 

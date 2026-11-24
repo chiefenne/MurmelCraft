@@ -24,7 +24,7 @@
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use crate::{CellKind, Mesh, MeshError, NO_CELL, Patch, PatchRole, Polygons};
+use crate::{CellKind, Mesh, MeshError, NO_CELL, Patch, PatchRole, Polygons, numbers};
 
 /// The files of a polyMesh the reader needs, without `cellZones`.
 const REQUIRED: [&str; 5] = ["points", "faces", "owner", "neighbour", "boundary"];
@@ -87,19 +87,37 @@ pub fn polymesh_dir(path: &Path) -> Result<PathBuf, MeshError> {
 
 /// The bytes of `dir/name`, or of `dir/name.gz` decompressed, and the
 /// path read; `None` when neither exists.
-fn read_file(dir: &Path, name: &str) -> Result<Option<(Vec<u8>, PathBuf)>, MeshError> {
+/// A file of the polyMesh as read: its bytes on disk (hashed for the
+/// validity badge) and, for a `.gz`, the decompressed text.
+struct FileBytes {
+    raw: Vec<u8>,
+    unzipped: Option<Vec<u8>>,
+    path: PathBuf,
+}
+
+impl FileBytes {
+    fn text(&self) -> &[u8] {
+        self.unzipped.as_deref().unwrap_or(&self.raw)
+    }
+}
+
+fn read_file(dir: &Path, name: &str) -> Result<Option<FileBytes>, MeshError> {
     let plain = dir.join(name);
     if plain.is_file() {
-        let bytes = std::fs::read(&plain)
+        let raw = std::fs::read(&plain)
             .map_err(|e| err("MESH001", format!("cannot read {}: {e}", plain.display())))?;
-        return Ok(Some((bytes, plain)));
+        return Ok(Some(FileBytes {
+            raw,
+            unzipped: None,
+            path: plain,
+        }));
     }
     let gz = dir.join(format!("{name}.gz"));
     if gz.is_file() {
-        let file = std::fs::File::open(&gz)
+        let raw = std::fs::read(&gz)
             .map_err(|e| err("MESH001", format!("cannot read {}: {e}", gz.display())))?;
         let mut bytes = Vec::new();
-        flate2::read::GzDecoder::new(file)
+        flate2::read::GzDecoder::new(&raw[..])
             .take(MAX_DECOMPRESSED + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| {
@@ -114,7 +132,11 @@ fn read_file(dir: &Path, name: &str) -> Result<Option<(Vec<u8>, PathBuf)>, MeshE
                 format!("{} decompresses to more than 16 GiB", gz.display()),
             ));
         }
-        return Ok(Some((bytes, gz)));
+        return Ok(Some(FileBytes {
+            raw,
+            unzipped: Some(bytes),
+            path: gz,
+        }));
     }
     Ok(None)
 }
@@ -123,35 +145,45 @@ fn read_file(dir: &Path, name: &str) -> Result<Option<(Vec<u8>, PathBuf)>, MeshE
 /// the files read are in [`Mesh::files`].
 pub fn read_polymesh(path: &Path) -> Result<Mesh, MeshError> {
     let dir = polymesh_dir(path)?;
-    let mut files = Vec::new();
-    let mut texts: Vec<Vec<u8>> = Vec::new();
+    let io = crate::profile::span("read.file");
+    let mut read: Vec<FileBytes> = Vec::new();
     for name in REQUIRED {
-        let Some((bytes, p)) = read_file(&dir, name)? else {
+        let Some(f) = read_file(&dir, name)? else {
             return Err(err(
                 "MESH013",
                 format!("{} has no {name} file", dir.display()),
             ));
         };
-        texts.push(bytes);
-        files.push(p);
+        read.push(f);
     }
-    let zones = match read_file(&dir, "cellZones")? {
-        Some((bytes, p)) => {
-            files.push(p);
-            Some(bytes)
-        }
-        None => None,
-    };
-    let [points, faces, owner, neighbour, boundary] = [0, 1, 2, 3, 4].map(|i| &texts[i][..]);
-    let mut mesh = read_polymesh_bytes(PolyMeshFiles {
-        points,
-        faces,
-        owner,
-        neighbour,
-        boundary,
-        cell_zones: zones.as_deref(),
-    })?;
-    mesh.files = files;
+    let zones = read_file(&dir, "cellZones")?;
+    drop(io);
+    crate::profile::check()?;
+    let all: Vec<&FileBytes> = read.iter().chain(zones.as_ref()).collect();
+    // The files are hashed on other threads while they are parsed.
+    let (mesh, digests) = std::thread::scope(|s| {
+        let hashes: Vec<_> = all
+            .iter()
+            .map(|f| s.spawn(|| crate::sha256_hex(&f.raw)))
+            .collect();
+        let [points, faces, owner, neighbour, boundary] = [0, 1, 2, 3, 4].map(|i| read[i].text());
+        let mesh = read_polymesh_bytes(PolyMeshFiles {
+            points,
+            faces,
+            owner,
+            neighbour,
+            boundary,
+            cell_zones: zones.as_ref().map(FileBytes::text),
+        });
+        let digests: Vec<String> = hashes
+            .into_iter()
+            .map(|h| h.join().unwrap_or_default())
+            .collect();
+        (mesh, digests)
+    });
+    let mut mesh = mesh?;
+    mesh.files = all.iter().map(|f| f.path.clone()).collect();
+    mesh.file_sha256 = digests;
     Ok(mesh)
 }
 
@@ -411,6 +443,28 @@ impl<'a> Lex<'a> {
         Ok(n)
     }
 
+    /// The `per * n` numbers of the ascii list body that starts here (after
+    /// its `(`), parsed in parallel, leaving the `)` that closes the list
+    /// to the caller; `None` (nothing taken) when the body holds anything
+    /// else, such as a comment, so the token-by-token reader can say what
+    /// is wrong.
+    fn fast_list<T: numbers::Number>(
+        &mut self,
+        n: usize,
+        per: usize,
+        sep: &numbers::Sep,
+    ) -> Option<Vec<T>> {
+        let rest = &self.b[self.i..];
+        let end = list_end(rest);
+        let end = end?;
+        let v = numbers::parse::<T>(&rest[..end], sep).ok()?;
+        if v.len() != n.checked_mul(per)? {
+            return None;
+        }
+        self.i += end;
+        Some(v)
+    }
+
     /// `n` raw binary values of `size` bytes each.
     fn raw(&mut self, n: usize, size: usize) -> Result<&'a [u8], MeshError> {
         let len = n.saturating_mul(size);
@@ -430,18 +484,21 @@ impl<'a> Lex<'a> {
         let v = match h.format {
             Format::Ascii => {
                 let n = self.list_start(2)?;
-                let mut v = Vec::with_capacity(n);
-                for _ in 0..n {
-                    v.push(self.label()?);
+                match self.fast_list::<i64>(n, 1, &numbers::SPACE) {
+                    Some(v) => v,
+                    None => {
+                        let mut v = Vec::with_capacity(n);
+                        for _ in 0..n {
+                            v.push(self.label()?);
+                        }
+                        v
+                    }
                 }
-                v
             }
             Format::Binary => {
                 let n = self.list_start(h.label_bytes)?;
                 let raw = self.raw(n, h.label_bytes)?;
-                raw.chunks_exact(h.label_bytes)
-                    .map(|c| decode_int(c, h.big_endian))
-                    .collect()
+                numbers::le(raw, h.label_bytes, int_decoder(h.label_bytes, h.big_endian))
             }
         };
         self.expect(b')')?;
@@ -478,6 +535,16 @@ fn arch(h: &mut Header, v: &str, file: &str) -> Result<(), MeshError> {
         }
     }
     Ok(())
+}
+
+/// The decoder of one label of `size` bytes (chosen once per list).
+fn int_decoder(size: usize, big: bool) -> fn(&[u8]) -> i64 {
+    match (size, big) {
+        (4, false) => |c| i64::from(i32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+        (4, true) => |c| i64::from(i32::from_be_bytes([c[0], c[1], c[2], c[3]])),
+        (_, false) => |c| decode_int(c, false),
+        (_, true) => |c| decode_int(c, true),
+    }
 }
 
 fn decode_int(c: &[u8], big: bool) -> i64 {
@@ -530,22 +597,39 @@ fn points(b: &[u8]) -> Result<Vec<[f64; 3]>, MeshError> {
     let v = match h.format {
         Format::Ascii => {
             let n = l.list_start(7)?;
-            let mut v = Vec::with_capacity(n);
-            for _ in 0..n {
-                l.expect(b'(')?;
-                let p = [l.scalar()?, l.scalar()?, l.scalar()?];
-                l.expect(b')')?;
-                v.push(p);
+            match l.fast_list::<f64>(n, 3, &numbers::SPACE_PAREN) {
+                Some(xyz) => xyz.as_chunks::<3>().0.to_vec(),
+                None => {
+                    let mut v = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        l.expect(b'(')?;
+                        let p = [l.scalar()?, l.scalar()?, l.scalar()?];
+                        l.expect(b')')?;
+                        v.push(p);
+                    }
+                    v
+                }
             }
-            v
         }
         Format::Binary => {
             let s = h.scalar_bytes;
             let n = l.list_start(3 * s)?;
             let raw = l.raw(n, 3 * s)?;
-            raw.chunks_exact(3 * s)
-                .map(|c| [0, 1, 2].map(|k| decode_float(&c[k * s..(k + 1) * s], h.big_endian)))
-                .collect()
+            let big = h.big_endian;
+            if (s, big) == (8, false) {
+                numbers::le(raw, 24, |c| {
+                    let f = |k: usize| {
+                        let mut b = [0u8; 8];
+                        b.copy_from_slice(&c[8 * k..8 * k + 8]);
+                        f64::from_le_bytes(b)
+                    };
+                    [f(0), f(1), f(2)]
+                })
+            } else {
+                raw.chunks_exact(3 * s)
+                    .map(|c| [0, 1, 2].map(|k| decode_float(&c[k * s..(k + 1) * s], big)))
+                    .collect()
+            }
         }
     };
     l.expect(b')')?;
@@ -571,6 +655,9 @@ fn faces(b: &[u8], n_points: usize) -> Result<(Polygons, Header), MeshError> {
     };
     let mut out = Polygons::new();
     if h.class == "faceCompactList" {
+        if let Some(fast) = compact_u32(&mut l, &h, n_points) {
+            return Ok((fast, h));
+        }
         let offsets = l.labels(&h)?;
         let nodes = l.labels(&h)?;
         if offsets.first().copied().unwrap_or(0) != 0 {
@@ -578,6 +665,32 @@ fn faces(b: &[u8], n_points: usize) -> Result<(Polygons, Header), MeshError> {
                 "MESH005",
                 "faces: the compact offsets do not start at 0",
             ));
+        }
+        // Checked and converted in parallel; the loop below names the
+        // first broken face when the check fails.
+        let ok_offsets = crate::par::map(offsets.len().saturating_sub(1), 1 << 16, |r| {
+            r.into_iter().all(|f| {
+                let (a, z) = (offsets[f], offsets[f + 1]);
+                a <= z && z as u64 <= nodes.len() as u64 && z - a >= 3
+            })
+        });
+        let ok_nodes = crate::par::map(nodes.len(), 1 << 16, |r| {
+            nodes[r]
+                .iter()
+                .all(|&v| v >= 0 && (v as u64) < n_points as u64)
+        });
+        let in_use = offsets.last().map_or(0, |&z| z as usize);
+        if ok_offsets.iter().all(|&b| b) && ok_nodes.iter().all(|&b| b) {
+            out.start = crate::par::collect(offsets.len(), 1 << 16, |r| {
+                offsets[r].iter().map(|&v| v as u32).collect()
+            });
+            out.nodes = crate::par::collect(in_use.min(nodes.len()), 1 << 16, |r| {
+                nodes[r].iter().map(|&v| v as u32).collect()
+            });
+            if out.start.is_empty() {
+                out.start.push(0);
+            }
+            return Ok((out, h));
         }
         for (f, w) in offsets.windows(2).enumerate() {
             let (a, z) = (w[0], w[1]);
@@ -590,12 +703,17 @@ fn faces(b: &[u8], n_points: usize) -> Result<(Polygons, Header), MeshError> {
                     ),
                 ));
             }
-            let mut face = Vec::with_capacity((z - a) as usize);
-            for &v in &nodes[a as usize..z as usize] {
-                face.push(index(v, f)?);
+            let face = &nodes[a as usize..z as usize];
+            if let Some(&v) = face.iter().find(|&&v| v < 0 || v as u64 >= n_points as u64) {
+                index(v, f)?;
             }
-            out.push(face);
+            out.push(face.iter().map(|&v| v as u32));
         }
+    } else if let Some(faces) = (h.format == Format::Ascii)
+        .then(|| fast_faces(&mut l, n_points))
+        .flatten()
+    {
+        out = faces;
     } else {
         let n = l.list_start(4)?;
         out.start.reserve(n);
@@ -625,6 +743,153 @@ fn faces(b: &[u8], n_points: usize) -> Result<(Polygons, Header), MeshError> {
         l.expect(b')')?;
     }
     Ok((out, h))
+}
+
+/// A binary `faceCompactList` of 32-bit little-endian labels decoded
+/// straight into the faces and checked in parallel; `None`, with nothing
+/// taken, when it is another layout or broken, so the general reader can
+/// say what is wrong.
+fn compact_u32(l: &mut Lex<'_>, h: &Header, n_points: usize) -> Option<Polygons> {
+    if h.format != Format::Binary || h.label_bytes != 4 || h.big_endian {
+        return None;
+    }
+    let at = l.i;
+    let list = |l: &mut Lex<'_>| -> Option<Vec<u32>> {
+        let n = l.list_start(4).ok()?;
+        let raw = l.raw(n, 4).ok()?;
+        let v = numbers::le(raw, 4, |c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+        l.expect(b')').ok()?;
+        Some(v)
+    };
+    let parsed = list(l).and_then(|start| Some((start, list(l)?)));
+    let ok = parsed.as_ref().is_some_and(|(start, nodes)| {
+        let len = nodes.len() as u64;
+        // Labels are signed: a negative one reads as 2^31 or more.
+        start.first() == Some(&0)
+            && crate::par::map(start.len().saturating_sub(1), 1 << 16, |r| {
+                r.into_iter().all(|f| {
+                    let (a, z) = (start[f], start[f + 1]);
+                    a <= z && u64::from(z) <= len && z - a >= 3 && z < 1 << 31
+                })
+            })
+            .into_iter()
+            .all(|b| b)
+            && crate::par::map(nodes.len(), 1 << 16, |r| {
+                nodes[r]
+                    .iter()
+                    .all(|&v| (v as usize) < n_points && v < 1 << 31)
+            })
+            .into_iter()
+            .all(|b| b)
+    });
+    match parsed {
+        Some((start, mut nodes)) if ok => {
+            nodes.truncate(start.last().map_or(0, |&z| z as usize));
+            Some(Polygons { start, nodes })
+        }
+        _ => {
+            l.i = at;
+            None
+        }
+    }
+}
+
+/// Where the ascii list body `rest` (after its `(`) closes: the `)` at
+/// depth 0, with nothing but numbers, whitespace and parentheses before
+/// it; `None` when a comment, a dictionary or a string comes first. A
+/// list that ends its file (points, faces, owner, neighbour) closes at
+/// the file's last `)`, which is checked in parallel pieces; any other
+/// list is scanned from the start.
+fn list_end(rest: &[u8]) -> Option<usize> {
+    let other = |c: u8| matches!(c, b'/' | b'{' | b'}' | b';' | b'"');
+    if let Some(end) = rest.iter().rposition(|&c| c == b')') {
+        let tail = &rest[end + 1..];
+        let trivia = tail.split(|&c| c == b'\n').all(|line| {
+            let t = line.trim_ascii();
+            t.is_empty() || t.starts_with(b"//")
+        });
+        if trivia {
+            let body = &rest[..end];
+            // Each piece: no other character, its change of depth and the
+            // lowest depth inside it.
+            let pieces = crate::par::map(body.len(), 1 << 20, |r| {
+                let (mut d, mut low, mut clean) = (0i64, 0i64, true);
+                for &c in &body[r] {
+                    match c {
+                        b'(' => d += 1,
+                        b')' => {
+                            d -= 1;
+                            low = low.min(d);
+                        }
+                        c if other(c) => clean = false,
+                        _ => {}
+                    }
+                }
+                (d, low, clean)
+            });
+            let mut depth = 0i64;
+            let mut ok = true;
+            for (d, low, clean) in pieces {
+                ok &= clean && depth + low >= 0;
+                depth += d;
+            }
+            if ok && depth == 0 {
+                return Some(end);
+            }
+        }
+    }
+    let mut depth = 0usize;
+    for (k, &c) in rest.iter().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' if depth == 0 => return Some(k),
+            b')' => depth -= 1,
+            c if other(c) => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// An ascii `faceList` read as one stream of numbers in parallel (`4(a b c
+/// d)` is the count and the ids); `None`, with nothing taken, when it is
+/// anything else, so the token reader can say what is wrong.
+fn fast_faces(l: &mut Lex<'_>, n_points: usize) -> Option<Polygons> {
+    let at = l.i;
+    let n = l.list_start(4).ok()?;
+    let body_start = l.i;
+    let rest = &l.b[body_start..];
+    let end = list_end(rest);
+    let parsed = end.and_then(|e| numbers::parse::<u32>(&rest[..e], &numbers::SPACE_PAREN).ok());
+    let Some(stream) = parsed else {
+        l.i = at;
+        return None;
+    };
+    let mut out = Polygons::new();
+    out.start.reserve(n);
+    out.nodes.reserve(stream.len().saturating_sub(n));
+    let mut k = 0;
+    while k < stream.len() {
+        let m = stream[k] as usize;
+        let face = stream.get(k + 1..k + 1 + m);
+        match face {
+            Some(face) if m >= 3 && face.iter().all(|&v| (v as usize) < n_points) => {
+                out.push(face.iter().copied());
+            }
+            _ => {
+                l.i = at;
+                return None;
+            }
+        }
+        k += 1 + m;
+    }
+    if out.len() != n {
+        l.i = at;
+        return None;
+    }
+    l.i = body_start + end.unwrap_or(0);
+    l.expect(b')').ok()?;
+    Some(out)
 }
 
 fn label_file(b: &[u8], file: &'static str) -> Result<Vec<i64>, MeshError> {
@@ -737,10 +1002,19 @@ pub fn patch_role(name: &str, kind: &str) -> PatchRole {
 
 /// Read a polyMesh from the contents of its files.
 pub fn read_polymesh_bytes(files: PolyMeshFiles<'_>) -> Result<Mesh, MeshError> {
+    let t = crate::profile::span("read.points");
     let points = points(files.points)?;
+    drop(t);
+    crate::profile::check()?;
+    let t = crate::profile::span("read.faces");
     let (face_nodes, fh) = faces(files.faces, points.len())?;
+    drop(t);
+    let t = crate::profile::span("read.owner_neighbour");
     let owner = label_file(files.owner, "owner")?;
     let neighbour = label_file(files.neighbour, "neighbour")?;
+    drop(t);
+    crate::profile::check()?;
+    let _cells = crate::profile::span("read.cells");
     let patches = boundary(files.boundary)?;
     let zones = match files.cell_zones {
         Some(b) => cell_zones(b)?,
@@ -841,27 +1115,67 @@ pub fn read_polymesh_bytes(files: PolyMeshFiles<'_>) -> Result<Mesh, MeshError> 
         boundary: Polygons::new(),
         ..Mesh::default()
     };
-    mesh.faces.nodes.reserve(face_nodes.nodes.len() + total);
-    mesh.cell_face_id = slot_face.clone();
+    // Each cell's faces laid out cell by cell: the node starts by a prefix
+    // sum of the face sizes, the nodes copied range by range of cells in
+    // parallel (a neighbour sees its face turned the other way).
+    let size = |f: u32| face_nodes.start[f as usize + 1] - face_nodes.start[f as usize];
+    let mut start = Vec::with_capacity(total + 1);
+    start.push(0u32);
+    let mut at = 0u32;
+    for &f in &slot_face {
+        at += size(f);
+        start.push(at);
+    }
     mesh.face_first = vec![NO_CELL; n_faces];
     for c in 0..n_cells {
-        let range = mesh.cell_faces[c] as usize..mesh.cell_faces[c + 1] as usize;
-        for s in range.clone() {
-            let f = slot_face[s] as usize;
-            let nodes = face_nodes.get(f);
+        for s in mesh.cell_faces[c]..mesh.cell_faces[c + 1] {
+            let f = slot_face[s as usize] as usize;
             if own[f] as usize == c {
-                mesh.face_first[f] = s as u32;
-                mesh.faces.push(nodes.iter().copied());
-            } else {
-                // Seen from the neighbour, the face turns the other way.
-                mesh.faces
-                    .push(std::iter::once(nodes[0]).chain(nodes[1..].iter().rev().copied()));
+                mesh.face_first[f] = s;
             }
         }
-        mesh.cell_kind.push(CellKind::classify(
-            range.map(|s| face_nodes.get(slot_face[s] as usize).len()),
-        ));
     }
+    let mut nodes = vec![0u32; at as usize];
+    let ranges = crate::par::ranges(n_cells, 1 << 14);
+    let cuts: Vec<usize> = ranges
+        .iter()
+        .map(|r| start[mesh.cell_faces[r.start] as usize] as usize)
+        .chain([at as usize])
+        .collect();
+    let parts = crate::par::split_mut(&mut nodes, &cuts);
+    let (cf, own_ref) = (&mesh.cell_faces, &own);
+    let (slot_ref, start_ref, fnodes) = (&slot_face, &start, &face_nodes);
+    std::thread::scope(|sc| {
+        for (r, part) in ranges.iter().zip(parts) {
+            let first = start_ref[cf[r.start] as usize] as usize;
+            sc.spawn(move || {
+                for c in r.clone() {
+                    for s in cf[c] as usize..cf[c + 1] as usize {
+                        let f = slot_ref[s] as usize;
+                        let src = fnodes.get(f);
+                        let at = start_ref[s] as usize - first;
+                        let dst = &mut part[at..at + src.len()];
+                        if own_ref[f] as usize == c {
+                            dst.copy_from_slice(src);
+                        } else {
+                            dst[0] = src[0];
+                            for (d, &v) in dst[1..].iter_mut().zip(src[1..].iter().rev()) {
+                                *d = v;
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    mesh.faces = Polygons { start, nodes };
+    mesh.cell_kind = crate::par::collect(n_cells, 1 << 14, |r| {
+        r.map(|c| {
+            CellKind::classify((cf_of(&mesh.cell_faces, c)).map(|s| size(slot_face[s]) as usize))
+        })
+        .collect()
+    });
+    mesh.cell_face_id = slot_face;
     mesh.unique_faces = n_faces;
     mesh.face_owner = own;
     mesh.face_neighbour = nei;
@@ -952,6 +1266,11 @@ pub fn read_polymesh_bytes(files: PolyMeshFiles<'_>) -> Result<Mesh, MeshError> 
         mesh.metadata.insert("openfoam_note".into(), note);
     }
     Ok(mesh)
+}
+
+/// The cell-face indices of cell `c` by the starts `cell_faces`.
+fn cf_of(cell_faces: &[u32], c: usize) -> std::ops::Range<usize> {
+    cell_faces[c] as usize..cell_faces[c + 1] as usize
 }
 
 fn unique_name(taken: &[String], base: &str) -> String {

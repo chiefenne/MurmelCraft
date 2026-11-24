@@ -78,5 +78,76 @@ What it shows:
 - Building the surface again (every colour, visibility or clip change, and
   every step of a clip drag) takes a third of a second at 1 M cells.
 - Picking walks every triangle: 7 to 12 ms per pick at 1.2 M triangles.
-- The window opens a mesh on its own thread, so it freezes for the whole
-  `open`.
+- The window opens a mesh on the thread that draws it, so it freezes for
+  the whole `open`.
+
+## Loading (2026-11-24)
+
+What changed, in the readers (`murmel-mesh`) and the window:
+
+- **The file is read once.** Its SHA-256 is taken from the bytes already
+  in memory, on another thread while the text is parsed, instead of
+  reading the file a second time (`open` no longer pays `digest`).
+- **Numbers are parsed in parallel.** The text of an array is cut into one
+  piece per thread at a separator, the tokens of each piece are counted,
+  and each piece is parsed in place into its part of the result
+  (`numbers.rs`); integers by hand, floating-point numbers by the standard
+  library (Eisel and Lemire's method). Base64 is decoded in pieces of whole
+  four-character groups, and the type of a binary array is decided once
+  per array, not once per value. The work is split over scoped threads of
+  the standard library (`par.rs`, no thread pool, no new dependency).
+- **Arrays are read straight into the mesh model** (32-bit ids, no
+  intermediate 64-bit vectors), and the text is dropped before the face
+  topology is built, which lowers the peak.
+- **The face topology** (which cell faces are the same face) groups the
+  faces by their smallest point with a counting sort and compares only
+  the faces of a group, instead of a hash map keyed by each face's sorted
+  points (`boundary.rs`); OpenFOAM's per-cell faces are assembled in
+  parallel from `owner` and `neighbour`.
+- **The window reads a mesh of 32 MiB or more on a thread of its own**
+  (`opening.rs`): it keeps drawing, the status bar (and the empty
+  viewport) shows the phase and the seconds so far, and Cancel or Esc
+  stops the reader at its next phase (`MESH019`, not shown as an error).
+  The read mesh, and its surface built for the display of the time, opens
+  through `mesh.open` (`session.load` for a session file) like any other,
+  so undo, the agents and the tools see the same open as before. A mesh
+  whose files changed since, or a display changed meanwhile, is read or
+  built again.
+
+Same machine and meshes as the baseline (n = 80, 1,005,039 cells), and
+the honeycomb n = 127 (4,048,759 cells, 2.6 GB mesh model); `--no-render`.
+
+| Stage (ms) | vtu | vtu-binary | polymesh | polymesh-binary | vtu, 4 M (4.99 GB) | polymesh-binary, 4 M (1.54 GB) |
+|---|---:|---:|---:|---:|---:|---:|
+| read (was) | 2,505 (8,660) | 3,635 (12,724) | 1,939 (3,245) | 1,155 (1,520) | 11,492 | 4,044 |
+| open (was) | 3,347 (12,782) | 4,106 (16,692) | 2,294 (4,682) | 1,473 (2,169) | 11,393 | 5,041 |
+| peak memory, MiB (was) | 2,952 (4,006) | 3,657 (4,993) | 2,344 (2,396) | 2,048 (2,266) | 11,762 | 7,980 |
+| surface | 437 | 474 | 362 | 368 | 1,296 | 1,037 |
+| quality | 1,794 | 1,853 | 1,882 | 2,018 | 7,029 | 7,503 |
+| pick.9 | 106 | 126 | 119 | 74 | 274 | 284 |
+
+The phases of `open` (`bench run --json` lists them; ms):
+
+| Phase | vtu | polymesh-binary | vtu, 4 M | polymesh-binary, 4 M |
+|---|---:|---:|---:|---:|
+| file (read from disk) | 600 | 162 | 2,364 | 653 |
+| xml / points | 320 | 195 | 773 | 607 |
+| numbers / faces | 940 | 187 | 4,038 | 651 |
+| cells | 279 | 365 | 945 | 1,380 |
+| topology / owner and neighbour | 449 | 68 | 1,666 | 313 |
+| surface | 491 | 465 | 955 | 1,329 |
+| SHA-256 (beside the parsing) | 1,129 | in `file` | 4,251 | in `file` |
+
+What it shows, towards the target of 10 M cells:
+
+- Opening is now 2 to 4 times faster and the window stays usable while it
+  runs; the ascii `.vtu` of 4 M cells (5 GB) opens in 11 s, where the old
+  reader would have needed, going by its 1 M numbers, about 50 s and 16 GB
+  (more than this machine has).
+- **Memory is the limit now.** The mesh model stores every interior face
+  twice (once per cell) and takes 650 MiB per million cells; at 10 M
+  cells it would be 6.5 GB, and the peak of an open about three times
+  that. Storing each face once is the next step for memory.
+- The surface (1 to 1.3 s at 4 M), the quality (7 s at 4 M) and picking
+  (30 ms per pick at 4 M) are single threaded or walk everything; they
+  come next.

@@ -189,6 +189,18 @@ fn mib(bytes: usize) -> f64 {
     (bytes as f64 / (1024.0 * 1024.0) * 10.0).round() / 10.0
 }
 
+/// The phases recorded since the last `profile::record(true)`, in
+/// milliseconds, and recording turned off.
+fn phases() -> Value {
+    murmel_mesh::profile::record(false);
+    let mut m = serde_json::Map::new();
+    for (name, ms) in murmel_mesh::profile::take() {
+        let v = m.entry(name).or_insert(json!(0.0));
+        *v = json!(v.as_f64().unwrap_or(0.0) + (ms * 100.0).round() / 100.0);
+    }
+    Value::Object(m)
+}
+
 /// The bytes of the mesh's arrays.
 pub fn mesh_bytes(m: &Mesh) -> usize {
     m.points.len() * 24
@@ -225,9 +237,15 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
     let mut st = Stages::default();
 
     let (mesh, _) = st
-        .time("read", r, || murmel_mesh::read_results(path))
+        .time("read", r, || {
+            murmel_mesh::profile::record(true);
+            murmel_mesh::read_results(path)
+        })
         .map_err(|e| e.to_string())?;
-    st.note(json!({ "file_bytes": mesh.files.iter().map(|f| bytes_of(f)).sum::<u64>() }));
+    st.note(json!({
+        "file_bytes": mesh.files.iter().map(|f| bytes_of(f)).sum::<u64>(),
+        "phases": phases(),
+    }));
     let files: Vec<PathBuf> = mesh.files.clone();
     st.time("digest", r, || {
         files
@@ -237,8 +255,12 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
     });
     let mut session = Session::new(tokens.clone());
     session.config_dir = None;
-    st.time("open", r, || session.open(path).map(|_| ()))
-        .map_err(|e| e.to_string())?;
+    st.time("open", r, || {
+        murmel_mesh::profile::record(true);
+        session.open(path).map(|_| ())
+    })
+    .map_err(|e| e.to_string())?;
+    st.note(json!({ "phases": phases() }));
 
     let d0 = Display::default();
     let s = st.time("surface", r, || Surface::build(&mesh, &tokens, &d0));
@@ -361,6 +383,17 @@ pub fn table(report: &Value) -> String {
             s["stage"].as_str().unwrap_or(""),
             s["median_ms"].as_f64().unwrap_or(0.0)
         ));
+        for (name, ms) in s
+            .get("phases")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            out.push_str(&format!(
+                "    {name:<22} {:>10.1} ms\n",
+                ms.as_f64().unwrap_or(0.0)
+            ));
+        }
     }
     out.push_str(&format!(
         "  peak memory {} MiB\n",

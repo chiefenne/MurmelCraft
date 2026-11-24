@@ -2,12 +2,14 @@
 //! settings. Front ends read it and change it only through tools.
 
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use murmel_mesh::{Evidence, Mesh, MeshError};
 
 use crate::camera::Camera;
 use crate::cube::CubeSettings;
 use crate::display::{ColorBy, Display, Item};
+use crate::field::FieldSet;
 use crate::journal::Journal;
 use crate::navigation::Navigation;
 use crate::quality::Quality;
@@ -33,7 +35,7 @@ pub struct OpenMesh {
     pub validity: Validity,
     /// The fields read with the mesh (a `.vtkhdf` result, the data
     /// arrays of a `.vtu`); empty for a bare mesh.
-    pub fields: crate::field::FieldSet,
+    pub fields: FieldSet,
 }
 
 /// The validity badge (UI spec, Model tree): green when the evidence
@@ -126,11 +128,7 @@ pub fn sha256(path: &Path) -> String {
 
 /// SHA-256 of bytes, hex.
 pub fn sha256_bytes(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    murmel_mesh::sha256_hex(bytes)
 }
 
 /// Compute the cell quality of `mesh` the first time colour mode quality
@@ -138,6 +136,184 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
 fn ensure_quality(display: &mut Display, mesh: &Mesh) {
     if display.color_by == ColorBy::Quality && display.quality.is_none() {
         display.quality = Some(std::sync::Arc::new(Quality::compute(mesh)));
+    }
+}
+
+/// The display a new mesh opens with: everything shown, nothing selected
+/// and no saved views, measurements, probes, slices or iso-surfaces (they
+/// are in the old mesh's coordinates); the colouring stays. The field
+/// colouring stays when the new mesh has the field (the next time step of
+/// the same case), else it falls back to solid.
+fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
+    let mut d = old.clone();
+    d.hidden.clear();
+    d.selection.clear();
+    d.isolated.clear();
+    d.colors.clear();
+    d.clips.clear();
+    d.threshold = None;
+    d.quality = None;
+    d.views.clear();
+    d.measurements.clear();
+    d.probes.clear();
+    d.slices.clear();
+    d.isos.clear();
+    d.field_values = None;
+    if d.field
+        .as_ref()
+        .is_some_and(|c| fields.get(&c.name).is_none())
+    {
+        d.field = None;
+        if d.color_by == ColorBy::Field {
+            d.color_by = ColorBy::Solid;
+        }
+    }
+    if d.color_by == ColorBy::Field && d.field.is_none() {
+        d.color_by = ColorBy::Solid;
+    }
+    d
+}
+
+/// The display (with the quality or field values it colours by) and the
+/// surface of a new mesh, from its display `base`.
+fn prepare(
+    mut base: Display,
+    mesh: &Mesh,
+    fields: &FieldSet,
+    tokens: &Tokens,
+) -> (Display, Surface) {
+    ensure_quality(&mut base, mesh);
+    crate::field::ensure_field(&mut base, mesh, fields);
+    let _t = murmel_mesh::profile::span("open.surface");
+    let surface = Surface::build_with(mesh, Some(fields), tokens, &base);
+    (base, surface)
+}
+
+/// The size and modification time of a file, `None` when it is missing.
+type Stamp = Option<(u64, Option<SystemTime>)>;
+
+fn stamp(p: &Path) -> Stamp {
+    std::fs::metadata(p)
+        .ok()
+        .map(|m| (m.len(), m.modified().ok()))
+}
+
+/// A mesh read with its fields, its evidence and the digests of its
+/// files, not yet open: [`load`] makes it on any thread, and
+/// [`Session::open`] takes it from `Session::preloaded`.
+#[derive(Clone, Debug)]
+pub struct Loaded {
+    pub path: PathBuf,
+    pub mesh: Mesh,
+    pub fields: FieldSet,
+    pub evidence: Option<Evidence>,
+    pub evidence_problem: Option<MeshError>,
+    pub files: Vec<(String, String)>,
+    pub digest: String,
+    pub validity: Validity,
+    /// Each file read and the evidence beside them, as they were then.
+    stamps: Vec<(PathBuf, Stamp)>,
+    prepared: Option<Prepared>,
+}
+
+/// The surface of a loaded mesh, built for a display and tokens.
+#[derive(Clone, Debug)]
+struct Prepared {
+    /// The display the mesh opens with, before quality or field values.
+    base: Display,
+    tokens: Tokens,
+    display: Display,
+    surface: Surface,
+}
+
+/// Read a mesh, its fields and the evidence beside it, and hash its files.
+pub fn load(path: &Path) -> Result<Loaded, MeshError> {
+    let t = murmel_mesh::profile::span("open.read");
+    let (mut mesh, results) = murmel_mesh::read_results(path)?;
+    drop(t);
+    let fields = FieldSet::new(results);
+    // The evidence sits beside the mesh file: beside the .vtu, or in the
+    // polyMesh folder among its files.
+    let first = mesh
+        .files
+        .first()
+        .cloned()
+        .unwrap_or_else(|| path.to_path_buf());
+    let (evidence, evidence_problem) = match Evidence::beside(&first) {
+        Ok(e) => (e, None),
+        Err(e) => (None, Some(e)),
+    };
+    if let Some(e) = &evidence {
+        mesh.apply_evidence_roles(e);
+    }
+    // The readers hash the bytes they read; a file they did not hash is
+    // read again here.
+    let files: Vec<(String, String)> = mesh
+        .files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let name = f
+                .file_name()
+                .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+            let digest = mesh
+                .file_sha256
+                .get(i)
+                .filter(|d| d.len() == 64)
+                .cloned()
+                .unwrap_or_else(|| sha256(f));
+            (name, digest)
+        })
+        .collect();
+    let digest = match files.as_slice() {
+        [(_, d)] => d.clone(),
+        _ => sha256_bytes(
+            files
+                .iter()
+                .map(|(n, d)| format!("{d}  {n}\n"))
+                .collect::<String>()
+                .as_bytes(),
+        ),
+    };
+    let validity = Validity::check(&files, &mesh, evidence.as_ref(), evidence_problem.as_ref());
+    let evidence_path = first.parent().map(|d| d.join("mesh-evidence.json"));
+    let stamps = mesh
+        .files
+        .iter()
+        .chain(evidence_path.as_ref())
+        .map(|f| (f.clone(), stamp(f)))
+        .collect();
+    Ok(Loaded {
+        path: path.to_path_buf(),
+        mesh,
+        fields,
+        evidence,
+        evidence_problem,
+        files,
+        digest,
+        validity,
+        stamps,
+        prepared: None,
+    })
+}
+
+impl Loaded {
+    /// Build in advance the surface the mesh opens with in a session of
+    /// `display` and `tokens` (used if they are unchanged when it opens).
+    pub fn prepare(&mut self, display: &Display, tokens: &Tokens) {
+        let base = display_for_new_mesh(display, &self.fields);
+        let (display, surface) = prepare(base.clone(), &self.mesh, &self.fields, tokens);
+        self.prepared = Some(Prepared {
+            base,
+            tokens: tokens.clone(),
+            display,
+            surface,
+        });
+    }
+
+    /// Whether its files and evidence are as they were when it was read.
+    pub fn is_fresh(&self) -> bool {
+        self.stamps.iter().all(|(f, s)| stamp(f) == *s)
     }
 }
 
@@ -164,6 +340,9 @@ pub struct Session {
     pub config_dir: Option<PathBuf>,
     /// The undo and redo steps of the open mesh.
     pub journal: Journal,
+    /// A mesh read in advance (the window reads a large one on a thread
+    /// of its own), which the next `mesh.open` of its path takes.
+    pub preloaded: Option<Loaded>,
 }
 
 impl Session {
@@ -182,6 +361,7 @@ impl Session {
             agents: true,
             config_dir: crate::settings::config_dir(),
             journal: Journal::default(),
+            preloaded: None,
         }
     }
 
@@ -190,95 +370,42 @@ impl Session {
     }
 
     /// Read a mesh and its evidence, replace the open one and fit the view.
+    /// The mesh [`load`]ed in advance into `preloaded` is used when it is
+    /// of `path` and its files have not changed since.
     pub fn open(&mut self, path: &Path) -> Result<&OpenMesh, MeshError> {
-        let (mut mesh, results) = murmel_mesh::read_results(path)?;
-        let fields = crate::field::FieldSet::new(results);
-        // The evidence sits beside the mesh file: beside the .vtu, or in
-        // the polyMesh folder among its files.
-        let first = mesh
-            .files
-            .first()
-            .cloned()
-            .unwrap_or_else(|| path.to_path_buf());
-        let (evidence, evidence_problem) = match Evidence::beside(&first) {
-            Ok(e) => (e, None),
-            Err(e) => (None, Some(e)),
+        let loaded = match self.preloaded.take() {
+            Some(l) if l.path == path && l.is_fresh() => l,
+            _ => load(path)?,
         };
-        if let Some(e) = &evidence {
-            mesh.apply_evidence_roles(e);
-        }
-        // A new mesh starts with everything shown, nothing selected and
-        // no saved views, measurements or probes (they are in its
-        // coordinates); the colouring stays. Its journal starts empty.
+        Ok(self.install(loaded))
+    }
+
+    /// Put a loaded mesh in place of the open one and fit the view. The
+    /// surface built in advance (`Loaded::prepare`) is used when the
+    /// display and the tokens are still the ones it was built for.
+    fn install(&mut self, mut l: Loaded) -> &OpenMesh {
         self.journal.clear();
-        self.display.hidden.clear();
-        self.display.selection.clear();
-        self.display.isolated.clear();
-        self.display.colors.clear();
-        self.display.clips.clear();
-        self.display.threshold = None;
-        self.display.quality = None;
-        self.display.views.clear();
-        self.display.measurements.clear();
-        self.display.probes.clear();
-        self.display.slices.clear();
-        self.display.isos.clear();
-        // The field colouring stays when the new mesh has the field (the
-        // next time step of the same case); else it falls back to solid.
-        self.display.field_values = None;
-        if self
-            .display
-            .field
-            .as_ref()
-            .is_some_and(|c| fields.get(&c.name).is_none())
-        {
-            self.display.field = None;
-            if self.display.color_by == ColorBy::Field {
-                self.display.color_by = ColorBy::Solid;
-            }
-        }
-        if self.display.color_by == ColorBy::Field && self.display.field.is_none() {
-            self.display.color_by = ColorBy::Solid;
-        }
-        ensure_quality(&mut self.display, &mesh);
-        crate::field::ensure_field(&mut self.display, &mesh, &fields);
-        let surface = Surface::build_with(&mesh, Some(&fields), &self.tokens, &self.display);
-        let files: Vec<(String, String)> = mesh
-            .files
-            .iter()
-            .map(|f| {
-                let name = f
-                    .file_name()
-                    .map_or(String::new(), |n| n.to_string_lossy().into_owned());
-                (name, sha256(f))
-            })
-            .collect();
-        let digest = match files.as_slice() {
-            [(_, d)] => d.clone(),
-            _ => sha256_bytes(
-                files
-                    .iter()
-                    .map(|(n, d)| format!("{d}  {n}\n"))
-                    .collect::<String>()
-                    .as_bytes(),
-            ),
+        let base = display_for_new_mesh(&self.display, &l.fields);
+        let (display, surface) = match l.prepared.take() {
+            Some(p) if p.base == base && p.tokens == self.tokens => (p.display, p.surface),
+            _ => prepare(base, &l.mesh, &l.fields, &self.tokens),
         };
-        let validity = Validity::check(&files, &mesh, evidence.as_ref(), evidence_problem.as_ref());
+        self.display = display;
         if let Some(b) = &surface.bounds {
             self.camera.fit(b, self.aspect());
         }
         self.surface_revision += 1;
-        Ok(self.mesh.insert(OpenMesh {
-            path: path.to_path_buf(),
-            mesh,
-            evidence,
-            evidence_problem,
+        self.mesh.insert(OpenMesh {
+            path: l.path,
+            mesh: l.mesh,
+            evidence: l.evidence,
+            evidence_problem: l.evidence_problem,
             surface,
-            digest,
-            files,
-            validity,
-            fields,
-        }))
+            digest: l.digest,
+            files: l.files,
+            validity: l.validity,
+            fields: l.fields,
+        })
     }
 
     pub fn close(&mut self) {
@@ -408,5 +535,77 @@ mod tests {
         );
         let m = s.open(&fixture("openfoam/channel_ascii")).unwrap();
         assert_eq!(m.validity, Validity::NoEvidence);
+    }
+
+    /// Invariant: a mesh loaded in advance opens with the surface built
+    /// for it while the display and tokens are unchanged; a changed display
+    /// builds the surface again, and a file changed since it was read, a
+    /// removed evidence file or another path reads the mesh again. A
+    /// reused stale surface would show the old colouring, or a mesh no
+    /// longer on disk under a green badge; the window test only checks
+    /// that a large mesh opens at all.
+    #[test]
+    fn preloaded_mesh() {
+        let dir = std::env::temp_dir().join(format!("murmel-preload-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in ["foehncraft.vtu", "mesh-evidence.json"] {
+            std::fs::copy(fixture("channel").join(f), dir.join(f)).unwrap();
+        }
+        let path = dir.join("foehncraft.vtu");
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let direct = s.open(&path).unwrap().clone();
+        // Marked, to tell the loaded mesh and its surface from a new read.
+        let marked = |s: &Session| {
+            let mut l = load(&path).unwrap();
+            l.prepare(&s.display, &s.tokens);
+            if let Some(p) = &mut l.prepared {
+                p.surface.cells = 7;
+            }
+            l.mesh.metadata.insert("preloaded".into(), "yes".into());
+            l
+        };
+        let preloaded = |m: &OpenMesh| m.mesh.metadata.contains_key("preloaded");
+
+        s.preloaded = Some(marked(&s));
+        let m = s.open(&path).unwrap();
+        assert!(preloaded(m));
+        assert_eq!(m.surface.cells, 7);
+        assert_eq!(m.digest, direct.digest);
+        assert_eq!(m.validity, Validity::Valid);
+        assert!(s.preloaded.is_none());
+
+        let l = marked(&s);
+        s.display.color_by = ColorBy::Quality;
+        s.preloaded = Some(l);
+        let m = s.open(&path).unwrap();
+        assert!(preloaded(m));
+        assert_eq!(m.surface.cells, direct.surface.cells);
+        assert!(s.display.quality.is_some());
+        s.display.color_by = ColorBy::Solid;
+
+        let l = marked(&s);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000))
+            .unwrap();
+        assert!(!l.is_fresh());
+        s.preloaded = Some(l);
+        let m = s.open(&path).unwrap();
+        assert!(!preloaded(m));
+        assert_eq!(m.surface.cells, direct.surface.cells);
+
+        let l = marked(&s);
+        assert!(l.is_fresh());
+        std::fs::remove_file(dir.join("mesh-evidence.json")).unwrap();
+        assert!(!l.is_fresh());
+
+        s.preloaded = Some(marked(&s));
+        let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
+        assert!(!preloaded(m));
+        assert!(s.preloaded.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

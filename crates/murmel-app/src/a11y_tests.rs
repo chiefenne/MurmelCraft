@@ -683,3 +683,115 @@ fn slices_and_iso_surfaces_in_the_window() {
     assert!(!h.state().session.display.outline_mesh());
     assert_eq!(problems(&h), Vec::<String>::new(), "mesh faces");
 }
+
+/// Wait until the mesh read on its own thread has opened (or failed).
+fn opened(h: &mut Harness<'_, MurmelApp>) {
+    let start = std::time::Instant::now();
+    while h.state().opening.is_some() {
+        assert!(start.elapsed().as_secs() < 60, "the opening never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    h.run_steps(1);
+}
+
+/// Hold the next background read until the returned sender sends.
+fn hold(h: &mut Harness<'_, MurmelApp>) -> std::sync::mpsc::Sender<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    h.state_mut().opening_gate = Some(rx);
+    tx
+}
+
+/// Invariant: a large mesh (here any, the threshold set to 0) is read on
+/// its own thread while the window keeps drawing: the status bar names
+/// the opening and offers Cancel with an accessible name, the mesh then
+/// opens through `mesh.open` (a session file through `session.load`),
+/// Cancel and Esc drop what was read and leave the open mesh as it was,
+/// and a mesh that cannot be read reports its code in the status bar.
+/// Breaks when the window opens on its own thread without taking the
+/// result, when Cancel opens the mesh anyway, or when an error of the
+/// reader is lost; the other window tests open small meshes at once.
+#[test]
+fn large_meshes_open_in_the_background() {
+    let cancel = "Cancel. Stop opening this mesh (Esc)";
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .build_eframe(|cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = None;
+            app.bridge_path = None;
+            app.background_bytes = 0;
+            app
+        });
+    h.run_steps(2);
+
+    let go = hold(&mut h);
+    h.state_mut().open_path(channel());
+    h.run_steps(2);
+    assert!(h.state().opening.is_some());
+    assert!(h.state().session.mesh.is_none());
+    assert!(named(&h, cancel), "the status bar offers Cancel");
+    let text = h.state().opening_text().unwrap_or_default();
+    assert!(text.starts_with("Opening foehncraft.vtu: "), "{text}");
+    let issues = problems(&h);
+    assert!(issues.is_empty(), "{issues:#?}");
+    go.send(()).unwrap();
+    opened(&mut h);
+    let digest = match &h.state().session.mesh {
+        Some(m) => m.digest.clone(),
+        None => panic!("the channel did not open: {:?}", h.state().error),
+    };
+    assert!(h.state().session.preloaded.is_none());
+    assert!(h.state().error.is_none());
+    assert!(!named(&h, cancel));
+
+    let other = channel().with_file_name("../box/foehncraft.vtu");
+    let go = hold(&mut h);
+    h.state_mut().open_path(other.clone());
+    h.run_steps(1);
+    h.get_by_label(cancel).click();
+    h.run_steps(1);
+    go.send(()).unwrap();
+    opened(&mut h);
+    let open = h.state().session.mesh.as_ref().map(|m| m.digest.clone());
+    assert_eq!(open.as_ref(), Some(&digest), "Cancel kept the channel");
+    assert!(h.state().error.is_none());
+
+    let go = hold(&mut h);
+    h.state_mut().open_path(other);
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(1);
+    go.send(()).unwrap();
+    opened(&mut h);
+    let open = h.state().session.mesh.as_ref().map(|m| m.digest.clone());
+    assert_eq!(open.as_ref(), Some(&digest), "Esc kept the channel");
+
+    // A session file's mesh is read first, then the session loads.
+    let dir = std::env::temp_dir().join(format!("murmel-bg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("channel.murmel");
+    assert!(
+        h.state_mut()
+            .call("session.save", serde_json::json!({ "path": file }))
+            .is_some()
+    );
+    h.state_mut().call("mesh.close", serde_json::json!({}));
+    let go = hold(&mut h);
+    h.state_mut().open_path(file.clone());
+    h.run_steps(1);
+    assert!(
+        h.state().opening.is_some(),
+        "the session's mesh is read first"
+    );
+    go.send(()).unwrap();
+    opened(&mut h);
+    assert!(h.state().session.mesh.is_some());
+    assert_eq!(h.state().session_path.as_ref(), Some(&file));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    h.state_mut()
+        .open_path(channel().with_file_name("missing.vtu"));
+    opened(&mut h);
+    assert_eq!(h.state().error.as_ref().map(|e| e.code), Some("MESH001"));
+}
