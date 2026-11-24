@@ -1374,6 +1374,100 @@ fn derived_fields_from_the_window() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Invariant: under the Wall group the Derived fields window lists
+/// FoehnCraft's own fields; one the result has says so and shows it, one
+/// it lacks runs foehn post derive in the background (the window keeps
+/// drawing) and reads the file it wrote in, saying which fields the case
+/// gave none of; Cancel stops a run and leaves no file. Every control is
+/// named. Breaks when the run blocks the window, or its file is not read
+/// in as the next step of the result.
+#[cfg(unix)]
+#[test]
+fn foehncraft_fields_from_the_window() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("murmel-window-foehn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let result = dir.join("fields.vtkhdf");
+    std::fs::copy(&fixture, &result).unwrap();
+    std::fs::write(dir.join("restart.h5"), b"").unwrap();
+    std::fs::write(dir.join("case.resolved.toml"), b"").unwrap();
+    // stand-ins for foehn: one that writes the result again, one that
+    // takes its time
+    let fake = |name: &str, body: String| {
+        let p = dir.join(name);
+        std::fs::write(
+            &p,
+            format!(
+                "#!/bin/sh\nFILE=\"\"\nwhile [ $# -gt 0 ]; do if [ \"$1\" = --file ]; then FILE=\"$2\"; fi; shift; done\n{body}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    };
+    let quick = fake("foehn", format!("cp \"{}\" \"$FILE\"", fixture.display()));
+    let slow = fake("slow-foehn", "touch \"$FILE\"; sleep 30".into());
+    let ready = |h: &mut Harness<'_, MurmelApp>, program: &std::path::Path| {
+        let s = &h.state().session;
+        let mesh = s.mesh.as_ref().unwrap().path.clone();
+        let plan = murmel_tools::foehn::plan_of(s).unwrap();
+        h.state_mut().derived.foehn = Some(crate::foehn_rows::FoehnReady {
+            mesh,
+            ready: Ok((program.to_path_buf(), plan)),
+        });
+    };
+    let mut h = harness();
+    h.state_mut().open_path(result);
+    h.run_steps(3);
+    h.state_mut().open_derived();
+    h.run_steps(2);
+    h.get_by_label("Wall").click();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "FoehnCraft's rows");
+    assert!(named(&h, "Show y⁺ on the walls"), "in the file");
+    // Cancel: no file is left
+    ready(&mut h, &slow);
+    h.run_steps(2);
+    h.get_by_label("Compute Wall treatment (u_τ, y*, blending) with FoehnCraft")
+        .click();
+    h.run_steps(3);
+    assert!(h.state().foehn_job.is_some(), "running");
+    assert!(named(&h, "Cancel foehn post derive"));
+    h.get_by_label("Cancel foehn post derive").click();
+    h.run_steps(3);
+    assert!(h.state().foehn_job.is_none(), "stopped");
+    assert!(!dir.join("derived.writing.vtkhdf").exists());
+    assert!(!dir.join("derived.vtkhdf").exists());
+    // A run read in
+    ready(&mut h, &quick);
+    h.run_steps(2);
+    h.get_by_label("Compute Wall treatment (u_τ, y*, blending) with FoehnCraft")
+        .click();
+    for _ in 0..100 {
+        h.run_steps(1);
+        if h.state().foehn_job.is_none() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    h.run_steps(2);
+    assert!(h.state().foehn_job.is_none(), "done");
+    assert_eq!(
+        h.state().session.mesh.as_ref().unwrap().path,
+        dir.join("derived.vtkhdf")
+    );
+    let note = h.state().derived.foehn_note.clone().unwrap_or_default();
+    assert!(
+        note.contains("FoehnCraft wrote no friction_velocity"),
+        "{note}"
+    );
+    assert_eq!(problems(&h), Vec::<String>::new(), "after the run");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Invariant: with a time series open the player bar shows below the
 /// viewport with named controls, F6 reaches it between the viewport and
 /// the properties, Next shows the next step, Play turns into Pause and

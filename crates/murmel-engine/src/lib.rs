@@ -19,6 +19,7 @@ pub mod derive;
 pub mod display;
 pub mod extract;
 pub mod field;
+pub mod foehn;
 pub mod glyph;
 mod gradient;
 pub mod history;

@@ -230,7 +230,8 @@ fn drives_one_session_and_returns_screenshots() {
 }
 
 /// Invariant: paths outside the roots are refused before the tool runs
-/// (MCP001, nothing written or opened), a failing tool is an MCP tool
+/// (MCP001, nothing written or opened; field.foehn_derive needs an
+/// output or a file to check), a failing tool is an MCP tool
 /// error with the registry's diagnostic, settings are not saved, and bad
 /// frames get JSON-RPC errors without ending the session. Breaks when the
 /// server passes paths through unchecked or writes the person's settings.
@@ -261,6 +262,14 @@ fn refuses_paths_outside_the_roots() {
     assert_eq!(envelope(&r)["diagnostics"][0]["code"], "MCP001", "{r}");
     assert!(!outside.join("shot.png").exists());
     let r = c.call("view.screenshot", json!({"path": "../x.png"}));
+    assert_eq!(envelope(&r)["diagnostics"][0]["code"], "MCP001", "{r}");
+    // foehn would write beside the result, unchecked: output or file
+    let r = c.call("field.foehn_derive", json!({"fields": ["y-plus"]}));
+    assert_eq!(envelope(&r)["diagnostics"][0]["code"], "MCP001", "{r}");
+    let r = c.call(
+        "field.foehn_derive",
+        json!({"fields": ["y-plus"], "output": outside.join("derived.vtkhdf")}),
+    );
     assert_eq!(envelope(&r)["diagnostics"][0]["code"], "MCP001", "{r}");
 
     let r = c.call("settings.set_theme", json!({"theme": "light"}));

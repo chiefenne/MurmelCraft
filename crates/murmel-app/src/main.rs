@@ -21,6 +21,7 @@ mod export_dialog;
 mod extracts;
 mod field;
 mod focus;
+mod foehn_rows;
 mod i18n;
 mod measure;
 mod movie_dialog;

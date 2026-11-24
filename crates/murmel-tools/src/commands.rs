@@ -1693,6 +1693,10 @@ fn new_stream(s: &Session, kind: &str) -> Option<Value> {
 /// Tools no command calls, and why: they answer questions whose answers
 /// the window already shows, or need an input only a panel can give.
 pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
+    (
+        "field.foehn_derive",
+        "the Derived fields window runs foehn in the background, with Cancel",
+    ),
     ("charts.data", "the chart panel draws it"),
     ("stats.at", "the statistics beside the chart show it"),
     (
