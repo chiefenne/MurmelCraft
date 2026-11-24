@@ -4,6 +4,9 @@
 use std::path::PathBuf;
 
 use murmel_engine::display::{SavedView, VIEW_NAME_MAX, all_items, view_name};
+use murmel_engine::field::{
+    self, Component, FieldChoice, FieldMode, FieldSet, FieldStyle, RangeMode,
+};
 use murmel_engine::measure::{self, SNAP_RADIUS_PX};
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
 use murmel_engine::session_file::{SessionFile, absolute};
@@ -97,7 +100,14 @@ fn mesh_summary(s: &Session) -> Value {
     }
     json!({
         "path": m.path,
-        "format": if m.mesh.metadata.contains_key("openfoam_format") { "openfoam" } else { "vtu" },
+        "format": if m.mesh.metadata.contains_key("openfoam_format") {
+            "openfoam"
+        } else if m.mesh.metadata.contains_key("vtkhdf") {
+            "vtkhdf"
+        } else {
+            "vtu"
+        },
+        "fields": m.fields.names(),
         "files": m.files.iter().map(|(n, d)| json!({"name": n, "sha256": d})).collect::<Vec<_>>(),
         "summary": m.mesh.summary(),
         "metadata": m.mesh.metadata,
@@ -536,6 +546,7 @@ fn display_json(s: &Session) -> Value {
         "visible_faces": faces,
         "colors": colors,
         "quality": quality_json(s),
+        "field": field_shown_json(s),
     })
 }
 
@@ -557,6 +568,13 @@ struct ColorByInput {
     /// The metric of colour mode quality; left out keeps the current one.
     #[serde(default)]
     metric: Option<Metric>,
+    /// The field of colour mode field; left out keeps the current one
+    /// (the first field of the file when none was chosen).
+    #[serde(default)]
+    field: Option<String>,
+    /// The scalar of a vector field; left out keeps the current one.
+    #[serde(default)]
+    component: Option<Component>,
 }
 
 #[derive(Deserialize)]
@@ -574,6 +592,15 @@ fn display_render_mode(input: Value, s: &mut Session) -> Run {
 
 fn display_color_by(input: Value, s: &mut Session) -> Run {
     let i: ColorByInput = parse(input)?;
+    if i.by == ColorBy::Field {
+        let choice = field_choice(s, i.field.as_deref(), i.component)?;
+        s.display.field = Some(choice);
+    } else if i.field.is_some() || i.component.is_some() {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "field and component go with by: field",
+        ));
+    }
     s.display.color_by = i.by;
     if let Some(m) = i.metric {
         if m != s.display.metric {
@@ -1777,6 +1804,260 @@ fn measure_list(_: Value, s: &mut Session) -> Run {
     Ok(measures_json(s))
 }
 
+// ---- fields -------------------------------------------------------------
+
+/// The fields of the open mesh; FIELD001 when it has none.
+fn need_fields(s: &Session) -> Result<&FieldSet, Diagnostic> {
+    need_mesh(s)?;
+    match s.fields() {
+        Some(f) if !f.is_empty() => Ok(f),
+        _ => Err(Diagnostic::new(
+            "FIELD001",
+            "the open mesh has no fields: it was read without results",
+        )),
+    }
+}
+
+/// The field `name` (or the one chosen now, or the first of the file)
+/// with `component` (or the one chosen now for the same field).
+fn field_choice(
+    s: &Session,
+    name: Option<&str>,
+    component: Option<Component>,
+) -> Result<FieldChoice, Diagnostic> {
+    let set = need_fields(s)?;
+    let current = s.display.field.as_ref();
+    let name = match name {
+        Some(n) => n.to_string(),
+        None => current
+            .map(|c| c.name.clone())
+            .filter(|n| set.get(n).is_some())
+            .or_else(|| set.names().first().map(|n| n.to_string()))
+            .unwrap_or_default(),
+    };
+    let Some(f) = set.get(&name) else {
+        return Err(Diagnostic::new(
+            "FIELD002",
+            format!("no field {name}; the open mesh has {}", set.names().join(", ")),
+        ));
+    };
+    let component = match component {
+        Some(c) if !f.is_vector() && c != Component::Magnitude => {
+            return Err(Diagnostic::new(
+                "FIELD003",
+                format!("{name} is a scalar; it has no component {}", c.name()),
+            ));
+        }
+        Some(c) => c,
+        None => current
+            .filter(|c| c.name == name && f.is_vector())
+            .map_or(Component::Magnitude, |c| c.component),
+    };
+    Ok(FieldChoice { name, component })
+}
+
+/// The field colouring shown now: the field, its colour range and map,
+/// and its style (null when the view is not coloured by a field).
+fn field_shown_json(s: &Session) -> Value {
+    let Some(v) = s.field_values() else {
+        return Value::Null;
+    };
+    json!({
+        "field": v.choice.name,
+        "component": v.choice.component,
+        "title": v.choice.title(v.vector),
+        "unit": v.unit,
+        "location": v.location,
+        "range": s.field_range().map(|(a, b)| [a, b]),
+        "field_range": v.range.map(|(a, b)| [a, b]),
+        "map": s.field_map().map(|(m, _)| m.id.clone()),
+        "style": s.field_style(),
+    })
+}
+
+fn field_list(_: Value, s: &mut Session) -> Run {
+    need_mesh(s)?;
+    let Some(set) = s.fields() else {
+        return Ok(json!({"fields": []}));
+    };
+    let fields: Vec<Value> = set
+        .fields()
+        .iter()
+        .map(|f| {
+            let comps: Vec<Component> = if f.is_vector() {
+                Component::ALL.to_vec()
+            } else {
+                vec![Component::Magnitude]
+            };
+            let ranges: serde_json::Map<String, Value> = comps
+                .iter()
+                .map(|&c| {
+                    (
+                        c.name().to_string(),
+                        json!(f.range(c).map(|(a, b)| [a, b])),
+                    )
+                })
+                .collect();
+            json!({
+                "name": f.name,
+                "location": f.location,
+                "components": f.components,
+                "unit": f.unit,
+                "count": f.len(),
+                "range": f.range(Component::Magnitude).map(|(a, b)| [a, b]),
+                "ranges": if f.is_vector() { Value::Object(ranges) } else { Value::Null },
+                "style": s.display.field_styles.get(&f.name),
+            })
+        })
+        .collect();
+    let r = &set.results;
+    Ok(json!({
+        "fields": fields,
+        "time": r.time,
+        "step": r.step,
+        "iteration": r.iteration,
+        "attributes": r.attrs,
+        "colormaps": murmel_engine::colormap::all().iter().map(|m| json!({"id": m.id, "kind": m.kind})).collect::<Vec<_>>(),
+        "shown": field_shown_json(s),
+    }))
+}
+
+/// What the colour range of `field.style` spans.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RangeKey {
+    Field,
+    Shown,
+    Symmetric,
+    Fixed,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FieldStyleInput {
+    /// The field to style; left out, the field chosen now.
+    #[serde(default)]
+    field: Option<String>,
+    /// Start again from the default style.
+    #[serde(default)]
+    reset: bool,
+    #[serde(default)]
+    mode: Option<FieldMode>,
+    #[serde(default)]
+    bands: Option<u32>,
+    #[serde(default)]
+    lines: Option<bool>,
+    #[serde(default)]
+    line_count: Option<u32>,
+    /// A colour map id, or `auto`.
+    #[serde(default)]
+    map: Option<String>,
+    #[serde(default)]
+    reverse: Option<bool>,
+    #[serde(default)]
+    range: Option<RangeKey>,
+    #[serde(default)]
+    min: Option<f64>,
+    #[serde(default)]
+    max: Option<f64>,
+}
+
+fn field_style(input: Value, s: &mut Session) -> Run {
+    let i: FieldStyleInput = parse(input)?;
+    let set = need_fields(s)?;
+    let name = match i.field.clone().or_else(|| s.display.field.as_ref().map(|c| c.name.clone())) {
+        Some(n) => n,
+        None => {
+            return Err(Diagnostic::new(
+                "FIELD002",
+                "no field is chosen; pass field, or colour by one first",
+            ));
+        }
+    };
+    if set.get(&name).is_none() {
+        return Err(Diagnostic::new(
+            "FIELD002",
+            format!("no field {name}; the open mesh has {}", set.names().join(", ")),
+        ));
+    }
+    let bad = |m: String| Err(Diagnostic::new("FIELD004", m));
+    let mut st = if i.reset {
+        FieldStyle::default()
+    } else {
+        s.display.field_styles.get(&name).cloned().unwrap_or_default()
+    };
+    if let Some(m) = i.mode {
+        st.mode = m;
+    }
+    if let Some(b) = i.bands {
+        if !(field::MIN_BANDS..=field::MAX_BANDS).contains(&b) {
+            return bad(format!("bands {b} is not between {} and {}", field::MIN_BANDS, field::MAX_BANDS));
+        }
+        st.bands = b;
+    }
+    if let Some(l) = i.lines {
+        st.lines = l;
+    }
+    if let Some(n) = i.line_count {
+        if !(1..=field::MAX_LINES).contains(&n) {
+            return bad(format!("line_count {n} is not between 1 and {}", field::MAX_LINES));
+        }
+        st.line_count = n;
+    }
+    if let Some(m) = &i.map {
+        if m == "auto" {
+            st.map = None;
+        } else if murmel_engine::colormap::get(m).is_some() {
+            st.map = Some(m.clone());
+        } else {
+            return bad(format!(
+                "no colour map {m}; there are auto, {}",
+                murmel_engine::colormap::ids().join(", ")
+            ));
+        }
+    }
+    if let Some(r) = i.reverse {
+        st.reverse = r;
+    }
+    let range = match (i.range, i.min.is_some() || i.max.is_some()) {
+        (Some(r), _) => Some(r),
+        (None, true) => Some(RangeKey::Fixed),
+        (None, false) => None,
+    };
+    match range {
+        Some(RangeKey::Field) => st.range = RangeMode::Field,
+        Some(RangeKey::Shown) => st.range = RangeMode::Shown,
+        Some(RangeKey::Symmetric) => st.range = RangeMode::Symmetric,
+        Some(RangeKey::Fixed) => {
+            // A bound left out keeps the range shown now (or the field's).
+            let now = if s.display.field.as_ref().is_some_and(|c| c.name == name) {
+                s.field_range()
+            } else {
+                None
+            }
+            .or_else(|| set.get(&name).and_then(|f| f.range(Component::Magnitude)));
+            let (min, max) = match (i.min.or(now.map(|r| r.0)), i.max.or(now.map(|r| r.1))) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return bad("give min and max of the fixed range".into()),
+            };
+            if !(min.is_finite() && max.is_finite() && min < max) {
+                return bad(format!("the fixed range {min} to {max} needs finite min < max"));
+            }
+            st.range = RangeMode::Fixed { min, max };
+        }
+        None => {}
+    }
+    s.display.field_styles.insert(name.clone(), st);
+    // The style is drawn by the GPU from uniforms; the surface stays.
+    // Only range mode shown needs the drawn range, which every build
+    // keeps.
+    let mut out = field_shown_json(s);
+    if out.is_null() {
+        out = json!({"field": name, "style": s.display.field_styles.get(&name), "shown": false});
+    }
+    Ok(out)
+}
+
 // ---- journal ------------------------------------------------------------
 
 /// The tools whose calls are steps of the journal: they change the camera
@@ -1798,6 +2079,7 @@ pub const JOURNALED: &[&str] = &[
     "display.render_mode",
     "display.color_by",
     "display.threshold",
+    "field.style",
     "display.set_color",
     "display.visibility",
     "clip.set",
@@ -1839,6 +2121,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
         "select.filter",
         "a mode of picking, not a change of the view",
     ),
+    ("field.list", READS_ONLY),
     ("inspect.at", READS_ONLY),
     ("inspect.quality", READS_ONLY),
     ("inspect.item", READS_ONLY),
@@ -1956,15 +2239,15 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "mesh.open",
-        version: 2,
+        version: 3,
         action: Action::Read,
         label_key: "tool-mesh-open",
-        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip).",
+        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip).",
         outputs: &[],
         reads: &["path"],
         input_schema: || {
             object(
-                json!({"path": {"type": "string", "description": "A .vtu file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)"}}),
+                json!({"path": {"type": "string", "description": "A .vtu or .vtkhdf file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)"}}),
                 &["path"],
             )
         },
@@ -2227,22 +2510,63 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "display.color_by",
-        version: 2,
+        version: 3,
         action: Action::Read,
         label_key: "tool-display-color-by",
-        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold.",
+        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style).",
         outputs: &[],
         reads: &[],
         input_schema: || {
             object(
                 json!({
-                    "by": {"enum": ["solid", "patch", "role", "cell_type", "zone", "quality"]},
-                    "metric": {"enum": ["non_orthogonality", "skewness", "volume_ratio", "face_count"]}
+                    "by": {"enum": ["solid", "patch", "role", "cell_type", "zone", "quality", "field"]},
+                    "metric": {"enum": ["non_orthogonality", "skewness", "volume_ratio", "face_count"]},
+                    "field": {"type": "string", "description": "A field name (field.list); with by: field"},
+                    "component": {"enum": ["magnitude", "x", "y", "z"], "description": "The scalar of a vector field; with by: field"}
                 }),
                 &["by"],
             )
         },
         run: display_color_by,
+    },
+    Tool {
+        id: "field.list",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-field-list",
+        summary: "The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style).",
+        outputs: &[],
+        reads: &[],
+        input_schema: no_input,
+        run: field_list,
+    },
+    Tool {
+        id: "field.style",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-field-style",
+        summary: "Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values by inverse distance weighting, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes viridis, or cool_warm for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "field": {"type": "string"},
+                    "reset": {"type": "boolean"},
+                    "mode": {"enum": ["flat", "smooth", "banded"]},
+                    "bands": {"type": "integer", "minimum": 2, "maximum": 64},
+                    "lines": {"type": "boolean"},
+                    "line_count": {"type": "integer", "minimum": 1, "maximum": 64},
+                    "map": {"type": "string", "description": "auto, or a colour map id (field.list)"},
+                    "reverse": {"type": "boolean"},
+                    "range": {"enum": ["field", "shown", "symmetric", "fixed"]},
+                    "min": {"type": "number"},
+                    "max": {"type": "number"}
+                }),
+                &[],
+            )
+        },
+        run: field_style,
     },
     Tool {
         id: "display.threshold",

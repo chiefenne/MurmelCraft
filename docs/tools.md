@@ -9,7 +9,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `system.info` | 1 | read | Version and platform of this build. |
 | `system.commands` | 1 | read | The catalogue of every tool with its input schema. |
 | `diag.codes` | 1 | read | The diagnostic codes with their severity, meaning and fix. |
-| `mesh.open` | 2 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). |
+| `mesh.open` | 3 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). |
 | `mesh.close` | 1 | read | Drop the open mesh from the session. |
 | `mesh.info` | 1 | read | Counts, zones, patches, metadata and evidence of the open mesh. |
 | `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport. |
@@ -27,7 +27,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `views.list` | 1 | read | The saved views of the open mesh, in the order they were saved, with their cameras. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
-| `display.color_by` | 2 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), or by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range). Changing the metric clears the threshold. |
+| `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
+| `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
+| `field.style` | 1 | read | Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values by inverse distance weighting, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes viridis, or cool_warm for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type. |
 | `display.visibility` | 1 | read | Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts. |
@@ -103,7 +105,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "additionalProperties": false,
   "properties": {
     "path": {
-      "description": "A .vtu file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)",
+      "description": "A .vtu or .vtkhdf file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)",
       "type": "string"
     }
   },
@@ -550,8 +552,22 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "role",
         "cell_type",
         "zone",
-        "quality"
+        "quality",
+        "field"
       ]
+    },
+    "component": {
+      "description": "The scalar of a vector field; with by: field",
+      "enum": [
+        "magnitude",
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "field": {
+      "description": "A field name (field.list); with by: field",
+      "type": "string"
     },
     "metric": {
       "enum": [
@@ -565,6 +581,76 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "required": [
     "by"
   ],
+  "type": "object"
+}
+```
+
+### `field.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `field.style`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "bands": {
+      "maximum": 64,
+      "minimum": 2,
+      "type": "integer"
+    },
+    "field": {
+      "type": "string"
+    },
+    "line_count": {
+      "maximum": 64,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "lines": {
+      "type": "boolean"
+    },
+    "map": {
+      "description": "auto, or a colour map id (field.list)",
+      "type": "string"
+    },
+    "max": {
+      "type": "number"
+    },
+    "min": {
+      "type": "number"
+    },
+    "mode": {
+      "enum": [
+        "flat",
+        "smooth",
+        "banded"
+      ]
+    },
+    "range": {
+      "enum": [
+        "field",
+        "shown",
+        "symmetric",
+        "fixed"
+      ]
+    },
+    "reset": {
+      "type": "boolean"
+    },
+    "reverse": {
+      "type": "boolean"
+    }
+  },
+  "required": [],
   "type": "object"
 }
 ```
@@ -1850,6 +1936,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `SESS002` | error | A session file could not be written. | Choose a writable folder. |
 | `SESS003` | warning | The session's mesh changed since the session was saved (its SHA-256 differs). | Check the view; save the session again to accept the new mesh. |
 | `SESS004` | warning | Items the session names are not in the mesh; they were skipped. | Save the session again to drop them. |
+| `FIELD001` | error | The open mesh has no fields: it was read without results. | Open a result: FoehnCraft's fields.vtkhdf, or a .vtu with cell or point data. |
+| `FIELD002` | error | The open mesh has no field of this name, or no field is chosen. | field.list names the fields; pass `field`. |
+| `FIELD003` | error | A component (x, y, z) was asked of a scalar field. | Leave `component` out, or give `magnitude`, for a scalar. |
+| `FIELD004` | error | A field style value is out of range: bands outside 2 to 64, contour lines outside 1 to 64, an unknown colour map, or a fixed range whose min is not below its max. | field.list names the colour maps; give finite min < max. |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
 | `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a .vtu file such as KoflCraft's foehncraft.vtu. |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |
@@ -1864,6 +1954,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `MESH011` | warning | mesh-evidence.json beside the mesh cannot be read; the mesh opens without it. | Write the evidence again with KoflCraft or remove it. |
 | `MESH013` | error | The folder holds no OpenFOAM mesh, or the polyMesh lacks one of points, faces, owner, neighbour and boundary. | Open a case folder, its constant folder or the polyMesh folder itself. |
 | `MESH014` | error | An OpenFOAM file is malformed: no FoamFile header, or a list or dictionary is broken. | Write the mesh again; the file may be truncated or edited by hand. |
+| `MESH016` | error | The HDF5 structure of the file is broken: a signature, address or size does not fit the file. | Write the file again; it may be truncated. |
+| `MESH017` | error | The file uses an HDF5 feature the reader does not support (a chunk index, filter or storage kind). | Write the file with contiguous or chunked datasets and the deflate or shuffle filters, as FoehnCraft and VTK do. |
+| `MESH018` | error | The file is not a VTKHDF file, or its VTKHDF layout is broken (a block, dataset or count is missing or wrong). | Open a .vtkhdf file written by FoehnCraft or VTK (VTKHDF 2.x, UnstructuredGrid or PartitionedDataSetCollection). |
 | `MESH015` | error | The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces). | Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch. |
 | `RENDER001` | error | No GPU adapter was found (no driver, or no software renderer such as Mesa lavapipe). | Install a Vulkan, Metal or DirectX 12 driver; on a headless Linux machine install mesa-vulkan-drivers. |
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |

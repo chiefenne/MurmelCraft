@@ -173,6 +173,8 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
             mesh.metadata.insert(k.into(), v.clone());
         }
     }
+    // Front ends name the format from this key.
+    mesh.metadata.insert("vtkhdf".into(), "2".into());
     Ok((mesh, results))
 }
 

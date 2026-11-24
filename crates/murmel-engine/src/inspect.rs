@@ -267,6 +267,7 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 .map_or(String::new(), |f| f.to_string_lossy().into_owned());
             let format = match m.metadata.get("openfoam_format") {
                 Some(f) => format!("OpenFOAM polyMesh ({f})"),
+                None if m.metadata.contains_key("vtkhdf") => "VTKHDF result (.vtkhdf)".into(),
                 None => "VTK unstructured grid (.vtu)".into(),
             };
             let mut v = vec![row("file", file), row("format", format)];
