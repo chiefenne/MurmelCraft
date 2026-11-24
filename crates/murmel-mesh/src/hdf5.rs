@@ -1292,6 +1292,19 @@ impl H5 {
         }
     }
 
+    /// The values of a string dataset, fixed-length or variable-length.
+    pub fn read_strings(&self, ds: &Dataset) -> Result<Vec<String>, MeshError> {
+        match ds.dtype {
+            Dtype::FixedString { .. } | Dtype::VarString => {}
+            _ => return Err(unsupported("a non-string dataset where text is expected")),
+        }
+        let raw = self.raw(ds)?;
+        match self.convert_value(&ds.dtype, ds.count(), &raw)? {
+            Value::Str(v) => Ok(v),
+            _ => Err(broken("string dataset")),
+        }
+    }
+
     // ----- fractal heap and version 2 B-tree --------------------------
 
     fn fractal_heap(&self, addr: u64) -> Result<Heap, MeshError> {

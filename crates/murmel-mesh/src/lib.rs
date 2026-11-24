@@ -11,10 +11,13 @@
 //! declares are checked against the file size before anything is
 //! allocated from them (KoflCraft SW-17).
 
+pub mod blocks;
 mod boundary;
 pub mod evidence;
 pub mod field;
+pub mod h5write;
 pub mod hdf5;
+pub mod hilbert;
 mod numbers;
 pub mod par;
 pub mod polymesh;
@@ -154,6 +157,21 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "MESH019",
         "Opening the mesh was cancelled.",
         "Open it again when you want it.",
+    ),
+    (
+        "BLOCK001",
+        "The blocked VTKHDF file cannot be written: the folder is missing or read-only, the disk is full, or the output is the mesh being converted.",
+        "Write to another path with room for about the size of the mesh file; the output must not be the input.",
+    ),
+    (
+        "BLOCK002",
+        "The block size is outside 16,384 to 1,048,576 cells.",
+        "Leave it out for the default of 65,536 cells per block.",
+    ),
+    (
+        "BLOCK003",
+        "The mesh has no volume cells to put in blocks.",
+        "Convert a volume mesh: a .vtu, an OpenFOAM polyMesh or a VTKHDF file.",
     ),
     (
         "MESH015",
