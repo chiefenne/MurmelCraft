@@ -136,6 +136,12 @@ mod tests {
         for k in ["density", "pressure", "velocity"] {
             assert!(t.has(&format!("derived-ref-{k}")));
         }
+        for f in murmel_engine::calc::FUNCTIONS {
+            assert!(t.has(&format!("calc-fn-{}", f.name)), "calc-fn-{}", f.name);
+        }
+        for n in ["x", "y", "z", "pos", "pi"] {
+            assert!(t.has(&format!("calc-name-{n}")));
+        }
         // Every property row of every item of the channel mesh, of a
         // region of every shape, and of its field results with a slice
         // series and an iso-surface, has a label.

@@ -71,6 +71,14 @@ every change.
   file's fields for colouring, slices, iso-surfaces, arrows and
   streamlines, and sessions save how each was made. The reference values
   come from FoehnCraft's case beside the result, else your defaults.
+- Field calculator (`field.calculate`, the Derived fields window's Your
+  formulas tab, palette "Field calculator…"): your own formulas of the
+  result's fields, such as `mag(velocity)`, `p - 101325`,
+  `dot(U, curl(U))` or `if(x > 0, p, 0)`: arithmetic, components (`U.x`),
+  vectors, the coordinates, 27 functions, and `grad`, `curl` and `div`
+  by the same least-squares gradients. Keep a formula to have it for
+  every result (settings.toml); a field made from another is computed
+  again when that one changes.
 - Shaded with edges, shaded, wireframe or feature edges (keys 1 to 4);
   one solid colour (green by default) or colours by patch, patch role,
   cell type, cell zone or cell quality (non-orthogonality, skewness,

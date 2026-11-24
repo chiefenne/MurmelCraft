@@ -11,7 +11,8 @@
 //! iso-surfaces and the mesh's look beside them (since 1.5), the
 //! vector arrows (since 1.6), the regions of interest (since 1.7; their
 //! flat cut since 1.8), the streamlines (since 1.9), the derived fields
-//! as recipes, computed again on loading (since 1.11), the user's mesh
+//! as recipes, computed again on loading (since 1.11), the fields of
+//! your formulas beside them (since 1.12), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -29,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
-use crate::derive::Recipe;
+use crate::derive::Made;
 use crate::display::{ColorBy, Item, PickTarget, RenderMode, SavedView};
 use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, RangeMode};
@@ -42,7 +43,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.11";
+pub const SESSION_VERSION: &str = "1.12";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -133,10 +134,11 @@ pub struct SessionFile {
     /// The saved views of the mesh, in the order they were saved (1.1).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<SavedView>,
-    /// The derived fields, as recipes, in the order they were made
-    /// (1.11); loading computes them again before the display returns.
+    /// The derived fields, as recipes (1.11), and the fields of your
+    /// formulas (1.12), each after the fields it reads; loading computes
+    /// them again before the display returns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub derived: Vec<Recipe>,
+    pub derived: Vec<Made>,
 }
 
 /// `path` made absolute from the working folder, without touching the
@@ -275,7 +277,7 @@ impl SessionFile {
             } else {
                 Vec::new()
             },
-            derived: s.fields().map(|f| f.recipes().to_vec()).unwrap_or_default(),
+            derived: s.fields().map(|f| f.made().to_vec()).unwrap_or_default(),
         }
     }
 
@@ -302,11 +304,12 @@ impl SessionFile {
         check_camera(&mut f.camera).map_err(|()| {
             Refused("the camera needs finite numbers and a positive distance".into())
         })?;
-        for r in &f.derived {
-            if let Some(rf) = &r.reference {
-                rf.check()
-                    .map_err(|e| Refused(format!("derived field {}: {e}", r.field())))?;
-            }
+        for m in &f.derived {
+            let checked = match m {
+                Made::Quantity(r) => r.reference.as_ref().map_or(Ok(()), |rf| rf.check()),
+                Made::Formula(x) => crate::calc::check(x).map_err(|e| e.message()),
+            };
+            checked.map_err(|e| Refused(format!("derived field {}: {e}", m.field())))?;
         }
         let mut names = Vec::new();
         for v in &mut f.views {
@@ -521,9 +524,9 @@ impl Session {
         self.view_cube = f.view_cube;
         self.camera = f.camera;
         // The derived fields first, so the display finds them.
-        for r in f.derived {
-            let name = r.field();
-            if let Err(e) = self.derive(r) {
+        for m in f.derived {
+            let name = m.field().to_string();
+            if let Err(e) = self.make(m) {
                 missing.push(format!("derived field {name}: {}", e.message()));
             }
         }
@@ -740,7 +743,16 @@ mod tests {
                 name: "Inlet".into(),
                 camera: Camera::default(),
             }],
-            derived: vec![Recipe::new(crate::derive::Quantity::Vorticity)],
+            derived: vec![
+                Made::Quantity(crate::derive::Recipe::new(
+                    crate::derive::Quantity::Vorticity,
+                )),
+                Made::Formula(crate::calc::Formula {
+                    name: "speed".into(),
+                    formula: "mag(U)".into(),
+                    unit: Some("m/s".into()),
+                }),
+            ],
         };
         assert!(SessionFile::parse(&ok.to_json()).is_ok());
         let with = |f: &dyn Fn(&mut serde_json::Value)| {
@@ -799,6 +811,24 @@ mod tests {
             .is_err()
         );
         assert!(with(&|v| v["derived"] = serde_json::json!([{"quantity": "helicity"}])).is_err());
+        // A formula that cannot be read, or names a quantity's field
+        // (1.12); a formula of fields the mesh lacks loads (they are
+        // reported missing then).
+        for bad in [
+            serde_json::json!({"name": "s", "formula": "mag(U"}),
+            serde_json::json!({"name": "vorticity", "formula": "1"}),
+            serde_json::json!({"name": "s", "formula": "1", "colour": "red"}),
+        ] {
+            assert!(
+                with(&|v| v["derived"] = serde_json::json!([bad.clone()])).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(
+            with(&|v| v["derived"] =
+                serde_json::json!([{"name": "s", "formula": "nothing_here * 2"}]))
+            .is_ok()
+        );
         assert!(
             with(&|v| v["display"]["clip"] = serde_json::json!({
                 "origin": [0, 0, 0], "normal": [0, 0, 0], "mode": "flat", "enabled": true

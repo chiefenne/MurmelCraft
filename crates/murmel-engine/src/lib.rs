@@ -5,6 +5,7 @@
 //! change this state only through the tools of `murmel-tools`.
 
 pub mod animation;
+pub mod calc;
 pub mod camera;
 pub mod clip;
 pub mod colormap;

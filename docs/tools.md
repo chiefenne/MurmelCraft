@@ -32,7 +32,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
 | `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
 | `field.derive` | 1 | read | Compute a derived field from the open result's fields and add it to them, as if the file had it (colour by it, slice it, iso-surfaces, arrows and streamlines of it; saved in sessions as its recipe and computed again on loading). quantity: vorticity (the vector field vorticity, ω = ∇ × u, 1/s), q-criterion (q_criterion, Q = ½ (‖Ω‖² − ‖S‖²), vortices where Q > 0, 1/s²), lambda2 (lambda2, the middle eigenvalue of S² + Ω², vortices where λ₂ < 0, 1/s²), total-pressure (total_pressure, p + ½ ρ u·u, Pa) or pressure-coefficient (pressure_coefficient, (p − p_ref) / (½ ρ_ref U_ref²)). S and Ω are the symmetric and antisymmetric parts of the velocity gradient, taken in each cell by least squares from the cells around it (the vortex quantities are cell fields); the pressure quantities are taken wherever the pressure is (cells, nodes, boundary faces). velocity and pressure name the input fields; left out, they are found by name (velocity, U, u; pressure, p, static_pressure). A pressure in m²/s² is kinematic and takes no density; a density field (density, rho) wins over the reference density. reference: density (kg/m³), pressure (p_ref) and velocity (U_ref); values left out are the field's own when it is made again, else FoehnCraft's (case.resolved.toml beside the result), else your defaults (settings.set_default kind reference), else air at sea level (1.225), 0 and the largest speed of the velocity; the result's reference_from says where each came from. Computing a field again replaces it. remove: true removes the derived field (refused while an iso-surface, the arrows or a streamline set is made from it). A field the file already has is not computed again. field.catalogue lists what can be derived. |
-| `field.catalogue` | 1 | read | What can be derived from the open result (field.derive): for each quantity its group (vortices, pressure), field name, formula, unit, inputs (the field each reads now and the fields that could be it), the reference values it uses, the inputs missing, whether the file has the field already and the recipe of the field when it is derived; and the reference values a new field starts from, with where each came from (case, defaults or built_in). |
+| `field.catalogue` | 1 | read | What can be derived from the open result (field.derive): for each quantity its group (vortices, pressure), field name, formula, unit, inputs (the field each reads now and the fields that could be it), the reference values it uses, the inputs missing, whether the file has the field already and the recipe of the field when it is derived; the reference values a new field starts from, with where each came from (case, defaults or built_in); your formulas (formulas, each with whether its field is computed now), the fields computed from formulas (calculated, with the fields each reads and whether it is kept among your formulas) and the calculator's functions (field.calculate). |
+| `field.calculate` | 1 | read | Compute the field of a formula of your own from the open result's fields and add it to them, as field.derive does (saved in sessions as its formula and computed again on loading). name: the field it makes (a letter or _ first, then letters, digits and _; not a field of the file or of a derived quantity). formula: numbers, pi, the coordinates x, y, z and the position vector pos (of each cell centroid, node or face centre), field names bare or quoted ("p rgh"; a field wins over a built-in name), + - * / ^, the comparisons < <= > >= (1 or 0), components U.x U.y U.z, vectors [a, b, c], and the functions sqrt abs exp log log10 sin cos tan asin acos atan atan2 sinh cosh tanh sign floor ceil min max if(c, a, b) mag dot cross grad curl div (field.catalogue lists them with their arguments). The result is a scalar or a vector; it sits wherever every field it reads is (cells, nodes, boundary faces), in the cells when it takes a derivative (grad, curl and div are least-squares gradients, exact for linear fields) or when no one place has every field (node fields then as each cell's mean). Values that are not finite are no value (no_value counts them). formula left out: your formula of that name (settings.keep_formula). Computing a field again replaces it and computes every field made from it again (made_again); a formula reading its own field, or one made from it, is refused. remove: true removes it (refused while an item or another field is made from it). Errors say the column. |
 | `field.style` | 1 | read | Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values rebuilt from the cells' least-squares gradients, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes rainbow_desaturated, or cool_warm for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style. |
 | `display.threshold` | 1 | read | Hide the cells whose quality metric is below value, so only the bad cells and the faces around them show; null shows them again. Switches the colouring to quality (and to metric, if given). |
 | `display.set_color` | 1 | read | Set the colour (#RRGGBB) of an item of the open mesh (mesh, zone:<name>, kind:<cell type>, patch:<name>, iso:<n>, arrows, stream:<n>), or null to go back to the colour mode's own; the mesh and zone colours show in solid, a zone colour also in zone, a patch colour in solid and patch, a cell-type colour in cell_type, an iso-surface's, the arrows' and a streamline set's colours when they are solid. |
@@ -65,13 +66,15 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `journal.redo` | 1 | read | Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none. |
 | `journal.group` | 1 | read | Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps). |
 | `journal.list` | 1 | read | The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept. |
-| `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets, your defaults for new items (and which values of each kind can be defaults) and the config folder. |
+| `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets, your defaults for new items (and which values of each kind can be defaults), your formulas and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
 | `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
 | `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_agents` | 1 | write-files | Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder. |
 | `settings.set_default` | 1 | write-files | Keep values as your defaults: new items of their kind start from them (arrows, slice, iso, stream, clip, region), a field shown for the first time takes the default field style (field_style), and the window starts with the default view (view: render_mode, mesh_look, projection); items already open keep theirs. Either kind with values ({"density": 60}), or item (an item's id, such as arrows or slice:1) with keys to take from it (left out: every value its kind can keep), or kind view or field_style (with field, else the field shown) to take the values now. Only an item's look, density, count and modes can be defaults, never where it is or its field (settings.get lists them per kind); a value at its built-in default forgets the default. Writes settings.toml in the config folder. |
 | `settings.reset_default` | 1 | write-files | Forget your defaults: one value (kind and key), every value of a kind (kind), or all (no input), so new items start from the built-in values again. Items already open keep theirs. Writes settings.toml in the config folder. |
+| `settings.keep_formula` | 1 | write-files | Keep a formula among your formulas (name, formula, unit; as field.calculate takes them), offered for every result: the Derived fields window lists them and field.calculate computes one by its name alone. A formula of the same name is replaced. The formula is checked for its grammar, not for the fields it names (a result without them refuses it when computed). Writes settings.toml in the config folder. |
+| `settings.forget_formula` | 1 | write-files | Forget one of your formulas, by name. A field already computed from it stays. Writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
 | `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement. |
 | `session.load` | 1 | read | Load a .murmel session file: open its mesh unless that mesh is already open (tried relative to the file first, then at its absolute path), then restore the camera, the display, the selection and the clip plane; the mesh colours and the view cube placement apply to this session and are not written to settings.toml. A mesh changed since the save (SESS003) or items it no longer has (SESS004) give warnings. A new journal starts. |
@@ -882,6 +885,37 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   "additionalProperties": false,
   "properties": {},
   "required": [],
+  "type": "object"
+}
+```
+
+### `field.calculate`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "formula": {
+      "description": "left out: your formula of this name (settings.keep_formula)",
+      "maxLength": 2000,
+      "type": "string"
+    },
+    "name": {
+      "description": "the field it makes: a letter or _ first, then letters, digits and _",
+      "maxLength": 64,
+      "type": "string"
+    },
+    "remove": {
+      "type": "boolean"
+    },
+    "unit": {
+      "maxLength": 64,
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
   "type": "object"
 }
 ```
@@ -2237,6 +2271,50 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `settings.keep_formula`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "formula": {
+      "maxLength": 2000,
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 64,
+      "type": "string"
+    },
+    "unit": {
+      "maxLength": 64,
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "formula"
+  ],
+  "type": "object"
+}
+```
+
+### `settings.forget_formula`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object"
+}
+```
+
 ### `settings.set_bindings`
 
 ```json
@@ -2910,8 +2988,13 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `FIELD006` | error | A derived field's input has the wrong shape or place: the velocity needs three components, the pressure one, the vortex quantities a velocity in the cells or at the nodes, the total pressure a velocity where the pressure is. | field.catalogue lists the fields that fit each input. |
 | `FIELD007` | error | A reference value is out of range: the density and the velocity must be above 0, every value finite and at most 1e12 in size. | Give reference density, pressure and velocity in range. |
 | `FIELD008` | error | The result's file already has a field of the derived quantity's name; it is not computed again. | Colour by the file's field with display.color_by. |
-| `FIELD009` | error | No derived field of this name: none was made with field.derive, or the field is the file's own. | field.catalogue says which fields are derived. |
-| `FIELD010` | error | The derived field is in use: an iso-surface, the arrows or a streamline set is made from it. | Remove or change the items named (iso.clear, arrows.clear, stream.clear), then remove the field. |
+| `FIELD009` | error | No derived or calculated field of this name: none was made with field.derive or field.calculate, or the field is the file's own. | field.catalogue says which fields are derived and calculated. |
+| `FIELD010` | error | The derived or calculated field is in use: an iso-surface, the arrows, a streamline set or another derived or calculated field is made from it (or it would change between scalar and vector under them). | Remove or change the items and fields named (iso.clear, arrows.clear, stream.clear, field.calculate remove), then remove or change the field. |
+| `FIELD011` | error | The formula cannot be read: a character it does not know, a bracket not closed, something missing or too much; the message says the column. Or it is empty, longer than 2000 characters or nested more than 64 deep. | Mend the formula at the column given; field.calculate describes the grammar. |
+| `FIELD012` | error | A name in the formula is no field of the result, no built-in name (x, y, z, pos, pi) and no function. | The message lists the fields; quote a field name with spaces or dots ("p rgh"). field.catalogue lists the functions. |
+| `FIELD013` | error | The formula's types or places do not fit: a vector where a scalar goes (or the other way), a function given the wrong number of arguments, a field with neither 1 nor 3 components, or fields with no place in common (one only on the boundary faces, one only in the cells). | Take a component (U.x) or the magnitude (mag(U)), or use dot or cross; the message says which argument. |
+| `FIELD014` | error | A formula's field cannot have this name (it must start with a letter or _, then letters, digits and _, at most 64 long, and not be a derived quantity's field), or its unit is longer than 64 characters. | Choose another name, such as speed or p_rel. |
+| `FIELD015` | error | The formula reads its own field, or a field made from it, so it would go round in a circle. | Read the fields it is made from instead, or remove the field made from it first. |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
 | `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a .vtu file such as KoflCraft's foehncraft.vtu. |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |

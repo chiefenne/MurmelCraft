@@ -105,6 +105,7 @@ impl MurmelApp {
                 "window.export_image" => self.export.open = true,
                 "window.export_movie" => self.movie.open = true,
                 "window.derived" => self.open_derived(),
+                "window.calculator" => self.open_calculator(),
                 "window.session_save" => self.save_session(false),
                 "window.session_save_as" => self.save_session(true),
                 "window.session_load" => self.load_session_dialog(),

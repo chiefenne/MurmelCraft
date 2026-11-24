@@ -34,7 +34,9 @@ pub use murmel_mesh::field::{Component, Field, Location, Results, range_of};
 use murmel_mesh::{Mesh, NO_CELL};
 use serde::{Deserialize, Serialize};
 
+use crate::calc::Formula;
 use crate::colormap::{self, Colormap};
+use crate::derive::{Made, Recipe, Refusal};
 use crate::display::ColorBy;
 use crate::session::Session;
 
@@ -431,9 +433,10 @@ pub struct FieldSet {
     /// Values made once per field and component (colour mode field and
     /// every iso-surface ask for them again on each redraw).
     cache: ValueCache,
-    /// How each derived field was made, in the order they were added
-    /// ([`crate::derive`]); its fields are in `results` with the file's.
-    derived: Vec<crate::derive::Recipe>,
+    /// How each derived or calculated field was made, each after the
+    /// fields it reads ([`crate::derive`], [`crate::calc`]); their
+    /// fields are in `results` with the file's.
+    derived: Vec<Made>,
 }
 
 impl FieldSet {
@@ -447,41 +450,103 @@ impl FieldSet {
         }
     }
 
-    /// How derived field `name` was made; `None` for a field of the file.
-    pub fn recipe(&self, name: &str) -> Option<&crate::derive::Recipe> {
-        self.derived.iter().find(|r| r.field() == name)
+    /// How derived field `name` was made; `None` for a field of the file
+    /// or of a formula.
+    pub fn recipe(&self, name: &str) -> Option<&Recipe> {
+        match self.maker(name)? {
+            Made::Quantity(r) => Some(r),
+            Made::Formula(_) => None,
+        }
     }
 
-    /// The recipes of the derived fields, in the order they were added.
-    pub fn recipes(&self) -> &[crate::derive::Recipe] {
+    /// The formula of calculated field `name`.
+    pub fn formula(&self, name: &str) -> Option<&Formula> {
+        match self.maker(name)? {
+            Made::Formula(f) => Some(f),
+            Made::Quantity(_) => None,
+        }
+    }
+
+    /// How field `name` was made; `None` for a field of the file.
+    pub fn maker(&self, name: &str) -> Option<&Made> {
+        self.derived.iter().find(|m| m.field() == name)
+    }
+
+    /// How the derived and calculated fields were made, each after the
+    /// fields it reads.
+    pub fn made(&self) -> &[Made] {
         &self.derived
     }
 
-    /// This set with the derived `fields` made by `recipe` in place of
-    /// any it made before (the mesh's topology is shared, the values
-    /// computed of other fields kept).
-    pub(crate) fn with_derived(
+    /// This set with the fields of `made` (made again when it made them
+    /// before), and every field made from those made again after them;
+    /// the names of the fields made, `made`'s first. Refused when `made`
+    /// reads its own field or one made from it, or when a field made
+    /// from it fails (the set stays as it was).
+    pub(crate) fn remake(
         &self,
-        fields: Vec<Field>,
-        recipe: crate::derive::Recipe,
-    ) -> FieldSet {
-        let name = recipe.field();
-        let mut out = self.without(name);
-        match out.derived.iter_mut().find(|r| r.field() == name) {
-            Some(r) => *r = recipe,
-            None => out.derived.push(recipe),
+        mesh: &Mesh,
+        made: Made,
+    ) -> Result<(FieldSet, Vec<String>), Refusal> {
+        let name = made.field().to_string();
+        // The fields made from `name`, near or far, in order.
+        let mut from: Vec<String> = vec![name.clone()];
+        let mut after: Vec<Made> = Vec::new();
+        for m in &self.derived {
+            if m.field() == name {
+                continue;
+            }
+            if m.reads(self).iter().any(|r| from.contains(r)) {
+                from.push(m.field().to_string());
+                after.push(m.clone());
+            }
         }
+        let reads = made.reads(self);
+        if let Some(r) = reads.iter().find(|r| from.contains(r)) {
+            return Err(Refusal::Cycle(if *r == name {
+                format!("{name} reads itself")
+            } else {
+                format!("{name} reads {r}, which is made from {name}")
+            }));
+        }
+        let fields = made.compute(mesh, self)?;
+        let mut out = self.without(&name);
+        out.derived
+            .retain(|m| m.field() != name && !after.iter().any(|a| a.field() == m.field()));
+        out.derived.push(made);
+        out.derived.extend(after.iter().cloned());
         out.results.fields.extend(fields);
-        out
+        let mut names = vec![name];
+        for m in after {
+            let n = m.field().to_string();
+            let fields = m
+                .compute(mesh, &out)
+                .map_err(|e| Refusal::Breaks(n.clone(), Box::new(e)))?;
+            out = out.without(&n);
+            out.results.fields.extend(fields);
+            names.push(n);
+        }
+        Ok((out, names))
     }
 
-    /// This set without derived field `name`; `None` when it has no such
-    /// derived field.
-    pub(crate) fn without_derived(&self, name: &str) -> Option<FieldSet> {
-        self.recipe(name)?;
+    /// This set without made field `name`. Refused when it has no such
+    /// field, or when another made field reads it.
+    pub(crate) fn unmake(&self, name: &str) -> Result<FieldSet, Refusal> {
+        if self.maker(name).is_none() {
+            return Err(Refusal::NotDerived(name.into()));
+        }
+        let readers: Vec<String> = self
+            .derived
+            .iter()
+            .filter(|m| m.field() != name && m.reads(self).iter().any(|r| r == name))
+            .map(|m| m.field().to_string())
+            .collect();
+        if !readers.is_empty() {
+            return Err(Refusal::InUse(name.into(), readers));
+        }
         let mut out = self.without(name);
-        out.derived.retain(|r| r.field() != name);
-        Some(out)
+        out.derived.retain(|m| m.field() != name);
+        Ok(out)
     }
 
     /// A copy without the fields called `name` and their cached values.
@@ -510,63 +575,119 @@ impl FieldSet {
         if !f.is_vector() || !Self::fits(f, mesh) {
             return None;
         }
-        let t = self.topology(mesh);
         let comps = components(f);
-        let n = mesh.cell_count();
-        match f.location {
+        let g: Vec<Vec<[f64; 3]>> = match f.location {
             Location::Cell => {
                 let twin = self.boundary_twin(mesh, f);
-                let g: Vec<Vec<[f64; 3]>> = comps
+                comps
                     .iter()
                     .enumerate()
                     .map(|(j, v)| {
                         let b = twin.as_ref().and_then(|b| b.get(j));
-                        crate::gradient::cell_gradients(
-                            mesh,
-                            &t.centre,
-                            v,
-                            b.map(|b| (b.as_slice(), t.face_centre.as_slice())),
-                            &|c, out| t.near(c, out),
-                        )
+                        self.cell_gradient(mesh, v, b.map(Vec::as_slice))
                     })
-                    .collect();
-                Some(
-                    (0..n)
-                        .map(|c| [0, 1, 2].map(|i| g[i].get(c).copied().unwrap_or([0.0; 3])))
-                        .collect(),
-                )
+                    .collect()
             }
-            Location::Point => Some(
-                murmel_mesh::par::map(n, 4096, |r| {
-                    r.map(|c| {
-                        let nodes = t.nodes_of(c);
-                        let k = nodes.len().max(1) as f64;
-                        let x = [0, 1, 2].map(|d| {
-                            nodes
-                                .iter()
-                                .map(|&p| mesh.points[p as usize][d])
-                                .sum::<f64>()
-                                / k
-                        });
-                        [0, 1, 2].map(|i| {
-                            let v = &comps[i];
-                            let mean = nodes.iter().map(|&p| v[p as usize]).sum::<f64>() / k;
-                            crate::gradient::fit(
-                                x,
-                                mean,
-                                nodes
-                                    .iter()
-                                    .map(|&p| (mesh.points[p as usize], v[p as usize])),
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>()
-                })
-                .into_iter()
-                .flatten()
+            Location::Point => comps
+                .iter()
+                .map(|v| self.node_fit_gradient(mesh, v))
                 .collect(),
-            ),
-            Location::Boundary => None,
+            Location::Boundary => return None,
+        };
+        Some(
+            (0..mesh.cell_count())
+                .map(|c| [0, 1, 2].map(|i| g[i].get(c).copied().unwrap_or([0.0; 3])))
+                .collect(),
+        )
+    }
+
+    /// The least-squares gradient in every cell of `values` (one per
+    /// cell, NaN for none), fitted to the cells that share a node with
+    /// each and to `boundary`, the values on the boundary faces, when
+    /// given ([`crate::gradient`]).
+    pub(crate) fn cell_gradient(
+        &self,
+        mesh: &Mesh,
+        values: &[f64],
+        boundary: Option<&[f64]>,
+    ) -> Vec<[f64; 3]> {
+        let t = self.topology(mesh);
+        crate::gradient::cell_gradients(
+            mesh,
+            &t.centre,
+            values,
+            boundary
+                .filter(|b| b.len() == t.face_centre.len())
+                .map(|b| (b, t.face_centre.as_slice())),
+            &|c, out| t.near(c, out),
+        )
+    }
+
+    /// The gradient in every cell of `values` (one per node): each
+    /// cell's own least-squares fit to its nodes about their mean, exact
+    /// for a field linear in space.
+    pub(crate) fn node_fit_gradient(&self, mesh: &Mesh, values: &[f64]) -> Vec<[f64; 3]> {
+        let t = self.topology(mesh);
+        murmel_mesh::par::map(mesh.cell_count(), 4096, |r| {
+            r.map(|c| {
+                let nodes = t.nodes_of(c);
+                let k = nodes.len().max(1) as f64;
+                let x = [0, 1, 2].map(|d| {
+                    nodes
+                        .iter()
+                        .map(|&p| mesh.points[p as usize][d])
+                        .sum::<f64>()
+                        / k
+                });
+                let at = |p: u32| values.get(p as usize).copied().unwrap_or(f64::NAN);
+                let mean = nodes.iter().map(|&p| at(p)).sum::<f64>() / k;
+                crate::gradient::fit(
+                    x,
+                    mean,
+                    nodes.iter().map(|&p| (mesh.points[p as usize], at(p))),
+                )
+            })
+            .collect::<Vec<_>>()
+        })
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    /// The mean over each cell's nodes of `values` (`k` per node), `k`
+    /// per cell, as [`FieldSet::cell_values`] gives a node field in a
+    /// cell.
+    pub(crate) fn cell_means(&self, mesh: &Mesh, values: &[f64], k: usize) -> Vec<f64> {
+        let t = self.topology(mesh);
+        let k = k.max(1);
+        murmel_mesh::par::map(mesh.cell_count(), 4096, |r| {
+            let mut out = Vec::with_capacity(r.len() * k);
+            for c in r {
+                let nodes = t.nodes_of(c);
+                for j in 0..k {
+                    if nodes.is_empty() {
+                        out.push(f64::NAN);
+                        continue;
+                    }
+                    let sum: f64 = nodes
+                        .iter()
+                        .map(|&p| values.get(p as usize * k + j).copied().unwrap_or(f64::NAN))
+                        .sum();
+                    out.push(sum / nodes.len() as f64);
+                }
+            }
+            out
+        })
+        .concat()
+    }
+
+    /// Where the values at `location` sit: the cells' centroids, the
+    /// nodes, or the boundary faces' centres.
+    pub(crate) fn places<'a>(&'a self, mesh: &'a Mesh, location: Location) -> &'a [[f64; 3]] {
+        match location {
+            Location::Cell => &self.topology(mesh).centre,
+            Location::Point => &mesh.points,
+            Location::Boundary => &self.topology(mesh).face_centre,
         }
     }
 
