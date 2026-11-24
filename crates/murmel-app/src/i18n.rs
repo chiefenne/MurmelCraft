@@ -85,6 +85,12 @@ mod tests {
         for c in murmel_engine::IsoColor::ALL {
             assert!(t.has(&format!("iso-color-{}", c.key())));
         }
+        for c in murmel_engine::glyph::ArrowColor::ALL {
+            assert!(t.has(&format!("iso-color-{}", c.key())));
+        }
+        for l in murmel_engine::glyph::Length::ALL {
+            assert!(t.has(&format!("arrow-length-{}", l.key())));
+        }
         for k in murmel_engine::region::Shape::KINDS {
             assert!(t.has(&format!("region-shape-{k}")));
         }

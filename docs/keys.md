@@ -170,6 +170,10 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Vector arrows: shorter | `arrows.set` (input from the session) |
 | palette | Vector arrows: solid colour | `arrows.set` (input from the session) |
 | palette | Vector arrows: coloured by the field shown | `arrows.set` (input from the session) |
+| palette | Vector arrows: coloured by their magnitude | `arrows.set` (input from the session) |
+| palette | Vector arrows: as long as the magnitude | `arrows.set` (input from the session) |
+| palette | Vector arrows: as long as the magnitude, at least a quarter of the longest | `arrows.set` (input from the session) |
+| palette | Vector arrows: all the same length | `arrows.set` (input from the session) |
 | palette | Remove the vector arrows | `arrows.clear` (input from the session) |
 | palette | Add streamlines from a line of seeds | `stream.set` (input from the session) |
 | palette | Add streamlines from a ball of seeds | `stream.set` (input from the session) |

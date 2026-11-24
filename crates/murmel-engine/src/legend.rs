@@ -25,6 +25,9 @@ pub enum Label {
     Key(String),
     /// A name from the mesh file (patch and zone names), shown as it is.
     Text(String),
+    /// A key whose `$field` is a field's title (`legend-arrows`:
+    /// "Arrows · |velocity|").
+    Of { key: String, field: String },
 }
 
 impl Label {
@@ -33,8 +36,27 @@ impl Label {
         match self {
             Label::Key(k) => i18n.tr(k),
             Label::Text(t) => t.clone(),
+            Label::Of { key, field } => i18n.tr_args(key, &[("field", field.clone().into())]),
         }
     }
+
+    /// The field's title of a [`Label::Of`], else the text as it is.
+    pub fn field(&self) -> &str {
+        match self {
+            Label::Key(k) => k,
+            Label::Text(t) => t,
+            Label::Of { field, .. } => field,
+        }
+    }
+}
+
+/// What a colour bar of its own explains ([`Legend::own_bars`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Owner {
+    /// These streamline sets (indices into the display's streams).
+    Streams(Vec<usize>),
+    /// The vector arrows, coloured by their own magnitude.
+    Arrows,
 }
 
 /// One swatch of a legend of categories.
@@ -99,57 +121,107 @@ impl Legend {
         })
     }
 
-    /// The colour bars of the streamlines coloured by a field (decided
-    /// 2026-11-24: their own field and their own colour bar), each with
-    /// the sets it explains: one bar per field, component and range, and
-    /// none that would repeat the mesh's field legend. Hidden sets and
-    /// sets not traced yet have none.
-    pub fn streams(s: &Session) -> Vec<(Vec<usize>, Legend)> {
+    /// The colour bars of their own, right of the mesh's legend, each
+    /// with what it explains: the streamlines coloured by a field
+    /// (decided 2026-11-24: their own field and their own colour bar),
+    /// one bar per field, component and range whatever the number of
+    /// sets; then the arrows coloured by their own magnitude (the
+    /// maintainer's card of 2026-11-24). None repeats the mesh's field
+    /// legend; hidden items, sets not traced yet and arrows not drawn
+    /// have none. Titles are [`Label::Of`] ("Streamlines · |velocity|").
+    pub fn own_bars(s: &Session) -> Vec<(Owner, Legend)> {
         let Some(m) = s.mesh.as_ref() else {
             return Vec::new();
         };
         let d = &s.display;
         let shown = Legend::of(s);
-        let mut out: Vec<(Vec<usize>, Legend)> = Vec::new();
+        let repeats = |l: &Legend| shown.as_ref().is_some_and(|x| same_bar(x, l));
+        let mut streams: Vec<(Vec<usize>, Legend)> = Vec::new();
         for (k, st) in d.streams.iter().enumerate() {
             let Some(choice) = st.color.as_ref().filter(|_| st.enabled) else {
                 continue;
             };
-            let Some((lo, hi)) = crate::stream::color_range(d, &m.mesh, Some(&m.fields), k) else {
-                continue;
-            };
-            let style = d.style_of(&choice.name);
-            let Some(map) = crate::field::map_for(&style, (lo, hi)) else {
+            let Some(range) = crate::stream::color_range(d, &m.mesh, Some(&m.fields), k) else {
                 continue;
             };
             let f = m.fields.get(&choice.name);
-            let legend = Legend {
-                title: Label::Text(choice.title(f.is_some_and(|f| f.is_vector()))),
-                body: Body::Ramp(Ramp {
-                    stops: map.legend_stops(style.reverse),
-                    lo,
-                    hi,
-                    ticks: ticks(lo, hi, MAX_TICKS),
-                    unit: f.and_then(|f| f.unit.clone()),
-                    bands: (style.mode == crate::field::FieldMode::Banded).then_some(
-                        style
-                            .bands
-                            .clamp(crate::field::MIN_BANDS, crate::field::MAX_BANDS)
-                            as usize,
-                    ),
-                    contours: Vec::new(),
-                    threshold: None,
-                }),
+            let title = choice.title(f.is_some_and(|f| f.is_vector()));
+            let unit = f.and_then(|f| f.unit.clone());
+            let Some(legend) = own_bar(d, &choice.name, title, unit, range) else {
+                continue;
             };
-            if shown.as_ref().is_some_and(|l| same_bar(l, &legend)) {
+            if repeats(&legend) {
                 continue;
             }
-            match out.iter_mut().find(|(_, l)| *l == legend) {
+            match streams.iter_mut().find(|(_, l)| *l == legend) {
                 Some((sets, _)) => sets.push(k),
-                None => out.push((vec![k], legend)),
+                None => streams.push((vec![k], legend)),
+            }
+        }
+        let mut out: Vec<(Owner, Legend)> = streams
+            .into_iter()
+            .map(|(sets, l)| (Owner::Streams(sets), titled(l, "legend-streams")))
+            .collect();
+        let arrows = d.arrows.as_ref().filter(|_| m.surface.arrows > 0);
+        if let Some(a) = arrows {
+            let range =
+                crate::glyph::color_range(d, &m.mesh, Some(&m.fields), m.surface.arrow_range);
+            let unit = m.fields.get(&a.field).and_then(|f| f.unit.clone());
+            let legend =
+                range.and_then(|r| own_bar(d, &a.field, a.magnitude().title(true), unit, r));
+            if let Some(legend) = legend {
+                // The part in the plane has a bar of its own whatever the
+                // mesh shows.
+                if a.in_plane {
+                    out.push((Owner::Arrows, titled(legend, "legend-arrows-in-plane")));
+                } else if !repeats(&legend) {
+                    out.push((Owner::Arrows, titled(legend, "legend-arrows")));
+                }
             }
         }
         out
+    }
+}
+
+/// The bar of a colour of its own: field `name`'s style over `range`,
+/// titled `title` (the field's title) for now.
+fn own_bar(
+    d: &Display,
+    name: &str,
+    title: String,
+    unit: Option<String>,
+    (lo, hi): (f64, f64),
+) -> Option<Legend> {
+    let style = d.style_of(name);
+    let map = crate::field::map_for(&style, (lo, hi))?;
+    Some(Legend {
+        title: Label::Text(title),
+        body: Body::Ramp(Ramp {
+            stops: map.legend_stops(style.reverse),
+            lo,
+            hi,
+            ticks: ticks(lo, hi, MAX_TICKS),
+            unit,
+            bands: (style.mode == crate::field::FieldMode::Banded).then_some(
+                style
+                    .bands
+                    .clamp(crate::field::MIN_BANDS, crate::field::MAX_BANDS)
+                    as usize,
+            ),
+            contours: Vec::new(),
+            threshold: None,
+        }),
+    })
+}
+
+/// `l` with its field's title put into `key`.
+fn titled(l: Legend, key: &str) -> Legend {
+    Legend {
+        title: Label::Of {
+            key: key.into(),
+            field: l.title.field().to_string(),
+        },
+        ..l
     }
 }
 
@@ -599,10 +671,16 @@ mod tests {
         c.color = None;
         s.display.streams = vec![a, b, c];
         s.redraw();
-        let bars = Legend::streams(&s);
+        let bars = Legend::own_bars(&s);
         assert_eq!(bars.len(), 1, "{bars:?}");
-        assert_eq!(bars[0].0, vec![0, 1]);
-        assert_eq!(bars[0].1.title, Label::Text("|velocity|".into()));
+        assert_eq!(bars[0].0, Owner::Streams(vec![0, 1]));
+        assert_eq!(
+            bars[0].1.title,
+            Label::Of {
+                key: "legend-streams".into(),
+                field: "|velocity|".into()
+            }
+        );
         let Body::Ramp(r) = &bars[0].1.body else {
             panic!("no ramp")
         };
@@ -614,10 +692,10 @@ mod tests {
             component: Component::Magnitude,
         });
         s.redraw();
-        assert_eq!(Legend::streams(&s).len(), 2);
+        assert_eq!(Legend::own_bars(&s).len(), 2);
         s.display.streams[1].enabled = false;
         s.redraw();
-        assert_eq!(Legend::streams(&s).len(), 1);
+        assert_eq!(Legend::own_bars(&s).len(), 1);
 
         // The mesh shows the same bar: no second one.
         s.display.color_by = ColorBy::Field;
@@ -626,6 +704,79 @@ mod tests {
             component: Component::Magnitude,
         });
         s.redraw();
-        assert!(Legend::streams(&s).is_empty());
+        assert!(Legend::own_bars(&s).is_empty());
+    }
+
+    /// Invariant: arrows coloured by their own magnitude (the default)
+    /// get a bar of their own over the field's magnitude, titled
+    /// "Arrows · |velocity|"; with the part in the plane only, over the
+    /// arrows drawn and titled so; solid arrows get none, and neither do
+    /// arrows whose bar the mesh's field legend already shows.
+    #[test]
+    fn arrow_bars() {
+        use crate::extract::Slice;
+        use crate::field::{Component, FieldChoice};
+        use crate::glyph::{ArrowColor, Arrows};
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+        s.open(&path).unwrap();
+        let centre = s.mesh.as_ref().unwrap().mesh.bounds().center();
+        s.display.slices.push(Slice::new(centre, [0.0, 0.0, 1.0]));
+        s.display.arrows = Some(Arrows::new("velocity"));
+        s.redraw();
+        let whole = s
+            .fields()
+            .and_then(|f| {
+                let m = &s.mesh.as_ref().unwrap().mesh;
+                f.values_cached(m, &Arrows::new("velocity").magnitude())
+            })
+            .and_then(|v| v.range)
+            .unwrap();
+        let bars = Legend::own_bars(&s);
+        assert_eq!(bars.len(), 1, "{bars:?}");
+        assert_eq!(bars[0].0, Owner::Arrows);
+        assert_eq!(
+            bars[0].1.title,
+            Label::Of {
+                key: "legend-arrows".into(),
+                field: "|velocity|".into()
+            }
+        );
+        let Body::Ramp(r) = &bars[0].1.body else {
+            panic!("no ramp")
+        };
+        assert_eq!((r.lo, r.hi), crate::field::widen(whole));
+
+        // The part in the plane: the range of the arrows drawn.
+        s.display.arrows.as_mut().unwrap().in_plane = true;
+        s.redraw();
+        let bars = Legend::own_bars(&s);
+        assert_eq!(bars.len(), 1, "{bars:?}");
+        let Label::Of { key, .. } = &bars[0].1.title else {
+            panic!("{:?}", bars[0].1.title)
+        };
+        assert_eq!(key, "legend-arrows-in-plane");
+        let drawn = s.mesh.as_ref().unwrap().surface.arrow_range.unwrap();
+        let Body::Ramp(r) = &bars[0].1.body else {
+            panic!("no ramp")
+        };
+        assert_eq!((r.lo, r.hi), crate::field::widen(drawn));
+        assert!(r.hi <= whole.1 + 1e-9);
+
+        // The mesh shows the same bar: none; solid arrows: none.
+        s.display.arrows.as_mut().unwrap().in_plane = false;
+        s.display.color_by = ColorBy::Field;
+        s.display.field = Some(FieldChoice {
+            name: "velocity".into(),
+            component: Component::Magnitude,
+        });
+        s.redraw();
+        assert!(Legend::own_bars(&s).is_empty());
+        s.display.color_by = ColorBy::Solid;
+        s.display.arrows.as_mut().unwrap().color = ArrowColor::Solid;
+        s.redraw();
+        assert!(Legend::own_bars(&s).is_empty());
     }
 }

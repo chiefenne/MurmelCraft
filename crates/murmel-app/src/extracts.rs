@@ -13,8 +13,8 @@
 use egui::{Align, Layout, Pos2, Rect, RichText, Role, Sense, Stroke, Ui, WidgetInfo};
 use murmel_engine::Item;
 use murmel_engine::extract::{IsoColor, MAX_ISOS, MAX_SLICES, MeshLook};
-use murmel_engine::glyph::{MAX_DENSITY, MAX_SCALE, MIN_DENSITY};
-use murmel_engine::legend::Ramp;
+use murmel_engine::glyph::{ArrowColor, Length, MAX_DENSITY, MAX_SCALE, MIN_DENSITY};
+use murmel_engine::legend::{Body, Legend, Owner, Ramp};
 use serde_json::{Value, json};
 
 use crate::app::MurmelApp;
@@ -333,16 +333,30 @@ impl MurmelApp {
                         action = Some(("arrows.set", json!({"enabled": !a.enabled})));
                     }
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
-                    match a.color {
-                        IsoColor::Solid => {
+                    // The own bar's ends (none when the mesh's legend
+                    // already shows the same bar), else the mesh's.
+                    let own = Legend::own_bars(&self.session)
+                        .into_iter()
+                        .find(|(o, _)| *o == Owner::Arrows)
+                        .and_then(|(_, l)| match l.body {
+                            Body::Ramp(r) => Some((r.sample(0.15), r.sample(0.85))),
+                            Body::Categories(_) => None,
+                        });
+                    let ramp = match a.color {
+                        ArrowColor::Solid => None,
+                        ArrowColor::Field => Some(ramp_ends),
+                        ArrowColor::Magnitude => Some(own.or(ramp_ends)),
+                    };
+                    match ramp {
+                        None => {
                             let rgb = d
                                 .item_color(mesh, tokens, item)
                                 .unwrap_or(tokens.mesh.field.arrow);
                             ui.painter().rect_filled(rect, 2.0, color(rgb));
                         }
-                        IsoColor::Field => {
+                        Some(ends) => {
                             let none = tokens.mesh.field.none;
-                            let (lo, hi) = ramp_ends.unwrap_or((none, none));
+                            let (lo, hi) = ends.unwrap_or((none, none));
                             let half = Rect::from_min_max(rect.min, rect.center_bottom());
                             ui.painter().rect_filled(half, 0.0, color(lo));
                             let rest = Rect::from_min_max(rect.center_top(), rect.max);
@@ -381,22 +395,25 @@ impl MurmelApp {
                             ui.close();
                         }
                         ui.separator();
-                        for (key, call) in [
-                            (
-                                "cmd-arrows-solid",
-                                ("arrows.set", json!({"color": "solid"})),
-                            ),
-                            (
-                                "cmd-arrows-field",
-                                ("arrows.set", json!({"color": "field"})),
-                            ),
-                        ] {
-                            if ui.button(self.i18n.tr(key)).clicked() {
-                                action = Some(call);
-                                ui.close();
+                        ui.menu_button(self.i18n.tr("tree-arrows-length"), |ui| {
+                            for l in Length::ALL {
+                                let text = self.i18n.tr(&format!("arrow-length-{}", l.key()));
+                                if ui.radio(a.length == l, text).clicked() {
+                                    action = Some(("arrows.set", json!({ "length": l.key() })));
+                                    ui.close();
+                                }
                             }
-                        }
-                        if a.color == IsoColor::Solid
+                        });
+                        ui.menu_button(self.i18n.tr("tree-arrows-color"), |ui| {
+                            for c in ArrowColor::ALL {
+                                let text = self.i18n.tr(&format!("iso-color-{}", c.key()));
+                                if ui.radio(a.color == c, text).clicked() {
+                                    action = Some(("arrows.set", json!({ "color": c.key() })));
+                                    ui.close();
+                                }
+                            }
+                        });
+                        if a.color == ArrowColor::Solid
                             && ui.button(self.i18n.tr("tree-color-edit")).clicked()
                         {
                             action = Some(("window.color", json!({"item": id, "label": label})));

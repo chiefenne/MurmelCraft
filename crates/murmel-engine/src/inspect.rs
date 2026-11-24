@@ -631,9 +631,18 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 row("on_surface", a.surface),
                 row("in_plane", a.in_plane),
                 row("density", a.density),
-                unit("spacing", round(a.spacing(m), 6), "m"),
-                row("scale", a.scale),
             ];
+            // The spacing of the first slice shown, else on the surface.
+            let spacing = display
+                .slices
+                .iter()
+                .find(|x| x.enabled)
+                .map_or_else(|| a.spacing(m), |x| a.plane_spacing(m, &x.plane()));
+            v.extend([
+                unit("spacing", round(spacing, 6), "m"),
+                row("length", a.length.key()),
+                row("scale", a.scale),
+            ]);
             // With the part in the plane only, the longest arrow depends
             // on the slices (the surface reports it).
             let longest = f

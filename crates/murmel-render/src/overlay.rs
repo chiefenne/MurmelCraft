@@ -40,9 +40,9 @@ const LEGEND_GAP: f64 = 8.0;
 /// What to draw over a picture.
 pub struct Overlays<'a> {
     pub legend: Option<&'a Legend>,
-    /// The streamlines' own colour bars ([`Legend::streams`]), right of
-    /// the legend, each titled "Streamlines · field".
-    pub streams: &'a [Legend],
+    /// The colour bars of their own ([`Legend::own_bars`]: streamlines,
+    /// arrows), right of the legend, each titled "Streamlines · field".
+    pub own_bars: &'a [Legend],
     /// The camera whose axes the triad shows (bottom left).
     pub triad: Option<&'a Camera>,
     pub i18n: &'a I18n,
@@ -54,7 +54,7 @@ pub struct Overlays<'a> {
 
 impl Overlays<'_> {
     pub fn is_empty(&self) -> bool {
-        self.legend.is_none() && self.streams.is_empty() && self.triad.is_none()
+        self.legend.is_none() && self.own_bars.is_empty() && self.triad.is_none()
     }
 }
 
@@ -93,12 +93,9 @@ pub fn draw(rgba: &mut [u8], width: u32, height: u32, o: &Overlays<'_>) -> Resul
             Body::Ramp(r) => p.ramp(&title, r, palette, x),
         } + LEGEND_GAP;
     }
-    for l in o.streams {
+    for l in o.own_bars {
         if let Body::Ramp(r) = &l.body {
-            let title = o
-                .i18n
-                .tr_args("legend-streams", &[("field", l.title.text(o.i18n).into())]);
-            x += p.ramp(&title, r, palette, x) + LEGEND_GAP;
+            x += p.ramp(&l.title.text(o.i18n), r, palette, x) + LEGEND_GAP;
         }
     }
     if let Some(cam) = o.triad {

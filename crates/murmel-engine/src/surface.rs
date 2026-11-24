@@ -92,6 +92,10 @@ pub struct Surface {
     /// The magnitude an arrow 0.9 of a spacing long stands for (times
     /// the scale); 0 without arrows.
     pub arrow_longest: f64,
+    /// The smallest and largest magnitude of the arrows drawn (the
+    /// colour range of arrows coloured by their magnitude, range mode
+    /// shown).
+    pub arrow_range: Option<(f64, f64)>,
     /// Streamlines drawn as lines (line pairs, relative to `origin`) with
     /// their linear colours: drawn in every render mode, hidden behind
     /// faces.

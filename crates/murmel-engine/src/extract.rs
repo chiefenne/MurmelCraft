@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::clip::{Clip, ClipMode};
 use crate::display::{Display, Item};
 use crate::field::{FieldChoice, FieldSet, FieldValues};
+use crate::glyph::ArrowColor;
 use crate::region::Bound;
 use crate::surface::Surface;
 use crate::theme::{Rgb, Tokens};
@@ -647,8 +648,9 @@ pub fn append(
                     pieces.push((t.cell, verts));
                 }
             }
-            if let Some((a, _, _, h)) = &arrows {
-                crate::glyph::on_plane(&mut samples, &plane, anchor, *h, a.in_plane, &pieces);
+            if let Some((a, _, _, _)) = &arrows {
+                let h = a.plane_spacing(mesh, &plane);
+                crate::glyph::on_plane(&mut samples, &plane, anchor, h, a.in_plane, &pieces);
             }
             // The outlines of the cells' sections.
             if !edges {
@@ -728,8 +730,8 @@ pub fn append(
         }
         let picked = selected(display, Item::Arrows);
         let colour = match a.color {
-            IsoColor::Field => field,
-            IsoColor::Solid => None,
+            ArrowColor::Field => field,
+            ArrowColor::Solid | ArrowColor::Magnitude => None,
         };
         let rgb = if colour.is_some() {
             tokens.mesh.field.none
@@ -740,8 +742,6 @@ pub fn append(
                 .copied()
                 .unwrap_or(tokens.mesh.field.arrow)
         };
-        let face = if picked { mixed(rgb, sel, mix) } else { rgb };
-        let full = 0.9 * h * a.scale;
         let size = |w: [f64; 3]| dot(w, w).sqrt();
         // The magnitude drawn 0.9 of a spacing long: the field's largest,
         // so the arrows keep their length while a slice moves; with the
@@ -757,24 +757,41 @@ pub fn append(
             *longest
         };
         out.s.arrow_longest = longest;
-        let mut drawn = 0;
+        // The arrows drawn, with their magnitude and length.
+        let mut drawn: Vec<(&crate::glyph::Sample, f64, f64)> = Vec::new();
         for x in &samples {
             let m = size(x.w);
-            let len = if longest > 0.0 {
-                m / longest * full
-            } else {
-                0.0
-            };
-            // Too short to see (or no value).
-            if len.is_nan() || len <= 0.02 * h {
+            // No value, or no flow to point along (noise below a
+            // millionth of the largest).
+            if !m.is_finite() || m <= 1e-6 * longest || longest <= 0.0 {
                 continue;
             }
-            if drawn == crate::glyph::MAX_ARROWS {
+            let len = a.length.share(m, longest) * 0.9 * x.h * a.scale;
+            // Too short to see.
+            if len <= 0.02 * x.h {
+                continue;
+            }
+            if drawn.len() == crate::glyph::MAX_ARROWS {
                 out.s.arrows_capped = true;
                 break;
             }
+            drawn.push((x, m, len));
+        }
+        let range = drawn
+            .iter()
+            .fold(None, |r: Option<(f64, f64)>, &(_, m, _)| {
+                Some(r.map_or((m, m), |(lo, hi)| (lo.min(m), hi.max(m))))
+            });
+        out.s.arrow_range = range;
+        // Coloured by their own magnitude: the colours here, from their
+        // field's style over its range.
+        let own = crate::glyph::color_range(display, mesh, fields, range)
+            .and_then(|r| crate::glyph::OwnColors::new(display, a, r));
+        for &(x, m, len) in &drawn {
             let dir = x.w.map(|c| c / m);
-            let (verts, tris) = crate::glyph::arrow(x.centre(dir, len, *h), dir, len, *h);
+            let (verts, tris) = crate::glyph::arrow(x.centre(dir, len, x.h), dir, len, x.h);
+            let rgb = own.as_ref().map_or(rgb, |o| o.of(m));
+            let face = if picked { mixed(rgb, sel, mix) } else { rgb };
             let paint = Paint {
                 color: face.linear(),
                 edge: None,
@@ -783,9 +800,8 @@ pub fn append(
                 cell: x.cell,
             };
             out.mesh(&verts, &tris, x.v, &paint);
-            drawn += 1;
         }
-        out.s.arrows = drawn;
+        out.s.arrows = drawn.len();
     }
     let span = out.span.0;
     if let Some((lo, hi)) = span {
@@ -1412,7 +1428,7 @@ mod tests {
             .0
             .len();
         // The cone's first triangle ends at the tip.
-        let tip = each - 3 * 8 + 2;
+        let tip = each - 3 * crate::glyph::SIDES + 2;
         let world = |i: usize| {
             let p = s.positions[i];
             [0, 1, 2].map(|k| p[k] as f64 + s.origin[k])
@@ -1428,13 +1444,17 @@ mod tests {
     }
 
     /// Invariant: arrows on a slice sit on the even grid of the plane
-    /// (anchored at the mesh's centre, one spacing apart), one per grid
-    /// point, centred on it; their length is the magnitude over the
-    /// field's largest, times 0.9 of a spacing times the scale; they
-    /// point along the vector (the duct's flow, along x). Breaks when
-    /// arrows follow the cells (crowding where the mesh is fine), when a
-    /// grid point is drawn twice (it lies on an edge between two cells'
-    /// pieces) or when the length stops following the magnitude.
+    /// (anchored at the mesh's centre, one spacing apart: the slice's
+    /// section of the box over the density, 40 by default), one per grid
+    /// point, centred on it; with length mode magnitude their length is
+    /// the magnitude over the field's largest, times 0.9 of a spacing
+    /// times the scale; they point along the vector (the duct's flow,
+    /// along x). With a floor (the default) none is shorter than a
+    /// quarter of the longest, with equal lengths all are 0.9 of a
+    /// spacing. Breaks when arrows follow the cells (crowding where the
+    /// mesh is fine), when a grid point is drawn twice (it lies on an
+    /// edge between two cells' pieces) or when the length stops
+    /// following the magnitude.
     #[test]
     fn arrows_on_a_slice_follow_the_grid_and_the_magnitude() {
         let (m, set) = channel();
@@ -1443,17 +1463,27 @@ mod tests {
         let mut slice = Slice::new(b.center(), [0.0, 0.0, 1.0]);
         slice.origin[2] += 0.013;
         d.slices.push(slice);
-        d.arrows = Some(velocity_arrows());
+        let mut a = velocity_arrows();
+        a.length = crate::glyph::Length::Magnitude;
+        d.arrows = Some(a.clone());
         let s = build(&m, &set, &d);
-        let a = d.arrows.clone().unwrap();
-        let h = a.spacing(&m);
-        assert!((h - 4.0 / 25.0).abs() < 1e-12);
+        let plane = Clip {
+            origin: slice.origin,
+            normal: slice.normal,
+            mode: ClipMode::Flat,
+            enabled: true,
+        };
+        let h = a.plane_spacing(&m, &plane);
+        // The duct is 4 long: 40 arrows along it.
+        assert!((h - 4.0 / 40.0).abs() < 1e-12, "{h}");
         let arrows = arrows_of(&s);
-        // 25 + 1 columns over x, 12 + 1 rows over y, a few left out at
-        // the walls (too short to see).
+        // One per grid point over x and y, a few left out at the walls
+        // (too short to see).
+        let most = (((b.max[0] - b.min[0]) / h).floor() as usize + 1)
+            * (((b.max[1] - b.min[1]) / h).floor() as usize + 1);
         assert!(
-            (200..=26 * 13).contains(&arrows.len()),
-            "{} arrows",
+            (most * 3 / 4..=most).contains(&arrows.len()),
+            "{} arrows of {most}",
             arrows.len()
         );
         assert!(!s.arrows_capped);
@@ -1461,6 +1491,7 @@ mod tests {
         let anchor = b.center();
         let mut seen = HashSet::new();
         let mut longest: f64 = 0.0;
+        let length = |t: &[f64; 3], p: &[f64; 3]| dot(sub(*p, *t), sub(*p, *t)).sqrt();
         for (tail, tip) in &arrows {
             let c = [0, 1, 2].map(|k| 0.5 * (tail[k] + tip[k]));
             assert!(
@@ -1473,25 +1504,92 @@ mod tests {
             }
             assert!(seen.insert(g.map(|x| x.round() as i64)), "twice: {g:?}");
             let d = sub(*tip, *tail);
-            let len = dot(d, d).sqrt();
+            let len = length(tail, tip);
             assert!(len <= 0.9 * h * (1.0 + 1e-4), "{len}");
-            if len > longest {
-                longest = len;
+            longest = longest.max(len);
+            // The core flow (not the slow eddies at the walls).
+            if len > 0.5 * 0.9 * h {
                 assert!(d[0] / len > 0.99, "not along the flow: {d:?}");
             }
         }
         assert!(longest > 0.75 * 0.9 * h, "{longest}");
+        let shortest = arrows
+            .iter()
+            .map(|(t, p)| length(t, p))
+            .fold(f64::INFINITY, f64::min);
+        assert!(shortest < 0.2 * 0.9 * h, "{shortest}");
         // Twice the scale, twice the length.
         d.arrows.as_mut().unwrap().scale = 2.0;
         let s2 = build(&m, &set, &d);
         let longest2 = arrows_of(&s2)
             .iter()
-            .map(|(a, b)| dot(sub(*b, *a), sub(*b, *a)).sqrt())
+            .map(|(a, b)| length(a, b))
             .fold(0.0, f64::max);
         assert!((longest2 - 2.0 * longest).abs() < 1e-4, "{longest2}");
+        d.arrows.as_mut().unwrap().scale = 1.0;
+        // A floor: the slow arrows a quarter of the longest; equal: all
+        // the same, and more of them (none too short to see).
+        d.arrows.as_mut().unwrap().length = crate::glyph::Length::Floor;
+        let floor = arrows_of(&build(&m, &set, &d));
+        assert!(floor.len() >= arrows.len());
+        for (t, p) in &floor {
+            let len = length(t, p);
+            assert!(len >= 0.25 * 0.9 * h * (1.0 - 1e-4), "{len}");
+        }
+        d.arrows.as_mut().unwrap().length = crate::glyph::Length::Equal;
+        for (t, p) in &arrows_of(&build(&m, &set, &d)) {
+            assert!((length(t, p) - 0.9 * h).abs() < 1e-4);
+        }
         // Off: none.
         d.arrows.as_mut().unwrap().enabled = false;
         assert_eq!(build(&m, &set, &d).arrows, 0);
+    }
+
+    /// Invariant: arrows coloured by their own magnitude (the default)
+    /// take their field's colour map over its magnitude's range, one
+    /// colour per arrow and no field value (so the mesh's colour bar does
+    /// not recolour them): the fastest at the map's top, the slowest
+    /// near its bottom; solid arrows share one colour. Breaks when own
+    /// colours are left to the mesh's field paint or ignore the style.
+    #[test]
+    fn arrows_coloured_by_their_magnitude() {
+        let (m, set) = channel();
+        let b = m.bounds();
+        let mut d = by_field(&m, &set, "speed");
+        d.slices.push(Slice::new(b.center(), [0.0, 0.0, 1.0]));
+        d.arrows = Some(velocity_arrows());
+        let s = build(&m, &set, &d);
+        assert!(s.arrows > 0);
+        let each = crate::glyph::arrow([0.0; 3], [1.0, 0.0, 0.0], 1.0, 1.0)
+            .0
+            .len();
+        let first = s.positions.len() - s.arrows * each;
+        let colours: Vec<[f32; 3]> = (0..s.arrows).map(|k| s.colors[first + k * each]).collect();
+        assert!((first..s.positions.len()).all(|i| s.values[i][3] == 0.0));
+        let range = crate::glyph::color_range(&d, &m, Some(&set), s.arrow_range).unwrap();
+        let style = d.style_of("velocity");
+        let map = crate::field::map_for(&style, range).unwrap();
+        let top = map.sample(1.0, false).linear();
+        let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|k| (a[k] - b[k]).abs() < 0.02);
+        let fastest = s.arrow_range.unwrap().1;
+        assert!(fastest > 0.9 * range.1, "{fastest} of {range:?}");
+        assert!(colours.iter().any(|c| {
+            near(
+                *c,
+                map.sample((fastest - range.0) / (range.1 - range.0), false)
+                    .linear(),
+            )
+        }));
+        assert!(!colours.iter().all(|c| near(*c, top)));
+        let distinct: HashSet<[u32; 3]> = colours.iter().map(|c| c.map(f32::to_bits)).collect();
+        assert!(distinct.len() > 5, "{} colours", distinct.len());
+        d.arrows.as_mut().unwrap().color = crate::glyph::ArrowColor::Solid;
+        let s = build(&m, &set, &d);
+        let first = s.positions.len() - s.arrows * each;
+        let distinct: HashSet<[u32; 3]> = (first..s.positions.len())
+            .map(|i| s.colors[i].map(f32::to_bits))
+            .collect();
+        assert_eq!(distinct.len(), 1);
     }
 
     /// Invariant: arrows of the part in the plane lie in the slice and
@@ -1512,7 +1610,15 @@ mod tests {
         a.density = 100;
         a.in_plane = true;
         d.arrows = Some(a.clone());
-        let h = a.spacing(&m);
+        let h = a.plane_spacing(
+            &m,
+            &Clip {
+                origin: slice.origin,
+                normal: slice.normal,
+                mode: ClipMode::Flat,
+                enabled: true,
+            },
+        );
         let s = build(&m, &set, &d);
         let arrows = arrows_of(&s);
         assert!(arrows.len() > 50, "{}", arrows.len());
@@ -1596,11 +1702,12 @@ mod tests {
         let s = build(&m, &set, &d);
         assert!(s.tri_face.iter().any(|&f| f != NO_CELL));
         let arrows = arrows_of(&s);
-        // All but those too short to see (in the corners).
+        // All but those with no flow (in the corners): the slow ones
+        // keep a quarter of the longest's length (length mode floor).
         let longest = s.arrow_longest;
         let seen = samples
             .iter()
-            .filter(|x| dot(x.w, x.w).sqrt() / longest * 0.9 > 0.02)
+            .filter(|x| dot(x.w, x.w).sqrt() > 1e-6 * longest)
             .count();
         assert_eq!(arrows.len(), seen);
         assert!(seen * 2 > samples.len(), "{seen} of {}", samples.len());
