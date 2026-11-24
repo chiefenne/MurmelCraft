@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use murmel_mesh::vtkhdf::Overview;
 use murmel_mesh::{Evidence, FileHash, Mesh, MeshError};
 
 use crate::camera::Camera;
@@ -47,6 +48,48 @@ pub struct OpenMesh {
     pub fields: Arc<FieldSet>,
     /// The display `surface` was built for.
     pub built_for: Display,
+    /// Opened as an overview (a blocked VTKHDF file beyond the memory
+    /// budget): `mesh` is the boundary only, and this tells what the
+    /// volume holds.
+    pub overview: Option<Arc<Overview>>,
+}
+
+impl OpenMesh {
+    /// The volume cells of the mesh: those of the file when it opened as
+    /// an overview.
+    pub fn cells(&self) -> usize {
+        cells_of(&self.mesh, self.overview.as_deref())
+    }
+}
+
+/// The volume cells of `mesh`, or of the file `overview` is of.
+fn cells_of(mesh: &Mesh, overview: Option<&Overview>) -> usize {
+    overview.map_or(mesh.cell_count(), |o| o.cells as usize)
+}
+
+/// How `mesh.open` is asked to open a mesh (its `mode`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenMode {
+    /// Whole within the memory budget, else as an overview.
+    #[default]
+    Fit,
+    /// Whole, whatever it needs.
+    Whole,
+    /// As an overview (a blocked VTKHDF file).
+    Overview,
+}
+
+/// How a mesh opens with respect to the memory budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fit {
+    /// Whole, whatever it needs.
+    Whole,
+    /// Whole when a whole read needs at most this many bytes; a blocked
+    /// VTKHDF file that needs more opens as an overview.
+    Within(u64),
+    /// As an overview (a blocked VTKHDF file only).
+    Overview,
 }
 
 /// The validity badge (UI spec, Model tree): green when the evidence
@@ -76,6 +119,7 @@ impl Validity {
     /// already; otherwise it is checking, or has no evidence.
     pub fn before_hash(
         mesh: &Mesh,
+        cells: usize,
         evidence: Option<&Evidence>,
         problem: Option<&MeshError>,
     ) -> Validity {
@@ -85,7 +129,7 @@ impl Validity {
         let Some(e) = evidence else {
             return Validity::NoEvidence;
         };
-        let why = counts(mesh, e);
+        let why = counts(mesh, cells, e);
         if why.is_empty() {
             Validity::Checking
         } else {
@@ -97,9 +141,11 @@ impl Validity {
     /// evidence's `file_hash`), against
     /// its evidence: every file the evidence lists must match, and the
     /// mesh file (the `.vtu`, or the polyMesh's `faces`) must be listed.
+    /// `cells` is the volume cells of the file ([`OpenMesh::cells`]).
     pub fn check(
         files: &[(String, String)],
         mesh: &Mesh,
+        cells: usize,
         evidence: Option<&Evidence>,
         problem: Option<&MeshError>,
     ) -> Validity {
@@ -129,7 +175,7 @@ impl Validity {
             let name = files.first().map_or("the mesh file", |f| f.0.as_str());
             why.push(format!("the evidence does not list {name}"));
         }
-        why.extend(counts(mesh, e));
+        why.extend(counts(mesh, cells, e));
         if why.is_empty() {
             Validity::Valid
         } else {
@@ -138,13 +184,13 @@ impl Validity {
     }
 }
 
-/// What the evidence's counts say against `mesh`.
-fn counts(mesh: &Mesh, e: &Evidence) -> Vec<String> {
+/// What the evidence's counts say against `mesh` of `cells` volume cells.
+fn counts(mesh: &Mesh, cells: usize, e: &Evidence) -> Vec<String> {
     let mut why = Vec::new();
     if let Some(c) = e.cells
-        && c as usize != mesh.cell_count()
+        && c as usize != cells
     {
-        why.push(format!("{} cells, evidence says {c}", mesh.cell_count()));
+        why.push(format!("{cells} cells, evidence says {c}"));
     }
     if let Some(b) = e.boundary_faces
         && b as usize != mesh.boundary.len()
@@ -495,6 +541,10 @@ pub struct Loaded {
     pub validity: Validity,
     /// The files are not hashed yet (`load_with` without `hash`).
     pub pending: bool,
+    /// Read as an overview ([`OpenMesh::overview`]).
+    pub overview: Option<Overview>,
+    /// How it was asked to fit the memory budget.
+    pub fit: Fit,
     /// Each file read and the evidence beside them, as they were then.
     stamps: Vec<(PathBuf, Stamp)>,
     prepared: Option<Prepared>,
@@ -519,14 +569,56 @@ pub fn load(path: &Path) -> Result<Loaded, MeshError> {
 /// empty and the badge checking until the session that opens the mesh has
 /// taken them ([`Hashing`]).
 pub fn load_with(path: &Path, hash: bool) -> Result<Loaded, MeshError> {
-    load_checked(path, hash, None)
+    load_checked(path, hash, None, Fit::Whole)
+}
+
+/// Read the mesh at `path` as `fit` asks: whole, or as an overview of a
+/// blocked VTKHDF file whose whole read needs more than the budget (from
+/// its structure: [`murmel_mesh::vtkhdf::Size::open_bytes`]).
+fn read_fitting(
+    path: &Path,
+    hash: bool,
+    fit: Fit,
+) -> Result<(Mesh, murmel_mesh::Results, Option<Overview>), MeshError> {
+    use murmel_mesh::vtkhdf;
+    let over = path.is_file()
+        && vtkhdf::is_vtkhdf(path)
+        && match fit {
+            Fit::Whole => false,
+            Fit::Overview => true,
+            Fit::Within(budget) => {
+                let size = vtkhdf::size_of(path)?;
+                size.blocked && size.open_bytes() > budget
+            }
+        };
+    if over {
+        let (mesh, results, overview) = vtkhdf::read_overview(path, hash)?;
+        return Ok((mesh, results, Some(overview)));
+    }
+    if fit == Fit::Overview {
+        return Err(MeshError::new(
+            "BLOCK004",
+            format!(
+                "{} is not a blocked VTKHDF file, so it cannot open as an overview",
+                path.display()
+            ),
+        ));
+    }
+    let (mesh, results) = murmel_mesh::read_results_with(path, hash)?;
+    Ok((mesh, results, None))
 }
 
 /// As [`load_with`], with the files checked before remembered in
 /// `checked` (the settings folder; see [`crate::checked`]): a mesh file
 /// unchanged since it was hashed is read without hashing it again, and
-/// the files hashed now are remembered.
-pub fn load_checked(path: &Path, hash: bool, checked: Option<&Path>) -> Result<Loaded, MeshError> {
+/// the files hashed now are remembered. `fit` says how a mesh beyond the
+/// memory budget opens.
+pub fn load_checked(
+    path: &Path,
+    hash: bool,
+    checked: Option<&Path>,
+    fit: Fit,
+) -> Result<Loaded, MeshError> {
     // The evidence beside a mesh of one file says before the read which
     // hash its files need: older evidence (1.0) recorded SHA-256, which
     // the readers do not take beside the parsing.
@@ -549,8 +641,9 @@ pub fn load_checked(path: &Path, hash: bool, checked: Option<&Path>) -> Result<L
         _ => (None, None),
     };
     let t = murmel_mesh::profile::span("open.read");
-    let (mut mesh, results) = murmel_mesh::read_results_with(path, read_hash && known.is_none())?;
+    let (mut mesh, results, overview) = read_fitting(path, read_hash && known.is_none(), fit)?;
     drop(t);
+    let cells = cells_of(&mesh, overview.as_ref());
     let one_file = |mesh: &Mesh| match mesh.files.as_slice() {
         [f] => std::fs::canonicalize(f).ok() == std::fs::canonicalize(path).ok(),
         _ => false,
@@ -602,10 +695,16 @@ pub fn load_checked(path: &Path, hash: bool, checked: Option<&Path>) -> Result<L
     };
     let files: Vec<(String, String)> = mesh.files.iter().map(|f| file_name(f)).zip(taken).collect();
     let (digest, validity) = if hash {
-        let v = Validity::check(&files, &mesh, evidence.as_ref(), evidence_problem.as_ref());
+        let v = Validity::check(
+            &files,
+            &mesh,
+            cells,
+            evidence.as_ref(),
+            evidence_problem.as_ref(),
+        );
         (combined(&files, file_hash), v)
     } else {
-        let v = Validity::before_hash(&mesh, evidence.as_ref(), evidence_problem.as_ref());
+        let v = Validity::before_hash(&mesh, cells, evidence.as_ref(), evidence_problem.as_ref());
         (String::new(), v)
     };
     let evidence_path = first.parent().map(|d| d.join("mesh-evidence.json"));
@@ -626,6 +725,8 @@ pub fn load_checked(path: &Path, hash: bool, checked: Option<&Path>) -> Result<L
         digest,
         validity,
         pending: !hash,
+        overview,
+        fit,
         stamps,
         prepared: None,
     })
@@ -711,6 +812,9 @@ pub struct Session {
     /// The tables of a run charted (`charts.open`) and the chart the
     /// window's panel shows; kept when another mesh opens.
     pub charts: Option<crate::chart::Charts>,
+    /// The memory budget set, in GiB (`settings.set_memory`); `None`:
+    /// half the computer's memory ([`crate::memory`]).
+    pub memory_budget: Option<f64>,
 }
 
 impl Session {
@@ -740,6 +844,26 @@ impl Session {
             series: None,
             probe_history: crate::history::Cache::default(),
             charts: None,
+            memory_budget: None,
+        }
+    }
+
+    /// The memory budget in bytes.
+    pub fn budget_bytes(&self) -> u64 {
+        crate::memory::budget_bytes(self.memory_budget)
+    }
+
+    /// How a mesh opens: whole within the memory budget.
+    pub fn budget_fit(&self) -> Fit {
+        Fit::Within(self.budget_bytes())
+    }
+
+    /// How a mesh opens when `mode` is asked for.
+    pub fn fit_for(&self, mode: OpenMode) -> Fit {
+        match mode {
+            OpenMode::Fit => self.budget_fit(),
+            OpenMode::Whole => Fit::Whole,
+            OpenMode::Overview => Fit::Overview,
         }
     }
 
@@ -774,6 +898,7 @@ impl Session {
         m.validity = Validity::check(
             &m.files,
             &m.mesh,
+            m.cells(),
             m.evidence.as_ref(),
             m.evidence_problem.as_ref(),
         );
@@ -816,9 +941,14 @@ impl Session {
     /// The mesh [`load`]ed in advance into `preloaded` is used when it is
     /// of `path` and its files have not changed since.
     pub fn open(&mut self, path: &Path) -> Result<&OpenMesh, MeshError> {
+        self.open_as(path, self.budget_fit())
+    }
+
+    /// [`Session::open`] as `fit` asks.
+    pub fn open_as(&mut self, path: &Path, fit: Fit) -> Result<&OpenMesh, MeshError> {
         let loaded = match self.preloaded.take() {
-            Some(l) if l.path == path && l.is_fresh() => l,
-            _ => load_checked(path, !self.hash_after_open, self.checked_dir())?,
+            Some(l) if l.path == path && l.fit == fit && l.is_fresh() => l,
+            _ => load_checked(path, !self.hash_after_open, self.checked_dir(), fit)?,
         };
         self.series = None;
         Ok(self.install(loaded))
@@ -831,9 +961,12 @@ impl Session {
     /// otherwise it opens as a new mesh does, but the camera stays. The
     /// series stays open either way.
     pub fn open_step(&mut self, path: &Path) -> Result<(), MeshError> {
-        let mut l = load_with(path, !self.hash_after_open)?;
+        let mut l = load_checked(path, !self.hash_after_open, None, self.budget_fit())?;
         let same = self.mesh.as_ref().is_some_and(|m| {
-            m.mesh.cell_count() == l.mesh.cell_count() && m.mesh.points.len() == l.mesh.points.len()
+            m.mesh.cell_count() == l.mesh.cell_count()
+                && m.mesh.points.len() == l.mesh.points.len()
+                && m.overview.is_some() == l.overview.is_some()
+                && m.cells() == cells_of(&l.mesh, l.overview.as_ref())
         });
         if !same {
             let camera = self.camera.clone();
@@ -880,6 +1013,7 @@ impl Session {
             files: l.files,
             validity: l.validity,
             fields: Arc::new(l.fields),
+            overview: l.overview.map(Arc::new),
         });
         Ok(())
     }
@@ -919,6 +1053,7 @@ impl Session {
             files: l.files,
             validity: l.validity,
             fields: Arc::new(l.fields),
+            overview: l.overview.map(Arc::new),
         })
     }
 
@@ -1263,6 +1398,7 @@ mod tests {
         let stale = Validity::check(
             &[("foehncraft.vtu".into(), "00".into())],
             &mesh,
+            mesh.cell_count(),
             ev.as_ref(),
             None,
         );
@@ -1547,10 +1683,11 @@ mod tests {
         // A count the evidence contradicts fails before the hash.
         let mut wrong = direct.evidence.clone().unwrap();
         wrong.cells = Some(1);
-        let early = Validity::before_hash(&direct.mesh, Some(&wrong), None);
+        let cells = direct.mesh.cell_count();
+        let early = Validity::before_hash(&direct.mesh, cells, Some(&wrong), None);
         assert!(matches!(early, Validity::Failed(w) if w.len() == 1));
         assert_eq!(
-            Validity::before_hash(&direct.mesh, None, None),
+            Validity::before_hash(&direct.mesh, cells, None, None),
             Validity::NoEvidence
         );
 
@@ -1589,7 +1726,7 @@ mod tests {
         let (mesh, ev) = (m.mesh.clone(), m.evidence.clone());
         let mut files = m.files.clone();
         files[2].1 = "00".into();
-        let stale = Validity::check(&files, &mesh, ev.as_ref(), None);
+        let stale = Validity::check(&files, &mesh, mesh.cell_count(), ev.as_ref(), None);
         assert!(
             matches!(stale, Validity::Failed(w) if w == ["owner differs from the file the evidence describes"])
         );
@@ -1600,7 +1737,8 @@ mod tests {
     /// Invariant: a mesh loaded in advance opens with the surface built
     /// for it while the display and tokens are unchanged; a changed display
     /// builds the surface again, and a file changed since it was read, a
-    /// removed evidence file or another path reads the mesh again. A
+    /// removed evidence file, another path or another fit (whole, or
+    /// within the memory budget) reads the mesh again. A
     /// reused stale surface would show the old colouring, or a mesh no
     /// longer on disk under a green badge; the window test only checks
     /// that a large mesh opens at all.
@@ -1617,7 +1755,7 @@ mod tests {
         let direct = s.open(&path).unwrap().clone();
         // Marked, to tell the loaded mesh and its surface from a new read.
         let marked = |s: &Session| {
-            let mut l = load(&path).unwrap();
+            let mut l = load_checked(&path, true, None, s.budget_fit()).unwrap();
             l.prepare(&s.display, &s.tokens);
             if let Some(p) = &mut l.prepared {
                 p.surface.cells = 7;
@@ -1626,6 +1764,11 @@ mod tests {
             l
         };
         let preloaded = |m: &OpenMesh| m.mesh.metadata.contains_key("preloaded");
+
+        // Read for another fit (whole whatever it needs), it is read again.
+        s.preloaded = Some(marked(&s));
+        let m = s.open_as(&path, Fit::Whole).unwrap();
+        assert!(!preloaded(m));
 
         s.preloaded = Some(marked(&s));
         let m = s.open(&path).unwrap();
@@ -1666,6 +1809,77 @@ mod tests {
         let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
         assert!(!preloaded(m));
         assert!(s.preloaded.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant: a blocked VTKHDF file whose whole read needs more than
+    /// the memory budget opens as an overview (the boundary with the
+    /// cell fields on it, the cells counted from the file, and the badge
+    /// checking those against the evidence); within the budget, or asked
+    /// whole, it opens whole; a file without a block index opens whole
+    /// whatever the budget and fails as an overview (BLOCK004). Breaks
+    /// when the budget is ignored, the badge counts the overview's own
+    /// none of the cells (a red badge on a good mesh), or a plain file
+    /// is taken for blocked. The mesh tests read overviews but never
+    /// decide when one is read.
+    #[test]
+    fn a_mesh_beyond_the_budget_opens_as_an_overview() {
+        let dir = std::env::temp_dir().join(format!("murmel-overview-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plain = fixture("vtkhdf/channel_fields.vtkhdf");
+        let (whole, results) = murmel_mesh::read_results(&plain).unwrap();
+        let path = dir.join("blocked.vtkhdf");
+        murmel_mesh::blocks::write_blocked(&path, &whole, &results, 100).unwrap();
+        std::fs::copy(
+            fixture("channel/mesh-evidence.json"),
+            dir.join("mesh-evidence.json"),
+        )
+        .unwrap();
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        s.hash_after_open = true;
+
+        // A budget of a byte: the blocked file opens as an overview.
+        s.memory_budget = Some(1e-9);
+        assert_eq!(s.budget_fit(), Fit::Within(1));
+        let m = s.open(&path).unwrap();
+        let ov = m.overview.clone().unwrap();
+        assert_eq!(m.mesh.cell_count(), 0);
+        assert_eq!(m.cells(), whole.cell_count());
+        assert_eq!(ov.cells, whole.cell_count() as u64);
+        assert_eq!(m.mesh.boundary.len(), whole.boundary.len());
+        assert_eq!(m.validity, Validity::Checking);
+        for f in results
+            .fields
+            .iter()
+            .filter(|f| f.location == murmel_mesh::Location::Cell)
+        {
+            let g = m.fields.results.get(&f.name).unwrap();
+            assert_eq!(g.location, murmel_mesh::Location::Boundary, "{}", f.name);
+        }
+        assert!(m.surface.bounds.is_some());
+
+        // Asked whole, or within the budget, it reads the cells.
+        let m = s.open_as(&path, s.fit_for(OpenMode::Whole)).unwrap();
+        assert!(m.overview.is_none());
+        assert_eq!(m.mesh.cell_count(), whole.cell_count());
+        s.memory_budget = None;
+        let m = s.open(&path).unwrap();
+        assert!(m.overview.is_none());
+
+        // A file without a block index opens whole, and never as an
+        // overview.
+        s.memory_budget = Some(1e-9);
+        let m = s.open(&plain).unwrap();
+        assert!(m.overview.is_none());
+        assert_eq!(m.mesh.cell_count(), whole.cell_count());
+        let e = s
+            .open_as(&plain, s.fit_for(OpenMode::Overview))
+            .unwrap_err();
+        assert_eq!(e.code, "BLOCK004");
+        let m = s.open_as(&path, s.fit_for(OpenMode::Overview)).unwrap();
+        assert!(m.overview.is_some());
+        s.close();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

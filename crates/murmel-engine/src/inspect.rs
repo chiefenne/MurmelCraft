@@ -1054,6 +1054,7 @@ mod tests {
             validity: Validity::NoEvidence,
             fields: Default::default(),
             built_for: Display::default(),
+            overview: None,
         };
         let d = Display::default();
         let rows = rows(&open, &d, Item::Cell(0));

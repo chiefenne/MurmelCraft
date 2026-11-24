@@ -34,6 +34,8 @@ const NEAR: usize = 4096;
 pub struct Overview {
     /// The volume cells of the file (owned cells; ghosts are copies).
     pub cells: u64,
+    /// What reading the file whole would build.
+    pub size: Size,
     /// The blocks, in file order.
     pub blocks: Vec<Block>,
     /// The cell and point fields of the volume.
@@ -77,6 +79,13 @@ impl Overview {
     }
 }
 
+/// The memory a whole read of a VTKHDF file peaks at, per volume cell:
+/// measured on blocked files of 1 M and 4 M polyhedral cells (the
+/// honeycomb of `murmel bench make`), which peaked at 1,500 to 1,540
+/// bytes per cell while opening (the read, the face linking and the
+/// surface). Cells with fewer faces (hexahedra, wedges) take less.
+pub const OPEN_BYTES_PER_CELL: u64 = 1_500;
+
 /// What reading a VTKHDF file whole would build, from its structure
 /// alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +99,16 @@ pub struct Size {
     /// Whether the file can open as an overview: one volume block with a
     /// block index (§ 6).
     pub blocked: bool,
+}
+
+impl Size {
+    /// About the memory a whole read peaks at: [`OPEN_BYTES_PER_CELL`]
+    /// per cell and 8 bytes per field value.
+    pub fn open_bytes(&self) -> u64 {
+        self.cells
+            .saturating_mul(OPEN_BYTES_PER_CELL)
+            .saturating_add(self.field_values.saturating_mul(8))
+    }
 }
 
 /// The volume block of a blocked file and its block index.
@@ -321,6 +340,11 @@ fn overview_parts(h: &H5) -> Result<(Parts, Overview), MeshError> {
         .sum::<Result<_, _>>()?;
     let cell_sets = field_sets(h, &ix.grid, "CellData", total_rows, &CELL_RESERVED)?;
     let point_sets = field_sets(h, &ix.grid, "PointData", points, &POINT_RESERVED)?;
+    let field_values = cell_sets
+        .iter()
+        .map(|(_, _, k)| total_rows * k)
+        .sum::<usize>()
+        + point_sets.iter().map(|(_, _, k)| points * k).sum::<usize>();
     let own: std::collections::HashSet<String> = boundary_fields
         .iter()
         .flat_map(|(_, fs)| fs.iter().map(|f| f.name.clone()))
@@ -362,14 +386,14 @@ fn overview_parts(h: &H5) -> Result<(Parts, Overview), MeshError> {
         if dims != [nb as u64, 2] {
             continue;
         }
-        for (blk, pair) in r.chunks_exact(2).enumerate() {
-            ranges[blk][k] = Some([pair[0], pair[1]]);
+        for (blk, &pair) in r.as_chunks::<2>().0.iter().enumerate() {
+            ranges[blk][k] = Some(pair);
         }
     }
     let blocks = ix
         .owned
         .iter()
-        .zip(ix.bounds.chunks_exact(6))
+        .zip(ix.bounds.as_chunks::<6>().0)
         .zip(ranges)
         .map(|((&cells, bb), ranges)| Block {
             cells: cells as u64,
@@ -392,6 +416,11 @@ fn overview_parts(h: &H5) -> Result<(Parts, Overview), MeshError> {
         },
         Overview {
             cells: cells as u64,
+            size: Size {
+                cells: cells as u64,
+                field_values: field_values as u64,
+                blocked: true,
+            },
             blocks,
             fields,
         },
@@ -595,6 +624,7 @@ mod tests {
             assert_eq!(o.metadata.get("vtkhdf").map(String::as_str), Some("2"));
 
             let size = size_of(&path).unwrap();
+            assert_eq!(ov.size, size);
             assert!(size.blocked);
             assert_eq!(size.cells, whole.cell_count() as u64);
             let rows = w.cells + w.ghost_cells;

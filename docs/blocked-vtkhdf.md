@@ -148,7 +148,11 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
 - Each face is oriented with its normal out of the domain.
 - `CellData/OwnerCell` (64-bit integer, one per face): the file cell id
   of the face's owner. Its block is found from `BlockOwnedCells`, so a
-  boundary face picked in the overview leads to its block.
+  boundary face picked in the overview leads to its block. The overview
+  reads each cell field at these rows to colour the boundary, so a
+  file of 100 M cells opens without reading its cells
+  (`vtkhdf::read_overview`; docs/performance.md, "The overview of a
+  mesh beyond the memory budget").
 - The patch's role is an optional string attribute `role` on the patch
   group: `wall`, `inlet`, `outlet`, `symmetry`, `farfield`, `periodic`,
   … When it is missing, MurmelCraft guesses the role from the name, as it

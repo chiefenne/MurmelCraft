@@ -9,7 +9,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `system.info` | 1 | read | Version and platform of this build. |
 | `system.commands` | 1 | read | The catalogue of every tool with its input schema. |
 | `diag.codes` | 1 | read | The diagnostic codes with their severity, meaning and fix. |
-| `mesh.open` | 4 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty. |
+| `mesh.open` | 5 | read | Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty. `mode` fit (the default) opens the mesh whole when it fits the memory budget (settings.set_memory) and a blocked VTKHDF file (murmel blocks make) that does not as an overview: its boundary only, each cell field on it as the value of the cell behind each face, and `overview` (cells, blocks, memory a whole read needs); whole reads it whole whatever it needs; overview asks for the overview. |
 | `mesh.close` | 1 | read | Drop the open mesh from the session. |
 | `mesh.info` | 1 | read | Counts, zones, patches, metadata and evidence of the open mesh. |
 | `view.get_camera` | 1 | read | The camera: target, distance, yaw, pitch, roll, the cube view it looks along, projection, eye and viewport. |
@@ -82,6 +82,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
 | `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_agents` | 1 | write-files | Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder. |
+| `settings.set_memory` | 1 | write-files | Set the memory budget: a mesh whose whole read needs more (estimated from the file before reading) opens as an overview when it is a blocked VTKHDF file; others open whole. budget_gib (0.25 to 4096), or automatic: true for half the computer's memory (the default). Applies to the next mesh opened; writes settings.toml in the config folder. |
 | `settings.set_default` | 1 | write-files | Keep values as your defaults: new items of their kind start from them (arrows, slice, iso, stream, clip, region), a field shown for the first time takes the default field style (field_style), and the window starts with the default view (view: render_mode, mesh_look, projection); items already open keep theirs. Either kind with values ({"density": 60}), or item (an item's id, such as arrows or slice:1) with keys to take from it (left out: every value its kind can keep), or kind view or field_style (with field, else the field shown) to take the values now. Only an item's look, density, count and modes can be defaults, never where it is or its field (settings.get lists them per kind); a value at its built-in default forgets the default. Writes settings.toml in the config folder. |
 | `settings.reset_default` | 1 | write-files | Forget your defaults: one value (kind and key), every value of a kind (kind), or all (no input), so new items start from the built-in values again. Items already open keep theirs. Writes settings.toml in the config folder. |
 | `settings.keep_formula` | 1 | write-files | Keep a formula among your formulas (name, formula, unit; as field.calculate takes them), offered for every result: the Derived fields window lists them and field.calculate computes one by its name alone. A formula of the same name is replaced. The formula is checked for its grammar, not for the fields it names (a result without them refuses it when computed). Writes settings.toml in the config folder. |
@@ -140,6 +141,15 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 {
   "additionalProperties": false,
   "properties": {
+    "mode": {
+      "description": "fit (default): whole within the memory budget, else an overview of a blocked VTKHDF file; whole; overview",
+      "enum": [
+        "fit",
+        "whole",
+        "overview"
+      ],
+      "type": "string"
+    },
     "path": {
       "description": "A .vtu or .vtkhdf file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)",
       "type": "string"
@@ -2656,6 +2666,26 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `settings.set_memory`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "automatic": {
+      "type": "boolean"
+    },
+    "budget_gib": {
+      "maximum": 4096,
+      "minimum": 0.25,
+      "type": "number"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `settings.set_default`
 
 ```json
@@ -3541,6 +3571,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `BLOCK001` | error | The blocked VTKHDF file cannot be written: the folder is missing or read-only, the disk is full, or the output is the mesh being converted. | Write to another path with room for about the size of the mesh file; the output must not be the input. |
 | `BLOCK002` | error | The block size is outside 16,384 to 1,048,576 cells. | Leave it out for the default of 65,536 cells per block. |
 | `BLOCK003` | error | The mesh has no volume cells to put in blocks. | Convert a volume mesh: a .vtu, an OpenFOAM polyMesh or a VTKHDF file. |
+| `BLOCK004` | error | The VTKHDF file has no block index, so it cannot open as an overview of a mesh beyond the memory budget. | Convert it once with `murmel blocks make` (or the blocks.make tool), or raise the memory budget to read it whole. |
 | `MESH015` | error | The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces). | Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch. |
 | `RENDER001` | error | No GPU adapter was found (no driver, or no software renderer such as Mesa lavapipe). | Install a Vulkan, Metal or DirectX 12 driver; on a headless Linux machine install mesa-vulkan-drivers. |
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |

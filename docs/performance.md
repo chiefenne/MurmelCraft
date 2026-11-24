@@ -929,3 +929,52 @@ faster. Building the cells takes longer because it now includes reading
 their datasets, which the open read before it, and each unit reads its
 windows twice (from the page cache the second time). For a 10 M mesh
 this saves about 8 GB at the reading peak.
+
+## The overview of a mesh beyond the memory budget (2026-11-24)
+
+A mesh opens whole up to the memory budget: half the computer's memory
+unless `[memory] budget_gib` in settings.toml sets another (Settings →
+Memory, or the tool `settings.set_memory`; 16 GiB when the computer's
+memory cannot be found). A blocked VTKHDF file whose whole read needs
+more opens as an **overview** (the maintainer's cards of 2026-11-24:
+overview plus regions beyond the budget, 100 M cells on the iMac). What
+a whole read needs is estimated from the file's structure alone
+(`vtkhdf::size_of`): 1,500 bytes per cell plus 8 bytes per field
+value, the peak of the run measured above for the 1 M and 4 M blocked
+files with room to spare. Any other file opens whole, as before.
+
+The overview reads no volume cells. It reads:
+
+- the patches, with their points joined by `GlobalPointIds` (each point
+  once) and their own fields;
+- the block index: `BlockOwnedCells`, `BlockBounds` and each
+  `BlockRange_<field>`;
+- each cell field at the rows of the cells behind the boundary faces
+  (`OwnerCell`), read in runs of nearby rows, so it colours the
+  boundary as the cell behind each face. Point fields are not shown
+  (they are named in `fields_not_shown`).
+
+`mesh.open` takes `mode`: `fit` (the default, as above), `whole` or
+`overview`; a file without a block index refuses an overview with
+BLOCK004. The window's model tree says when a mesh is an overview, with
+its cells, blocks and the memory they need, and offers "Read the cells
+anyway". The badge checks the file's cells against the evidence.
+
+`read_overview` alone, same machine as above, 4 threads, three runs:
+
+| | read whole | overview |
+|---|---:|---:|
+| 1 M blocked (227,534 boundary faces): time, ms | 1,074 to 1,094 (open) | 63 to 110 |
+| 1 M blocked: peak memory, MiB | 1,116 | 41 to 51 |
+| 4 M blocked (576,086 boundary faces): time, ms | 4,201 (open) | 243 to 264 |
+| 4 M blocked: peak memory, MiB | 3,983 | 110 to 134 |
+
+`murmel call mesh.open` on the 4 M file, which also takes the BLAKE3
+digest of the 6 GB file and builds the surface: 1.1 s and 659 MiB as an
+overview, 4.9 s and 3,978 MiB whole. The boundary of a mesh grows as
+its cells to the power 2/3, so the overview of a 100 M mesh of this
+shape (about 4.9 M boundary faces) should read in 2 to 3 s within about
+1 GB; its whole read would need some 150 GB.
+
+Not yet: the block ranges in the legend and the block boxes, the
+preview grid, and regions that read the blocks they touch.

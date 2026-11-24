@@ -34,7 +34,9 @@ use crate::{Mesh, MeshError, Patch, Polygons, boundary, par};
 mod cells;
 mod overview;
 
-pub use overview::{Block, Overview, Size, VolumeField, read_overview, size_of};
+pub use overview::{
+    Block, OPEN_BYTES_PER_CELL, Overview, Size, VolumeField, read_overview, size_of,
+};
 
 /// No mesh point yet for a global point id.
 const NO_POINT: u32 = u32::MAX;

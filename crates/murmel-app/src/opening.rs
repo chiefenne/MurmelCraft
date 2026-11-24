@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use egui::{RichText, Role, Ui, WidgetInfo};
-use murmel_engine::Loaded;
+use murmel_engine::{Loaded, OpenMode};
 use murmel_mesh::MeshError;
 use murmel_mesh::profile::{self, Progress};
 use murmel_tools::Diagnostic;
@@ -26,7 +26,8 @@ pub(crate) const BACKGROUND_BYTES: u64 = 32 << 20;
 /// names it.
 #[derive(Debug)]
 pub(crate) enum Then {
-    Mesh(PathBuf),
+    /// Open the mesh, as the mode asks (`mesh.open`).
+    Mesh(PathBuf, OpenMode),
     Session(PathBuf),
 }
 
@@ -88,6 +89,10 @@ impl MurmelApp {
         // tell whether its mesh changed, so its mesh is hashed here.
         let hash = matches!(then, Then::Session(_)) || !self.session.hash_after_open;
         let checked = self.session.checked_dir().map(std::path::Path::to_path_buf);
+        let fit = match &then {
+            Then::Mesh(_, mode) => self.session.fit_for(*mode),
+            Then::Session(_) => self.session.budget_fit(),
+        };
         #[cfg(test)]
         let gate = self.opening_gate.take();
         let handle = std::thread::spawn(move || {
@@ -96,7 +101,7 @@ impl MurmelApp {
                 let _ = g.recv();
             }
             profile::watch(watched, || {
-                let mut l = murmel_engine::load_checked(&from, hash, checked.as_deref())?;
+                let mut l = murmel_engine::load_checked(&from, hash, checked.as_deref(), fit)?;
                 profile::check()?;
                 l.prepare(&display, &tokens);
                 Ok(l)
@@ -171,9 +176,12 @@ impl MurmelApp {
     /// Open the mesh, or load the session file, on this thread.
     pub(crate) fn open_now(&mut self, then: Then) {
         match then {
-            Then::Mesh(mesh) => {
+            Then::Mesh(mesh, mode) => {
                 if self
-                    .call("mesh.open", serde_json::json!({ "path": mesh }))
+                    .call(
+                        "mesh.open",
+                        serde_json::json!({ "path": mesh, "mode": mode }),
+                    )
                     .is_some()
                 {
                     // Ctrl + S no longer writes the last session over it.
@@ -241,6 +249,7 @@ fn phase_message(phase: &str) -> &'static str {
         | "read.owner_neighbour"
         | "read.vtkhdf" => "loading-phase-numbers",
         "read.cells" => "loading-phase-cells",
+        "read.overview" => "loading-phase-overview",
         p if p == "read.topology" || p.starts_with("topology.") => "loading-phase-topology",
         p if p == "open.surface" || p.starts_with("surface.") => "loading-phase-surface",
         _ => "loading-phase-file",

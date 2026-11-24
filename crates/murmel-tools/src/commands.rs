@@ -1746,6 +1746,10 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     ("inspect.item", "the Properties panel shows it"),
     ("settings.get", "the Settings window shows it"),
     (
+        "settings.set_memory",
+        "needs a size: the Settings window sets the budget, or gives it back to half the memory",
+    ),
+    (
         "journal.group",
         "the window groups each mouse gesture and run of wheel steps itself",
     ),

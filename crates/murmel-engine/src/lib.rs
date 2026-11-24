@@ -26,6 +26,7 @@ pub mod inspect;
 pub mod journal;
 pub mod legend;
 pub mod measure;
+pub mod memory;
 pub mod navigation;
 pub mod parcel;
 pub mod pick;
@@ -54,7 +55,9 @@ pub use measure::{Anchor, MeasureKind, Measurement, Probe, SnapKind};
 pub use navigation::Navigation;
 pub use quality::{Metric, Quality};
 pub use region::{Region, RegionCells, Shape};
-pub use session::{Loaded, OpenMesh, Session, Validity, load, load_checked, load_with};
+pub use session::{
+    Fit, Loaded, OpenMesh, OpenMode, Session, Validity, load, load_checked, load_with,
+};
 pub use session_file::SessionFile;
 pub use stream::{Direction, Look, Seed, Stream};
 pub use surface::Surface;

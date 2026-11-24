@@ -100,6 +100,7 @@ pub fn session() -> Result<Session, String> {
         s.agents = st.agents.enabled;
         s.defaults = st.defaults;
         s.formulas = st.formulas;
+        s.memory_budget = st.memory.budget_gib;
         murmel_engine::defaults::start_view(&mut s);
         if let Err(e) = s.set_colors(st.colors) {
             eprintln!("murmel mcp: warning: settings.toml colors: {e}");

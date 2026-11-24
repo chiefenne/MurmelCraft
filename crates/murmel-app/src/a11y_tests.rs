@@ -1537,3 +1537,70 @@ fn readme_chart_panel() {
     let img = h.render().unwrap();
     img.save(&out).unwrap();
 }
+
+/// Invariant (the maintainer's card of 2026-11-24: beyond the memory
+/// budget a blocked VTKHDF file opens as an overview): the model tree
+/// says so, with the file's cells and blocks, and "Read the cells
+/// anyway" opens the whole mesh; Settings shows the budget, as a named
+/// box once one is set, and its checkbox gives it back to half the
+/// memory; every control keeps a clean name. Breaks when the note or the
+/// button is lost, the button opens the overview again, or the budget
+/// box has no name; the engine and tool tests do not click.
+#[test]
+fn overview_in_the_window() {
+    let dir = std::env::temp_dir().join(format!("murmel-overview-win-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let (open, config) = (path.clone(), dir.clone());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .build_eframe(move |cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = Some(config);
+            app.bridge_path = None;
+            // A budget of a byte: the file needs more.
+            app.session.memory_budget = Some(1e-9);
+            app.open_path(open);
+            app
+        });
+    h.run_steps(3);
+    opened(&mut h);
+    let m = h.state().session.mesh.as_ref().unwrap();
+    assert!(m.overview.is_some(), "{:?}", h.state().error);
+    assert_eq!(m.cells(), mesh.cell_count());
+    let note = "Overview: the 776 cells in 8 blocks are not read.";
+    assert!(
+        h.root().children_recursive().any(|n| n
+            .accesskit_node()
+            .value()
+            .is_some_and(|v| v.starts_with(note))),
+        "the tree's note"
+    );
+    assert_eq!(problems(&h), Vec::<String>::new(), "an overview");
+
+    h.get_by_label("Read the cells anyway").click();
+    h.run_steps(3);
+    opened(&mut h);
+    let m = h.state().session.mesh.as_ref().unwrap();
+    assert!(m.overview.is_none());
+    assert_eq!(m.mesh.cell_count(), mesh.cell_count());
+    assert!(!named(&h, "Read the cells anyway"));
+
+    h.state_mut().settings_open = true;
+    h.run_steps(2);
+    assert!(named(&h, "Budget"), "the budget box");
+    assert_eq!(problems(&h), Vec::<String>::new(), "settings with a budget");
+    h.get_by(|n| {
+        n.label()
+            .is_some_and(|l| l.starts_with("Half of this computer's memory"))
+    })
+    .click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.memory_budget, None);
+    assert!(!named(&h, "Budget"));
+    let _ = std::fs::remove_dir_all(dir);
+}

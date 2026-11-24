@@ -3284,3 +3284,82 @@ fn chart_tools() {
     );
     assert_eq!(e.diagnostics[0].code, "CHART003");
 }
+
+/// Invariant (the maintainer's card of 2026-11-24: a mesh opens whole up
+/// to a memory budget, half the computer's memory unless set; a blocked
+/// VTKHDF file that needs more opens as an overview): settings.set_memory
+/// sets the budget, or gives it back to half the memory, saves it in
+/// settings.toml and refuses budgets out of range or half given, leaving
+/// the budget as it was; settings.get shows it; mesh.open opens a blocked
+/// file beyond the budget as an overview (its cells and blocks in the
+/// summary), whole with mode "whole", and refuses an overview of a file
+/// without a block index. Breaks when the setting is not saved or loaded,
+/// a bad budget is taken, or the open ignores the mode; the session tests
+/// open overviews but never through the tool.
+#[test]
+fn the_memory_budget_decides_how_a_mesh_opens() {
+    let dir = scratch("memory");
+    let mut s = session();
+    s.config_dir = Some(dir.clone());
+    let e = call("settings.get", json!({}), &mut s);
+    assert_eq!(e.result["memory"]["automatic"], true);
+    assert!(e.result["memory"]["budget_gib"].as_f64().unwrap() > 0.0);
+
+    let e = call("settings.set_memory", json!({"budget_gib": 2.0}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["memory"]["budget_gib"], 2.0);
+    assert_eq!(s.memory_budget, Some(2.0));
+    let (st, _, problems) = murmel_engine::settings::load(&dir, false);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(st.memory.budget_gib, Some(2.0));
+    for bad in [
+        json!({"budget_gib": 0.1}),
+        json!({"budget_gib": 5000.0}),
+        json!({"budget_gib": 2.0, "automatic": true}),
+        json!({"automatic": false}),
+        json!({}),
+        json!({"budget": 2.0}),
+    ] {
+        let e = call("settings.set_memory", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, "TOOL002", "{bad}");
+        assert_eq!(s.memory_budget, Some(2.0), "{bad}");
+    }
+    let e = call("settings.set_memory", json!({"automatic": true}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.memory_budget, None);
+    let (st, _, _) = murmel_engine::settings::load(&dir, false);
+    assert!(st.memory.is_default());
+
+    let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let blocked = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&blocked, &mesh, &results, 100).unwrap();
+    // A budget far below what the file needs (the tool takes 0.25 GiB
+    // and up; the file needs a megabyte).
+    s.memory_budget = Some(1e-6);
+    let e = call("mesh.open", json!({"path": blocked}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let o = &e.result["overview"];
+    assert_eq!(o["cells"], mesh.cell_count());
+    assert_eq!(o["blocks"], mesh.cell_count().div_ceil(100));
+    assert!(!o["fields_on_boundary"].as_array().unwrap().is_empty());
+    let e = call(
+        "mesh.open",
+        json!({"path": blocked, "mode": "whole"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(e.result["overview"].is_null());
+    assert_eq!(e.result["summary"]["cells"], mesh.cell_count());
+    let e = call("mesh.open", json!({"path": plain}), &mut s);
+    assert!(e.result["overview"].is_null());
+    let e = call(
+        "mesh.open",
+        json!({"path": plain, "mode": "overview"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "BLOCK004");
+    let e = call("mesh.open", json!({"path": plain, "mode": "half"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let _ = std::fs::remove_dir_all(dir);
+}
