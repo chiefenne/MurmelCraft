@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
-use murmel_engine::Session;
+use murmel_engine::{Session, SessionFile};
 use murmel_tools::{Diagnostic, Envelope, Tool};
 use serde_json::{Map, Value, json};
 
@@ -231,7 +231,37 @@ impl Server {
                 args.insert((*f).into(), json!(real));
             }
         }
+        if t.id == "session.load" {
+            self.confine_session_mesh(args)?;
+        }
         Ok(())
+    }
+
+    /// The mesh a session file names is a path inside a file, not in the
+    /// input: it must lie within the read roots too, for the headless and
+    /// the live server alike. A file that cannot be read or parsed, or a
+    /// mesh that does not exist, is left to `session.load` to report.
+    fn confine_session_mesh(&self, args: &Map<String, Value>) -> Result<(), Diagnostic> {
+        let Some(file) = args.get("path").and_then(Value::as_str).map(Path::new) else {
+            return Ok(());
+        };
+        let Some(mesh) = std::fs::read_to_string(file)
+            .ok()
+            .and_then(|t| SessionFile::parse(&t).ok())
+            .and_then(|f| f.mesh_path(file))
+        else {
+            return Ok(());
+        };
+        match self.roots.read(&mesh) {
+            Err(d) if d.code == "MCP001" => Err(Diagnostic::new(
+                "MCP001",
+                format!(
+                    "the session's mesh {} is outside the MCP server's read roots",
+                    mesh.display()
+                ),
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// Run a call; its envelope as JSON, and the PNG to send back.

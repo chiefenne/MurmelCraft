@@ -1,0 +1,357 @@
+//! Session files (UI spec, viewer tools: "`session.save`, `session.load`:
+//! save or load the session (meshes, camera, display, clip) as JSON").
+//!
+//! A session file (`*.murmel`, format `murmelcraft.session`) names the
+//! mesh by its path and SHA-256 and holds the camera, the display (colour
+//! mode, render mode, quality metric and threshold, pick target, the
+//! hidden, isolated and selected items and the colours set on items, all
+//! by their tree ids), the clip plane, the user's mesh colours and the
+//! view cube placement. Loading puts all of it back; the colours and the
+//! view cube apply to the session only and are not written to
+//! `settings.toml` (decided 2026-11-24).
+//!
+//! The mesh path is kept twice: relative to the session file's folder, so
+//! a case folder that moves as a whole still opens, and absolute, for a
+//! session file moved on its own. Loading tries the relative one first.
+
+use std::collections::BTreeMap;
+use std::path::{Component, Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::camera::Camera;
+use crate::clip::Clip;
+use crate::cube::CubeSettings;
+use crate::display::{ColorBy, Item, PickTarget, RenderMode};
+use crate::quality::Metric;
+use crate::session::Session;
+use crate::theme::{MeshColors, Rgb, Tokens};
+
+pub const SESSION_FORMAT: &str = "murmelcraft.session";
+pub const SESSION_VERSION: &str = "1.0";
+/// The extension of session files (JSON inside).
+pub const EXTENSION: &str = "murmel";
+
+/// The mesh a session shows.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeshRef {
+    /// Relative to the session file's folder when the mesh is on the same
+    /// drive, else absolute.
+    pub path: PathBuf,
+    /// The absolute path when the session was saved.
+    pub absolute: PathBuf,
+    /// `OpenMesh::digest` when the session was saved.
+    pub sha256: String,
+}
+
+/// What the viewport shows, by item ids.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DisplayState {
+    pub color_by: ColorBy,
+    pub render_mode: RenderMode,
+    pub metric: Metric,
+    pub threshold: Option<f64>,
+    pub pick: PickTarget,
+    pub hidden: Vec<String>,
+    pub isolated: Vec<String>,
+    pub selection: Vec<String>,
+    /// Colours set on items (`display.set_color`), by item id.
+    pub colors: BTreeMap<String, Rgb>,
+    pub clip: Option<Clip>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionFile {
+    pub format: String,
+    pub format_version: String,
+    #[serde(default)]
+    pub mesh: Option<MeshRef>,
+    pub camera: Camera,
+    #[serde(default)]
+    pub display: DisplayState,
+    /// The user's mesh colours when the session was saved.
+    #[serde(default)]
+    pub colors: MeshColors,
+    #[serde(default)]
+    pub view_cube: CubeSettings,
+}
+
+/// `path` made absolute from the working folder, without touching the
+/// disk (`std::path::absolute`), and with `.` and `..` folded.
+pub fn absolute(path: &Path) -> PathBuf {
+    let p = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// `to` relative to the folder `from` (both absolute and folded); `None`
+/// when they share no root (another drive on Windows).
+pub fn relative(from: &Path, to: &Path) -> Option<PathBuf> {
+    let f: Vec<Component> = from.components().collect();
+    let t: Vec<Component> = to.components().collect();
+    if f.first() != t.first() {
+        return None;
+    }
+    let common = f.iter().zip(&t).take_while(|(a, b)| a == b).count();
+    let mut out = PathBuf::new();
+    for _ in common..f.len() {
+        out.push("..");
+    }
+    for c in &t[common..] {
+        out.push(c);
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    Some(out)
+}
+
+/// A session file that cannot be used, and why.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Refused(pub String);
+
+impl SessionFile {
+    /// The state of `s`, to be written at `file`.
+    pub fn of(s: &Session, file: &Path) -> SessionFile {
+        let dir = absolute(file)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let mesh = s.mesh.as_ref().map(|m| {
+            let abs = absolute(&m.path);
+            MeshRef {
+                path: relative(&dir, &abs).unwrap_or_else(|| abs.clone()),
+                absolute: abs,
+                sha256: m.digest.clone(),
+            }
+        });
+        let d = &s.display;
+        let ids = |items: &mut dyn Iterator<Item = &Item>| -> Vec<String> {
+            match &s.mesh {
+                Some(m) => items.map(|i| i.id(&m.mesh)).collect(),
+                None => Vec::new(),
+            }
+        };
+        let colors = match &s.mesh {
+            Some(m) => d.colors.iter().map(|(i, c)| (i.id(&m.mesh), *c)).collect(),
+            None => BTreeMap::new(),
+        };
+        SessionFile {
+            format: SESSION_FORMAT.into(),
+            format_version: SESSION_VERSION.into(),
+            mesh,
+            camera: s.camera.clone(),
+            display: DisplayState {
+                color_by: d.color_by,
+                render_mode: d.render_mode,
+                metric: d.metric,
+                threshold: d.threshold,
+                pick: d.pick,
+                hidden: ids(&mut d.hidden.iter()),
+                isolated: ids(&mut d.isolated.iter()),
+                selection: ids(&mut d.selection.iter()),
+                colors,
+                clip: if s.mesh.is_some() { d.clip } else { None },
+            },
+            colors: s.colors.clone(),
+            view_cube: s.view_cube.clone(),
+        }
+    }
+
+    /// Parse and check a session file's text: the format, finite numbers,
+    /// a positive distance, a non-zero clip normal and colours the tokens
+    /// take. Nothing of the session changes.
+    pub fn parse(text: &str) -> Result<SessionFile, Refused> {
+        let probe: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| Refused(format!("not JSON: {e}")))?;
+        if probe["format"] != SESSION_FORMAT {
+            return Err(Refused(format!(
+                "not a session file (format is not {SESSION_FORMAT})"
+            )));
+        }
+        let major = |v: &str| v.split('.').next().unwrap_or("").to_string();
+        let version = probe["format_version"].as_str().unwrap_or("");
+        if major(version) != major(SESSION_VERSION) {
+            return Err(Refused(format!(
+                "format version {version}; this MurmelCraft reads {SESSION_VERSION}"
+            )));
+        }
+        let mut f: SessionFile =
+            serde_json::from_value(probe).map_err(|e| Refused(e.to_string()))?;
+        let c = &mut f.camera;
+        let finite = c.target.iter().all(|v| v.is_finite())
+            && [c.distance, c.yaw_deg, c.pitch_deg, c.fov_deg, c.roll_deg]
+                .iter()
+                .all(|v| v.is_finite());
+        if !finite || c.distance <= 0.0 {
+            return Err(Refused(
+                "the camera needs finite numbers and a positive distance".into(),
+            ));
+        }
+        c.pitch_deg = c.pitch_deg.clamp(-90.0, 90.0);
+        c.fov_deg = c.fov_deg.clamp(1.0, 120.0);
+        if let Some(clip) = &mut f.display.clip {
+            if !clip.origin.iter().all(|v| v.is_finite()) {
+                return Err(Refused("the clip origin needs finite numbers".into()));
+            }
+            clip.normal = crate::clip::unit(clip.normal)
+                .ok_or_else(|| Refused("the clip normal must not be zero".into()))?;
+        }
+        if let Some(t) = f.display.threshold
+            && !t.is_finite()
+        {
+            return Err(Refused("the quality threshold must be finite".into()));
+        }
+        let v = &f.view_cube;
+        if !(0.0..=crate::cube::MAX_DISTANCE).contains(&v.distance_px)
+            || v.position.is_some_and(|p| !p.iter().all(|x| x.is_finite()))
+        {
+            return Err(Refused("the view cube settings are out of range".into()));
+        }
+        Tokens::builtin()
+            .and_then(|t| t.with_colors(&f.colors))
+            .map_err(|e| Refused(format!("colours: {e}")))?;
+        Ok(f)
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_default() + "\n"
+    }
+
+    /// The mesh file to open: relative to `file`'s folder if that exists,
+    /// else the absolute path saved.
+    pub fn mesh_path(&self, file: &Path) -> Option<PathBuf> {
+        let m = self.mesh.as_ref()?;
+        let dir = absolute(file).parent().map(Path::to_path_buf)?;
+        let rel = absolute(&dir.join(&m.path));
+        Some(if rel.exists() || !m.absolute.exists() {
+            rel
+        } else {
+            m.absolute.clone()
+        })
+    }
+}
+
+impl Session {
+    /// Put the camera, the display and the settings of `f` back on the
+    /// open mesh (the caller opened the right one). Ids the mesh does not
+    /// have are skipped and returned. The selection is restored too, and
+    /// the journal starts again.
+    pub fn restore(&mut self, f: SessionFile) -> Vec<String> {
+        let mut missing = Vec::new();
+        // Checked by `parse`; the surface is rebuilt once, below.
+        if self.colors != f.colors
+            && let Ok(t) = Tokens::builtin().and_then(|t| t.with_colors(&f.colors))
+        {
+            self.tokens = t;
+            self.colors = f.colors;
+        }
+        self.view_cube = f.view_cube;
+        self.camera = f.camera;
+        let d = &mut self.display;
+        let s = f.display;
+        d.color_by = s.color_by;
+        d.render_mode = s.render_mode;
+        d.metric = s.metric;
+        d.threshold = s.threshold;
+        d.pick = s.pick;
+        d.hidden.clear();
+        d.isolated.clear();
+        d.selection.clear();
+        d.colors.clear();
+        d.clip = None;
+        if let Some(m) = &self.mesh {
+            let mut find = |id: &String| {
+                let i = Item::parse(id, &m.mesh);
+                if i.is_none() && !missing.contains(id) {
+                    missing.push(id.clone());
+                }
+                i
+            };
+            d.hidden = s.hidden.iter().filter_map(&mut find).collect();
+            d.isolated = s.isolated.iter().filter_map(&mut find).collect();
+            for id in &s.selection {
+                if let Some(i) = find(id)
+                    && !d.selection.contains(&i)
+                {
+                    d.selection.push(i);
+                }
+            }
+            d.colors = s
+                .colors
+                .iter()
+                .filter_map(|(id, c)| find(id).map(|i| (i, *c)))
+                .collect();
+            d.clip = s.clip;
+        }
+        self.journal.clear();
+        self.redraw();
+        missing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Invariant: a relative path climbs out of the session's folder with
+    /// `..` and back down to the mesh, so `dir.join(relative)` is the
+    /// mesh again. A path joined without the climb would point inside
+    /// the session's folder.
+    #[test]
+    fn relative_paths() {
+        let r = |a: &str, b: &str| relative(Path::new(a), Path::new(b)).unwrap();
+        assert_eq!(r("/a/b", "/a/b/c/m.vtu"), PathBuf::from("c/m.vtu"));
+        assert_eq!(r("/a/b/s", "/a/c/m.vtu"), PathBuf::from("../../c/m.vtu"));
+        assert_eq!(r("/a/b", "/a/b"), PathBuf::from("."));
+        assert_eq!(absolute(Path::new("/a/./b/../c")), PathBuf::from("/a/c"));
+    }
+
+    /// Invariant: a file of another format, a newer major version, a zero
+    /// camera distance or a zero clip normal is refused before anything
+    /// changes; a session from a different tool would otherwise reset
+    /// the view to defaults.
+    #[test]
+    fn bad_files_are_refused() {
+        let ok = SessionFile {
+            format: SESSION_FORMAT.into(),
+            format_version: SESSION_VERSION.into(),
+            mesh: None,
+            camera: Camera::default(),
+            display: DisplayState::default(),
+            colors: MeshColors::default(),
+            view_cube: CubeSettings::default(),
+        };
+        assert!(SessionFile::parse(&ok.to_json()).is_ok());
+        let with = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v = serde_json::to_value(&ok).unwrap();
+            f(&mut v);
+            SessionFile::parse(&v.to_string())
+        };
+        assert!(with(&|v| v["format"] = "murmelcraft.settings".into()).is_err());
+        assert!(with(&|v| v["format_version"] = "2.0".into()).is_err());
+        assert!(with(&|v| v["format_version"] = "1.3".into()).is_ok());
+        assert!(with(&|v| v["camera"]["distance"] = 0.0.into()).is_err());
+        assert!(with(&|v| v["surprise"] = 1.into()).is_err());
+        assert!(
+            with(&|v| v["display"]["clip"] = serde_json::json!({
+                "origin": [0, 0, 0], "normal": [0, 0, 0], "mode": "flat", "enabled": true
+            }))
+            .is_err()
+        );
+        assert!(with(&|v| v["colors"]["role"] = serde_json::json!({"lava": "#FF0000"})).is_err());
+        assert!(SessionFile::parse("{").is_err());
+    }
+}

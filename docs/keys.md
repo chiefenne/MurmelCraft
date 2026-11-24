@@ -9,6 +9,8 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 |---|---|---|
 | `Ctrl + O` | Open mesh… | window, then `mesh.open` |
 | `Ctrl + Shift + O` | Open OpenFOAM case folder… | window, then `mesh.open` |
+| `Ctrl + S` | Save session | window, then `session.save` |
+| `Ctrl + Shift + S` | Save session as… | window, then `session.save` |
 | `Ctrl + K` | Command palette | window |
 | `F1` | Keyboard shortcuts | window |
 | `T` | Show or hide the model tree | window |
@@ -51,6 +53,7 @@ from `crates/murmel-tools/src/commands.rs`; a test fails when it is out of date.
 | `Ctrl + Z` | Undo (camera and display) | `journal.undo` (input from the session) |
 | `Ctrl + Shift + Z` | Redo | `journal.redo` (input from the session) |
 | palette | Close mesh | `mesh.close` `{}` |
+| palette | Load session… | window, then `session.load` |
 | palette | Save a screenshot… | window, then `view.screenshot` |
 | palette | Settings | window |
 | palette | Front right | `view.standard` `{"view":"front_right"}` |

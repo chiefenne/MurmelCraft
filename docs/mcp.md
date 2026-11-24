@@ -114,7 +114,11 @@ after `_`) is not declared.
 
 The roots confine the paths the tools are given. Files a reader opens next to
 the mesh it is given (`mesh-evidence.json`, the files of a `polyMesh` folder)
-are found beside that mesh.
+are found beside that mesh. The mesh a session file names
+(`session.load`, [sessions.md](sessions.md)) is a path inside a file, not
+in the input, so the server reads the session file before the call and
+refuses it with `MCP001` when that mesh lies outside the read roots; this
+holds for the live server too, before the call reaches the window.
 
 ## Screenshots
 

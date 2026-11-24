@@ -19,6 +19,8 @@ pub struct MurmelApp {
     pub(crate) i18n: I18n,
     pub(crate) gpu: Option<GpuView>,
     pub(crate) error: Option<Diagnostic>,
+    /// The session file last saved or loaded, where Ctrl + S saves.
+    pub(crate) session_path: Option<PathBuf>,
     pub(crate) drag: Option<murmel_engine::navigation::Action>,
     /// The pointer resting over the viewport, and what `inspect.at` found
     /// under it (the hover tooltip and the cursor coordinates).
@@ -108,6 +110,7 @@ impl MurmelApp {
             i18n: I18n::english()?,
             gpu,
             error,
+            session_path: None,
             drag: None,
             hover: None,
             settings_open: false,
@@ -187,6 +190,17 @@ impl MurmelApp {
             if id == "mesh.open" {
                 self.error = None;
             }
+            if id == "session.load" {
+                // The first warning (a changed mesh, skipped items) shows
+                // in the status bar.
+                self.error = e.result["warnings"]
+                    .as_array()
+                    .and_then(|w| w.first())
+                    .and_then(|w| {
+                        let c = murmel_tools::code(w["code"].as_str()?)?;
+                        Some(Diagnostic::new(c.code, w["message"].as_str()?))
+                    });
+            }
         } else {
             self.error = e.diagnostics.first().cloned();
         }
@@ -214,8 +228,61 @@ impl MurmelApp {
         }
     }
 
+    /// Open a mesh, or load a session file (`*.murmel`).
     pub(crate) fn open_path(&mut self, path: PathBuf) {
-        self.call("mesh.open", json!({ "path": path }));
+        let session = path
+            .extension()
+            .is_some_and(|e| e == murmel_engine::session_file::EXTENSION);
+        if session {
+            if self.call("session.load", json!({ "path": path })).is_some() {
+                self.session_path = Some(path);
+            }
+        } else if self.call("mesh.open", json!({ "path": path })).is_some() {
+            // Ctrl + S no longer writes the last session over this mesh.
+            self.session_path = None;
+        }
+    }
+
+    /// Save the session where it was saved or loaded last; a new name
+    /// (`ask`), or the first save, asks for the file.
+    pub(crate) fn save_session(&mut self, ask: bool) {
+        let path = match (&self.session_path, ask) {
+            (Some(p), false) => Some(p.clone()),
+            _ => {
+                let ext = murmel_engine::session_file::EXTENSION;
+                let mesh = self.session.mesh.as_ref().map(|m| m.path.clone());
+                let stem = mesh
+                    .as_ref()
+                    .and_then(|p| p.file_stem())
+                    .map_or("session".into(), |s| s.to_string_lossy().into_owned());
+                let mut d = rfd::FileDialog::new()
+                    .set_title(self.i18n.tr("session-save-title"))
+                    .add_filter(self.i18n.tr("open-filter-session"), &[ext])
+                    .set_file_name(format!("{stem}.{ext}"));
+                if let Some(dir) = mesh.as_ref().and_then(|p| p.parent()) {
+                    d = d.set_directory(dir);
+                }
+                d.save_file()
+            }
+        };
+        if let Some(p) = path
+            && self.call("session.save", json!({ "path": p })).is_some()
+        {
+            self.session_path = Some(p);
+        }
+    }
+
+    pub(crate) fn load_session_dialog(&mut self) {
+        let picked = rfd::FileDialog::new()
+            .set_title(self.i18n.tr("session-load-title"))
+            .add_filter(
+                self.i18n.tr("open-filter-session"),
+                &[murmel_engine::session_file::EXTENSION],
+            )
+            .pick_file();
+        if let Some(p) = picked {
+            self.open_path(p);
+        }
     }
 
     pub(crate) fn open_dialog(&mut self) {
@@ -223,7 +290,12 @@ impl MurmelApp {
             .set_title(self.i18n.tr("toolbar-open-tip"))
             .add_filter(
                 self.i18n.tr("open-filter-meshes"),
-                &["vtu", "foam", "OpenFOAM"],
+                &[
+                    "vtu",
+                    "foam",
+                    "OpenFOAM",
+                    murmel_engine::session_file::EXTENSION,
+                ],
             )
             .add_filter(self.i18n.tr("open-filter-vtu"), &["vtu"])
             .add_filter(self.i18n.tr("open-filter-foam"), &["foam", "OpenFOAM"])
@@ -774,7 +846,12 @@ impl MurmelApp {
                             ("message", e.message.clone().into()),
                         ],
                     );
-                    let red = color(p.status_error);
+                    // A warning (a session's changed mesh) is amber.
+                    let red = color(if e.severity == murmel_tools::Severity::Warning {
+                        p.status_warn
+                    } else {
+                        p.status_error
+                    });
                     ui.label(RichText::new(&text).small().color(red))
                         .on_hover_text(e.fix.unwrap_or(""));
                     // The alert glyph is painted left of the text, not

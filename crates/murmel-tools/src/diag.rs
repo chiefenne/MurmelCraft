@@ -96,6 +96,30 @@ const OWN: &[Code] = &[
         meaning: "The navigation bindings bind one input to two actions.",
         fix: Some("Give each gesture, button and modifier combination one action."),
     },
+    Code {
+        code: "SESS001",
+        severity: Severity::Error,
+        meaning: "A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values.",
+        fix: Some("Check the path; save the session again with session.save."),
+    },
+    Code {
+        code: "SESS002",
+        severity: Severity::Error,
+        meaning: "A session file could not be written.",
+        fix: Some("Choose a writable folder."),
+    },
+    Code {
+        code: "SESS003",
+        severity: Severity::Warning,
+        meaning: "The session's mesh changed since the session was saved (its SHA-256 differs).",
+        fix: Some("Check the view; save the session again to accept the new mesh."),
+    },
+    Code {
+        code: "SESS004",
+        severity: Severity::Warning,
+        meaning: "Items the session names are not in the mesh; they were skipped.",
+        fix: Some("Save the session again to drop them."),
+    },
 ];
 
 /// Every code: the tools' own, then the mesh and render codes.

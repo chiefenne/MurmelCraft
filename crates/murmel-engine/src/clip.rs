@@ -43,7 +43,8 @@ impl ClipMode {
 }
 
 /// The clip plane.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Clip {
     /// A point of the plane.
     pub origin: [f64; 3],

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use murmel_engine::display::all_items;
 use murmel_engine::navigation::{Binding, Navigation, PRESETS};
+use murmel_engine::session_file::{SessionFile, absolute};
 use murmel_engine::settings::{Agents, Settings, save_navigation, save_settings};
 use murmel_engine::{
     Clip, ClipMode, ColorBy, CubeSettings, Item, MeshColors, Metric, PickTarget, Placement,
@@ -1038,6 +1039,78 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
     }))
 }
 
+// ---- session files ------------------------------------------------------
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionPath {
+    path: PathBuf,
+}
+
+fn session_save(input: Value, s: &mut Session) -> Run {
+    let i: SessionPath = parse(input)?;
+    let f = SessionFile::of(s, &i.path);
+    std::fs::write(&i.path, f.to_json())
+        .map_err(|e| Diagnostic::new("SESS002", format!("{}: {e}", i.path.display())))?;
+    Ok(json!({"files": [i.path], "session": f}))
+}
+
+/// The same file or folder, links followed where both exist.
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => absolute(a) == absolute(b),
+    }
+}
+
+fn session_load(input: Value, s: &mut Session) -> Run {
+    let i: SessionPath = parse(input)?;
+    let text = std::fs::read_to_string(&i.path)
+        .map_err(|e| Diagnostic::new("SESS001", format!("{}: {e}", i.path.display())))?;
+    let f = SessionFile::parse(&text)
+        .map_err(|r| Diagnostic::new("SESS001", format!("{}: {}", i.path.display(), r.0)))?;
+    let mut warnings = Vec::new();
+    match (f.mesh_path(&i.path), &f.mesh) {
+        (Some(p), Some(saved)) => {
+            let open = s
+                .mesh
+                .as_ref()
+                .is_some_and(|m| m.digest == saved.sha256 && same_path(&m.path, &p));
+            if !open {
+                s.open(&p).map_err(|e| {
+                    Diagnostic::new(e.code, format!("the session's mesh: {}", e.message))
+                })?;
+            }
+            if s.mesh.as_ref().is_some_and(|m| m.digest != saved.sha256) {
+                warnings.push(json!(Diagnostic::new(
+                    "SESS003",
+                    format!(
+                        "{} changed since the session was saved; items it no longer has are skipped",
+                        p.display()
+                    ),
+                )));
+            }
+        }
+        _ => s.close(),
+    }
+    let missing = s.restore(f);
+    if !missing.is_empty() {
+        warnings.push(json!(Diagnostic::new(
+            "SESS004",
+            format!("not in the mesh, skipped: {}", missing.join(", ")),
+        )));
+    }
+    Ok(json!({
+        "files": [i.path],
+        "mesh": s.mesh.as_ref().map(|m| &m.path),
+        "camera": camera_json(s),
+        "display": display_json(s),
+        "view_cube": s.view_cube,
+        "skipped": missing,
+        "warnings": warnings,
+    }))
+}
+
 // ---- journal ------------------------------------------------------------
 
 /// The tools whose calls are steps of the journal: they change the camera
@@ -1103,6 +1176,8 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("journal.redo", "walks the journal"),
     ("journal.group", "groups the steps"),
     ("journal.list", READS_ONLY),
+    ("session.save", "writes a file; the view stays as it is"),
+    ("session.load", "a loaded session starts a new journal"),
 ];
 
 /// The reason in `NOT_JOURNALED` of a tool that changes nothing: no file,
@@ -1783,5 +1858,37 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: settings_set_bindings,
+    },
+    Tool {
+        id: "session.save",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-session-save",
+        summary: "Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the mesh colours and the view cube placement.",
+        outputs: &["path"],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({"path": {"type": "string", "description": "The session file to write, usually *.murmel"}}),
+                &["path"],
+            )
+        },
+        run: session_save,
+    },
+    Tool {
+        id: "session.load",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-session-load",
+        summary: "Load a .murmel session file: open its mesh unless that mesh is already open (tried relative to the file first, then at its absolute path), then restore the camera, the display, the selection and the clip plane; the mesh colours and the view cube placement apply to this session and are not written to settings.toml. A mesh changed since the save (SESS003) or items it no longer has (SESS004) give warnings. A new journal starts.",
+        outputs: &[],
+        reads: &["path"],
+        input_schema: || {
+            object(
+                json!({"path": {"type": "string", "description": "A session file (*.murmel)"}}),
+                &["path"],
+            )
+        },
+        run: session_load,
     },
 ];
