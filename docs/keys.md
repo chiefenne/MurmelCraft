@@ -144,6 +144,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Grey | `field.style` `{"map":"grey"}` |
 | palette | Field: default style | `field.style` `{"reset":true}` |
 | palette | Derived fields… | window, then `field.derive` |
+| palette | Field calculator… | window, then `field.calculate` |
 | palette | Derive vorticity | `field.derive` `{"quantity":"vorticity"}` |
 | palette | Derive Q criterion | `field.derive` `{"quantity":"q-criterion"}` |
 | palette | Derive λ₂ | `field.derive` `{"quantity":"lambda2"}` |

@@ -161,6 +161,7 @@ impl MurmelApp {
             session.view_cube = st.view_cube;
             session.agents = st.agents.enabled;
             session.defaults = st.defaults;
+            session.formulas = st.formulas;
             murmel_engine::defaults::start_view(&mut session);
             let mut problems = problems;
             if let Err(e) = session.set_colors(st.colors) {

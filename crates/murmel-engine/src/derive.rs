@@ -389,6 +389,61 @@ impl Recipe {
         }
         find_input(set, input)
     }
+
+    /// The fields of `set` it reads: its inputs, and the density fields
+    /// the pressure quantities take.
+    pub fn reads(&self, set: &FieldSet) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .quantity
+            .inputs()
+            .iter()
+            .filter_map(|&i| self.input(set, i))
+            .collect();
+        if !self.quantity.references().is_empty() {
+            for n in ["density", "rho"] {
+                if set.get(n).is_some() {
+                    out.push(n.into());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A field made from the result's fields: a derived quantity, or a
+/// formula of your own ([`crate::calc`]). Sessions keep them in the
+/// order they were made, each after the fields it reads.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Made {
+    Quantity(Recipe),
+    Formula(crate::calc::Formula),
+}
+
+impl Made {
+    /// The field it makes.
+    pub fn field(&self) -> &str {
+        match self {
+            Made::Quantity(r) => r.field(),
+            Made::Formula(f) => &f.name,
+        }
+    }
+
+    /// The fields of `set` it reads.
+    pub fn reads(&self, set: &FieldSet) -> Vec<String> {
+        match self {
+            Made::Quantity(r) => r.reads(set),
+            Made::Formula(f) => crate::calc::reads(&f.formula, set),
+        }
+    }
+
+    /// Its fields, made from those of `set`.
+    pub fn compute(&self, mesh: &Mesh, set: &FieldSet) -> Result<Vec<Field>, Refusal> {
+        match self {
+            Made::Quantity(r) => compute(mesh, set, r),
+            Made::Formula(f) => crate::calc::compute(mesh, set, f),
+        }
+    }
 }
 
 /// The field of `set` that `input` reads when none is named: by name,
@@ -398,7 +453,7 @@ pub fn find_input(set: &FieldSet, input: Input) -> Option<String> {
     let fits = |f: &Field| {
         f.components == input.components()
             && f.location != Location::Boundary
-            && set.recipe(&f.name).is_none()
+            && set.maker(&f.name).is_none()
     };
     for name in input.names() {
         if set.fields().iter().any(|f| f.name == *name && fits(f)) {
@@ -412,7 +467,8 @@ pub fn find_input(set: &FieldSet, input: Input) -> Option<String> {
         .map(|f| f.name.clone())
 }
 
-/// The fields of `set` that can be `input` (for the catalogue's choice).
+/// The fields of `set` that can be `input` (for the catalogue's choice):
+/// the file's and your formulas' fields, not the derived quantities'.
 pub fn candidates(set: &FieldSet, input: Input) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for f in set.fields() {
@@ -443,8 +499,23 @@ pub enum Refusal {
     /// No derived field of this name: none was made, or it is the
     /// file's own (FIELD009).
     NotDerived(String),
-    /// Items made from the derived field, by id (FIELD010).
+    /// Items made from the derived field, by id, and the fields made
+    /// from it, by name (FIELD010).
     InUse(String, Vec<String>),
+    /// A formula that cannot be read (FIELD011).
+    Syntax(String),
+    /// A name in a formula that is no field, built-in name or function
+    /// (FIELD012).
+    Unknown(String),
+    /// A formula whose types or places do not fit together: a vector
+    /// where a scalar goes, fields with no place in common (FIELD013).
+    Type(String),
+    /// A name a formula's field cannot have (FIELD014).
+    BadName(String),
+    /// A formula that reads itself, or a field made from it (FIELD015).
+    Cycle(String),
+    /// Making a field again would break field `.0`, made from it: why.
+    Breaks(String, Box<Refusal>),
 }
 
 impl Refusal {
@@ -457,6 +528,12 @@ impl Refusal {
             Refusal::NoFields => "FIELD001",
             Refusal::NotDerived(_) => "FIELD009",
             Refusal::InUse(..) => "FIELD010",
+            Refusal::Syntax(_) => "FIELD011",
+            Refusal::Unknown(_) => "FIELD012",
+            Refusal::Type(_) => "FIELD013",
+            Refusal::BadName(_) => "FIELD014",
+            Refusal::Cycle(_) => "FIELD015",
+            Refusal::Breaks(_, r) => r.code(),
         }
     }
 
@@ -472,11 +549,19 @@ impl Refusal {
                 format!("the result's file has a field {n}; it is not computed again")
             }
             Refusal::NoFields => "the open mesh has no fields".into(),
-            Refusal::NotDerived(n) => format!("no derived field {n}"),
+            Refusal::NotDerived(n) => format!("no derived or calculated field {n}"),
             Refusal::InUse(n, ids) => format!(
                 "{n} is in use by {}; remove or change them first",
                 ids.join(", ")
             ),
+            Refusal::Syntax(why)
+            | Refusal::Unknown(why)
+            | Refusal::Type(why)
+            | Refusal::BadName(why)
+            | Refusal::Cycle(why) => why.clone(),
+            Refusal::Breaks(n, r) => {
+                format!("{n} is made from it and would fail: {}", r.message())
+            }
         }
     }
 }
@@ -1003,7 +1088,7 @@ mod tests {
         assert_eq!(s.derive(Recipe::new(Quantity::Vorticity)), Ok("vorticity"));
         let f = s.fields().unwrap();
         assert!(f.get("vorticity").is_some_and(|f| f.is_vector()));
-        assert_eq!(f.recipes().len(), 1);
+        assert_eq!(f.made().len(), 1);
         s.display.color_by = crate::display::ColorBy::Field;
         s.display.field = Some(crate::field::FieldChoice {
             name: "vorticity".into(),
@@ -1028,7 +1113,7 @@ mod tests {
         });
         s.derive(cp).unwrap();
         let f = s.fields().unwrap();
-        assert_eq!(f.recipes().len(), 2);
+        assert_eq!(f.made().len(), 2);
         assert_eq!(
             f.fields()
                 .iter()
@@ -1049,7 +1134,7 @@ mod tests {
         t.open(&path).unwrap();
         let missing = t.restore(crate::session_file::SessionFile::parse(&text).unwrap());
         assert!(missing.is_empty(), "{missing:?}");
-        assert_eq!(t.fields().unwrap().recipes(), s.fields().unwrap().recipes());
+        assert_eq!(t.fields().unwrap().made(), s.fields().unwrap().made());
         assert_eq!(
             t.display.field.as_ref().map(|c| c.name.as_str()),
             Some("vorticity")

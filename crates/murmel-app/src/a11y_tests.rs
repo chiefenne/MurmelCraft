@@ -1201,6 +1201,82 @@ fn every_string_has_its_glyphs() {
     assert_eq!(missing, Vec::new());
 }
 
+/// Invariant: the calculator of the Derived fields window computes a
+/// typed formula and shows its field, writes a clicked function into
+/// the formula, says in the window why a formula is refused, keeps a
+/// formula among yours (settings.toml) and lists it with Compute, Show,
+/// Remove, Edit and Forget, each named with the formula's name. Breaks
+/// when the editor's calls do not reach field.calculate or a refusal is
+/// only in the status bar.
+#[test]
+fn formulas_from_the_window() {
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-window-calc-{}", std::process::id()));
+    h.state_mut().session.config_dir = Some(dir.clone());
+    let result = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    h.state_mut().open_path(result);
+    h.run_steps(3);
+    h.state_mut().open_calculator();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "the calculator");
+    h.get_by_role_and_label(Role::TextInput, "Name").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, "Name")
+        .type_text("speed2");
+    h.run_steps(2);
+    h.get_by_label("dot").click();
+    h.run_steps(3);
+    assert_eq!(h.state().derived.formula, "dot(");
+    h.get_by_role_and_label(Role::TextInput, "Formula")
+        .type_text("velocity, velocity)");
+    h.run_steps(2);
+    assert_eq!(h.state().derived.formula, "dot(velocity, velocity)");
+    h.get_by_label("Compute the formula").click();
+    h.run_steps(3);
+    let s = &h.state().session;
+    assert!(s.fields().unwrap().formula("speed2").is_some());
+    assert_eq!(
+        s.display.field.as_ref().map(|c| c.name.as_str()),
+        Some("speed2"),
+        "computed and shown"
+    );
+    h.get_by_label("Keep the formula among yours").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.formulas.len(), 1);
+    let (st, _, _) = murmel_engine::settings::load(&dir, false);
+    assert_eq!(st.formulas.len(), 1, "written to settings.toml");
+    for n in [
+        "Compute again speed2",
+        "Show speed2",
+        "Remove speed2",
+        "Edit speed2",
+        "Forget speed2",
+    ] {
+        let label = n.replacen("Compute again", "Compute", 1);
+        assert!(named(&h, &label), "{label}");
+    }
+    assert_eq!(problems(&h), Vec::<String>::new(), "a formula kept");
+    // A refused formula says why, in the window.
+    h.state_mut().derived.formula = "velocity *".into();
+    h.run_steps(2);
+    h.get_by_label("Compute the formula").click();
+    h.run_steps(3);
+    let why = h.state().derived.error.clone().unwrap_or_default();
+    assert!(why.contains("column"), "{why}");
+    h.get_by_label(&why);
+    // Forgotten: the field stays, offered to keep again; removed: gone.
+    h.get_by_label("Forget speed2").click();
+    h.run_steps(3);
+    assert!(h.state().session.formulas.is_empty());
+    assert!(named(&h, "Keep speed2 among your formulas"));
+    h.get_by_label("Remove speed2").click();
+    h.run_steps(3);
+    assert!(h.state().session.fields().unwrap().get("speed2").is_none());
+    assert!(!named(&h, "Remove speed2"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Invariant: the Derived fields window computes a quantity with one
 /// click and shows it, offers Show and Remove for it then, greys a
 /// quantity whose input is missing, and a right-click on a reference

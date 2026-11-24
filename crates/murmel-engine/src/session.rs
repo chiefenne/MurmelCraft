@@ -643,6 +643,8 @@ pub struct Session {
     pub config_dir: Option<PathBuf>,
     /// Where new items start (`settings.set_default`, settings.toml).
     pub defaults: crate::defaults::Defaults,
+    /// Your formulas (`settings.keep_formula`, settings.toml).
+    pub formulas: Vec<crate::calc::Formula>,
     /// The undo and redo steps of the open mesh.
     pub journal: Journal,
     /// A mesh read in advance (the window reads a large one on a thread
@@ -689,6 +691,7 @@ impl Session {
             agents: true,
             config_dir: crate::settings::config_dir(),
             defaults: crate::defaults::Defaults::default(),
+            formulas: Vec::new(),
             journal: Journal::default(),
             preloaded: None,
             hash_after_open: false,
@@ -778,10 +781,11 @@ impl Session {
         let Some(old) = self.mesh.take() else {
             return Ok(());
         };
-        // The fields derived on the step before, made again of this one's.
-        for r in old.fields.recipes() {
-            if let Ok(f) = crate::derive::compute(&l.mesh, &l.fields, r) {
-                l.fields = l.fields.with_derived(f, r.clone());
+        // The fields derived and calculated on the step before, made
+        // again of this one's, in order.
+        for m in old.fields.made() {
+            if let Ok((set, _)) = l.fields.remake(&l.mesh, m.clone()) {
+                l.fields = set;
             }
         }
         if let Some(h) = self.hashing.take() {
@@ -928,28 +932,60 @@ impl Session {
         &mut self,
         recipe: crate::derive::Recipe,
     ) -> Result<&'static str, crate::derive::Refusal> {
-        let Some(m) = &mut self.mesh else {
-            return Err(crate::derive::Refusal::NoFields);
-        };
-        let fields = crate::derive::compute(&m.mesh, &m.fields, &recipe)?;
         let name = recipe.field();
-        m.fields = Arc::new(m.fields.with_derived(fields, recipe));
-        self.forget_values(name);
-        self.redraw();
+        self.make(crate::derive::Made::Quantity(recipe))?;
         Ok(name)
     }
 
-    /// Remove derived field `name` from the open mesh's fields. Refused
-    /// while an iso-surface, the arrows or a streamline set is made from
-    /// it (their ids are given); colouring by it moves on to the
-    /// result's first field.
-    pub fn underive(&mut self, name: &str) -> Result<(), crate::derive::Refusal> {
+    /// Compute the field of `formula` ([`crate::calc`]) on the open mesh
+    /// and add it to the mesh's fields, as [`Session::derive`]; the names
+    /// of the fields made, the formula's first, then those made from it
+    /// again.
+    pub fn calculate(
+        &mut self,
+        formula: crate::calc::Formula,
+    ) -> Result<Vec<String>, crate::derive::Refusal> {
+        self.make(crate::derive::Made::Formula(formula))
+    }
+
+    /// Make the field of `made` (again), and every field made from it,
+    /// then draw again; the names of the fields made. Refused, with
+    /// nothing changed, when a field made again changes between scalar
+    /// and vector while items are made from it.
+    pub fn make(
+        &mut self,
+        made: crate::derive::Made,
+    ) -> Result<Vec<String>, crate::derive::Refusal> {
         use crate::derive::Refusal;
-        let Some(m) = &mut self.mesh else {
-            return Err(Refusal::NotDerived(name.into()));
+        let Some(m) = &self.mesh else {
+            return Err(Refusal::NoFields);
         };
-        let Some(set) = m.fields.without_derived(name) else {
-            return Err(Refusal::NotDerived(name.into()));
+        let (set, names) = m.fields.remake(&m.mesh, made)?;
+        for n in &names {
+            let before = m.fields.get(n).map(|f| f.components);
+            let after = set.get(n).map(|f| f.components);
+            if before.is_some() && before != after {
+                let users = self.users_of(n);
+                if !users.is_empty() {
+                    return Err(Refusal::InUse(n.clone(), users));
+                }
+            }
+        }
+        if let Some(m) = &mut self.mesh {
+            m.fields = Arc::new(set);
+        }
+        for n in &names {
+            self.forget_values(n);
+        }
+        self.redraw();
+        Ok(names)
+    }
+
+    /// The ids of the items made from field `name`: iso-surfaces, the
+    /// arrows, streamline sets.
+    fn users_of(&self, name: &str) -> Vec<String> {
+        let Some(m) = &self.mesh else {
+            return Vec::new();
         };
         let d = &self.display;
         let mut users: Vec<Item> = Vec::new();
@@ -966,12 +1002,27 @@ impl Session {
                 users.push(Item::Stream(k as u32));
             }
         }
+        users.iter().map(|i| i.id(&m.mesh)).collect()
+    }
+
+    /// Remove derived or calculated field `name` from the open mesh's
+    /// fields. Refused while an iso-surface, the arrows, a streamline
+    /// set or another made field is made from it (their ids and names
+    /// are given); colouring by it moves on to the result's first field.
+    pub fn underive(&mut self, name: &str) -> Result<(), crate::derive::Refusal> {
+        use crate::derive::Refusal;
+        let Some(m) = &self.mesh else {
+            return Err(Refusal::NotDerived(name.into()));
+        };
+        let set = m.fields.unmake(name)?;
+        let users = self.users_of(name);
         if !users.is_empty() {
-            let ids = users.iter().map(|i| i.id(&m.mesh)).collect();
-            return Err(Refusal::InUse(name.into(), ids));
+            return Err(Refusal::InUse(name.into(), users));
         }
         let first = set.names().first().map(|n| n.to_string());
-        m.fields = Arc::new(set);
+        if let Some(m) = &mut self.mesh {
+            m.fields = Arc::new(set);
+        }
         let d = &mut self.display;
         if d.field.as_ref().is_some_and(|c| c.name == name) {
             d.field = first.map(|name| crate::field::FieldChoice {

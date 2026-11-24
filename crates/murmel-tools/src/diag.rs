@@ -407,15 +407,51 @@ const OWN: &[Code] = &[
     Code {
         code: "FIELD009",
         severity: Severity::Error,
-        meaning: "No derived field of this name: none was made with field.derive, or the field is the file's own.",
-        fix: Some("field.catalogue says which fields are derived."),
+        meaning: "No derived or calculated field of this name: none was made with field.derive or field.calculate, or the field is the file's own.",
+        fix: Some("field.catalogue says which fields are derived and calculated."),
     },
     Code {
         code: "FIELD010",
         severity: Severity::Error,
-        meaning: "The derived field is in use: an iso-surface, the arrows or a streamline set is made from it.",
+        meaning: "The derived or calculated field is in use: an iso-surface, the arrows, a streamline set or another derived or calculated field is made from it (or it would change between scalar and vector under them).",
         fix: Some(
-            "Remove or change the items named (iso.clear, arrows.clear, stream.clear), then remove the field.",
+            "Remove or change the items and fields named (iso.clear, arrows.clear, stream.clear, field.calculate remove), then remove or change the field.",
+        ),
+    },
+    Code {
+        code: "FIELD011",
+        severity: Severity::Error,
+        meaning: "The formula cannot be read: a character it does not know, a bracket not closed, something missing or too much; the message says the column. Or it is empty, longer than 2000 characters or nested more than 64 deep.",
+        fix: Some("Mend the formula at the column given; field.calculate describes the grammar."),
+    },
+    Code {
+        code: "FIELD012",
+        severity: Severity::Error,
+        meaning: "A name in the formula is no field of the result, no built-in name (x, y, z, pos, pi) and no function.",
+        fix: Some(
+            "The message lists the fields; quote a field name with spaces or dots (\"p rgh\"). field.catalogue lists the functions.",
+        ),
+    },
+    Code {
+        code: "FIELD013",
+        severity: Severity::Error,
+        meaning: "The formula's types or places do not fit: a vector where a scalar goes (or the other way), a function given the wrong number of arguments, a field with neither 1 nor 3 components, or fields with no place in common (one only on the boundary faces, one only in the cells).",
+        fix: Some(
+            "Take a component (U.x) or the magnitude (mag(U)), or use dot or cross; the message says which argument.",
+        ),
+    },
+    Code {
+        code: "FIELD014",
+        severity: Severity::Error,
+        meaning: "A formula's field cannot have this name (it must start with a letter or _, then letters, digits and _, at most 64 long, and not be a derived quantity's field), or its unit is longer than 64 characters.",
+        fix: Some("Choose another name, such as speed or p_rel."),
+    },
+    Code {
+        code: "FIELD015",
+        severity: Severity::Error,
+        meaning: "The formula reads its own field, or a field made from it, so it would go round in a circle.",
+        fix: Some(
+            "Read the fields it is made from instead, or remove the field made from it first.",
         ),
     },
 ];

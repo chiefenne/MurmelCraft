@@ -2545,6 +2545,119 @@ fn derived_field_tools() {
     assert!(s.fields().unwrap().get("vorticity").is_none());
 }
 
+/// Invariant: field.calculate adds a formula's field (no journal step),
+/// says what it reads and where it has no value, computes your kept
+/// formula by its name alone, makes the fields read from it again, and
+/// refuses bad formulas with the codes of diag.codes; your formulas are
+/// written to settings.toml and load back, and field.catalogue lists
+/// them with the calculated fields and the functions. Breaks when a
+/// kept formula is lost between settings and the session.
+#[test]
+fn calculator_tools() {
+    let dir = std::env::temp_dir().join(format!("murmel-calc-{}", std::process::id()));
+    let mut s = session();
+    s.config_dir = Some(dir.clone());
+    let path = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+
+    let before = s.journal.undo.len();
+    let e = call(
+        "field.calculate",
+        json!({"name": "speed2", "formula": "mag(velocity) ^ 2", "unit": "m2/s2"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.journal.undo.len(), before);
+    assert_eq!(e.result["field"], "speed2");
+    assert_eq!(e.result["reads"], json!(["velocity"]));
+    assert_eq!(e.result["places"][0]["unit"], "m2/s2");
+    assert_eq!(e.result["places"][0]["no_value"], 0);
+    let e = call(
+        "field.calculate",
+        json!({"name": "root", "formula": "sqrt(pressure - 1e9)"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(e.result["places"][0]["no_value"].as_u64().unwrap() > 0);
+
+    // Kept, then computed by its name; settings.toml has it.
+    let e = call(
+        "settings.keep_formula",
+        json!({"name": "half", "formula": "speed2 / 2"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let (st, _, problems) = murmel_engine::settings::load(&dir, false);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(st.formulas.len(), 1);
+    assert_eq!(st.formulas[0].formula, "speed2 / 2");
+    let e = call("field.calculate", json!({"name": "half"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["formula"]["formula"], "speed2 / 2");
+    // speed2 made again makes half again.
+    let e = call(
+        "field.calculate",
+        json!({"name": "speed2", "formula": "dot(velocity, velocity)"}),
+        &mut s,
+    );
+    assert_eq!(e.result["made_again"], json!(["half"]));
+
+    let e = call("field.catalogue", json!({}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["formulas"][0]["computed"], true);
+    let calc = e.result["calculated"].as_array().unwrap();
+    assert_eq!(calc.len(), 3);
+    assert_eq!(calc[2]["kept"], true);
+    assert!(
+        e.result["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "curl")
+    );
+
+    for (input, code) in [
+        (json!({"name": "x1", "formula": "velocity +"}), "FIELD011"),
+        (json!({"name": "x1", "formula": "nothing * 2"}), "FIELD012"),
+        (
+            json!({"name": "x1", "formula": "velocity * velocity"}),
+            "FIELD013",
+        ),
+        (json!({"name": "vorticity", "formula": "1"}), "FIELD014"),
+        (json!({"name": "speed2", "formula": "half"}), "FIELD015"),
+        (json!({"name": "pressure", "formula": "1"}), "FIELD008"),
+        (json!({"name": "nope"}), "TOOL002"),
+        (json!({"name": "speed2", "remove": true}), "FIELD010"),
+        (json!({"name": "velocity", "remove": true}), "FIELD009"),
+        (
+            json!({"name": "half", "formula": "1", "remove": true}),
+            "TOOL002",
+        ),
+    ] {
+        let e = call("field.calculate", input.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, code, "{input}: {:?}", e.diagnostics);
+    }
+    let e = call(
+        "settings.keep_formula",
+        json!({"name": "bad", "formula": "(1"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "FIELD011");
+    for n in ["half", "speed2", "root"] {
+        let e = call(
+            "field.calculate",
+            json!({"name": n, "remove": true}),
+            &mut s,
+        );
+        assert!(e.ok(), "{n}: {:?}", e.diagnostics);
+    }
+    assert!(call("settings.forget_formula", json!({"name": "half"}), &mut s).ok());
+    assert!(s.formulas.is_empty());
+    let e = call("settings.forget_formula", json!({"name": "half"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Parcels at the centre of the channel's box and spread through it, in
 /// FoehnCraft's layout, written to a fresh file.
 fn parcel_file(s: &Session, name: &str) -> PathBuf {

@@ -69,6 +69,7 @@ fn session() -> Result<Session, String> {
         s.view_cube = st.view_cube;
         s.agents = st.agents.enabled;
         s.defaults = st.defaults;
+        s.formulas = st.formulas;
         murmel_engine::defaults::start_view(&mut s);
         if let Err(e) = s.set_colors(st.colors) {
             eprintln!("warning: settings.toml colors: {e}");

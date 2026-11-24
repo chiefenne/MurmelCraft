@@ -552,6 +552,14 @@ pub fn commands() -> Vec<Command> {
         &[],
         Window(Some("field.derive")),
     ));
+    // The calculator: the same window, its formula field focused.
+    v.push(cmd(
+        "window.calculator",
+        "cmd-calculator",
+        "field",
+        &[],
+        Window(Some("field.calculate")),
+    ));
     for q in murmel_engine::derive::Quantity::ALL {
         v.push(cmd(
             format!("field.derive:{}", q.key()),
@@ -1641,6 +1649,14 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "the colour-by menu and the legend show the fields",
     ),
     ("field.catalogue", "the Derived fields window shows it"),
+    (
+        "settings.keep_formula",
+        "the Derived fields window keeps a formula among yours",
+    ),
+    (
+        "settings.forget_formula",
+        "the Derived fields window forgets one of your formulas",
+    ),
     ("views.list", "the model tree shows the saved views"),
     (
         "views.rename",
