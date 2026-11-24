@@ -168,6 +168,13 @@ problem took more than a few minutes to understand.
   read or built again. Meshes under 32 MiB open at once, which keeps the
   window tests synchronous; a test of the background path sets
   `background_bytes` to 0 and holds the reader with `opening_gate`.
+- **The `.vtu` reader streams; it never holds the file's text.** Each
+  array is parsed as it streams past, into the type its use needs, and
+  `vtu::kind_of` decides which arrays are parsed at all: an array it does
+  not name is passed over unread. A new array the reader uses goes into
+  `kind_of` first. A chunk can end anywhere (inside a number, a base64
+  group, a tag), so a change to the streaming path is tested with the
+  file handed over a few bytes at a time (`streams_in_any_pieces`).
 
 ## Serde
 
