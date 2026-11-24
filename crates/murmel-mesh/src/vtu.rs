@@ -370,7 +370,13 @@ fn parse<R: BufRead>(src: R, len: u64) -> Result<(Mesh, Polygons, Results), Mesh
                     "DataArray" => {
                         let mut a = array(&e, section)?;
                         let kind = kind_of(&a, &arrays);
-                        a.values = values(&mut reader.stream(), &a, header64, kind)?;
+                        let room = Room {
+                            declared: declared(&a, header.as_ref(), len),
+                            rest: len.saturating_sub(
+                                usize::try_from(reader.buffer_position()).unwrap_or(usize::MAX),
+                            ),
+                        };
+                        a.values = values(&mut reader.stream(), &a, header64, kind, room)?;
                         arrays.push(a);
                         crate::profile::check()?;
                     }
@@ -477,39 +483,45 @@ fn is_field(a: &Array) -> bool {
 }
 
 /// The values of the array whose start tag was just read: its text up to
-/// the `<` that ends it, parsed into `kind` as it streams in, or passed
-/// over. The first array of `Points` is grouped by three at once, before
-/// the next arrays are read.
+/// the `<` that ends it, parsed into `kind` as it streams in (into `room`),
+/// or passed over. The first array of `Points` is grouped by three: ascii
+/// coordinates parse straight into points.
 fn values<R: BufRead>(
     src: &mut R,
     a: &Array,
     header64: bool,
     kind: Kind,
+    room: Room,
 ) -> Result<Values, MeshError> {
     let name = &a.name;
+    let not_number = |t: &str| err("MESH005", format!("{name}: \"{t}\" is not a number"));
     Ok(match kind {
         Kind::Skip => {
             content(src, None, |_| Ok(()))?;
             Values::Skipped
         }
+        Kind::Floats if a.section == Section::Points && a.format != "binary" => {
+            match ascii::<R, [f64; 3]>(src, room, not_number)? {
+                Ok(p) => Values::Points(p),
+                Err(flat) => Values::Floats(flat),
+            }
+        }
         Kind::Floats => {
-            let v = numbers_of(src, a, header64, f64_of, |t| {
-                err("MESH005", format!("{name}: \"{t}\" is not a number"))
-            })?;
+            let v = numbers_of(src, a, header64, room, f64_of, not_number)?;
             if a.section == Section::Points && v.len() % 3 == 0 {
                 Values::Points(v.as_chunks::<3>().0.to_vec())
             } else {
                 Values::Floats(v)
             }
         }
-        Kind::Ints => Values::Ints(numbers_of(src, a, header64, i64_of, |t| {
+        Kind::Ints => Values::Ints(numbers_of(src, a, header64, room, i64_of, |t| {
             err("MESH005", format!("{name}: \"{t}\" is not an integer"))
         })?),
         // Point ids and counts: whole numbers from 0 to `u32::MAX`, kept
         // in 4 bytes each instead of 8. A negative or larger value is out
         // of range (`MESH006`), and in binary becomes `u32::MAX`, which no
         // index check passes.
-        Kind::Ids => Values::Ids(numbers_of(src, a, header64, u32_of, |t| {
+        Kind::Ids => Values::Ids(numbers_of(src, a, header64, room, u32_of, |t| {
             if <i64 as numbers::Number>::parse(t.as_bytes()).is_some() {
                 err("MESH006", format!("{name}: {t} is out of range"))
             } else {
@@ -519,40 +531,85 @@ fn values<R: BufRead>(
     })
 }
 
+/// What an ascii array is parsed into: room for the values the `Piece`
+/// declares, or, for the connectivity and face streams (no count given),
+/// for as many as the rest of the file holds at the density of their
+/// first megabyte. Room never touched costs no memory, and room too small
+/// grows (see [`numbers::Filling`]).
+#[derive(Clone, Copy)]
+struct Room {
+    declared: Option<usize>,
+    /// Bytes of the file from the array on.
+    rest: usize,
+}
+
+/// The values an array should hold by the counts of the `Piece`, at most
+/// one for every two bytes of the file: a wrong count cannot claim more
+/// memory than the numbers the file could hold.
+fn declared(a: &Array, h: Option<&Header>, len: usize) -> Option<usize> {
+    let h = h?;
+    let n = match (a.section, a.name.as_str()) {
+        (Section::Points | Section::PointData, _) => h.points,
+        (Section::Cells, "offsets" | "types" | "faceoffsets") | (Section::CellData, _) => h.cells,
+        _ => return None,
+    };
+    Some(n.saturating_mul(a.components).min(len.div_ceil(2)))
+}
+
+/// The ascii numbers of an array as slots of `S`, parsed in parallel piece
+/// by piece as the text streams in, into `room`; every value read when
+/// they do not fill whole slots. `bad` names a token that is not a number.
+fn ascii<R: BufRead, S: numbers::Slot>(
+    src: &mut R,
+    room: Room,
+    bad: impl Fn(&str) -> MeshError,
+) -> Result<Result<Vec<S>, Vec<S::Value>>, MeshError> {
+    let mut out = numbers::Filling::new(room.declared.unwrap_or(0));
+    // The density is sampled from the first piece long enough to tell.
+    let mut guess = room.declared.is_none();
+    content(src, Some(&numbers::SPACE), |text| {
+        if guess && text.len() >= 1 << 16 {
+            guess = false;
+            out.expect(numbers::estimate(text, &numbers::SPACE, room.rest));
+        }
+        numbers::parse_append(text, &numbers::SPACE, &mut out).map_err(|t| bad(&t))
+    })?;
+    Ok(out.finish())
+}
+
 /// How a binary value of `T` is read from its little-endian bytes.
 type Converter<T> = fn(&[u8]) -> T;
 
 /// The numbers of an array as `T`: ascii tokens parsed in parallel piece
-/// by piece, or base64 decoded and converted by the function its type
-/// selects (`convert`). `bad` names a token that is not a `T`.
-fn numbers_of<R: BufRead, T: numbers::Number>(
+/// by piece (see [`ascii`]), or base64 decoded and converted by the
+/// function its type selects (`convert`). `bad` names a token that is not
+/// a `T`.
+fn numbers_of<R: BufRead, T: numbers::Number + numbers::Slot<Value = T>>(
     src: &mut R,
     a: &Array,
     header64: bool,
+    room: Room,
     convert: fn(&str) -> Option<Converter<T>>,
     bad: impl Fn(&str) -> MeshError,
 ) -> Result<Vec<T>, MeshError> {
-    let mut out = Vec::new();
-    if a.format == "binary" {
-        let type_error = || err("MESH005", format!("{}: type {}", a.name, a.ty));
-        let mut b = Base64 {
-            name: &a.name,
-            header: if header64 { 8 } else { 4 },
-            size: element_size(&a.ty).ok_or_else(type_error)?,
-            convert: convert(&a.ty).ok_or_else(type_error)?,
-            group: Vec::new(),
-            bytes: Vec::new(),
-            decoded: 0,
-            padded: false,
-            data: None,
-        };
-        content(src, None, |text| b.eat(text, &mut out))?;
-        b.finish()?;
-    } else {
-        content(src, Some(&numbers::SPACE), |text| {
-            numbers::parse_append(text, &numbers::SPACE, &mut out).map_err(|t| bad(&t))
-        })?;
+    if a.format != "binary" {
+        return Ok(ascii::<R, T>(src, room, bad)?.unwrap_or_else(|v| v));
     }
+    let mut out = Vec::new();
+    let type_error = || err("MESH005", format!("{}: type {}", a.name, a.ty));
+    let mut b = Base64 {
+        name: &a.name,
+        header: if header64 { 8 } else { 4 },
+        size: element_size(&a.ty).ok_or_else(type_error)?,
+        convert: convert(&a.ty).ok_or_else(type_error)?,
+        group: Vec::new(),
+        bytes: Vec::new(),
+        decoded: 0,
+        padded: false,
+        data: None,
+    };
+    content(src, None, |text| b.eat(text, &mut out))?;
+    b.finish()?;
     Ok(out)
 }
 
@@ -1515,6 +1572,34 @@ mod tests {
                     }
                 });
             }
+        }
+    }
+
+    /// Invariant: the arrays with no declared count (the connectivity and
+    /// the face stream, here over 64 KiB of text each) read the same into
+    /// room guessed from their first piece (the whole text at once, or
+    /// pieces of 256 KiB) as into room that grows from nothing (pieces too
+    /// short to guess from), at one thread and at several. A guess that
+    /// lost or moved the values read before it would change the cells.
+    #[test]
+    fn guessed_room_reads_the_same() {
+        let dir = std::env::temp_dir().join(format!("murmel-vtu-guess-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mesh = crate::synth::honeycomb(8);
+        let path = dir.join("ascii.vtu");
+        crate::synth::write_vtu(&mesh, &path, crate::synth::Encoding::Ascii).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        for threads in [1, 3] {
+            crate::par::with_threads(threads, || {
+                let grown = format!("{:?}", read_in_pieces(&bytes, 4099).unwrap());
+                let (m, r) = read_vtu_str_results(std::str::from_utf8(&bytes).unwrap()).unwrap();
+                assert_eq!(m.cell_count(), mesh.cell_count());
+                assert_eq!(m.points, mesh.points);
+                assert_eq!(format!("{:?}", (m, r)), grown);
+                let pieces = format!("{:?}", read_in_pieces(&bytes, 1 << 18).unwrap());
+                assert_eq!(pieces, grown);
+            });
         }
     }
 
