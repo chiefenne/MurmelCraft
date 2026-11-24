@@ -1176,7 +1176,10 @@ impl FieldSet {
         twin: Option<&[Vec<f64>]>,
         keep: Option<usize>,
     ) -> (Vec<Vec<f64>>, Vec<[f64; 3]>) {
-        let t = self.topology(mesh);
+        let t = {
+            let _phase = murmel_mesh::profile::span("field.topology");
+            self.topology(mesh)
+        };
         let np = mesh.points.len();
         let mut kept = Vec::new();
         let nodes = comps
@@ -1184,6 +1187,7 @@ impl FieldSet {
             .enumerate()
             .map(|(j, v)| {
                 let b = twin.and_then(|b| b.get(j));
+                let phase = murmel_mesh::profile::span("field.gradients");
                 let g = crate::gradient::cell_gradients(
                     mesh,
                     &t.centre,
@@ -1191,6 +1195,8 @@ impl FieldSet {
                     b.map(|b| (b.as_slice(), t.face_centre.as_slice())),
                     &|c, out| t.near(c, out),
                 );
+                drop(phase);
+                let _phase = murmel_mesh::profile::span("field.nodes");
                 let out: Vec<f64> = murmel_mesh::par::map(np, 8192, |r| {
                     r.map(|p| {
                         let at = mesh.points[p];
@@ -1357,6 +1363,7 @@ impl FieldSet {
             Location::Cell => {
                 let cell: Vec<f64> = (0..nc).map(|c| combine(&comps, c, component)).collect();
                 if keep.is_none() {
+                    let _phase = murmel_mesh::profile::span("field.gradients");
                     let t = self.topology(mesh);
                     let b: Option<Vec<f64>> = twin.as_deref().map(|b| {
                         (0..mesh.boundary.len())
@@ -1610,6 +1617,7 @@ pub(crate) fn ensure_field(display: &mut crate::display::Display, mesh: &Mesh, f
         v.choice.name == choice.name && (!v.vector || v.choice.component == choice.component)
     });
     if !fresh {
+        let _phase = murmel_mesh::profile::span("field.values");
         display.field_values = fields.values_cached(mesh, &choice);
     }
 }

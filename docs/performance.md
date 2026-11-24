@@ -45,8 +45,16 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `pick.9` | nine picks over the iso view (the hover tooltip, a click, snapping) |
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
 | `render.next.faces` | a later frame without the edges (the window while the view moves, when frames with edges are slow) |
+| `field.make` | two cell fields made for the bench (a scalar `p` and a swirling vector `U`, functions of each cell's centroid), so every mesh has results |
+| `field.color` | colouring by `p` the first time (`display.color_by`): the field's node values, with their phases `field.topology` (which nodes and cells meet, made once per mesh), `field.gradients` (each cell's least-squares gradient), `field.nodes` (the node values), then the surface |
+| `field.switch` | colouring by `U` the first time (a vector: its three components and their magnitude) |
+| `field.color.again` | colouring by a field whose values are made already: the surface alone |
+| `field.style` | a change of the colour range (`field.style`), which draws again without building anything |
+| `slice.set`, `slice.step` | a slice through the middle, then one step of a slice drag (`slice.set` with a new origin), with the phases `extract.slice` (the section's faces), `extract.outline` (the outline of each cell's section) |
+| `iso.set`, `iso.step` | an iso-surface of `p`, then one step of its value (`extract.iso`) |
+| `arrows.set`, `slice.step.arrows` | arrows of `U` on the slice, the first time (`extract.vector`: the vector's node values), then one step of the slice with them |
 
-and reports the peak resident memory (Linux and macOS, from
+`--no-fields` leaves out the field stages. The bench reports the peak resident memory (Linux and macOS, from
 `getrusage`; the `read` stage also reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
 rasteriser and says nothing about a real GPU; run it on the Mac for those.
 
@@ -1195,3 +1203,24 @@ The grid holds at most 2 M cells whatever the size of the file, so on
 100 M cells moving a slice costs what it costs here; only reading the
 grid grows with the file. Keeping the grid in the cache folder, so a
 second open does not sample again, comes next.
+
+## Fields on a large mesh: where the time goes (2026-11-24)
+
+The field stages of `murmel bench` (above) time colouring by a field,
+slices, iso-surfaces and arrows as the tools draw them. Before any work
+on them, 1 M honeycomb (1,005,039 cells), polyMesh binary, 4 threads,
+`--no-render`:
+
+| Stage (ms) | total | where |
+|---|---:|---|
+| field.color (`p`) | 2,256 | topology 1,617 (one thread), gradients 227, node values 112 |
+| field.switch (`U`) | 1,892 | gradients 1,187 (each component and the magnitude on its own), node values 320 |
+| field.color.again | 155 | the mesh surface |
+| field.style | 0 | |
+| slice.set / slice.step | 1,008 / 1,059 | section 586 to 653 (one thread, every cell tested), outlines 218 to 226 (one thread), the mesh surface built again 200 |
+| iso.set / iso.step | 2,876 / 2,909 | iso-surface 1,645 to 1,802 (one thread), the slice built again with it |
+| arrows.set | 4,972 | the vector's node values 3,699 (each of x, y, z and the magnitude made all three components again) |
+| slice.step.arrows | 1,270 | section 929, outlines 314 |
+
+At 10 M cells each of these is about ten times longer: seconds for one
+step of a slice drag. What follows takes them down one at a time.

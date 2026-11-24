@@ -574,6 +574,7 @@ pub fn append(
     };
     // The arrows' field (its three components and magnitude), their grid
     // spacing and where they go.
+    let phase = murmel_mesh::profile::span("extract.vector");
     let arrows = display.arrows.as_ref().filter(|a| a.enabled).and_then(|a| {
         let fields = fields?;
         let comp = |component| {
@@ -593,6 +594,7 @@ pub fn append(
         let longest = comp(Component::Magnitude)?.range?.1;
         Some((a, vector, longest, a.spacing(mesh)))
     });
+    drop(phase);
     let mut samples: Vec<crate::glyph::Sample> = Vec::new();
     let anchor = mesh.bounds().center();
     for (k, slice) in display.slices.iter().enumerate() {
@@ -637,6 +639,7 @@ pub fn append(
             // iso-surfaces), not only its nodes'.
             let vector = arrows.as_ref().map(|a| &a.1);
             let mut pieces: Vec<(u32, Vec<Vx>)> = Vec::new();
+            let phase = murmel_mesh::profile::span("extract.slice");
             for t in level_set(mesh, fields, Level::Plane(&plane), field, vector, shown) {
                 let verts: Vec<Vx> = t.verts.iter().map(|v| Vx { n: normal, ..*v }).collect();
                 let verts = clip_flat(verts, &flat, borders(t.cell));
@@ -651,6 +654,7 @@ pub fn append(
                     pieces.push((t.cell, verts));
                 }
             }
+            drop(phase);
             if let Some((a, _, _, _)) = &arrows {
                 let h = a.plane_spacing(mesh, &plane);
                 crate::glyph::on_plane(&mut samples, &plane, anchor, h, a.in_plane, &pieces);
@@ -659,6 +663,7 @@ pub fn append(
             if !edges {
                 continue;
             }
+            let _phase = murmel_mesh::profile::span("extract.outline");
             let dist: Vec<f64> = mesh.points.iter().map(|&p| plane.distance(p)).collect();
             for (c, &on) in shown.iter().enumerate() {
                 if !on {
@@ -685,6 +690,7 @@ pub fn append(
             }
         }
     }
+    let phase = murmel_mesh::profile::span("extract.iso");
     if let Some(fields) = fields {
         for (k, iso) in display.isos.iter().enumerate() {
             if !iso.enabled {
@@ -726,6 +732,8 @@ pub fn append(
             }
         }
     }
+    drop(phase);
+    let _phase = murmel_mesh::profile::span("extract.arrows");
     if let Some((a, vector, longest, h)) = &arrows {
         if a.surface {
             let v = [&*vector[0], &*vector[1], &*vector[2]];
