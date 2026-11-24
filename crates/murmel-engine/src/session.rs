@@ -884,6 +884,10 @@ pub struct Session {
     /// of the session so the window's reading on a copy serves the
     /// export after it.
     pub probe_history: crate::history::Cache,
+    /// The colour ranges read over the steps of a series (range mode
+    /// steps, [`crate::steps_range`]), shared by copies of the session
+    /// so the window's reading on a copy colours the window.
+    pub steps_ranges: crate::steps_range::Cache,
     /// The tables of a run charted (`charts.open`) and the chart the
     /// window's panel shows; kept when another mesh opens.
     pub charts: Option<crate::chart::Charts>,
@@ -947,6 +951,7 @@ impl Session {
             preview: None,
             series: None,
             probe_history: crate::history::Cache::default(),
+            steps_ranges: crate::steps_range::Cache::default(),
             charts: None,
             memory_budget: None,
             defer_blocks: false,

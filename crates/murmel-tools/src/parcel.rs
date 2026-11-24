@@ -242,6 +242,12 @@ pub(crate) fn parcels_set(input: Value, s: &mut Session) -> Run {
         Some(RangeKey::Field) => v.range = RangeMode::Field,
         Some(RangeKey::Shown) => v.range = RangeMode::Shown,
         Some(RangeKey::Symmetric) => v.range = RangeMode::Symmetric,
+        Some(RangeKey::Steps) => {
+            return Err(Diagnostic::new(
+                "TOOL002",
+                "parcels have no range over the steps; give field, shown, symmetric or fixed",
+            ));
+        }
         Some(RangeKey::Fixed) => {
             let now = s.mesh.as_ref().and_then(|m| {
                 murmel_engine::parcel::color_range(&s.display, m.surface.parcel_range)

@@ -8,14 +8,30 @@
 //! mesh plays as fast as it reads.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use egui::{Color32, Pos2, Rect, RichText, Role, Stroke, Ui, WidgetInfo, pos2, vec2};
+use murmel_engine::history::Progress;
 use murmel_engine::series::{MAX_RATE, MIN_RATE};
+use murmel_tools::{Diagnostic, Envelope};
 use serde_json::{Value, json};
 
 use crate::app::MurmelApp;
 use crate::style::color;
+
+/// The colour range over the steps of the open series (range mode
+/// steps, the maintainer's card of 2026-11-24), read by `series.range`
+/// on a copy of the session on a thread of its own. The copies share the
+/// ranges read, so the legend widens while it reads; a reading of a
+/// field no longer shown is stopped.
+#[derive(Default)]
+pub(crate) struct StepsRangeJob {
+    job: Option<(String, Arc<Progress>, JoinHandle<Envelope>)>,
+    /// The key that could not be read, and why; not tried again.
+    failed: Option<(String, String)>,
+}
 
 /// What a painted button of the bar shows.
 #[derive(Clone, Copy)]
@@ -97,6 +113,78 @@ impl MurmelApp {
         if let Some(p) = picked {
             self.call("series.open", json!({ "path": p }));
         }
+    }
+
+    /// Read the range over the steps of the field shown when range mode
+    /// steps needs it; take a finished reading.
+    pub(crate) fn read_steps_range(&mut self, ctx: &egui::Context) {
+        let want = murmel_tools::series::steps_range_pending(&self.session);
+        let j = &mut self.steps_range;
+        if let Some((key, progress, handle)) = &j.job {
+            if want.as_ref() != Some(key) {
+                progress.cancel();
+            }
+            if !handle.is_finished() {
+                ctx.request_repaint_after(Duration::from_millis(100));
+                return;
+            }
+            if let Some((key, _, handle)) = j.job.take() {
+                let e = handle.join().unwrap_or_else(|_| {
+                    Envelope::failed(
+                        "series.range",
+                        1,
+                        Diagnostic::new(
+                            "SERIES004",
+                            "the range over the steps stopped unexpectedly",
+                        ),
+                    )
+                });
+                if let Some(d) = e.diagnostics.first().filter(|_| !e.ok())
+                    && !d.message.contains("cancelled")
+                {
+                    j.failed = Some((key, d.message.clone()));
+                }
+            }
+            ctx.request_repaint();
+            return;
+        }
+        let Some(key) = want else { return };
+        if j.failed.as_ref().is_some_and(|(k, _)| *k == key) {
+            return;
+        }
+        let mut session = self.session.clone();
+        let progress = Arc::new(Progress::default());
+        let p = progress.clone();
+        let handle = std::thread::spawn(move || {
+            murmel_tools::probe::with_progress(p, || {
+                murmel_tools::call("series.range", json!({}), &mut session)
+            })
+        });
+        j.failed = None;
+        j.job = Some((key, progress, handle));
+        ctx.request_repaint_after(Duration::from_millis(100));
+    }
+
+    /// The player bar's note on the range over the steps: how far its
+    /// reading is, or why it failed; `None` when there is nothing to say.
+    fn steps_range_note(&self) -> Option<String> {
+        let key = murmel_tools::series::steps_range_pending(&self.session)?;
+        if let Some((k, why)) = &self.steps_range.failed
+            && *k == key
+        {
+            return Some(
+                self.i18n
+                    .tr_args("player-range-failed", &[("why", why.clone().into())]),
+            );
+        }
+        let (_, p, _) = self.steps_range.job.as_ref()?;
+        Some(self.i18n.tr_args(
+            "player-range-reading",
+            &[
+                ("read", (p.done() as i64).into()),
+                ("n", (p.total() as i64).into()),
+            ],
+        ))
     }
 
     /// While the series plays, show the next step when its time has come
@@ -227,6 +315,9 @@ impl MurmelApp {
                 ),
             };
             ui.label(RichText::new(text).small().monospace());
+            if let Some(note) = self.steps_range_note() {
+                ui.label(RichText::new(note).small().color(secondary));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut rate = r.playback.rate;
                 let label_text = self.i18n.tr("player-rate");

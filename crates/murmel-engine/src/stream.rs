@@ -1389,7 +1389,8 @@ pub fn color_range(
         .and_then(|v| v.range)
         .or(t.color_range);
     let r = match style.range {
-        RangeMode::Field => whole?,
+        // Streamlines keep the step's range for now (see glyph.rs).
+        RangeMode::Field | RangeMode::Steps => whole?,
         RangeMode::Shown => t.color_range?,
         RangeMode::Symmetric => {
             let (a, b) = whole?;

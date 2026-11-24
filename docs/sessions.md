@@ -58,7 +58,9 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   and `display.field_styles`, one style per field: `mode` (`flat`,
   `smooth`, `banded`), `bands` (2 to 64), `lines` and `line_count` (1 to
   64), `map` (a colour map id, or left out for automatic), `reverse` and
-  `range` (`field`, `shown`, `symmetric` or `{"fixed": {"min": 0, "max": 2}}`).
+  `range` (`field`, `shown`, `symmetric`, `{"fixed": {"min": 0, "max": 2}}`
+  or, since format 1.17, `steps`: over every step of the open time
+  series).
   A field the result does not have is skipped as `field:<name>` and the
   colour falls back to solid. The values themselves are read from the
   result file again, never stored.

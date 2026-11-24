@@ -131,6 +131,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Field range: shown cells | `field.style` `{"range":"shown"}` |
 | palette | Field range: symmetric about zero | `field.style` `{"range":"symmetric"}` |
 | palette | Field range: fix as shown now | `field.style` `{"range":"fixed"}` |
+| palette | Field range: over all time steps | `field.style` `{"range":"steps"}` |
 | palette | Colour map: automatic | `field.style` `{"map":"auto"}` |
 | palette | Rainbow desaturated | `field.style` `{"map":"rainbow_desaturated"}` |
 | palette | Inferno | `field.style` `{"map":"inferno"}` |

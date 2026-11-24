@@ -167,6 +167,14 @@ impl Progress {
     pub fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
+
+    pub(crate) fn set_total(&self, n: usize) {
+        self.total.store(n, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_done(&self, n: usize) {
+        self.done.store(n, Ordering::Relaxed);
+    }
 }
 
 /// Why no history was read.

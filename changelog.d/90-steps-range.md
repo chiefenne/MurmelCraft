@@ -1,0 +1,3 @@
+### Added
+
+- Colour range "All time steps" (`field.style` range `steps`): while a time series is open, the mesh's colours span the smallest to the largest value of the field over every step, so a colour means the same value at each step of a playing series and in a movie of it. It is the default while a series is open (fields coloured over their whole range at one step take it; shown, symmetric and fixed ranges stay); "Whole field" gives each step's own range back. The window reads the other steps in the background and the player bar shows how far it is; the legend widens as it reads. `series.range` reads it from the command line and for agents, and pictures and movies read it before their first frame (SERIES004). Session files keep it (format 1.17).

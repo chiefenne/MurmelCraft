@@ -91,12 +91,18 @@ pub enum RangeMode {
     Symmetric,
     /// Set by the user.
     Fixed { min: f64, max: f64 },
+    /// Smallest to largest value of the whole field over every step of
+    /// the open time series ([`crate::steps_range`]; the maintainer's
+    /// card of 2026-11-24): a colour means the same value at every
+    /// step. Without a series it is [`RangeMode::Field`].
+    Steps,
 }
 
 impl RangeMode {
     pub fn key(self) -> &'static str {
         match self {
             RangeMode::Field => "field",
+            RangeMode::Steps => "steps",
             RangeMode::Shown => "shown",
             RangeMode::Symmetric => "symmetric",
             RangeMode::Fixed { .. } => "fixed",
@@ -1312,6 +1318,30 @@ impl FieldSet {
         v.is_finite().then_some(v)
     }
 
+    /// The range [`FieldSet::values`] gives `choice`, without computing
+    /// the node values: the smallest and largest finite value over the
+    /// cells, the points or the boundary faces, and over the whole volume
+    /// when the file says. `None` for an unknown field, one that does not
+    /// fit the mesh, or one without a finite value.
+    pub fn range_of(&self, mesh: &Mesh, choice: &FieldChoice) -> Option<(f64, f64)> {
+        let f = self.get(&choice.name)?;
+        if !Self::fits(f, mesh) {
+            return None;
+        }
+        let component = if f.is_vector() {
+            choice.component
+        } else {
+            Component::Magnitude
+        };
+        let range = f.range(component);
+        match (component, self.volume_range(&choice.name)) {
+            (Component::Magnitude, Some((a, b))) => {
+                Some(range.map_or((a, b), |(lo, hi)| (lo.min(a), hi.max(b))))
+            }
+            _ => range,
+        }
+    }
+
     /// The values colouring by `choice` draws: per cell, per node and per
     /// boundary face. `None` for an unknown field or one that does not
     /// fit the mesh.
@@ -1546,6 +1576,16 @@ impl Session {
         let style = self.field_style();
         let r = match style.range {
             RangeMode::Field => v.range?,
+            RangeMode::Steps => match (&self.series, self.mesh.as_ref()) {
+                (Some(series), Some(m)) => crate::steps_range::now(
+                    &self.steps_ranges,
+                    series,
+                    &m.fields,
+                    &v.choice,
+                    v.range,
+                )?,
+                _ => v.range?,
+            },
             RangeMode::Shown => self
                 .mesh
                 .as_ref()

@@ -1039,7 +1039,16 @@ fn reads_only_tools_change_nothing() {
             && s.fields()
                 .is_none_or(murmel_engine::field::FieldSet::is_empty)
             && e.diagnostics.first().is_some_and(|d| d.code == "PROBE001");
-        assert!(e.ok() || no_results, "{}: {:?}", t.id, e.diagnostics);
+        // No series is open, so no range over its steps.
+        let no_series = t.id == "series.range"
+            && s.series.is_none()
+            && e.diagnostics.first().is_some_and(|d| d.code == "SERIES002");
+        assert!(
+            e.ok() || no_results || no_series,
+            "{}: {:?}",
+            t.id,
+            e.diagnostics
+        );
         let after = (
             murmel_engine::Snapshot::of(&s),
             s.display.selection.clone(),
@@ -3588,4 +3597,113 @@ fn block_boxes_through_the_tools() {
     let e = call("display.visibility", show, &mut s);
     assert!(!e.ok());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A run of three steps of the box (`test-fixtures/box`) as VTU files with
+/// a cell field `temperature` of `factor × (k + 1)` on entry `k`: the
+/// factors 1, 2 and −1 give the ranges 1 to 4, 2 to 8 and −4 to −1.
+fn box_steps(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("murmel-steps-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let vtu = std::fs::read_to_string(root().join("test-fixtures/box/foehncraft.vtu")).unwrap();
+    // 4 cells and 16 boundary polygons; the polygons get no value.
+    let mut entries = Vec::new();
+    for (step, factor) in [(10u64, 1.0f64), (20, 2.0), (30, -1.0)] {
+        let values: Vec<String> = (0..20)
+            .map(|k| {
+                if k < 4 {
+                    (factor * (k + 1) as f64).to_string()
+                } else {
+                    "nan".into()
+                }
+            })
+            .collect();
+        let array = format!(
+            "        <DataArray type=\"Float64\" Name=\"temperature\" format=\"ascii\">\n{}\n        </DataArray>\n      </CellData>",
+            values.join("\n")
+        );
+        let file = format!("step_{step}.vtu");
+        std::fs::write(
+            dir.join(&file),
+            vtu.replacen("      </CellData>", &array, 1),
+        )
+        .unwrap();
+        entries.push(json!({"step": step, "time": step as f64 / 100.0, "files": {"fields": file}}));
+    }
+    let m = json!({"format": "foehncraft.series", "format_version": 1, "entries": entries});
+    std::fs::write(dir.join("series.json"), m.to_string()).unwrap();
+    dir
+}
+
+/// Invariant: while a series is open, a field first shown is coloured
+/// over every step (range steps, the maintainer's card of 2026-11-24):
+/// until read, its range is the step's own; series.range reads every
+/// step once and the range then spans them all, at every step, without
+/// reading again; range field gives the step's own back; parcels refuse
+/// range steps; a session file keeps it. Breaks if colours rescaled at
+/// each step of a playing series, or a step outside the shown one was
+/// missed.
+#[test]
+fn range_over_the_steps() {
+    let mut s = session();
+    let e = call("series.range", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let dir = box_steps("range");
+    let e = call(
+        "series.open",
+        json!({ "path": dir.join("series.json") }),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let e = call("series.range", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES004", "no field shown yet");
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "field": "temperature"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.field_style().range, murmel_engine::RangeMode::Steps);
+    let (lo, hi) = s.field_range().unwrap();
+    assert!(
+        (lo, hi) == (1.0, 4.0),
+        "the step's own until read: {lo} {hi}"
+    );
+    let e = call("field.style", json!({}), &mut s);
+    assert_eq!(e.result["steps_range"]["complete"], false);
+    let e = call("series.range", json!({}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["range"], json!([-4.0, 8.0]));
+    assert_eq!(
+        (e.result["read"].clone(), e.result["total"].clone()),
+        (json!(3), json!(3))
+    );
+    assert_eq!(s.field_range(), Some((-4.0, 8.0)));
+    // Another step keeps the range; nothing is read again (the files
+    // of the other steps are gone).
+    assert!(call("series.go", json!({"step": 20}), &mut s).ok());
+    let _ = std::fs::remove_file(dir.join("step_30.vtu"));
+    assert_eq!(s.field_range(), Some((-4.0, 8.0)));
+    let e = call("series.range", json!({}), &mut s);
+    assert_eq!(
+        e.result["range"],
+        json!([-4.0, 8.0]),
+        "kept, not read again"
+    );
+    // The step's own range again.
+    assert!(call("field.style", json!({"range": "field"}), &mut s).ok());
+    assert_eq!(s.field_range(), Some((2.0, 8.0)));
+    assert!(call("field.style", json!({"range": "steps"}), &mut s).ok());
+    assert_eq!(s.field_range(), Some((-4.0, 8.0)));
+    // A session file keeps range steps.
+    let file = dir.join("steps.murmel");
+    assert!(call("session.save", json!({ "path": file }), &mut s).ok());
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("\"steps\""), "{text}");
+    assert!(call("field.style", json!({"range": "field"}), &mut s).ok());
+    let e = call("session.load", json!({ "path": file }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.field_style().range, murmel_engine::RangeMode::Steps);
+    let _ = std::fs::remove_dir_all(dir);
 }
