@@ -156,6 +156,7 @@ impl MurmelApp {
         // cut is built on a thread of its own.
         session.hash_after_open = true;
         session.remember_checked = true;
+        session.cache_dir = settings::cache_dir();
         session.defer_clips = true;
         session.defer_blocks = true;
         let mut error = None;

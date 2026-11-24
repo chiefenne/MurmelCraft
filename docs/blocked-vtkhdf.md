@@ -225,7 +225,9 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   grid of an overview").
 - Slices, iso-surfaces and arrows on an overview draw on its preview
   grid (the engine's `preview.rs`), read the first time one shows, until
-  a region reads the cells of its blocks.
+  a region reads the cells of its blocks. The grid is kept in the cache
+  folder, so the file opened again unchanged is not sampled again
+  (docs/performance.md, "The preview grid kept").
 - The eye of "Block boxes" in the model tree (the item `blocks`) draws
   each block's `BlockBounds` as a box (the engine's `block_boxes.rs`);
   the blocks a region reads take a colour of their own, so you see what

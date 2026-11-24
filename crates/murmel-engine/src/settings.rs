@@ -35,6 +35,30 @@ pub fn config_dir() -> Option<PathBuf> {
         .map(|c| c.join("murmelcraft"))
 }
 
+/// The platform's cache folder for MurmelCraft, if one can be found:
+/// `MURMEL_CACHE_DIR`, else `~/Library/Caches/MurmelCraft` on macOS,
+/// `%LOCALAPPDATA%\MurmelCraft\cache` on Windows, and
+/// `$XDG_CACHE_HOME/murmelcraft` or `~/.cache/murmelcraft` elsewhere.
+/// What is kept there can be made again (the preview grids of overviews,
+/// [`crate::preview_cache`]).
+pub fn cache_dir() -> Option<PathBuf> {
+    if let Some(d) = std::env::var_os("MURMEL_CACHE_DIR") {
+        return Some(PathBuf::from(d));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    if cfg!(target_os = "macos") {
+        return home.map(|h| h.join("Library/Caches/MurmelCraft"));
+    }
+    if cfg!(windows) {
+        return std::env::var_os("LOCALAPPDATA")
+            .map(|a| PathBuf::from(a).join("MurmelCraft").join("cache"));
+    }
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.map(|h| h.join(".cache")))
+        .map(|c| c.join("murmelcraft"))
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     pub format: String,
