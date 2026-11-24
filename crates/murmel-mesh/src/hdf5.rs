@@ -402,11 +402,14 @@ enum Num {
     Unread,
 }
 
-/// The values of a numeric dataset, read where they lie ([`H5::values`]).
+/// The values of a numeric dataset, read where they lie ([`H5::values`]),
+/// or some of them ([`H5::values_in`]): values `first..` of the dataset's
+/// `len`.
 pub struct Values<'a> {
     bytes: Cow<'a, [u8]>,
     num: Num,
     len: usize,
+    first: usize,
 }
 
 impl<'a> Values<'a> {
@@ -431,7 +434,51 @@ impl<'a> Values<'a> {
             Num::Unread => 0,
             _ => bytes.len() / dtype.size(),
         };
-        Some(Values { bytes, num, len })
+        Some(Values {
+            bytes,
+            num,
+            len,
+            first: 0,
+        })
+    }
+
+    /// The values `first..` of a dataset of `len` values, from `bytes`
+    /// stored as `dtype`.
+    fn window(bytes: Cow<'a, [u8]>, dtype: &Dtype, first: usize, len: usize) -> Option<Values<'a>> {
+        let mut v = Values::new(bytes, dtype)?;
+        if !matches!(v.num, Num::Unread) {
+            v.first = first;
+            v.len = len;
+        }
+        Some(v)
+    }
+
+    /// No values (of a dataset that is not there).
+    pub(crate) fn none() -> Values<'static> {
+        Values {
+            bytes: Cow::Borrowed(&[]),
+            num: Num::Unread,
+            len: 0,
+            first: 0,
+        }
+    }
+
+    /// Values `rows` of `all`, for tests: a window of a dataset of floats.
+    #[cfg(test)]
+    pub(crate) fn of_floats_in(all: &[f64], rows: Range<usize>) -> Values<'static> {
+        let mut v = Values::of_floats(&all[rows.clone()]);
+        v.first = rows.start;
+        v.len = all.len();
+        v
+    }
+
+    /// Values `first..` of `all`, for tests: a window of a dataset.
+    #[cfg(test)]
+    pub(crate) fn of_ints_in(all: &[i64], rows: Range<usize>) -> Values<'static> {
+        let mut v = Values::of_ints(&all[rows.clone()]);
+        v.first = rows.start;
+        v.len = all.len();
+        v
     }
 
     /// Values of 64-bit integers, for tests.
@@ -456,17 +503,40 @@ impl<'a> Values<'a> {
 }
 
 impl Values<'_> {
-    /// How many values there are.
+    /// How many values the dataset has (those held may be fewer).
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// The values held: `held().contains(&i)` for each `i` that
+    /// [`Values::int`] and [`Values::float`] take.
+    pub fn held(&self) -> Range<usize> {
+        let size = match self.num {
+            Num::I64Le | Num::F64Le | Num::F64Be => 8,
+            Num::F32 { .. } => 4,
+            Num::Int { size, .. } => size,
+            Num::Unread => return 0..0,
+        };
+        self.first..self.first + self.bytes.len() / size
+    }
+
+    /// The same values, borrowed.
+    pub fn view(&self) -> Values<'_> {
+        Values {
+            bytes: Cow::Borrowed(&self.bytes),
+            num: self.num,
+            len: self.len,
+            first: self.first,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Value `i` as an integer (a float is truncated); `i < len()`.
+    /// Value `i` as an integer (a float is truncated); `i` is held.
     pub fn int(&self, i: usize) -> i64 {
+        let i = i - self.first;
         match self.num {
             Num::I64Le => i64::from_le_bytes(self.eight(i)),
             Num::Int { size, signed, be } => {
@@ -482,12 +552,13 @@ impl Values<'_> {
                 v as i64
             }
             Num::Unread => 0,
-            _ => self.float(i) as i64,
+            _ => self.float(i + self.first) as i64,
         }
     }
 
-    /// Value `i` as a float (an integer converts); `i < len()`.
+    /// Value `i` as a float (an integer converts); `i` is held.
     pub fn float(&self, i: usize) -> f64 {
+        let i = i - self.first;
         match self.num {
             Num::F64Le => f64::from_le_bytes(self.eight(i)),
             Num::F32 { be } => {
@@ -501,7 +572,7 @@ impl Values<'_> {
             }
             Num::F64Be => f64::from_be_bytes(self.eight(i)),
             Num::Unread => 0.0,
-            _ => self.int(i) as f64,
+            _ => self.int(i + self.first) as f64,
         }
     }
 
@@ -1563,6 +1634,77 @@ impl H5 {
     /// [`H5::values`] of a dataset read for its integers.
     pub fn int_values(&self, ds: &Dataset) -> Result<Values<'_>, MeshError> {
         self.values_or(ds, "a non-numeric dataset where integers are expected")
+    }
+
+    /// Whether [`H5::int_values_in`] reads rows of `ds` apart from the
+    /// rest (its data lies whole in the file).
+    pub fn reads_rows(&self, ds: &Dataset) -> bool {
+        matches!(ds.layout, Layout::Contiguous { addr: Some(_), .. })
+    }
+
+    /// Values `rows` of a numeric dataset read for its integers (element
+    /// numbers, clamped to the dataset): read apart from the rest when
+    /// the dataset lies whole in the file (contiguous), else all of them
+    /// ([`H5::int_values`]). The values keep the dataset's numbering and
+    /// length.
+    pub fn int_values_in(&self, ds: &Dataset, rows: Range<usize>) -> Result<Values<'_>, MeshError> {
+        self.values_in_or(
+            ds,
+            rows,
+            "a non-numeric dataset where integers are expected",
+        )
+    }
+
+    /// [`H5::int_values_in`] of a dataset read for its numbers.
+    pub fn values_in(&self, ds: &Dataset, rows: Range<usize>) -> Result<Values<'_>, MeshError> {
+        self.values_in_or(ds, rows, "a non-numeric dataset where numbers are expected")
+    }
+
+    fn values_in_or(
+        &self,
+        ds: &Dataset,
+        rows: Range<usize>,
+        not_numbers: &str,
+    ) -> Result<Values<'_>, MeshError> {
+        let Layout::Contiguous {
+            addr: Some(a),
+            size,
+        } = ds.layout
+        else {
+            return self.values_or(ds, not_numbers);
+        };
+        let elem = ds.dtype.size();
+        if Values::new(Cow::Borrowed(&[]), &ds.dtype).is_none() {
+            return Err(unsupported(not_numbers));
+        }
+        if elem == 0 {
+            return Err(unsupported("reading a dataset of this datatype"));
+        }
+        let total = ds
+            .count()
+            .checked_mul(elem as u64)
+            .ok_or_else(|| broken("dataset size overflows"))?;
+        if total > self.len as u64 {
+            return Err(MeshError::new(
+                "MESH004",
+                format!(
+                    "a dataset of {total} bytes cannot come from a file of {} bytes",
+                    self.len
+                ),
+            ));
+        }
+        if size < total {
+            return Err(broken("contiguous data shorter than its dataspace"));
+        }
+        let count = (total / elem as u64) as usize;
+        let start = rows.start.min(count);
+        let end = rows.end.clamp(start, count);
+        let bytes = self.data(
+            a.checked_add((start * elem) as u64)
+                .ok_or_else(|| broken("data runs past the end of the file"))?,
+            ((end - start) * elem) as u64,
+        )?;
+        Values::window(bytes, &ds.dtype, start, count).ok_or_else(|| unsupported(not_numbers))
     }
 
     fn values_or(&self, ds: &Dataset, not_numbers: &str) -> Result<Values<'_>, MeshError> {
@@ -2668,6 +2810,102 @@ mod tests {
         let got = crate::par::with_threads(4, || h.read_f64(&ds)).unwrap();
         assert_eq!(got, values);
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Every dataset of a file.
+    fn datasets(h: &H5) -> Vec<Dataset> {
+        let mut out = Vec::new();
+        let mut stack = vec![h.root().unwrap()];
+        while let Some(obj) = stack.pop() {
+            if h.is_group(&obj) {
+                for l in h.links(&obj).unwrap() {
+                    if matches!(l.target, Target::Hard(_))
+                        && let Ok(Some(c)) = h.child(&obj, &l.name)
+                    {
+                        stack.push(c);
+                    }
+                }
+            } else if let Ok(ds) = h.dataset(&obj) {
+                out.push(ds);
+            }
+        }
+        out
+    }
+
+    /// Invariant: rows of a dataset read apart from the rest
+    /// ([`H5::values_in`], [`H5::int_values_in`]) are, value by value,
+    /// those rows of the whole dataset, keep its numbering and length,
+    /// and hold no row outside the dataset, for rows inside it, at and
+    /// past its end, empty and reversed; a contiguous dataset holds only
+    /// the rows asked for (opened by path, read from the file), any other
+    /// layout all of them. Breaks when a window starts at the wrong byte,
+    /// numbers its values from 0 instead of its first row, or is not
+    /// clamped to the dataset. The cell walk's tests give it windows made
+    /// in memory, so only this test reads them from a file.
+    #[test]
+    fn rows_read_apart_are_those_of_the_whole() {
+        let mut seen = [false; 2];
+        for path in fixture_files() {
+            let h = H5::open(&path).unwrap();
+            for ds in datasets(&h) {
+                let Ok(whole) = h.values(&ds) else {
+                    assert!(h.values_in(&ds, 0..1).is_err());
+                    continue;
+                };
+                let n = whole.len();
+                let apart = h.reads_rows(&ds);
+                seen[usize::from(apart)] = true;
+                let windows = [
+                    0..0,
+                    0..1,
+                    1..3,
+                    n / 2..n,
+                    n.saturating_sub(1)..n + 5,
+                    n + 2..n + 9,
+                    Range { start: 3, end: 2 },
+                    0..usize::MAX,
+                ];
+                for rows in windows {
+                    for got in [
+                        h.values_in(&ds, rows.clone()),
+                        h.int_values_in(&ds, rows.clone()),
+                    ] {
+                        let got = got.unwrap();
+                        assert_eq!(got.len(), n, "{} {rows:?}", path.display());
+                        let held = got.held();
+                        if apart {
+                            let start = rows.start.min(n);
+                            assert_eq!(held, start..rows.end.clamp(start, n));
+                        } else {
+                            assert_eq!(held, whole.held());
+                        }
+                        for i in held {
+                            assert_eq!(got.int(i), whole.int(i));
+                            assert_eq!(got.float(i).to_bits(), whole.float(i).to_bits());
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(seen, [true, true], "fixtures with both layouts");
+
+        use crate::h5write::{H5Writer, Link};
+        let dir = std::env::temp_dir().join(format!("murmel-rows-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rows.h5");
+        let values: Vec<i64> = (0..1 << 20).map(|i| i * 3 - 7).collect();
+        let mut w = H5Writer::create(&path).unwrap();
+        let big = w.dataset(&[values.len() as u64], &values).unwrap();
+        let root = w.group(&[Link::Hard("big".into(), big)], &[]).unwrap();
+        w.finish(root).unwrap();
+        let h = H5::open(&path).unwrap();
+        let ds = h.dataset(&h.path("/big").unwrap()).unwrap();
+        let got = h.int_values_in(&ds, 1000..1010).unwrap();
+        assert_eq!(got.held(), 1000..1010);
+        assert_eq!(got.len(), values.len());
+        assert!((1000..1010).all(|i| got.int(i) == values[i]));
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 
     /// Invariant: broken files opened by their path give a diagnostic and
