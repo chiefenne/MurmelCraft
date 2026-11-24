@@ -165,12 +165,44 @@ impl<'a> Sides<'a> {
         }
     }
 
+    /// What the planes slicing cell `c` do to a polygon of it with the
+    /// mesh nodes `verts`, as [`Cutter::clip_flat`] would: leave it whole
+    /// (every plane keeps every node), drop it (the first plane that does
+    /// not keep them all keeps none), or cut it (that plane keeps some),
+    /// which only the cutter can do.
+    fn fate(self, c: u32, verts: &[V]) -> Fate {
+        for p in self.flat_of(c) {
+            let kept = verts
+                .iter()
+                .filter(|&&v| match v {
+                    V::Node(i) => self.keeps_node(p, i),
+                    V::Cut(_) => false,
+                })
+                .count();
+            if kept == 0 {
+                return Fate::Drop;
+            }
+            if kept < verts.len() || verts.iter().any(|v| matches!(v, V::Cut(_))) {
+                return Fate::Cut;
+            }
+        }
+        Fate::Whole
+    }
+
     /// Whether a plane that slices cell `c` cuts away a node of it: the
     /// cells with a section.
     fn crosses(self, mesh: &Mesh, c: usize) -> bool {
         self.flat_of(c as u32)
             .any(|p| mesh.cell_points(c).any(|i| !self.keeps_node(p, i)))
     }
+}
+
+/// What the flat planes do to a polygon (see [`Sides::fate`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fate {
+    Whole,
+    Drop,
+    Cut,
 }
 
 /// The cut points found so far: where each is, which plane made it, and
@@ -287,31 +319,6 @@ impl<'a> Cutter<'a> {
         }
     }
 
-    fn pos(&self, v: V) -> [f64; 3] {
-        match v {
-            V::Node(i) => self.points[i as usize],
-            V::Cut(k) => self.cuts.borrow().pos[k as usize],
-        }
-    }
-
-    fn dist(&self, p: usize, v: V) -> f64 {
-        let plane = &self.planes[p];
-        match (v, &plane.nodes) {
-            (V::Node(i), Some((_, dist))) => dist[i as usize],
-            _ => plane.bound.distance(self.pos(v)),
-        }
-    }
-
-    /// Whether plane `p` keeps corner `v` (a point on the plane counts as
-    /// kept, and so does every cut point the plane made).
-    fn keeps(&self, p: usize, v: V) -> bool {
-        match (v, &self.planes[p].nodes) {
-            (V::Node(i), Some((keep, _))) => keep[i as usize],
-            (V::Node(_), None) => self.dist(p, v) <= 0.0,
-            (V::Cut(k), _) => self.cuts.borrow().plane[k as usize] == p || self.dist(p, v) <= 0.0,
-        }
-    }
-
     /// Whether every clip plane keeps a node of `face`.
     fn keeps_some(&self, face: &[u32]) -> bool {
         self.planes[..self.clips].iter().all(|pl| {
@@ -321,46 +328,198 @@ impl<'a> Cutter<'a> {
         })
     }
 
-    /// The point where plane `p` crosses the edge from `a` to `b`.
-    fn cut(&self, p: usize, a: V, b: V) -> V {
+    /// The cutting with the cut points numbered as they are found.
+    fn view(&self) -> View<'_, RefCell<Cuts>> {
+        View {
+            sides: self.sides(),
+            store: &self.cuts,
+        }
+    }
+
+    fn pos(&self, v: V) -> [f64; 3] {
+        self.view().pos(v)
+    }
+
+    fn value(&self, v: V, node: &[f64]) -> f64 {
+        self.view().value(v, node)
+    }
+
+    fn clip_flat(&self, cell: u32, verts: Vec<V>) -> Vec<V> {
+        self.view().clip_flat(cell, verts).unwrap_or_default()
+    }
+
+    fn sections(&self, mesh: &Mesh, c: usize) -> Vec<Vec<V>> {
+        self.view().sections(mesh, c).unwrap_or_default()
+    }
+
+    /// The only plane that slices cell `c`, if one alone does.
+    fn only_plane(&self, c: u32) -> Option<usize> {
+        let mut planes = self.flat_of(c);
+        match (planes.next(), planes.next()) {
+            (Some(p), None) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Number the points where plane `p`, the only one slicing cell `c`,
+    /// crosses the edges of its faces, in the order its section finds
+    /// them (face by face, edge by edge; see [`View::ring`]), so the
+    /// section can then be built on any thread, reading them.
+    fn cut_edges(&self, mesh: &Mesh, p: usize, c: usize) {
+        let view = self.view();
+        for f in mesh.cell(c) {
+            let face: Vec<V> = f.oriented().map(V::Node).collect();
+            let n = face.len();
+            for i in 0..n {
+                let (a, b) = (face[i], face[(i + 1) % n]);
+                if view.keeps(p, a) != view.keeps(p, b) {
+                    view.cut(p, a, b);
+                }
+            }
+        }
+    }
+}
+
+/// Where the cut points are kept: numbered as they are found (on one
+/// thread, the cutter's own), or, once all are found, only read (on all
+/// threads).
+trait Store {
+    fn id(&self, key: &(usize, V, V)) -> Option<u32>;
+    fn pos(&self, k: u32) -> [f64; 3];
+    fn plane(&self, k: u32) -> usize;
+    fn along(&self, k: u32) -> Option<(V, V, f64)>;
+    /// A new cut point, numbered next; `None` from a store that only
+    /// reads.
+    fn add(&self, key: (usize, V, V), at: [f64; 3], along: (V, V, f64)) -> Option<u32>;
+}
+
+impl Store for RefCell<Cuts> {
+    fn id(&self, key: &(usize, V, V)) -> Option<u32> {
+        self.borrow().ids.get(key).copied()
+    }
+
+    fn pos(&self, k: u32) -> [f64; 3] {
+        self.borrow().pos[k as usize]
+    }
+
+    fn plane(&self, k: u32) -> usize {
+        self.borrow().plane[k as usize]
+    }
+
+    fn along(&self, k: u32) -> Option<(V, V, f64)> {
+        self.borrow().along.get(k as usize).copied()
+    }
+
+    fn add(&self, key: (usize, V, V), at: [f64; 3], along: (V, V, f64)) -> Option<u32> {
+        let mut c = self.borrow_mut();
+        let k = c.pos.len() as u32;
+        c.pos.push(at);
+        c.plane.push(key.0);
+        c.ids.insert(key, k);
+        c.along.push(along);
+        Some(k)
+    }
+}
+
+impl Store for Cuts {
+    fn id(&self, key: &(usize, V, V)) -> Option<u32> {
+        self.ids.get(key).copied()
+    }
+
+    fn pos(&self, k: u32) -> [f64; 3] {
+        self.pos[k as usize]
+    }
+
+    fn plane(&self, k: u32) -> usize {
+        self.plane[k as usize]
+    }
+
+    fn along(&self, k: u32) -> Option<(V, V, f64)> {
+        self.along.get(k as usize).copied()
+    }
+
+    fn add(&self, _: (usize, V, V), _: [f64; 3], _: (V, V, f64)) -> Option<u32> {
+        None
+    }
+}
+
+/// The cutting of polygons and cells by the planes of `sides`, with the
+/// cut points in `store`.
+struct View<'a, S> {
+    sides: Sides<'a>,
+    store: &'a S,
+}
+
+impl<S> Clone for View<'_, S> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S> Copy for View<'_, S> {}
+
+impl<'a, S: Store> View<'a, S> {
+    fn flat_of(self, c: u32) -> impl Iterator<Item = usize> + 'a {
+        self.sides.flat_of(c)
+    }
+
+    fn pos(self, v: V) -> [f64; 3] {
+        match v {
+            V::Node(i) => self.sides.points[i as usize],
+            V::Cut(k) => self.store.pos(k),
+        }
+    }
+
+    fn dist(self, p: usize, v: V) -> f64 {
+        let plane = &self.sides.planes[p];
+        match (v, &plane.nodes) {
+            (V::Node(i), Some((_, dist))) => dist[i as usize],
+            _ => plane.bound.distance(self.pos(v)),
+        }
+    }
+
+    /// Whether plane `p` keeps corner `v` (a point on the plane counts as
+    /// kept, and so does every cut point the plane made).
+    fn keeps(self, p: usize, v: V) -> bool {
+        match (v, &self.sides.planes[p].nodes) {
+            (V::Node(i), Some((keep, _))) => keep[i as usize],
+            (V::Node(_), None) => self.dist(p, v) <= 0.0,
+            (V::Cut(k), _) => self.store.plane(k) == p || self.dist(p, v) <= 0.0,
+        }
+    }
+
+    /// The point where plane `p` crosses the edge from `a` to `b`;
+    /// `None` when it is not numbered yet and the store only reads.
+    fn cut(self, p: usize, a: V, b: V) -> Option<V> {
         let key = (p, a.min(b), a.max(b));
-        if let Some(&k) = self.cuts.borrow().ids.get(&key) {
-            return V::Cut(k);
+        if let Some(k) = self.store.id(&key) {
+            return Some(V::Cut(k));
         }
         let (a, b) = (key.1, key.2);
         let (da, db) = (self.dist(p, a), self.dist(p, b));
         let t = if da == db { 0.0 } else { da / (da - db) };
         let (pa, pb) = (self.pos(a), self.pos(b));
         let at = [0, 1, 2].map(|k| pa[k] + t * (pb[k] - pa[k]));
-        let mut c = self.cuts.borrow_mut();
-        let k = c.pos.len() as u32;
-        c.pos.push(at);
-        c.plane.push(p);
-        c.ids.insert(key, k);
-        c.along.push((a, b, t));
-        V::Cut(k)
+        self.store.add(key, at, (a, b, t)).map(V::Cut)
     }
 
     /// The value at corner `v` of a field with `node` values: a node's
     /// own, a cut point's mixed from the ends of its edge.
-    fn value(&self, v: V, node: &[f64]) -> f64 {
+    fn value(self, v: V, node: &[f64]) -> f64 {
         match v {
             V::Node(i) => node.get(i as usize).copied().unwrap_or(f64::NAN),
-            V::Cut(k) => {
-                let along = self.cuts.borrow().along.get(k as usize).copied();
-                match along {
-                    Some((a, b, t)) => {
-                        let (va, vb) = (self.value(a, node), self.value(b, node));
-                        va + t * (vb - va)
-                    }
-                    None => f64::NAN,
+            V::Cut(k) => match self.store.along(k) {
+                Some((a, b, t)) => {
+                    let (va, vb) = (self.value(a, node), self.value(b, node));
+                    va + t * (vb - va)
                 }
-            }
+                None => f64::NAN,
+            },
         }
     }
 
     /// The part of `poly` that plane `p` keeps (Sutherland and Hodgman).
-    fn clip_poly(&self, p: usize, verts: &[V]) -> Vec<V> {
+    fn clip_poly(self, p: usize, verts: &[V]) -> Option<Vec<V>> {
         let mut out = Vec::with_capacity(verts.len() + 2);
         for i in 0..verts.len() {
             let (a, b) = (verts[i], verts[(i + 1) % verts.len()]);
@@ -369,15 +528,15 @@ impl<'a> Cutter<'a> {
                 out.push(a);
             }
             if ka != kb {
-                out.push(self.cut(p, a, b));
+                out.push(self.cut(p, a, b)?);
             }
         }
-        out
+        Some(out)
     }
 
     /// The part of `poly`, a polygon of cell `cell`, that every plane
     /// slicing that cell keeps, cut in their order.
-    fn clip_flat(&self, cell: u32, verts: Vec<V>) -> Vec<V> {
+    fn clip_flat(self, cell: u32, verts: Vec<V>) -> Option<Vec<V>> {
         let mut v = verts;
         for p in self.flat_of(cell) {
             if v.len() < 3 {
@@ -387,9 +546,9 @@ impl<'a> Cutter<'a> {
             if v.iter().all(|&x| self.keeps(p, x)) {
                 continue;
             }
-            v = self.clip_poly(p, &v);
+            v = self.clip_poly(p, &v)?;
         }
-        v
+        Some(v)
     }
 
     /// The section of the closed polygons `polys` by plane `p`: closed
@@ -397,7 +556,7 @@ impl<'a> Cutter<'a> {
     /// cut where it leaves the kept side to the next cut where it comes
     /// back; those segments, joined at the shared cut points, close
     /// around the cell.
-    fn ring(&self, p: usize, polys: &[Vec<V>]) -> Vec<Vec<V>> {
+    fn ring(self, p: usize, polys: &[Vec<V>]) -> Option<Vec<Vec<V>>> {
         let mut next: HashMap<V, Vec<V>> = HashMap::new();
         for face in polys {
             let n = face.len();
@@ -406,7 +565,7 @@ impl<'a> Cutter<'a> {
                 let (a, b) = (face[i], face[(i + 1) % n]);
                 let (ka, kb) = (self.keeps(p, a), self.keeps(p, b));
                 if ka != kb {
-                    cuts.push((self.cut(p, a, b), ka));
+                    cuts.push((self.cut(p, a, b)?, ka));
                 }
             }
             for (i, &(v, leaving)) in cuts.iter().enumerate() {
@@ -445,16 +604,16 @@ impl<'a> Cutter<'a> {
                 loops.push(ring);
             }
         }
-        loops
+        Some(loops)
     }
 
     /// The sections of cell `c` by the flat planes: the cell's faces are
     /// cut by each plane in turn, and each plane's section joins the
     /// polygons the next one cuts (convex clipping of a polyhedron by
     /// half-spaces, one plane at a time).
-    fn sections(&self, mesh: &Mesh, c: usize) -> Vec<Vec<V>> {
-        if !self.sides().crosses(mesh, c) {
-            return Vec::new();
+    fn sections(self, mesh: &Mesh, c: usize) -> Option<Vec<Vec<V>>> {
+        if !self.sides.crosses(mesh, c) {
+            return Some(Vec::new());
         }
         let planes: Vec<usize> = self.flat_of(c as u32).collect();
         let mut set: Vec<(Vec<V>, bool)> = mesh
@@ -466,18 +625,23 @@ impl<'a> Cutter<'a> {
             if !polys.iter().flatten().any(|&v| !self.keeps(p, v)) {
                 continue;
             }
-            let rings = self.ring(p, &polys);
-            set = set
-                .into_iter()
-                .map(|(v, s)| (self.clip_poly(p, &v), s))
-                .filter(|(v, _)| v.len() >= 3)
-                .collect();
-            set.extend(rings.into_iter().map(|r| (r, true)));
+            let rings = self.ring(p, &polys)?;
+            let mut cut = Vec::with_capacity(set.len() + rings.len());
+            for (v, s) in set {
+                let v = self.clip_poly(p, &v)?;
+                if v.len() >= 3 {
+                    cut.push((v, s));
+                }
+            }
+            cut.extend(rings.into_iter().map(|r| (r, true)));
+            set = cut;
         }
-        set.into_iter()
-            .filter(|(_, s)| *s)
-            .map(|(v, _)| v)
-            .collect()
+        Some(
+            set.into_iter()
+                .filter(|(_, s)| *s)
+                .map(|(v, _)| v)
+                .collect(),
+        )
     }
 }
 
@@ -1095,7 +1259,13 @@ fn polygons(
 ) -> Vec<Poly> {
     let flat = cutter.filter(|c| c.slices());
     let mut polys: Vec<Poly> = Vec::new();
-    let mut add = |verts: Vec<V>, cell: u32, face: u32, boundary: u32, color: Rgb, group: u32| {
+    let add = |polys: &mut Vec<Poly>,
+               verts: Vec<V>,
+               cell: u32,
+               face: u32,
+               boundary: u32,
+               color: Rgb,
+               group: u32| {
         let verts = match flat {
             Some(c) => c.clip_flat(cell, verts),
             None => verts,
@@ -1124,6 +1294,7 @@ fn polygons(
             continue;
         }
         add(
+            &mut polys,
             nodes(face),
             NO_CELL,
             u,
@@ -1133,8 +1304,7 @@ fn polygons(
         );
     }
     // The faces between cells, and the boundary faces of the cells: on
-    // all threads, in face order, unless something cuts flat (the cut
-    // points are numbered as they are found, on one thread).
+    // all threads, in face order.
     let regions_cut = flat
         .and_then(|c| c.regions.as_ref())
         .and_then(|(rc, _)| rc.cut_by.as_deref());
@@ -1214,32 +1384,47 @@ fn polygons(
         );
     };
     let faces = mesh.face_owner.len().min(mesh.face_neighbour.len());
-    if slicing {
-        for u in 0..faces {
-            between(u, &mut add);
-        }
-    } else {
-        let found = murmel_mesh::par::collect(faces, 1 << 14, |r| {
-            let mut out = Vec::new();
-            let mut keep = |verts: Vec<V>, cell, face, boundary, color, group| {
-                if verts.len() >= 3 {
-                    out.push(Poly {
-                        verts,
-                        cell,
-                        face,
-                        boundary,
-                        color,
-                        group,
-                    });
-                }
-            };
-            for u in r {
-                between(u, &mut keep);
+    // When something cuts flat, the threads also tell which polygons a
+    // plane crosses: only those go through the cutter, afterwards and in
+    // face order, so the cut points are numbered as before; the others
+    // are kept whole or dropped where they are found.
+    let sides = flat.map(Cutter::sides);
+    let found = murmel_mesh::par::collect(faces, 1 << 14, |r| {
+        let mut out = Vec::new();
+        let mut keep = |verts: Vec<V>, cell, face, boundary, color, group| {
+            let fate = sides.map_or(Fate::Whole, |s| s.fate(cell, &verts));
+            if verts.len() >= 3 && fate != Fate::Drop {
+                let poly = Poly {
+                    verts,
+                    cell,
+                    face,
+                    boundary,
+                    color,
+                    group,
+                };
+                out.push((poly, fate == Fate::Cut));
             }
-            out
-        });
-        let mut add_all = |p: Poly| add(p.verts, p.cell, p.face, p.boundary, p.color, p.group);
-        found.into_iter().for_each(&mut add_all);
+        };
+        for u in r {
+            between(u, &mut keep);
+        }
+        out
+    });
+    polys.reserve(found.len());
+    for (p, cut) in found {
+        if cut {
+            let Poly {
+                verts,
+                cell,
+                face,
+                boundary,
+                color,
+                group,
+            } = p;
+            add(&mut polys, verts, cell, face, boundary, color, group);
+        } else {
+            polys.push(p);
+        }
     }
     // Faces isolated on their own (I on picked faces), unless a cell
     // shown beside them already draws them.
@@ -1256,6 +1441,7 @@ fn polygons(
         let owner = mesh.face_owner.get(u).copied().unwrap_or(NO_CELL);
         match mesh.face_boundary.get(u).copied() {
             Some(b) if b != NO_CELL => add(
+                &mut polys,
                 nodes(mesh.boundary.get(b as usize)),
                 owner,
                 u as u32,
@@ -1264,6 +1450,7 @@ fn polygons(
                 patch(b as usize),
             ),
             _ => add(
+                &mut polys,
                 nodes(mesh.face_nodes(u)),
                 owner,
                 u as u32,
@@ -1281,14 +1468,46 @@ fn polygons(
         // The cells a plane crosses, found on all threads: a thin layer
         // of the cells shown.
         let sides = cutter.sides();
-        let crossed: Vec<bool> = murmel_mesh::par::collect(shown.len(), 1 << 12, |r| {
-            r.map(|c| shown[c] && sides.crosses(mesh, c)).collect()
+        let crossed: Vec<usize> = murmel_mesh::par::collect(shown.len(), 1 << 12, |r| {
+            r.filter(|&c| shown[c] && sides.crosses(mesh, c)).collect()
         });
-        for (c, &on) in crossed.iter().enumerate() {
-            if !on {
-                continue;
+        // The cut points first, numbered in cell order as one thread
+        // finds them: a cell one plane slices names where that plane
+        // crosses the edges of its faces; a cell more planes slice is cut
+        // here, whole.
+        let mut rings: Vec<Option<Vec<Vec<V>>>> = Vec::with_capacity(crossed.len());
+        for &c in &crossed {
+            match cutter.only_plane(c as u32) {
+                Some(p) => {
+                    cutter.cut_edges(mesh, p, c);
+                    rings.push(None);
+                }
+                None => rings.push(Some(cutter.sections(mesh, c))),
             }
-            let rings = cutter.sections(mesh, c);
+        }
+        // Then the sections of the cells one plane slices, on all
+        // threads, reading the cut points (a point not found, which the
+        // numbering above rules out, sends the cell back to the cutter).
+        let built: Vec<Option<Vec<Vec<V>>>> = {
+            let cuts = cutter.cuts.borrow();
+            let view = View {
+                sides,
+                store: &*cuts,
+            };
+            let (crossed, rings) = (&crossed, &rings);
+            murmel_mesh::par::collect(crossed.len(), 1 << 6, |r| {
+                r.map(|i| match rings[i] {
+                    Some(_) => Some(Vec::new()),
+                    None => view.sections(mesh, crossed[i]),
+                })
+                .collect()
+            })
+        };
+        for ((&c, serial), parallel) in crossed.iter().zip(rings).zip(built) {
+            let rings = match (serial, parallel) {
+                (Some(r), _) | (None, Some(r)) => r,
+                (None, None) => cutter.sections(mesh, c),
+            };
             if rings.is_empty() {
                 continue;
             }
@@ -1824,10 +2043,13 @@ mod tests {
     /// them (each fills a run of polygons in draw order at the place the
     /// counts before it give; the edges are drawn once, in draw order;
     /// a feature edge is judged against its first face in polygon order,
-    /// shard by shard), for faces with edges, a cut, a section, lines
-    /// only, feature edges and a selection, on a mesh that is all creases
-    /// and one that is mostly flat. Breaks when a run starts at the wrong
-    /// place or the edges or faces are taken in another order.
+    /// shard by shard; the cut points are numbered on one thread in cell
+    /// order before the sections are built on all), for faces with
+    /// edges, a cut, sections by one, two and three flat planes and by a
+    /// region, lines only, feature edges and a selection, on a mesh that
+    /// is all creases and one that is mostly flat. Breaks when a run
+    /// starts at the wrong place, the edges or faces are taken in another
+    /// order, or a cut point is numbered in another order.
     #[test]
     fn threads_give_the_same_surface() {
         // The honeycomb's boundary is all creases; the channel's flat
@@ -1863,10 +2085,22 @@ mod tests {
                 s.field_range,
             )
         };
+        let b = m.bounds();
+        let slab = crate::region::Region {
+            cut: ClipMode::Flat,
+            ..crate::region::Region::new(crate::region::Shape::Slab {
+                origin: b.center(),
+                normal: [0.6, 0.0, 0.8],
+                thickness: 0.3 * b.radius(),
+            })
+        };
         for (name, d) in [
             ("all", Display::default()),
             ("crinkle", clip_y(m, ClipMode::Crinkle)),
             ("flat", clip_y(m, ClipMode::Flat)),
+            ("two flat", clips(m, ClipMode::Flat, ClipMode::Flat, false)),
+            ("three flat", clips(m, ClipMode::Flat, ClipMode::Flat, true)),
+            ("flat slab", with_regions(m, vec![slab], Vec::new())),
             ("wireframe", wire),
             ("feature edges", feature),
             ("selection", sel),
