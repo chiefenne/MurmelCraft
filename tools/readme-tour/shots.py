@@ -1,4 +1,4 @@
-"""The eight README shots: each sets up the open MurmelCraft window through
+"""The README shots: each sets up the open MurmelCraft window through
 the live MCP bridge (`murmel mcp --live`), then disconnects, so the
 "Agent connected" badge is gone when the window is captured.
 
@@ -50,6 +50,7 @@ def reset(m):
     """Back to the plain mesh; never calls a settings tool (agents cannot
     save settings, SET001 would show in the status bar)."""
     for tool, args in [("slice.clear", {"all": True}), ("iso.clear", {"all": True}), ("arrows.clear", {}),
+                       ("stream.clear", {"all": True}),
                        ("clip.clear", {"all": True}), ("region.clear", {"all": True}),
                        ("measure.remove", {"all": True}), ("select.clear", {}),
                        ("display.visibility", {"action": "show_all"}),
@@ -95,23 +96,54 @@ def vorticity_slice(m):  # dark: vorticity on a slice, mesh as outline
     fit(m, -20, 62, 0.85, (0.05, 0.05))
 
 
-def speed_arrows(m):  # dark: speed on the slice with in-plane arrows
-    field(m, "speed", map="viridis")
+def speed_arrows(m):  # dark: speed on the slice, equal-length arrows show the direction
+    field(m, "speed", map="rainbow_desaturated")
     jet_slice(m)
-    m("arrows.set", {"field": "velocity", "density": 24, "in_plane": True, "color": "solid", "scale": 3.0})
+    m("arrows.set", {"field": "velocity", "in_plane": True, "length": "equal", "color": "solid", "scale": 1.6})
     m("display.set_color", {"item": "arrows", "color": "#F4F4F4"})
     m("select.clear", {})
     fit(m, -20, 62, 0.85, (0.05, 0.05))
     m("view.zoom", {"factor": 0.5, "cursor_ndc": [0.45, -0.4]})
 
 
-def slices_iso(m):  # dark: a series of four slices and an iso-surface
-    field(m, "speed", map="viridis")
-    m("display.render_mode", {"mode": "shaded"})
-    m("slice.set", {"new": True, "axis": "x", "origin": [0.25, 0.2, 0.02], "count": 4, "spacing": 0.05})
-    m("iso.set", {"new": True, "field": "speed", "value": 0.05, "color": "solid"})
+def streamlines(m):  # dark: streamline tubes from the inlet, coloured by speed
+    field(m, "speed", map="rainbow_desaturated")
+    m("display.color_by", {"by": "solid"})
+    m("display.render_mode", {"mode": "feature_edges"})
+    m("stream.set", {"new": True, "seed": "patch", "patch": "inlet", "count": 80, "look": "tubes",
+                     "color": "field", "color_field": "speed"})
     m("select.clear", {})
-    cam(m, -60, 30, 0.95, [0.24, 0.22, 0.02])
+    fit(m, -50, 30, 0.72, (0.12, -0.05))
+    m("view.pan", {"dx_px": -120, "dy_px": 30})
+
+
+def vorticity(m):
+    """MurmelCraft's own vorticity magnitude (least-squares velocity
+    gradients): smoother than the solver's, whose iso-surface is ragged."""
+    m("field.calculate", {"name": "vorticity_mag", "formula": "mag(curl(velocity))", "unit": "1/s"})
+
+
+def vorticity_iso(m, slices):
+    field(m, "speed", map="rainbow_desaturated")
+    vorticity(m)
+    if slices:
+        m("display.color_by", {"by": "field", "field": "speed"})
+        m("display.render_mode", {"mode": "shaded"})
+        m("slice.set", {"new": True, "axis": "x", "origin": [0.25, 0.2, 0.02], "count": 3, "spacing": 0.06})
+    else:
+        m("display.color_by", {"by": "solid"})
+        m("display.render_mode", {"mode": "feature_edges"})
+    m("iso.set", {"new": True, "field": "vorticity_mag", "value": 3.0, "color": "solid"})
+    m("select.clear", {})
+    cam(m, -60, 30, 0.62, [0.29, 0.27, 0.02])
+
+
+def vorticity_iso_slices(m):  # dark: three speed slices and a vorticity iso-surface
+    vorticity_iso(m, True)
+
+
+def vorticity_iso_alone(m):  # dark: the vorticity iso-surface, mesh as feature edges
+    vorticity_iso(m, False)
 
 
 def region(m):  # dark: a sphere region of interest, cut flat
@@ -144,8 +176,9 @@ def light_pressure(m):  # light: banded pressure with contour lines
     m("view.pan", {"dx_px": -85, "dy_px": 10})
 
 
-SHOTS = {f.__name__: f for f in [mesh, cell_types_clip, vorticity_slice, speed_arrows, slices_iso, region,
-                                 measure_probe, light_pressure]}
+SHOTS = {f.__name__: f for f in [mesh, cell_types_clip, vorticity_slice, speed_arrows, streamlines,
+                                 vorticity_iso_slices, vorticity_iso_alone, region, measure_probe,
+                                 light_pressure]}
 
 if __name__ == "__main__":
     m = Mcp(sys.argv[1])
