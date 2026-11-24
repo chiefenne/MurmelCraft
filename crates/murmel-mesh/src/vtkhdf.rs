@@ -20,8 +20,9 @@
 //! (`vtkGhostType` with the duplicate bit) are left out with their field
 //! rows, points with the same `GlobalPointIds` are one point, the patches
 //! join the cells by those ids, and `zone_names`, the patches' `role` and
-//! the strings of `/VTKHDF` are kept. Reading only some of the blocks
-//! comes with the large-mesh overview.
+//! the strings of `/VTKHDF` are kept. [`read_overview`] reads the
+//! boundary and the block index alone, [`read_blocks`] the cells of some
+//! blocks.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -33,10 +34,12 @@ use crate::{Mesh, MeshError, Patch, Polygons, boundary, par};
 
 mod cells;
 mod overview;
+mod subset;
 
 pub use overview::{
     Block, OPEN_BYTES_PER_CELL, Overview, Size, VolumeField, read_overview, size_of,
 };
+pub use subset::{Subset, read_blocks};
 
 /// No mesh point yet for a global point id.
 const NO_POINT: u32 = u32::MAX;
@@ -213,19 +216,25 @@ fn names_of(
     Ok(())
 }
 
+/// Which faces of the patches to read: those whose owner cell (its file
+/// cell id, `OwnerCell`) the predicate takes.
+pub(super) type Owners<'a> = &'a (dyn Fn(i64) -> bool + Sync);
+
 /// Read the patches into `b`, each with its cell data as boundary fields
-/// (and its first face).
+/// (and its first face); with `keep`, only the faces whose owner cell it
+/// takes.
 fn read_patches(
     h: &H5,
     b: &mut Builder,
     patches: &[(String, Object)],
     roles: &BTreeMap<usize, String>,
+    keep: Option<Owners>,
 ) -> Result<Vec<(usize, Vec<Field>)>, MeshError> {
     let mut boundary_fields: Vec<(usize, Vec<Field>)> = Vec::new();
     for (name, obj) in patches {
         let p = b.mesh.patches.len() as u32;
         let before = b.mesh.boundary.len();
-        b.poly_data(h, obj, p)?;
+        let (n, kept) = b.poly_data(h, obj, p, keep)?;
         let role = match attr_text(h, obj, "role").or_else(|| roles.get(&(p as usize)).cloned()) {
             Some(r) => crate::PatchRole::parse(&r),
             None => crate::polymesh::patch_role(name, ""),
@@ -234,7 +243,6 @@ fn read_patches(
             name: name.clone(),
             role,
         });
-        let n = b.mesh.boundary.len() - before;
         boundary_fields.push((
             before,
             data_fields(
@@ -242,7 +250,7 @@ fn read_patches(
                 obj,
                 "CellData",
                 Location::Boundary,
-                (n, None),
+                (n, kept.as_deref()),
                 &["boundary", "OwnerCell"],
             )?,
         ));
@@ -308,7 +316,7 @@ fn read_parts(h: &H5) -> Result<Parts, MeshError> {
             &["vtkGhostType", "GlobalPointIds"],
         )?);
     }
-    let boundary_fields = read_patches(h, &mut b, &patches, &roles)?;
+    let boundary_fields = read_patches(h, &mut b, &patches, &roles, None)?;
     let (attrs, vtk_attrs) = text_attrs(h, &vtk)?;
     Ok(Parts {
         b,
@@ -861,8 +869,8 @@ impl Builder {
         // the mesh point of each row of Points
         let (points, point_rows) = match gids {
             Some(ids) if ids.len() == total_points => {
-                let (map, rows) = self.join_points(&xyz, &ids, total_points);
-                (map, Some(rows))
+                let (map, rows) = self.join_points(&xyz, &ids, 0..total_points);
+                (cells::PointMap::Rows(map), Some(rows))
             }
             Some(_) => {
                 return Err(MeshError::new(
@@ -941,19 +949,20 @@ impl Builder {
             .extend(cell_end.iter().map(|&e| faces + e));
     }
 
-    /// Join the points of rows `0..total` of `xyz` by their global `ids`:
-    /// a row whose id came before is that point, any other a new point,
-    /// in row order. Gives the point of each row and the rows that became
-    /// new points.
+    /// Join the points of rows `rows` of `xyz` by their global `ids`: a
+    /// row whose id came before is that point, any other a new point, in
+    /// row order. Gives the point of each row (of `rows.start + i` at
+    /// `i`) and the rows that became new points.
     fn join_points(
         &mut self,
         xyz: &Values,
         ids: &Values,
-        total: usize,
-    ) -> (cells::PointMap, Vec<u32>) {
+        rows: std::ops::Range<usize>,
+    ) -> (Vec<u32>, Vec<u32>) {
+        let (from, total) = (rows.start, rows.len());
         let before = self.mesh.points.len();
         let (lo, hi) = par::map(total, 1 << 15, |r| {
-            r.map(|row| ids.int(row))
+            r.map(|row| ids.int(from + row))
                 .fold((i64::MAX, i64::MIN), |(lo, hi), id| {
                     (lo.min(id), hi.max(id))
                 })
@@ -970,7 +979,7 @@ impl Builder {
             Some(Gids::Dense(points)) if small => points,
             other => {
                 let mut map = other.map(Gids::into_map).unwrap_or_default();
-                let joined = self.join_mapped(xyz, ids, total, &mut map);
+                let joined = self.join_mapped(xyz, ids, rows, &mut map);
                 self.gids = Some(Gids::Hash(map));
                 return joined;
             }
@@ -985,14 +994,14 @@ impl Builder {
             let known = &dense;
             par::map(total, 1 << 15, |r| {
                 for row in r {
-                    let id = ids.int(row) as usize;
+                    let id = ids.int(from + row) as usize;
                     if known[id] == NO_POINT {
                         firsts[id].fetch_min(row as u32, Relaxed);
                     }
                 }
             });
         }
-        let is_new = |row: usize| first[ids.int(row) as usize] == row as u32;
+        let is_new = |row: usize| first[ids.int(from + row) as usize] == row as u32;
         let ranges = par::ranges(total, 1 << 15);
         let counts = par::each(ranges.clone(), |r| r.filter(|&row| is_new(row)).count());
         let mut at = Vec::with_capacity(counts.len());
@@ -1016,9 +1025,9 @@ impl Builder {
                 let mut k = 0;
                 for row in r {
                     if is_new(row) {
-                        pts[k] = xyz_at(xyz, row);
-                        rws[k] = row as u32;
-                        ds[ids.int(row) as usize].store((before + base + k) as u32, Relaxed);
+                        pts[k] = xyz_at(xyz, from + row);
+                        rws[k] = (from + row) as u32;
+                        ds[ids.int(from + row) as usize].store((before + base + k) as u32, Relaxed);
                         k += 1;
                     }
                 }
@@ -1027,7 +1036,7 @@ impl Builder {
         let mut map = vec![0u32; total];
         par::chunks_mut(&mut map, 1 << 15, |at, part| {
             for (k, m) in part.iter_mut().enumerate() {
-                *m = dense[ids.int(at + k) as usize];
+                *m = dense[ids.int(from + at + k) as usize];
             }
         });
         if self.mesh.points.is_empty() {
@@ -1036,7 +1045,7 @@ impl Builder {
             self.mesh.points.extend_from_slice(&points);
         }
         self.gids = Some(Gids::Dense(dense));
-        (cells::PointMap::Rows(map), rows)
+        (map, rows)
     }
 
     /// [`Builder::join_points`] by a map, for ids that are not small
@@ -1045,25 +1054,33 @@ impl Builder {
         &mut self,
         xyz: &Values,
         ids: &Values,
-        total: usize,
+        rows: std::ops::Range<usize>,
         map: &mut HashMap<i64, u32>,
-    ) -> (cells::PointMap, Vec<u32>) {
+    ) -> (Vec<u32>, Vec<u32>) {
         let points = &mut self.mesh.points;
-        let mut rows = Vec::new();
-        let mut pmap = Vec::with_capacity(total);
-        for r in 0..total {
+        let mut new = Vec::new();
+        let mut pmap = Vec::with_capacity(rows.len());
+        for r in rows {
             let i = *map.entry(ids.int(r)).or_insert_with(|| {
                 points.push(xyz_at(xyz, r));
-                rows.push(r as u32);
+                new.push(r as u32);
                 (points.len() - 1) as u32
             });
             pmap.push(i);
         }
-        (cells::PointMap::Rows(pmap), rows)
+        (pmap, new)
     }
 
-    /// Read a PolyData block's polygons as boundary faces of patch `p`.
-    fn poly_data(&mut self, h: &H5, g: &Object, p: u32) -> Result<(), MeshError> {
+    /// Read a PolyData block's polygons as boundary faces of patch `p`;
+    /// with `keep`, only those whose owner cell it takes. Gives the
+    /// polygons the block has and, with `keep`, the rows of those read.
+    fn poly_data(
+        &mut self,
+        h: &H5,
+        g: &Object,
+        p: u32,
+        keep: Option<Owners>,
+    ) -> Result<(usize, Option<Vec<u32>>), MeshError> {
         let np = ints(h, g, "NumberOfPoints")?;
         let (xyz, _) = floats(h, g, "Points")?;
         let total: usize = np
@@ -1077,7 +1094,18 @@ impl Builder {
             ));
         }
         let Some(polys) = h.child(g, "Polygons")? else {
-            return Ok(());
+            return Ok((0, keep.map(|_| Vec::new())));
+        };
+        // the owner of each polygon, when only some are read
+        let owners = match keep {
+            Some(_) => Some(
+                optional_ints(h, g, "CellData", "OwnerCell")?.ok_or_else(|| {
+                    bad(format!(
+                        "patch {p} has no CellData/OwnerCell, so its faces cannot be read by block"
+                    ))
+                })?,
+            ),
+            None => None,
         };
         // a file without volume cells starts its boundary here
         if self.mesh.boundary.start.is_empty() {
@@ -1095,11 +1123,16 @@ impl Builder {
         ) && gp.len() == total
         {
             for id in gp {
-                ids.push(map.get(id).ok_or_else(|| {
-                    bad(format!(
-                        "patch {p} has the global point {id}, which no volume cell uses"
-                    ))
-                })?);
+                ids.push(match map.get(id) {
+                    Some(i) => i,
+                    // a point of a face that is not read
+                    None if keep.is_some() => NO_POINT,
+                    None => {
+                        return Err(bad(format!(
+                            "patch {p} has the global point {id}, which no volume cell uses"
+                        )));
+                    }
+                });
             }
         }
         // without volume cells (an overview), the patches join among
@@ -1139,6 +1172,7 @@ impl Builder {
                     ids.push(i);
                     self.mesh.points.push(*q);
                 }
+                None if keep.is_some() => ids.push(NO_POINT),
                 None => {
                     return Err(bad(format!(
                         "a point of patch {p} ({:?}) is not a point of the volume mesh",
@@ -1151,6 +1185,8 @@ impl Builder {
             self.lookup = Some(lookup);
         }
         let (mut pb, mut ob, mut kb) = (0usize, 0usize, 0usize);
+        let mut row = 0usize;
+        let mut kept = keep.map(|_| Vec::new());
         for part in 0..nc.len().min(np.len()).min(ncon.len()) {
             let n = count(nc[part], "polygons")?;
             let k = count(ncon[part], "connectivity ids")?;
@@ -1162,6 +1198,14 @@ impl Builder {
                 .get(kb..kb + k)
                 .ok_or_else(|| bad("Polygons/Connectivity is shorter than its count"))?;
             for c in 0..n {
+                let here = row;
+                row += 1;
+                if let (Some(keep), Some(owners), Some(kept)) = (keep, &owners, &mut kept) {
+                    if !owners.get(here).is_some_and(|&o| keep(o)) {
+                        continue;
+                    }
+                    kept.push(here as u32);
+                }
                 let r = usize::try_from(offs[c])
                     .ok()
                     .zip(usize::try_from(offs[c + 1]).ok())
@@ -1174,6 +1218,7 @@ impl Builder {
                             .ok()
                             .filter(|&v| v < npart)
                             .and_then(|v| ids.get(pb + v).copied())
+                            .filter(|&i| i != NO_POINT)
                             .ok_or_else(|| {
                                 MeshError::new("MESH006", format!("polygon {c}: point {v}"))
                             })
@@ -1186,7 +1231,7 @@ impl Builder {
             ob += n + 1;
             kb += k;
         }
-        Ok(())
+        Ok((row, kept))
     }
 
     fn finish(mut self) -> Result<Mesh, MeshError> {
@@ -1396,11 +1441,11 @@ mod tests {
                 let mut out = Vec::new();
                 for (ids, xyz) in &grids {
                     let ids: Vec<i64> = ids.iter().map(|&i| i + shift).collect();
-                    let (map, rows) =
-                        b.join_points(&Values::of_floats(xyz), &Values::of_ints(&ids), ids.len());
-                    let cells::PointMap::Rows(map) = map else {
-                        panic!("no rows")
-                    };
+                    let (map, rows) = b.join_points(
+                        &Values::of_floats(xyz),
+                        &Values::of_ints(&ids),
+                        0..ids.len(),
+                    );
                     let list = matches!(b.gids, Some(Gids::Dense(_)));
                     out.push((map, rows, list));
                 }

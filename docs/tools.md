@@ -3572,6 +3572,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `BLOCK002` | error | The block size is outside 16,384 to 1,048,576 cells. | Leave it out for the default of 65,536 cells per block. |
 | `BLOCK003` | error | The mesh has no volume cells to put in blocks. | Convert a volume mesh: a .vtu, an OpenFOAM polyMesh or a VTKHDF file. |
 | `BLOCK004` | error | The VTKHDF file has no block index, so it cannot open as an overview of a mesh beyond the memory budget. | Convert it once with `murmel blocks make` (or the blocks.make tool), or raise the memory budget to read it whole. |
+| `BLOCK005` | error | The blocked VTKHDF file has no such block, or no block was asked for. | Ask for blocks 0 to one less than the file's block count (the overview's `blocks`). |
 | `MESH015` | error | The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces). | Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch. |
 | `RENDER001` | error | No GPU adapter was found (no driver, or no software renderer such as Mesa lavapipe). | Install a Vulkan, Metal or DirectX 12 driver; on a headless Linux machine install mesa-vulkan-drivers. |
 | `RENDER002` | error | The GPU device could not be created or lost during rendering. | Run again; set WGPU_BACKEND to choose another backend. |

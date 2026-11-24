@@ -22,9 +22,10 @@ use crate::hdf5::{Dataset, Dtype, H5, Object};
 use crate::{Bounds, Mesh, MeshError};
 
 /// The cell datasets of the volume that are not fields.
-const CELL_RESERVED: [&str; 4] = ["zone", "vtkGhostType", "GlobalCellIds", "OriginalCellIds"];
+pub(super) const CELL_RESERVED: [&str; 4] =
+    ["zone", "vtkGhostType", "GlobalCellIds", "OriginalCellIds"];
 /// The point datasets of the volume that are not fields.
-const POINT_RESERVED: [&str; 2] = ["vtkGhostType", "GlobalPointIds"];
+pub(super) const POINT_RESERVED: [&str; 2] = ["vtkGhostType", "GlobalPointIds"];
 
 /// Rows of a dataset this close to the row before are read with it.
 const NEAR: usize = 4096;
@@ -112,18 +113,18 @@ impl Size {
 }
 
 /// The volume block of a blocked file and its block index.
-struct Index {
-    grid: Object,
+pub(super) struct Index {
+    pub grid: Object,
     /// Each partition's cell rows (owned cells, then ghosts).
-    rows: Vec<usize>,
+    pub rows: Vec<usize>,
     /// Each block's owned cells.
-    owned: Vec<usize>,
-    bounds: Vec<f64>,
-    fd: Object,
+    pub owned: Vec<usize>,
+    pub bounds: Vec<f64>,
+    pub fd: Object,
 }
 
 /// The block index of `volumes`, if the file is blocked.
-fn index_of(h: &H5, volumes: &[(String, Object)]) -> Result<Option<Index>, MeshError> {
+pub(super) fn index_of(h: &H5, volumes: &[(String, Object)]) -> Result<Option<Index>, MeshError> {
     let [(_, grid)] = volumes else {
         return Ok(None);
     };
@@ -164,7 +165,7 @@ fn index_of(h: &H5, volumes: &[(String, Object)]) -> Result<Option<Index>, MeshE
 
 /// The numeric datasets of `group` of `obj` that are fields, with the
 /// values per row of each (`n` rows).
-fn field_sets(
+pub(super) fn field_sets(
     h: &H5,
     obj: &Object,
     group: &str,
@@ -278,7 +279,7 @@ pub fn read_overview(path: &Path, hash: bool) -> Result<(Mesh, Results, Overview
     Ok((mesh, results, overview))
 }
 
-fn not_blocked() -> MeshError {
+pub(super) fn not_blocked() -> MeshError {
     MeshError::new(
         "BLOCK004",
         "the file has no block index (one volume block with FieldData/BlockOwnedCells and BlockBounds), so it cannot open as an overview",
@@ -291,7 +292,7 @@ fn overview_parts(h: &H5) -> Result<(Parts, Overview), MeshError> {
     let mut b = Builder::default();
     let mut roles = BTreeMap::new();
     names_of(h, &ix.grid, &mut b, &mut roles)?;
-    let mut boundary_fields = read_patches(h, &mut b, &patches, &roles)?;
+    let mut boundary_fields = read_patches(h, &mut b, &patches, &roles, None)?;
 
     // the row of each face's owner cell in the volume's cell datasets
     let total_rows: usize = ix.rows.iter().sum();
@@ -428,12 +429,17 @@ fn overview_parts(h: &H5) -> Result<(Parts, Overview), MeshError> {
 }
 
 /// A face without an owner cell in the file.
-const NO_ROW: u32 = u32::MAX;
+pub(super) const NO_ROW: u32 = u32::MAX;
 
 /// The values of `ds` (`comps` per row) at `rows`, NaN at [`NO_ROW`]: a
 /// dataset that lies whole in the file is read a run of nearby rows at a
 /// time, any other once.
-fn rows_at(h: &H5, ds: &Dataset, comps: usize, rows: &[u32]) -> Result<Vec<f64>, MeshError> {
+pub(super) fn rows_at(
+    h: &H5,
+    ds: &Dataset,
+    comps: usize,
+    rows: &[u32],
+) -> Result<Vec<f64>, MeshError> {
     let mut out = vec![f64::NAN; rows.len() * comps];
     if !h.reads_rows(ds) {
         let v = h.values(ds)?;

@@ -205,6 +205,19 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   - virtual datasets and external files
 - **Byte order:** little-endian throughout.
 
+## Readers in MurmelCraft
+
+- `read_vtkhdf` reads a blocked file whole, as any VTKHDF file: the
+  ghost cells are left out and the blocks join by `GlobalPointIds`.
+- `vtkhdf::read_overview` reads the patches and the block index alone,
+  with each cell field at the rows of the cells behind the boundary
+  faces (§ 7), for a file beyond the memory budget.
+- `vtkhdf::read_blocks` reads the cells of some blocks: each block's
+  partition alone, its owned cells and, with the halo, its ghosts (§ 4)
+  that no block read owns, with the patch faces their cells own. It
+  needs `GlobalPointIds` (§ 3), and `GlobalCellIds` for the halo; a
+  block number the file does not have is BLOCK005.
+
 ## Writers
 
 - `murmel blocks make MESH --out FILE [--block-cells N]` (the tool
