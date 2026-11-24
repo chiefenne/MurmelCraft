@@ -3406,3 +3406,38 @@ fn slices_on_an_overview_draw_through_the_tools() {
     assert!(preview["not_read"].is_null());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Invariant: the example script of docs/post-processing.md (section
+/// "The same from a script") runs: every call but the picture succeeds
+/// on the channel result, the Q iso-surface and the streamlines draw
+/// something, and the picture is its last call. Breaks when a tool's
+/// input changes and the guide still shows the old one; the guide is
+/// prose that no other test reads. The picture needs a GPU, so its call
+/// is checked by name only (export.image has render tests of its own).
+#[test]
+fn post_processing_guide_script_runs() {
+    let doc = std::fs::read_to_string(root().join("docs/post-processing.md")).unwrap();
+    let start = doc.find("```json\n").expect("the script block") + "```json\n".len();
+    let end = start + doc[start..].find("```").unwrap();
+    let calls: Vec<serde_json::Value> = serde_json::from_str(&doc[start..end]).unwrap();
+    let (last, rest) = calls.split_last().unwrap();
+    assert_eq!(last["tool"], "export.image", "the picture comes last");
+    let mut s = session();
+    for c in rest {
+        let tool = c["tool"].as_str().unwrap();
+        let mut input = c["input"].clone();
+        if let Some(p) = input["path"].as_str() {
+            input["path"] = json!(root().join(p));
+        }
+        let e = call(tool, input.clone(), &mut s);
+        assert!(e.ok(), "{tool} {input}: {:?}", e.diagnostics);
+        if tool == "stream.set" {
+            let lines = e.result["stream"]["traced"]["lines"].as_u64();
+            assert!(lines.unwrap_or(0) > 0, "streamlines traced: {}", e.result);
+        }
+    }
+    let m = s.mesh.as_ref().unwrap();
+    assert!(m.fields.get("q_criterion").is_some(), "Q derived");
+    assert!(m.surface.arrows > 0, "arrows on the slice");
+    assert_eq!(s.display.probes.len(), 1, "the probe");
+}
