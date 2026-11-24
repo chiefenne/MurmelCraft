@@ -236,12 +236,15 @@ fn reach(v: &Values, at: usize, rows: Range<usize>, count: i64, base: usize) -> 
 }
 
 impl<'s> Window<'s> {
-    /// The window of the walk of rows `cells`.
+    /// The window of the walk of rows `cells`; without `points`, the rows
+    /// of `Connectivity` and `FaceConnectivity` are left out (their length
+    /// is kept).
     fn of(
         grid: &Grid,
         sets: &'s dyn Sets,
         cells: Range<usize>,
         last: bool,
+        points: bool,
     ) -> Result<Self, MeshError> {
         let spans: Vec<(usize, Range<usize>)> = spans(grid.parts, cells.clone(), last)
             .filter(|(_, r)| !r.is_empty())
@@ -268,7 +271,7 @@ impl<'s> Window<'s> {
                 reach(&offsets, q.offset_at, r.start..r.end + 1, q.conn, q.conn_at),
             )
         });
-        let conn = need(Set::Connectivity, conn_rows)?;
+        let conn = need(Set::Connectivity, if points { conn_rows } else { 0..0 })?;
         let poly = if grid.poly {
             let po = need(Set::PolyhedronOffsets, offset_rows(|p| p.poly_offset_at))?;
             let to_rows = spans.iter().fold(0..0, |all, (p, r)| {
@@ -314,7 +317,7 @@ impl<'s> Window<'s> {
                     ),
                 )
             });
-            let fc = need(Set::FaceConnectivity, fc_rows)?;
+            let fc = need(Set::FaceConnectivity, if points { fc_rows } else { 0..0 })?;
             Some([po, to_faces, fo, fc])
         } else {
             None
@@ -412,11 +415,21 @@ fn enter(input: &Input, part: Part) -> Result<Here, MeshError> {
     Ok(here)
 }
 
+/// What a walk does with the point ids of the faces.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Points {
+    /// Nothing: only their number counts, and `Connectivity` and
+    /// `FaceConnectivity` are not read.
+    Skip,
+    /// Check that each is in its partition.
+    Check,
+    /// Check them and hand on their mesh points.
+    Map,
+}
+
 /// What a walk hands on, cell by cell.
 trait Sink {
-    /// Whether it needs the mesh points of the faces (a count needs only
-    /// their number; the points are checked either way).
-    const POINTS: bool;
+    const POINTS: Points;
     /// A face of the volume cell being read.
     fn face(&mut self, nodes: &[u32]);
     /// The volume cell whose faces came before ends; a polyhedron's faces
@@ -425,12 +438,22 @@ trait Sink {
     fn polygon(&mut self, nodes: &[u32]);
 }
 
-/// The point of local id `v` in partition `here` (0 when `map` is
-/// false: the id is only checked).
-fn point(input: &Input, here: &Here, v: i64, map: bool) -> Result<u32, MeshError> {
+/// The point of the local id at row `i` of `ids` in partition `here` (0
+/// unless `how` maps it; not read when `how` skips it).
+fn point(
+    input: &Input,
+    here: &Here,
+    ids: &Values,
+    i: usize,
+    how: Points,
+) -> Result<u32, MeshError> {
+    if how == Points::Skip {
+        return Ok(0);
+    }
+    let v = ids.int(i);
     let n = here.part.points;
     match usize::try_from(v).ok().filter(|&v| v < n) {
-        Some(v) if map => Ok(input.points.get(here.part.point_at + v)),
+        Some(v) if how == Points::Map => Ok(input.points.get(here.part.point_at + v)),
         Some(_) => Ok(0),
         None => Err(MeshError::new(
             "MESH006",
@@ -506,7 +529,7 @@ fn walk<S: Sink>(
                 }
                 ids.clear();
                 for i in nodes {
-                    ids.push(point(input, &here, input.conn.int(i), S::POINTS)?);
+                    ids.push(point(input, &here, input.conn, i, S::POINTS)?);
                 }
                 for f in table {
                     face.clear();
@@ -544,8 +567,8 @@ fn walk<S: Sink>(
                         .ok_or_else(|| MeshError::new("MESH009", format!("cell {c}: face {f}")))?;
                     face.clear();
                     for i in fr {
-                        let v = poly.face_conn.int(part.face_conn_at + i);
-                        face.push(point(input, &here, v, S::POINTS)?);
+                        let i = part.face_conn_at + i;
+                        face.push(point(input, &here, poly.face_conn, i, S::POINTS)?);
                     }
                     faces += 1;
                     match face.len() {
@@ -565,7 +588,7 @@ fn walk<S: Sink>(
                 }
                 face.clear();
                 for i in nodes {
-                    face.push(point(input, &here, input.conn.int(i), S::POINTS)?);
+                    face.push(point(input, &here, input.conn, i, S::POINTS)?);
                 }
                 sink.polygon(&face);
             } else {
@@ -603,22 +626,27 @@ impl Count {
     }
 }
 
-impl Sink for Count {
-    const POINTS: bool = false;
+/// A count of what a walk gives; with `CHECK` it checks the point ids,
+/// else it does not read them.
+#[derive(Default)]
+struct Tally<const CHECK: bool>(Count);
+
+impl<const CHECK: bool> Sink for Tally<CHECK> {
+    const POINTS: Points = if CHECK { Points::Check } else { Points::Skip };
 
     fn face(&mut self, nodes: &[u32]) {
-        self.faces += 1;
-        self.nodes += nodes.len();
+        self.0.faces += 1;
+        self.0.nodes += nodes.len();
     }
 
     fn cell(&mut self, zone: u32, _: CellKind, _: usize, _: bool) {
-        self.cells += 1;
-        self.zone_max = max(self.zone_max, Some(zone));
+        self.0.cells += 1;
+        self.0.zone_max = max(self.0.zone_max, Some(zone));
     }
 
     fn polygon(&mut self, nodes: &[u32]) {
-        self.polygons += 1;
-        self.polygon_nodes += nodes.len();
+        self.0.polygons += 1;
+        self.0.polygon_nodes += nodes.len();
     }
 }
 
@@ -666,7 +694,7 @@ impl Write<'_> {
 }
 
 impl Sink for Write<'_> {
-    const POINTS: bool = true;
+    const POINTS: Points = Points::Map;
 
     fn face(&mut self, nodes: &[u32]) {
         let (f, at) = (self.done.faces, self.done.nodes);
@@ -721,6 +749,30 @@ fn in_runs<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R>
         .collect()
 }
 
+/// Where each of the units `numbered` starts in the arrays, and their
+/// sum; the first error in file order. With `CHECK` the point ids are
+/// read and checked, else they are not read.
+fn tally<const CHECK: bool>(
+    grid: &Grid,
+    sets: &dyn Sets,
+    numbered: &[(usize, Range<usize>)],
+) -> Result<(Vec<Count>, Count), MeshError> {
+    let n = numbered.len();
+    let counts = in_runs(numbered.to_vec(), |(i, r)| {
+        let last = i + 1 == n;
+        let window = Window::of(grid, sets, r.clone(), last, CHECK)?;
+        let mut tally = Tally::<CHECK>::default();
+        walk(&window.input(grid), r, last, &mut tally).map(|()| tally.0)
+    });
+    let mut base = Vec::with_capacity(n);
+    let mut all = Count::default();
+    for count in counts {
+        base.push(all);
+        all = all.plus(count?);
+    }
+    Ok((base, all))
+}
+
 /// Build the cells of the `total` rows of `grid`, reading the datasets
 /// from `sets` a unit at a time.
 pub(super) fn read(grid: &Grid, sets: &dyn Sets, total: usize) -> Result<Cells, MeshError> {
@@ -734,18 +786,17 @@ fn read_in(grid: &Grid, sets: &dyn Sets, total: usize, unit: usize) -> Result<Ce
         .map(|i| (i, (i * unit).min(total)..((i + 1) * unit).min(total)))
         .collect();
     let n = numbered.len();
-    let counts = in_runs(numbered.clone(), |(i, r)| {
-        let last = i + 1 == n;
-        let window = Window::of(grid, sets, r.clone(), last)?;
-        let mut count = Count::default();
-        walk(&window.input(grid), r, last, &mut count).map(|()| count)
-    });
-    let mut base = Vec::with_capacity(counts.len());
-    let mut all = Count::default();
-    for count in counts {
-        base.push(all);
-        all = all.plus(count?);
-    }
+    // The counts do not depend on the point ids, so the first pass reads
+    // none; the walk that writes checks them. When the first pass meets a
+    // bad cell, a pass that checks the ids finds the first bad one, which
+    // may be a point id before it.
+    let (base, all) = match tally::<false>(grid, sets, &numbered) {
+        Ok(counted) => counted,
+        Err(e) => {
+            tally::<true>(grid, sets, &numbered)?;
+            return Err(e);
+        }
+    };
 
     let mut polys = Polygons {
         start: vec![0; all.faces + 1],
@@ -817,7 +868,7 @@ fn read_in(grid: &Grid, sets: &dyn Sets, total: usize, unit: usize) -> Result<Ce
     }
     for written in in_runs(jobs, |(i, r, mut write)| {
         let last = i + 1 == n;
-        let window = Window::of(grid, sets, r.clone(), last)?;
+        let window = Window::of(grid, sets, r.clone(), last, true)?;
         walk(&window.input(grid), r, last, &mut write)
     }) {
         written?;
@@ -1201,11 +1252,14 @@ mod tests {
     /// number of threads: the first bad one's, even when a later unit
     /// holds another; and every partition is checked, those without cells
     /// too, at a unit's edge or after the last cell; an offset that points
-    /// outside its dataset is reported, not cut off by a unit's window.
-    /// Breaks when the units' errors are taken in the order the threads
-    /// finish, a unit reports a partition that a unit before it checks
-    /// first, a partition without cells at a unit's edge or the end is
-    /// checked by no unit, or a window clamps a bad offset into range. The
+    /// outside its dataset is reported, not cut off by a unit's window; a
+    /// bad point id (which the counting pass does not read) is reported
+    /// before a bad cell after it, and alone. Breaks when the units' errors
+    /// are taken in the order the threads finish, a unit reports a
+    /// partition that a unit before it checks first, a partition without
+    /// cells at a unit's edge or the end is checked by no unit, a window
+    /// clamps a bad offset into range, or the error of the counting pass
+    /// is reported without looking for a bad point id before it. The
     /// reader's error tests read small files, which fit in one unit.
     #[test]
     fn threads_report_the_first_bad_cell_or_partition() {
@@ -1234,7 +1288,7 @@ mod tests {
                 .rfind(|p| p.cell_at <= r && r < p.cell_at + p.cells)
                 .unwrap()
         };
-        let cells: [(&Spoil, &dyn Fn(i64) -> bool); 7] = [
+        let cells: [(&Spoil, &dyn Fn(i64) -> bool); 8] = [
             (&|g, _, r| g.types[r] = 99, &|_| true),
             (&|g, _, r| g.zone[r] = -1.0, &|_| true),
             (
@@ -1264,6 +1318,15 @@ mod tests {
                     let i = g.poly_offsets[p.poly_offset_at + r - p.cell_at] as usize;
                     let f = g.to_faces[p.to_faces_at + i] as usize;
                     g.face_offsets[p.face_offset_at + f + 1] = 1_000_000;
+                },
+                &|t| t == POLYHEDRON,
+            ),
+            (
+                &|g, p, r| {
+                    let i = g.poly_offsets[p.poly_offset_at + r - p.cell_at] as usize;
+                    let f = g.to_faces[p.to_faces_at + i] as usize;
+                    let j = g.face_offsets[p.face_offset_at + f] as usize;
+                    g.face_conn[p.face_conn_at + j] = 1_000;
                 },
                 &|t| t == POLYHEDRON,
             ),
