@@ -565,6 +565,14 @@ impl FieldSet {
         out
     }
 
+    /// Take `from`'s node and cell lists, built for the same mesh, so
+    /// another step's fields need not build them again.
+    pub(crate) fn share_topology(&self, from: &FieldSet) {
+        if let Some(t) = from.topology.get() {
+            let _ = self.topology.set(t.clone());
+        }
+    }
+
     /// The velocity gradient Gᵢⱼ = ∂uᵢ/∂xⱼ in every cell of the vector
     /// field `f`: for a cell field the least-squares gradient of each
     /// component (with its values on the boundary faces when the file
@@ -796,7 +804,7 @@ impl FieldSet {
     }
 
     /// Whether `f` has one value per entity of `mesh` it sits on.
-    pub(crate) fn fits(f: &Field, mesh: &Mesh) -> bool {
+    pub fn fits(f: &Field, mesh: &Mesh) -> bool {
         let n = match f.location {
             Location::Cell => mesh.cell_count(),
             Location::Point => mesh.points.len(),
@@ -892,6 +900,160 @@ impl FieldSet {
             }
         }
         out
+    }
+
+    /// Every field's value at `point` in cell `cell`, read as a probe
+    /// reads it (the maintainer's card of 2026-11-24, "cell value plus
+    /// gradient"): a cell field's value is the cell's own plus its
+    /// least-squares gradient ([`crate::gradient`], fitted to the cells
+    /// sharing a node with it and to its boundary faces' values when the
+    /// file has them) times the way from the centroid to the point, as a
+    /// finite-volume solver reconstructs it; a node field's is the cell's
+    /// own linear fit to its nodes. Both keep the cell's peak (inverse
+    /// distance from the nodes flattened it) and are exact for a field
+    /// linear in space. When `face` is a boundary face (a probe snapped
+    /// to a wall), the boundary fields' values there follow. Derived and
+    /// calculated fields are read like the file's.
+    pub fn probe_values(
+        &self,
+        mesh: &Mesh,
+        cell: usize,
+        point: [f64; 3],
+        face: Option<u32>,
+    ) -> Vec<FieldValue> {
+        if cell >= mesh.cell_count() {
+            return Vec::new();
+        }
+        let t = self.topology(mesh);
+        let mut around = Vec::new();
+        // As the colouring's gradients take them: a cell sharing more
+        // nodes counts more.
+        t.near(cell, &mut around);
+        let mut out: Vec<FieldValue> = self
+            .results
+            .fields
+            .iter()
+            .filter(|f| f.location != Location::Boundary && Self::fits(f, mesh))
+            .filter_map(|f| {
+                let value = self.probe_reading(mesh, f, cell, point, &around)?;
+                Some(FieldValue {
+                    name: f.name.clone(),
+                    unit: f.unit.clone(),
+                    location: f.location,
+                    value,
+                })
+            })
+            .collect();
+        if let Some(u) = face
+            && let Some(&b) = mesh.face_boundary.get(u as usize)
+            && b != NO_CELL
+        {
+            out.extend(self.face_values(mesh, b as usize));
+        }
+        out
+    }
+
+    /// Scalar `component` of field `name` at `point` in cell `cell`, read
+    /// as [`FieldSet::probe_values`] reads it; `None` for a boundary
+    /// field, one that does not fit or no finite value.
+    pub fn probe_value(
+        &self,
+        mesh: &Mesh,
+        name: &str,
+        component: Component,
+        cell: usize,
+        point: [f64; 3],
+    ) -> Option<f64> {
+        let f = self
+            .results
+            .fields
+            .iter()
+            .find(|f| f.name == name && f.location != Location::Boundary)?;
+        if cell >= mesh.cell_count() || !Self::fits(f, mesh) {
+            return None;
+        }
+        let mut around = Vec::new();
+        self.topology(mesh).near(cell, &mut around);
+        let v = pick(
+            &self.probe_reading(mesh, f, cell, point, &around)?,
+            component,
+        );
+        v.is_finite().then_some(v)
+    }
+
+    /// Each component of cell or node field `f` at `point` in `cell`
+    /// (`around`: the cells sharing a node with it), read in place,
+    /// without copying the field.
+    fn probe_reading(
+        &self,
+        mesh: &Mesh,
+        f: &Field,
+        cell: usize,
+        point: [f64; 3],
+        around: &[u32],
+    ) -> Option<Vec<f64>> {
+        let k = f.components.max(1);
+        let t = self.topology(mesh);
+        let value: Vec<f64> = match f.location {
+            Location::Cell => {
+                let twin = self
+                    .at(&f.name, Location::Boundary)
+                    .filter(|b| b.components == f.components && Self::fits(b, mesh));
+                let x = t.centre[cell];
+                (0..k)
+                    .map(|j| {
+                        let v = f.values[cell * k + j];
+                        let cells = around
+                            .iter()
+                            .map(|&o| o as usize)
+                            .filter(|&o| o != cell)
+                            .map(|o| (t.centre[o], f.values[o * k + j]));
+                        let faces = twin.into_iter().flat_map(|b| {
+                            mesh.cell(cell).filter_map(move |face| {
+                                let i = *mesh.face_boundary.get(face.id as usize)?;
+                                if i == NO_CELL {
+                                    return None;
+                                }
+                                Some((
+                                    *t.face_centre.get(i as usize)?,
+                                    *b.values.get(i as usize * k + j)?,
+                                ))
+                            })
+                        });
+                        let g = crate::gradient::fit(x, v, cells.chain(faces));
+                        crate::gradient::predict(v, x, g, point)
+                    })
+                    .collect()
+            }
+            Location::Point => {
+                let nodes = t.nodes_of(cell);
+                if nodes.is_empty() {
+                    return None;
+                }
+                let n = nodes.len() as f64;
+                let x = [0, 1, 2].map(|d| {
+                    nodes
+                        .iter()
+                        .map(|&p| mesh.points[p as usize][d])
+                        .sum::<f64>()
+                        / n
+                });
+                (0..k)
+                    .map(|j| {
+                        let at = |p: u32| f.values[p as usize * k + j];
+                        let mean = nodes.iter().map(|&p| at(p)).sum::<f64>() / n;
+                        let g = crate::gradient::fit(
+                            x,
+                            mean,
+                            nodes.iter().map(|&p| (mesh.points[p as usize], at(p))),
+                        );
+                        crate::gradient::predict(mean, x, g, point)
+                    })
+                    .collect()
+            }
+            Location::Boundary => return None,
+        };
+        value.iter().all(|v| v.is_finite()).then_some(value)
     }
 
     /// Every boundary field's value on boundary face `b`, in file order.
@@ -1488,6 +1650,102 @@ mod tests {
             let local = linear.node_components(&m, f, &comps, None, p);
             assert!((local[0] - n[p]).abs() < 1e-9, "node {p}");
         }
+    }
+
+    /// Invariant (the maintainer's card of 2026-11-24, "cell value plus
+    /// gradient"): a probe reads a cell field as the cell's value plus
+    /// its least-squares gradient to the point, so it reads the cell's
+    /// own value at the centroid (the peak is kept) and a field linear in
+    /// space exactly anywhere in a cell, wall cells included (their
+    /// boundary values join the fit); a node field reads exactly through
+    /// the cell's fit to its nodes; probe_value picks components as the
+    /// colouring does, and a wall face adds the boundary fields. Breaks
+    /// if the probe went back to node averages (a coarse cell's peak
+    /// flattens) or the stencil or the centroid were wrong.
+    #[test]
+    fn probes_read_cell_value_plus_gradient() {
+        let (m, set) = channel();
+        let g0 = [0.7, -1.3, 2.1];
+        let lin = |x: [f64; 3]| 3.0 + g0[0] * x[0] + g0[1] * x[1] + g0[2] * x[2];
+        let mut r = set.results.clone();
+        // Linear pressure in the cells and on the boundary faces, linear
+        // velocity (x and z components) at the nodes.
+        let t = set.topology(&m);
+        for f in &mut r.fields {
+            match (f.name.as_str(), f.location) {
+                ("pressure", Location::Cell) => {
+                    for (c, x) in f.values.iter_mut().enumerate() {
+                        *x = lin(t.centre[c]);
+                    }
+                }
+                ("pressure", Location::Boundary) => {
+                    for (b, x) in f.values.iter_mut().enumerate() {
+                        *x = lin(t.face_centre[b]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        r.fields.retain(|f| f.name != "velocity");
+        r.fields.push(Field {
+            name: "velocity".into(),
+            unit: Some("m/s".into()),
+            location: Location::Point,
+            components: 3,
+            values: m
+                .points
+                .iter()
+                .flat_map(|&x| [lin(x), 0.0, -lin(x)])
+                .collect(),
+        });
+        let linear = FieldSet::new(r);
+        for c in (0..m.cell_count()).step_by(53) {
+            let x = linear.topology(&m).centre[c];
+            let at = linear
+                .probe_value(&m, "pressure", Component::Magnitude, c, x)
+                .unwrap();
+            assert!((at - lin(x)).abs() < 1e-12, "centroid of cell {c}");
+            // Halfway to the cell's first node.
+            let n = m.points[linear.topology(&m).nodes_of(c)[0] as usize];
+            let y = [0, 1, 2].map(|k| 0.5 * (x[k] + n[k]));
+            let want = lin(y);
+            let tol = 1e-9 * want.abs().max(1.0);
+            let p = linear
+                .probe_value(&m, "pressure", Component::Magnitude, c, y)
+                .unwrap();
+            assert!((p - want).abs() < tol, "cell {c}: {p} vs {want}");
+            let vz = linear
+                .probe_value(&m, "velocity", Component::Z, c, y)
+                .unwrap();
+            // The fit's tiny ridge (gradient::solve) leaves a few parts
+            // in a billion on a cell's handful of nodes.
+            let node_tol = 1e-7 * want.abs().max(1.0);
+            assert!(
+                (vz + want).abs() < node_tol,
+                "velocity_z in cell {c}: {vz} vs {}",
+                -want
+            );
+            let all = linear.probe_values(&m, c, y, None);
+            let v = all.iter().find(|f| f.name == "velocity").unwrap();
+            assert_eq!(v.value.len(), 3);
+            assert!((v.value[0] - want).abs() < node_tol);
+        }
+        // The real pressure at a centroid is the cell's own value.
+        let pc = set.at("pressure", Location::Cell).unwrap();
+        let c = 11;
+        let x = set.topology(&m).centre[c];
+        let got = set
+            .probe_value(&m, "pressure", Component::Magnitude, c, x)
+            .unwrap();
+        assert!((got - pc.values[c]).abs() < 1e-12 * pc.values[c].abs().max(1.0));
+        // A wall face brings the boundary fields.
+        let wall = m.boundary_face_id[0];
+        let owner = m.face_owner[wall as usize] as usize;
+        let vals = set.probe_values(&m, owner, set.topology(&m).centre[owner], Some(wall));
+        assert!(
+            vals.iter()
+                .any(|f| f.name == "y_plus" && f.location == Location::Boundary)
+        );
     }
 
     /// Invariant: a vector's magnitude at the nodes is the length of the

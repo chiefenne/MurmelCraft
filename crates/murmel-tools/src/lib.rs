@@ -26,6 +26,7 @@ pub mod live;
 mod markdown;
 pub mod movie;
 mod parcel;
+pub mod probe;
 mod region;
 pub mod series;
 mod stream;

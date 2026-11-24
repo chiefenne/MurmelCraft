@@ -122,6 +122,19 @@ impl MurmelApp {
         }
     }
 
+    /// What probe `p` shows of the field colouring the mesh (the
+    /// maintainer's card of 2026-11-24, "Shown field on label and
+    /// tree"): `|velocity| 12.3 m/s`; `None` while no field colours the
+    /// mesh or outside it.
+    pub(crate) fn probe_shown(&self, p: &murmel_engine::measure::Probe) -> Option<String> {
+        let m = self.session.mesh.as_ref()?;
+        let s = murmel_engine::inspect::probe_shown(m, &self.session.display, p)?;
+        Some(match &s.unit {
+            Some(u) => format!("{} {} {u}", s.title, number(s.value)),
+            None => format!("{} {}", s.title, number(s.value)),
+        })
+    }
+
     /// The status bar's hint while measuring.
     pub(crate) fn measure_hint(&self) -> Option<String> {
         let m = self.measuring.as_ref()?;
@@ -274,12 +287,16 @@ impl MurmelApp {
                 style.probe
             };
             let name = self.measure_name(item);
-            let text = match p.at.cell {
-                Some(cell) => self.i18n.tr_args(
+            let text = match (p.at.cell, self.probe_shown(p)) {
+                (Some(_), Some(value)) => self.i18n.tr_args(
+                    "measure-label-probe-value",
+                    &[("name", name.into()), ("value", value.into())],
+                ),
+                (Some(cell), None) => self.i18n.tr_args(
                     "measure-label-probe",
                     &[("name", name.into()), ("cell", cell.to_string().into())],
                 ),
-                None => self
+                (None, _) => self
                     .i18n
                     .tr_args("measure-label-probe-outside", &[("name", name.into())]),
             };
@@ -391,10 +408,12 @@ impl MurmelApp {
             if probes {
                 for pr in &d.probes {
                     let item = Item::Probe(pr.n);
-                    let value = pr
-                        .at
-                        .cell
-                        .map_or_else(|| "–".to_string(), |c| format!("cell:{c}"));
+                    // The field colouring the mesh, else the cell.
+                    let value = match (pr.at.cell, self.probe_shown(pr)) {
+                        (Some(_), Some(v)) => v,
+                        (Some(c), None) => format!("cell:{c}"),
+                        (None, _) => "–".to_string(),
+                    };
                     v.push((
                         item,
                         item.id(mesh),
@@ -426,6 +445,8 @@ impl MurmelApp {
         ];
         let mut action = None;
         let mut start = None;
+        let mut history = false;
+        let any_probe = !d.probes.is_empty();
         for (section, rows, mode) in groups {
             if rows.is_empty() && !filter.is_empty() {
                 continue;
@@ -540,11 +561,24 @@ impl MurmelApp {
                     if b.clicked() {
                         start = Some(mode);
                     }
+                    if mode == Mode::Probe && any_probe {
+                        let h = ui
+                            .add(egui::Button::new(
+                                RichText::new(self.i18n.tr("tree-probe-history")).small(),
+                            ))
+                            .on_hover_text(self.i18n.tr("tree-probe-history-tip"));
+                        if h.clicked() {
+                            history = true;
+                        }
+                    }
                 });
             });
         }
         if let Some(m) = start {
             self.toggle_measuring(m);
+        }
+        if history {
+            self.open_probe_history();
         }
         action
     }

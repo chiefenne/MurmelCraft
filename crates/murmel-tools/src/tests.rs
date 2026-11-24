@@ -1033,7 +1033,13 @@ fn reads_only_tools_change_nothing() {
             _ => json!({}),
         };
         let e = call(t.id, input, &mut s);
-        assert!(e.ok(), "{}: {:?}", t.id, e.diagnostics);
+        // This mesh has no results, so no probe history: refused, and
+        // still nothing changed.
+        let no_results = t.id == "probe.history"
+            && s.fields()
+                .is_none_or(murmel_engine::field::FieldSet::is_empty)
+            && e.diagnostics.first().is_some_and(|d| d.code == "PROBE001");
+        assert!(e.ok() || no_results, "{}: {:?}", t.id, e.diagnostics);
         let after = (
             murmel_engine::Snapshot::of(&s),
             s.display.selection.clone(),
@@ -3045,6 +3051,149 @@ fn series_tools() {
     assert_eq!(e.result["series"]["time"], 0.5, "the parcel file's time");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&dir2);
+}
+
+/// Invariant (the maintainer's cards of 2026-11-24): a probe shows the
+/// value of the field colouring the mesh (`shown`), and probe.history
+/// reads every probe over every step of the open series: the step shown
+/// from memory and the others from their files, derived and calculated
+/// fields made again of each step's values, a step without a fields
+/// file noted; the history is kept, so probe.export after it reads no
+/// file again, until the probes change; probes and fields narrow it,
+/// and the CSV has a line per step. Breaks if a history read the wrong
+/// file, dropped a made field, or re-read the run on every call.
+#[test]
+fn probe_history_tools() {
+    let mut s = session();
+    let dir = series_run(&mut s, "probe-history", false);
+    // Step 30 has parcels only.
+    let m = json!({"format": "foehncraft.series", "format_version": 1, "entries": [
+        {"step": 10, "time": 0.1, "files": {"fields": "fields_000010.vtkhdf"}},
+        {"step": 20, "time": 0.2, "files": {"fields": "fields_000020.vtkhdf"}},
+        {"step": 30, "time": 0.3, "files": {"parcels": "spray/parcels_000020.vtkhdf"}},
+    ]});
+    std::fs::write(dir.join("series.json"), m.to_string()).unwrap();
+    let e = call("probe.history", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    assert!(call("series.open", json!({ "path": dir }), &mut s).ok());
+    let e = call("probe.history", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "PROBE001", "no probe yet");
+    for cell in [3, 40] {
+        assert!(call("probe.add", json!({"at": {"cell": cell}}), &mut s).ok());
+    }
+    assert!(
+        call(
+            "probe.add",
+            json!({"at": {"point": [99.0, 0.0, 0.0]}}),
+            &mut s
+        )
+        .ok()
+    );
+    // Shown: nothing while the mesh is solid, then the field's value.
+    let e = call("measure.list", json!({}), &mut s);
+    assert!(e.result["probes"][0]["shown"].is_null());
+    assert!(
+        call(
+            "display.color_by",
+            json!({"by": "field", "field": "velocity", "component": "x"}),
+            &mut s
+        )
+        .ok()
+    );
+    let e = call("measure.list", json!({}), &mut s);
+    let shown = &e.result["probes"][0]["shown"];
+    assert_eq!(shown["title"], "velocity_x");
+    assert_eq!(shown["unit"], "m/s");
+    let vx = e.result["probes"][0]["fields"][0]["value"][0]
+        .as_f64()
+        .unwrap();
+    assert!((shown["value"].as_f64().unwrap() - vx).abs() < 1e-12);
+    assert!(e.result["probes"][2]["shown"].is_null(), "outside the mesh");
+
+    assert!(
+        call(
+            "field.calculate",
+            json!({"name": "speed2", "formula": "mag(velocity) ^ 2"}),
+            &mut s
+        )
+        .ok()
+    );
+    let e = call("probe.history", json!({}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let r = &e.result;
+    assert_eq!(r["steps"], 3);
+    assert_eq!(
+        r["probes"],
+        json!([{"id": "probe:1", "name": "Probe 1"}, {"id": "probe:2", "name": "Probe 2"}]),
+        "the probe outside is left out"
+    );
+    let cols: Vec<&str> = r["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        cols.contains(&"pressure") && cols.contains(&"speed2"),
+        "{cols:?}"
+    );
+    assert!(!cols.contains(&"y_plus"), "boundary fields are left out");
+    let k = cols.iter().position(|c| *c == "speed2").unwrap();
+    // Steps 10 and 20 hold the same file: the same values, read from
+    // memory and from the file; step 30 has none and a note.
+    let rows = r["rows"].as_array().unwrap();
+    assert_eq!(rows[0]["values"], rows[1]["values"]);
+    assert_eq!(rows[0]["time"], 0.1);
+    assert!(rows[1]["values"][1][k][0].as_f64().unwrap() > 0.0);
+    assert!(rows[2]["values"][0][0].is_null());
+    assert!(rows[2]["note"].as_str().unwrap().contains("no fields file"));
+
+    // Kept: with the step 20 file gone, the export still has its values.
+    std::fs::rename(dir.join("fields_000020.vtkhdf"), dir.join("gone.vtkhdf")).unwrap();
+    let csv = dir.join("probes.csv");
+    let e = call(
+        "probe.export",
+        json!({"path": csv, "probes": ["probe:2"], "fields": ["pressure", "velocity"]}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["steps"], 3);
+    let text = std::fs::read_to_string(&csv).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 4);
+    assert!(
+        lines[0].starts_with("step,time,Probe 2: pressure"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[0].ends_with("Probe 2: velocity_z [m/s]"),
+        "{}",
+        lines[0]
+    );
+    assert_eq!(lines[2].split(',').count(), 6);
+    assert!(
+        !lines[2].split(',').nth(2).unwrap().is_empty(),
+        "step 20 kept"
+    );
+    // A new probe reads the run again, and step 20's file is missing now.
+    assert!(call("probe.add", json!({"at": {"cell": 5}}), &mut s).ok());
+    let e = call("probe.history", json!({"fields": ["pressure"]}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(e.result["rows"][1]["note"].is_string());
+    assert_eq!(e.result["columns"].as_array().unwrap().len(), 1);
+    // Narrowing to what the history lacks is refused.
+    let e = call("probe.history", json!({"fields": ["nope"]}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "FIELD001");
+    let e = call("probe.history", json!({"probes": ["probe:3"]}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "PROBE001");
+    let e = call(
+        "probe.export",
+        json!({"path": dir.join("no/such/dir.csv")}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "PROBE003");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Invariant (charts, D268 second milestone): charts.open reads a

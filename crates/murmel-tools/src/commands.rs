@@ -1495,6 +1495,13 @@ pub fn commands() -> Vec<Command> {
         Window(Some("probe.add")),
     ));
     v.push(cmd(
+        "window.probe_history",
+        "cmd-probe-history",
+        "measure",
+        &[],
+        Window(Some("probe.history")),
+    ));
+    v.push(cmd(
         "measure.remove:selected",
         "cmd-measure-remove-selected",
         "measure",
@@ -1774,6 +1781,10 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     (
         "probe.at",
         "needs a point: a probe placed with Shift + P shows the same rows",
+    ),
+    (
+        "probe.export",
+        "needs a file name: the Probe history window exports CSV",
     ),
 ];
 

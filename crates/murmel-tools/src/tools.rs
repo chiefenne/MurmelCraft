@@ -1647,13 +1647,16 @@ fn probe_json(s: &Session, p: &Probe) -> Value {
         "visible": p.visible,
         "rows": s.mesh.as_ref().map(|m| murmel_engine::inspect::probe_rows(&m.mesh, &p.at)),
         "fields": probe_fields(s, &p.at),
+        "shown": s.mesh.as_ref().and_then(|m| murmel_engine::inspect::probe_shown(m, &s.display, p)),
     })
 }
 
 /// The field values at an anchor inside a cell (none outside the mesh).
 fn probe_fields(s: &Session, at: &Anchor) -> Vec<field::FieldValue> {
     match (&s.mesh, at.cell) {
-        (Some(m), Some(c)) => m.fields.point_values(&m.mesh, c as usize, at.point),
+        (Some(m), Some(c)) => m
+            .fields
+            .probe_values(&m.mesh, c as usize, at.point, at.face),
         _ => Vec::new(),
     }
 }
@@ -2258,6 +2261,8 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("measure.snap", READS_ONLY),
     ("measure.list", READS_ONLY),
     ("probe.at", READS_ONLY),
+    ("probe.history", READS_ONLY),
+    ("probe.export", "writes a file; the view stays as it is"),
     ("region.list", READS_ONLY),
     ("blocks.make", "writes a file; the view stays as it is"),
     (
@@ -3607,7 +3612,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-probe-add",
-        summary: "Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (inverse distance weighted from the cell's nodes). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it.",
+        summary: "Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness, and with results every field's value at the point (derived and calculated fields too: a cell field's value is the cell's own plus its least-squares gradient times the way from the centroid, as a finite-volume solver reconstructs it; a node field's the cell's linear fit to its nodes; on a boundary face also the boundary fields there) and shown, the value of the field colouring the mesh (title, unit, value). The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -3631,5 +3636,27 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: || object(json!({"at": anchor_schema()}), &["at"]),
         run: probe_at,
+    },
+    Tool {
+        id: "probe.history",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-probe-history",
+        summary: "Every probe's field values over the time steps of the open series (just the step shown without one): each step's fields file is read (the step shown is not read again), the derived and calculated fields are made again of its values, and each probe reads its cell as probe.add does (the cell's value plus its least-squares gradient to the point). probes (probe:<n> ids) and fields (names) narrow it; left out, every probe inside the mesh and every cell and node field. The result gives the probes (id, name), the columns (name, unit, components) and a row per step (index, step, time, values by probe then column, null where the step has none, and a note when a step has no fields file or another mesh). The history read last is kept until the probes, the series or the derived fields change, so probe.export after it reads nothing again. Changes nothing.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::probe::probe_history_schema,
+        run: crate::probe::probe_history,
+    },
+    Tool {
+        id: "probe.export",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-probe-export",
+        summary: "Write the probe history (probe.history, the same probes and fields filters) as CSV at path: a line per step with step and time, then a column per probe, field and component (velocity_x, velocity_y, velocity_z), named \"<probe>: <field> [unit]\"; values in full precision, an empty cell where a step has none.",
+        outputs: &["path"],
+        reads: &[],
+        input_schema: crate::probe::probe_export_schema,
+        run: crate::probe::probe_export,
     },
 ];

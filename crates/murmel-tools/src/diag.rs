@@ -355,6 +355,26 @@ const OWN: &[Code] = &[
         fix: None,
     },
     Code {
+        code: "PROBE001",
+        severity: Severity::Error,
+        meaning: "No probe history can be read: no probe lies inside the mesh, the open mesh has no cell or node fields, or a probe named is not inside the mesh.",
+        fix: Some(
+            "Place a probe inside the mesh (probe.add) on a mesh with results; measure.list gives the probes.",
+        ),
+    },
+    Code {
+        code: "PROBE002",
+        severity: Severity::Error,
+        meaning: "The probe history was cancelled before every step was read.",
+        fix: Some("Read it again; the steps already read are not kept."),
+    },
+    Code {
+        code: "PROBE003",
+        severity: Severity::Error,
+        meaning: "The probe history's CSV file cannot be written.",
+        fix: Some("Give a path in a folder that exists and can be written."),
+    },
+    Code {
         code: "SESS001",
         severity: Severity::Error,
         meaning: "A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values.",

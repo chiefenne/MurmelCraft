@@ -227,6 +227,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Region: three cell layers along the selected patch | `region.set` (input from the session) |
 | palette | Remove the region | `region.clear` (input from the session) |
 | palette | Remove all regions | `region.clear` (input from the session) |
+| palette | Probe history | window, then `probe.history` |
 | palette | Delete all measurements and probes | `measure.remove` (input from the session) |
 | palette | Fit the selection | `view.fit` (input from the session) |
 | palette | Click picks cells | `select.filter` `{"target":"cell"}` |
