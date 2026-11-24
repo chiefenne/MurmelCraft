@@ -887,3 +887,45 @@ The open takes a fifth to a third less and the peak an eighth less:
 the datasets of the cells are still read whole before the cells are
 built, and they are most of the file. Reading them block by block, a
 few blocks at a time, is the next step.
+
+## VTKHDF cells read in windows, unit by unit (2026-11-24)
+
+The cells of a VTKHDF grid are built in units of 32,768 cells, a run of
+units per thread, and each unit reads only its window of each dataset:
+its rows of `Types`, ghosts and zones, its offsets and the one after,
+the rows of `Connectivity` those offsets reach, and for polyhedra the
+rows of `PolyhedronOffsets`, `PolyhedronToFaces`, `FaceOffsets` and
+`FaceConnectivity` its cells use, found from the window read before
+(`Window::of`). A contiguous dataset's rows are read from the file
+(`H5::values_in`); a chunked one is still read whole, once. The reader
+now holds the outputs and the units in flight, not the datasets.
+
+Both passes read their windows: the counting pass reads all but
+`Connectivity` and `FaceConnectivity` (the counts do not depend on the
+point ids), and the pass that writes checks the ids. When the counting
+pass meets a bad cell, a pass that reads the ids looks for a bad one
+before it, so the error is still the first in file order.
+
+The meshes and fields are the same bit for bit (the 15 VTKHDF files of
+the sections above, at 1 and 4 threads).
+`threads_give_the_cells_of_one_walk` reads in units of 1 to 1,000 cells
+on 1 to 5 threads against one walk over the whole datasets.
+
+Same machine, 4 threads, `--no-render`, against main after #74:
+
+| | #74 | now |
+|---|---:|---:|
+| 1 M blocked: open, ms | 1,155, 1,287 | 1,074, 1,094 |
+| 1 M blocked: building the cells, ms | 271 to 313 | 390 to 479 |
+| 1 M blocked: peak memory while reading, MiB | 1,759, 1,774 | 1,116, 1,116 |
+| 1 M blocked: peak memory of the run, MiB | 2,310, 2,326 | 1,895, 1,920 |
+| 4 M blocked: open, ms | 4,764 | 4,201 |
+| 4 M blocked: peak memory while reading, MiB | 7,154 | 3,983 |
+| 4 M blocked: peak memory of the run, MiB | 9,103 | 5,937 |
+
+The peak while reading falls by 37 % (1 M) and 44 % (4 M), the peak of
+the run by a fifth to a third; the open is about as fast or a little
+faster. Building the cells takes longer because it now includes reading
+their datasets, which the open read before it, and each unit reads its
+windows twice (from the page cache the second time). For a 10 M mesh
+this saves about 8 GB at the reading peak.
