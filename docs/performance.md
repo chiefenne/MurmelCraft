@@ -851,3 +851,39 @@ What it shows:
   4 M cells). A 10 M cell file would need about 20 GB, more than the
   iMac should spend. The next step reads the datasets from the file in
   pieces, block by block, which the 100 M cell overview needs too.
+
+## HDF5 read from the file, not held (2026-11-24)
+
+`H5::open` no longer reads the whole file. It reads the file's
+structure: the superblock and the first 64 KiB, then it walks every
+object from the root (headers, links, attributes, dataset descriptions,
+chunk indices), notes what the walk needed and had not read, reads that
+(a page of 64 KiB at least, or twice the run it continues) and walks
+again, until nothing is missing. A dataset's data is read from the file
+when it is asked for, with positional reads, in pieces of 8 MiB on all
+threads. The datasets the mesh does not need (`GlobalCellIds`,
+`OriginalCellIds`, fields until they are gathered) are never read, and
+the points and their ids are freed once the blocks are joined. The
+file's hash now reads the file on its own thread
+(`FileHash::of_file`), as for the `.vtu`.
+
+The meshes and fields are the same bit for bit (the 15 VTKHDF files of
+the section above, at 1 and 4 threads), and
+`opening_a_path_reads_what_the_bytes_read` reads every fixture both
+ways, with pages of 64 KiB and of 512 bytes.
+
+Same machine, 4 threads, `--no-render`, against main after #73:
+
+| | #73 | now |
+|---|---:|---:|
+| 1 M blocked: open, ms | 1,639, 1,789 | 1,333, 1,338 |
+| 1 M blocked: reading the file's structure, ms | 604, 722 (all of it) | 1, 2 |
+| 1 M blocked: peak memory while reading, MiB | 2,036 | 1,775, 1,759 |
+| 4 M blocked: open, ms | 7,873 | 5,097 |
+| 4 M blocked: peak memory while reading, MiB | 8,267 | 7,170 |
+| 4 M blocked: peak memory of the run, MiB | 10,216 | 9,108 |
+
+The open takes a fifth to a third less and the peak an eighth less:
+the datasets of the cells are still read whole before the cells are
+built, and they are most of the file. Reading them block by block, a
+few blocks at a time, is the next step.

@@ -264,13 +264,17 @@ problem took more than a few minutes to understand.
   points after noting them hands `None` instead, or the face lands in the
   wrong group and loses its twin. Turning a face round keeps its points
   and its smallest one.
-- **The VTKHDF reader reads the datasets where they lie** (`H5::values`,
-  `hdf5::Values`): a compact or contiguous dataset is borrowed from the
-  file's bytes, a chunked one decoded once. The `H5` therefore lives
-  until the cells are built, and `read_vtkhdf_with` drops it before the
-  faces are linked, so the peak holds the file or the linking, not both.
-  Code that keeps a dataset after `read_parts` copies it out
-  (`H5::read_i64`, `H5::read_f64`).
+- **An HDF5 file opened by its path holds only its structure**
+  (`H5::open`): the object headers, groups, attributes and chunk indices
+  are read in pages when the file opens, by walking every object until
+  nothing the walk needs is missing (`load_structure`), and the data of
+  a dataset is read from the file each time it is asked for. Read a
+  dataset once and keep the values (`H5::values`, `hdf5::Values`), not
+  once per use. A new kind of structure the reader follows (a new chunk
+  index, say) goes into `H5::walk` too, or it is missing when read
+  (`MESH016`); `opening_a_path_reads_what_the_bytes_read` compares every
+  fixture read both ways. `H5::from_bytes` holds the whole file, as
+  before.
 - **The VTKHDF cells are read in ranges, in two passes**
   (`vtkhdf/cells.rs`), as the `.vtu` cells are. A range checks each
   partition when it comes to it; a partition without cells is checked by
