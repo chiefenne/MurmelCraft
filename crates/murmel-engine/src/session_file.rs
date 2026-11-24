@@ -48,7 +48,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.16";
+pub const SESSION_VERSION: &str = "1.17";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 

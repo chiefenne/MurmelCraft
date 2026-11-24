@@ -126,14 +126,14 @@ mod tests {
         for g in Group::ALL {
             assert!(t.has(&format!("derived-group-{}", g.key())));
         }
-        for i in [Input::Velocity, Input::Pressure] {
+        for i in Input::ALL {
             assert!(t.has(&format!("derived-input-{}", i.key())));
             assert!(t.has(&format!("derived-no-{}", i.key())));
         }
         for s in ["case", "defaults", "built_in", "edited"] {
             assert!(t.has(&format!("derived-from-{s}")));
         }
-        for k in ["density", "pressure", "velocity"] {
+        for k in murmel_engine::derive::REFERENCE_KEYS {
             assert!(t.has(&format!("derived-ref-{k}")));
         }
         for f in murmel_engine::calc::FUNCTIONS {

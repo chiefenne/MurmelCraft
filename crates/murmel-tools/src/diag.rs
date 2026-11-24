@@ -506,6 +506,22 @@ const OWN: &[Code] = &[
             "Read the fields it is made from instead, or remove the field made from it first.",
         ),
     },
+    Code {
+        code: "FIELD016",
+        severity: Severity::Error,
+        meaning: "The turning zones of a turbomachinery quantity cannot be used: an axis of length 0, a speed or axis point that is not finite, a zone the mesh does not have, a frame that is not one of the zones, or more than 16 zones.",
+        fix: Some(
+            "Give each zone a cell zone of the mesh (field.catalogue lists them under rotation.mesh_zones) or none for every cell, an axis that is not zero and a finite rpm.",
+        ),
+    },
+    Code {
+        code: "FIELD017",
+        severity: Severity::Error,
+        meaning: "The wall distance has no wall face to measure to: no patch is a wall (by the result's case or the patch role), a named patch is not one of the mesh's, or the patches have no face.",
+        fix: Some(
+            "Name the wall patches with walls (field.catalogue lists the mesh's patches under walls.mesh_patches).",
+        ),
+    },
 ];
 
 /// Every code: the tools' own, then the mesh and render codes.

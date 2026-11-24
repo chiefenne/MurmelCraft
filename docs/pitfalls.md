@@ -401,3 +401,10 @@ problem took more than a few minutes to understand.
   default socket path; window tests set `bridge_path` to `None` (or to a
   scratch path), or two test runs, or a test and a real window, fight over
   one socket (`LIVE003`).
+- **A window test clicks only what is in view.** kittest clicks a widget
+  at its place on the screen; one scrolled out of a `ScrollArea` or below
+  the harness's screen is in the accessibility tree but the click lands
+  nowhere and nothing happens (no error either). A scroll area around a
+  whole window also lost its clicks, so the Derived fields window scrolls
+  only its rows and puts the values its rows take (reference values,
+  turning zones, walls) above them; tests click the first rows.

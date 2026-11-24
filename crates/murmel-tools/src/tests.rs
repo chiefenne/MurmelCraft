@@ -2535,9 +2535,21 @@ fn derived_field_tools() {
     let e = call("field.catalogue", json!({}), &mut s);
     assert!(e.ok(), "{:?}", e.diagnostics);
     let qs = e.result["quantities"].as_array().unwrap();
-    assert_eq!(qs.len(), 5);
-    assert!(qs.iter().all(|q| q["available"] == true), "{qs:?}");
+    assert_eq!(qs.len(), murmel_engine::derive::Quantity::ALL.len());
+    // The velocity and pressure ones can be made from the channel's
+    // fields; the turbulence ones need k, ω or ε and ν_t.
+    for q in qs {
+        let group = q["group"].as_str().unwrap();
+        if matches!(group, "vortices" | "pressure" | "turbomachinery") {
+            assert_eq!(q["available"], true, "{q}");
+        }
+    }
     assert_eq!(qs[0]["inputs"][0]["field"], "velocity");
+    assert_eq!(e.result["rotation"]["from"], "built_in");
+    assert_eq!(
+        e.result["rotation"]["zones"][0]["axis"],
+        json!([0.0, 0.0, 1.0])
+    );
     assert_eq!(e.result["reference"]["from"]["density"], "built_in");
     assert_eq!(e.result["reference"]["density"], 1.225);
 
@@ -2576,10 +2588,13 @@ fn derived_field_tools() {
     assert_eq!(e.result["recipe"]["reference"]["velocity"], 2.0);
     assert_eq!(e.result["reference_from"]["velocity"], "kept");
     let e = call("field.catalogue", json!({}), &mut s);
-    assert_eq!(
-        e.result["quantities"][4]["derived"]["reference"]["density"],
-        1.0
-    );
+    let cp = e.result["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| q["quantity"] == "pressure-coefficient")
+        .unwrap();
+    assert_eq!(cp["derived"]["reference"]["density"], 1.0);
 
     for (input, code) in [
         (
@@ -2614,6 +2629,92 @@ fn derived_field_tools() {
     );
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert!(s.fields().unwrap().get("vorticity").is_none());
+}
+
+/// Invariant: beside FoehnCraft's case the turbomachinery quantities
+/// take its turning zones and the wall distance its walls, the
+/// catalogue says so, and values given win; the turbulence quantities
+/// need their fields. Breaks when the case beside the result is not
+/// read or a given rotation is replaced by the case's.
+#[test]
+fn derived_fields_from_the_case() {
+    let dir = std::env::temp_dir().join(format!("murmel-derived-case-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("fields.vtkhdf");
+    std::fs::copy(
+        root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf"),
+        &path,
+    )
+    .unwrap();
+    let mut s = session();
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    let e = call("field.catalogue", json!({}), &mut s);
+    let patches: Vec<String> = e.result["walls"]["mesh_patches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(patches.len() >= 2, "{patches:?}");
+    std::fs::write(
+        dir.join("case.resolved.toml"),
+        format!(
+            "[[mrf]]\norigin = [0.0, 0.0, 0.0]\naxis = [1, 0, 0]\nrpm = 1200.0\n[boundary.{}]\ntype = \"wall\"\n[boundary.{}]\ntype = \"velocity-inlet\"\n",
+            patches[0], patches[1]
+        ),
+    )
+    .unwrap();
+    let e = call("field.catalogue", json!({}), &mut s);
+    assert_eq!(e.result["rotation"]["from"], "case");
+    assert_eq!(e.result["rotation"]["zones"][0]["rpm"], 1200.0);
+    assert_eq!(e.result["walls"]["patches"], json!([patches[0]]));
+
+    let e = call("field.derive", json!({"quantity": "flow-angle"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["rotation_from"], "case");
+    assert_eq!(e.result["recipe"]["rotation"]["zones"][0]["rpm"], 1200.0);
+    assert_eq!(e.result["places"][0]["unit"], "°");
+    let mine = json!({"zones": [{"origin": [0, 0, 0], "axis": [0, 0, 1], "rpm": 10}]});
+    let e = call(
+        "field.derive",
+        json!({"quantity": "relative-velocity", "rotation": mine}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["rotation_from"], "given");
+    assert_eq!(e.result["recipe"]["rotation"]["zones"][0]["rpm"], 10.0);
+
+    let e = call("field.derive", json!({"quantity": "wall-distance"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["recipe"]["walls"], json!([patches[0]]));
+    assert_eq!(e.result["places"][0]["unit"], "m");
+    let r = e.result["places"][0]["range"].as_array().unwrap();
+    assert!(r[0].as_f64().unwrap() > 0.0, "{r:?}");
+
+    for (input, code) in [
+        (
+            json!({"quantity": "viscosity-ratio", "nu_t": "nothing"}),
+            "FIELD005",
+        ),
+        (
+            json!({"quantity": "flow-angle", "rotation": {"zones": [{"zone": "impeller", "origin": [0, 0, 0], "axis": [0, 0, 1], "rpm": 1}]}}),
+            "FIELD016",
+        ),
+        (
+            json!({"quantity": "wall-distance", "walls": ["nowhere"]}),
+            "FIELD017",
+        ),
+        (
+            json!({"quantity": "vorticity", "rotation": mine}),
+            "TOOL002",
+        ),
+        (json!({"quantity": "flow-angle", "walls": []}), "TOOL002"),
+    ] {
+        let e = call("field.derive", input.clone(), &mut s);
+        assert!(!e.ok(), "{input} was made: {}", e.result);
+        assert_eq!(e.diagnostics[0].code, code, "{input}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Invariant: field.calculate adds a formula's field (no journal step),

@@ -31,7 +31,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
 | `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
 | `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
-| `field.derive` | 1 | read | Compute a derived field from the open result's fields and add it to them, as if the file had it (colour by it, slice it, iso-surfaces, arrows and streamlines of it; saved in sessions as its recipe and computed again on loading). quantity: vorticity (the vector field vorticity, ω = ∇ × u, 1/s), q-criterion (q_criterion, Q = ½ (‖Ω‖² − ‖S‖²), vortices where Q > 0, 1/s²), lambda2 (lambda2, the middle eigenvalue of S² + Ω², vortices where λ₂ < 0, 1/s²), total-pressure (total_pressure, p + ½ ρ u·u, Pa) or pressure-coefficient (pressure_coefficient, (p − p_ref) / (½ ρ_ref U_ref²)). S and Ω are the symmetric and antisymmetric parts of the velocity gradient, taken in each cell by least squares from the cells around it (the vortex quantities are cell fields); the pressure quantities are taken wherever the pressure is (cells, nodes, boundary faces). velocity and pressure name the input fields; left out, they are found by name (velocity, U, u; pressure, p, static_pressure). A pressure in m²/s² is kinematic and takes no density; a density field (density, rho) wins over the reference density. reference: density (kg/m³), pressure (p_ref) and velocity (U_ref); values left out are the field's own when it is made again, else FoehnCraft's (case.resolved.toml beside the result), else your defaults (settings.set_default kind reference), else air at sea level (1.225), 0 and the largest speed of the velocity; the result's reference_from says where each came from. Computing a field again replaces it. remove: true removes the derived field (refused while an iso-surface, the arrows or a streamline set is made from it). A field the file already has is not computed again. field.catalogue lists what can be derived. |
+| `field.derive` | 1 | read | Compute a derived field from the open result's fields and add it to them, as if the file had it (colour by it, slice it, iso-surfaces, arrows and streamlines of it; saved in sessions as its recipe and computed again on loading). The quantities and fields are FoehnCraft's names and units; field.catalogue lists each with its formula, unit and inputs. Vortices: vorticity (vector, 1/s), q-criterion, lambda2, enstrophy (½ ω·ω), strain-rate (√(2 S:S)). Pressure: total-pressure (p + ½ ρ u·u), pressure-coefficient ((p − p_ref) / (½ ρ_ref U_ref²)), taken wherever the pressure is. Turbomachinery, in the cells, from the turning zones of rotation (zones: zone, origin, axis, rpm; frame): relative-velocity and frame-velocity (vectors w = c − u, u = Ω × (x − x0)), velocity-radial, velocity-circumferential, velocity-axial, velocity-meridional, relative-velocity-circumferential, flow-angle and relative-flow-angle (°), relative-total-pressure (p + ½ ρ w·w), rothalpy (p/ρ + ½ w·w − ½ u·u); each cell is seen in the frame of the first zone that holds it (the fixed frame outside them), or of frame in every cell. Turbulence, in the cells: dissipation-rate, specific-dissipation-rate, time-scale, length-scale (from k and ω or ε, with C_mu), viscosity-ratio (nu_t / ν), reynolds-stress-xx … -xz (Boussinesq). Wall: wall-distance (exact, from each cell centroid to the nearest face of walls). velocity, pressure, k, dissipation (ω or ε) and nu_t name the input fields; left out, they are found by name. A pressure in m²/s² is kinematic and takes no density; a density field (density, rho) wins over the reference density. reference: density, pressure, velocity, viscosity (kinematic, m²/s) and c_mu; rotation and walls: each left out is the field's own when it is made again, else FoehnCraft's (case.resolved.toml beside the result: [output.reference], [fluid], [turbulence.constants], [[mrf]], [[sliding]], [output] frame, boundaries of type wall), else your defaults (settings.set_default kinds reference and rotation), else built in (air at sea level, 0, the largest speed, C_mu 0.09; every cell about z at 0 rpm; the patches whose role is wall); reference_from and rotation_from say where they came from. Computing a field again replaces it. remove: true removes the derived field (refused while an iso-surface, the arrows or a streamline set is made from it). A field the file already has is not computed again. |
 | `field.catalogue` | 1 | read | What can be derived from the open result (field.derive): for each quantity its group (vortices, pressure), field name, formula, unit, inputs (the field each reads now and the fields that could be it), the reference values it uses, the inputs missing, whether the file has the field already and the recipe of the field when it is derived; the reference values a new field starts from, with where each came from (case, defaults or built_in); your formulas (formulas, each with whether its field is computed now), the fields computed from formulas (calculated, with the fields each reads and whether it is kept among your formulas) and the calculator's functions (field.calculate). |
 | `field.calculate` | 1 | read | Compute the field of a formula of your own from the open result's fields and add it to them, as field.derive does (saved in sessions as its formula and computed again on loading). name: the field it makes (a letter or _ first, then letters, digits and _; not a field of the file or of a derived quantity). formula: numbers, pi, the coordinates x, y, z and the position vector pos (of each cell centroid, node or face centre), field names bare or quoted ("p rgh"; a field wins over a built-in name), + - * / ^, the comparisons < <= > >= (1 or 0), components U.x U.y U.z, vectors [a, b, c], and the functions sqrt abs exp log log10 sin cos tan asin acos atan atan2 sinh cosh tanh sign floor ceil min max if(c, a, b) mag dot cross grad curl div (field.catalogue lists them with their arguments). The result is a scalar or a vector; it sits wherever every field it reads is (cells, nodes, boundary faces), in the cells when it takes a derivative (grad, curl and div are least-squares gradients, exact for linear fields) or when no one place has every field (node fields then as each cell's mean). Values that are not finite are no value (no_value counts them). formula left out: your formula of that name (settings.keep_formula). Computing a field again replaces it and computes every field made from it again (made_again); a formula reading its own field, or one made from it, is refused. remove: true removes it (refused while an item or another field is made from it). Errors say the column. |
 | `field.style` | 1 | read | Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values rebuilt from the cells' least-squares gradients, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes rainbow_desaturated, or rainbow_uniform for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style. |
@@ -856,6 +856,18 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 {
   "additionalProperties": false,
   "properties": {
+    "dissipation": {
+      "description": "omega or epsilon (a scalar; epsilon by its name, else by the unit m2/s3); left out: found by its name",
+      "type": "string"
+    },
+    "k": {
+      "description": "the turbulent kinetic energy (a scalar); left out: found by its name",
+      "type": "string"
+    },
+    "nu_t": {
+      "description": "the eddy viscosity (a scalar); left out: found by its name",
+      "type": "string"
+    },
     "pressure": {
       "description": "the pressure field (a scalar); left out: found by its name",
       "type": "string"
@@ -865,13 +877,43 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "vorticity",
         "q-criterion",
         "lambda2",
+        "enstrophy",
+        "strain-rate",
         "total-pressure",
-        "pressure-coefficient"
+        "pressure-coefficient",
+        "relative-velocity",
+        "frame-velocity",
+        "velocity-radial",
+        "velocity-circumferential",
+        "velocity-axial",
+        "velocity-meridional",
+        "relative-velocity-circumferential",
+        "flow-angle",
+        "relative-flow-angle",
+        "relative-total-pressure",
+        "rothalpy",
+        "dissipation-rate",
+        "specific-dissipation-rate",
+        "time-scale",
+        "length-scale",
+        "viscosity-ratio",
+        "reynolds-stress-xx",
+        "reynolds-stress-yy",
+        "reynolds-stress-zz",
+        "reynolds-stress-xy",
+        "reynolds-stress-yz",
+        "reynolds-stress-xz",
+        "wall-distance"
       ]
     },
     "reference": {
       "additionalProperties": false,
       "properties": {
+        "c_mu": {
+          "description": "C_mu of the turbulence model (beta* of SST)",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
         "density": {
           "exclusiveMinimum": 0,
           "type": "number"
@@ -882,6 +924,11 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "velocity": {
           "exclusiveMinimum": 0,
           "type": "number"
+        },
+        "viscosity": {
+          "description": "kinematic viscosity (m2/s)",
+          "exclusiveMinimum": 0,
+          "type": "number"
         }
       },
       "required": [],
@@ -890,9 +937,68 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     "remove": {
       "type": "boolean"
     },
+    "rotation": {
+      "additionalProperties": false,
+      "properties": {
+        "frame": {
+          "description": "the zone whose frame every cell is seen in; left out: each cell in its own zone's",
+          "type": "string"
+        },
+        "zones": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "origin": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "rpm": {
+                "type": "number"
+              },
+              "zone": {
+                "description": "the cell zone that turns; left out: every cell",
+                "type": "string"
+              }
+            },
+            "required": [
+              "origin",
+              "axis",
+              "rpm"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "zones"
+      ],
+      "type": "object"
+    },
     "velocity": {
       "description": "the velocity field (a vector); left out: found by its name",
       "type": "string"
+    },
+    "walls": {
+      "description": "the wall patches (wall distance); left out: the case's walls, else the patches whose role is wall",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     }
   },
   "required": [
@@ -2715,7 +2821,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "field_style",
         "view",
         "reference",
-        "parcels"
+        "parcels",
+        "rotation"
       ]
     },
     "values": {
@@ -2747,7 +2854,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "field_style",
         "view",
         "reference",
-        "parcels"
+        "parcels",
+        "rotation"
       ]
     }
   },
@@ -3551,6 +3659,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `FIELD013` | error | The formula's types or places do not fit: a vector where a scalar goes (or the other way), a function given the wrong number of arguments, a field with neither 1 nor 3 components, or fields with no place in common (one only on the boundary faces, one only in the cells). | Take a component (U.x) or the magnitude (mag(U)), or use dot or cross; the message says which argument. |
 | `FIELD014` | error | A formula's field cannot have this name (it must start with a letter or _, then letters, digits and _, at most 64 long, and not be a derived quantity's field), or its unit is longer than 64 characters. | Choose another name, such as speed or p_rel. |
 | `FIELD015` | error | The formula reads its own field, or a field made from it, so it would go round in a circle. | Read the fields it is made from instead, or remove the field made from it first. |
+| `FIELD016` | error | The turning zones of a turbomachinery quantity cannot be used: an axis of length 0, a speed or axis point that is not finite, a zone the mesh does not have, a frame that is not one of the zones, or more than 16 zones. | Give each zone a cell zone of the mesh (field.catalogue lists them under rotation.mesh_zones) or none for every cell, an axis that is not zero and a finite rpm. |
+| `FIELD017` | error | The wall distance has no wall face to measure to: no patch is a wall (by the result's case or the patch role), a named patch is not one of the mesh's, or the patches have no face. | Name the wall patches with walls (field.catalogue lists the mesh's patches under walls.mesh_patches). |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
 | `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a .vtu file such as KoflCraft's foehncraft.vtu. |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |

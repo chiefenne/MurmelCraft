@@ -1311,6 +1311,8 @@ fn derived_fields_from_the_window() {
     assert!(named(&h, "Show Vorticity") && named(&h, "Remove Vorticity"));
     assert_eq!(problems(&h), Vec::<String>::new(), "a field computed");
     // A reference value kept as your default.
+    h.get_by_label("Pressure").click();
+    h.run_steps(3);
     h.get_by(|n| n.role() == Role::SpinButton && n.label().as_deref() == Some("Density ρ_ref"))
         .click_secondary();
     h.run_steps(2);
@@ -1321,6 +1323,44 @@ fn derived_fields_from_the_window() {
         h.state().session.defaults.get(Kind::Reference, "density"),
         Some(&serde_json::json!(1.225))
     );
+    // Turbomachinery: the turning zone typed in the window reaches the
+    // recipe, and its speed can be kept as your default.
+    h.get_by_label("Turbomachinery").click();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "turbomachinery");
+    h.state_mut().derived.rotation.as_mut().unwrap().0.zones[0].rpm = 1500.0;
+    h.run_steps(2);
+    h.get_by_label("Compute Relative velocity").click();
+    h.run_steps(3);
+    let r = h
+        .state()
+        .session
+        .fields()
+        .unwrap()
+        .recipe("relative_velocity")
+        .cloned()
+        .unwrap_or_else(|| panic!("not computed: {:?}", h.state().error));
+    assert_eq!(r.rotation.unwrap().zones[0].rpm, 1500.0);
+    h.get_by(|n| {
+        n.role() == Role::SpinButton && n.label().as_deref() == Some("Speed of turning zone 1")
+    })
+    .click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Save Speed of rotation as your default")
+        .click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.defaults.get(Kind::Rotation, "rpm"),
+        Some(&serde_json::json!(1500.0))
+    );
+    // Turbulence and walls: shown with their inputs and walls.
+    for g in ["Turbulence", "Wall"] {
+        h.get_by_label(g).click();
+        h.run_steps(3);
+        assert_eq!(problems(&h), Vec::<String>::new(), "{g}");
+    }
+    h.get_by_label("Vortices").click();
+    h.run_steps(3);
     h.get_by_label("Remove Vorticity").click();
     h.run_steps(3);
     assert!(
