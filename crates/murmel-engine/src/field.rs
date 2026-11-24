@@ -5,15 +5,22 @@
 //! ([`FieldValues`], [`FieldPaint`]).
 //!
 //! Smooth colouring needs values at the mesh nodes, and a finite-volume
-//! solver writes them per cell. Each node takes the inverse distance
-//! weighted mean of the cells around it, weights 1 / |node − cell
-//! centroid| (D. Shepard, "A two-dimensional interpolation function for
-//! irregularly-spaced data", Proc. ACM National Conference 1968,
-//! pp. 517–524; decided by the maintainer 2026-11-24). Where the file
-//! also has the field on the boundary faces, boundary nodes take those
-//! face values instead, weighted the same way by the face centres. A
-//! vector is interpolated by components and its magnitude taken at the
-//! nodes.
+//! solver writes them per cell. Each cell predicts the node's value from
+//! its own value and its least-squares gradient ([`crate::gradient`]),
+//! and the node takes the inverse distance weighted mean of its cells'
+//! predictions, weights 1 / |node − cell centroid| (D. Shepard, "A
+//! two-dimensional interpolation function for irregularly-spaced data",
+//! Proc. ACM National Conference 1968, pp. 517–524), kept within the
+//! values of those cells so no new extreme appears (as T. J. Barth and
+//! D. C. Jespersen bound a reconstruction, "The design and application
+//! of upwind schemes on unstructured meshes", AIAA paper 89-0366). A
+//! field linear in space is so exact at every inner node, and its
+//! iso-surfaces flat; the plain weighted mean of the cell values
+//! (decided 2026-11-24 morning, replaced the same day) made them wave
+//! cell by cell. Where the file also has the field on the boundary
+//! faces, boundary nodes take those face values instead, weighted by
+//! the face centres. A vector is interpolated by components and its
+//! magnitude taken at the nodes.
 //!
 //! The values go to the GPU relative to [`FieldValues::origin`] (the
 //! middle of the field's range), so they keep their precision in `f32`;
@@ -293,6 +300,15 @@ impl Topology {
         }
     }
 
+    /// The cells that share a node with cell `c`, each once (with `c`).
+    fn near(&self, c: usize, out: &mut Vec<u32>) {
+        for &n in self.nodes_of(c) {
+            out.extend_from_slice(self.cells_of(n as usize));
+        }
+        out.sort_unstable();
+        out.dedup();
+    }
+
     fn cells_of(&self, p: usize) -> &[u32] {
         &self.point_cells[self.point_start[p]..self.point_start[p + 1]]
     }
@@ -324,7 +340,48 @@ fn idw(at: [f64; 3], ids: &[u32], centres: &[[f64; 3]], values: &[f64]) -> f64 {
     if sw > 0.0 { sv / sw } else { f64::NAN }
 }
 
+/// The mean at `at` of what the cells `ids` (centroids `centres`) predict
+/// there from their values and gradients (`grad` of a cell), weighted as
+/// Shepard's mean by the inverse distance, and kept within those cells'
+/// values ([`crate::gradient`]); a cell whose centroid is `at` wins. NaN
+/// when no cell has a finite value.
+fn predicted(
+    at: [f64; 3],
+    ids: &[u32],
+    centres: &[[f64; 3]],
+    values: &[f64],
+    mut grad: impl FnMut(usize) -> [f64; 3],
+) -> f64 {
+    let (mut sw, mut sv) = (0.0, 0.0);
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for &i in ids {
+        let i = i as usize;
+        let (Some(&v), Some(&c)) = (values.get(i), centres.get(i)) else {
+            continue;
+        };
+        if !v.is_finite() {
+            continue;
+        }
+        let d = ((at[0] - c[0]).powi(2) + (at[1] - c[1]).powi(2) + (at[2] - c[2]).powi(2)).sqrt();
+        if d <= f64::MIN_POSITIVE {
+            return v;
+        }
+        lo = lo.min(v);
+        hi = hi.max(v);
+        let x = crate::gradient::predict(v, c, grad(i), at);
+        let x = if x.is_finite() { x } else { v };
+        sw += 1.0 / d;
+        sv += x / d;
+    }
+    if sw > 0.0 {
+        (sv / sw).clamp(lo, hi)
+    } else {
+        f64::NAN
+    }
+}
+
 /// Scalar `c` of a field whose entities have the values `comps` (one
+/// list per component)./// Scalar `c` of a field whose entities have the values `comps` (one
 /// list per component).
 fn combine(comps: &[Vec<f64>], i: usize, c: Component) -> f64 {
     let at = |k: usize| {
@@ -417,6 +474,34 @@ impl FieldSet {
     pub(crate) fn cell_grid(&self, mesh: &Mesh) -> &crate::stream::CellGrid {
         self.grid
             .get_or_init(|| Arc::new(crate::stream::CellGrid::build(mesh, self)))
+    }
+
+    /// The slope at mesh point `p` of a field whose cell gradients are
+    /// `grad`: the inverse distance weighted mean of its cells' (the
+    /// normals of iso-surfaces follow it).
+    pub(crate) fn node_gradient(&self, mesh: &Mesh, grad: &[[f32; 3]], p: u32) -> [f64; 3] {
+        let t = self.topology(mesh);
+        let Some(&at) = mesh.points.get(p as usize) else {
+            return [0.0; 3];
+        };
+        let (mut sw, mut sg) = (0.0, [0.0; 3]);
+        for &c in t.cells_of(p as usize) {
+            let (Some(g), Some(x)) = (grad.get(c as usize), t.centre.get(c as usize)) else {
+                continue;
+            };
+            let d =
+                ((at[0] - x[0]).powi(2) + (at[1] - x[1]).powi(2) + (at[2] - x[2]).powi(2)).sqrt();
+            let w = 1.0 / d.max(f64::MIN_POSITIVE);
+            sw += w;
+            for k in 0..3 {
+                sg[k] += w * f64::from(g[k]);
+            }
+        }
+        if sw > 0.0 {
+            sg.map(|x| x / sw)
+        } else {
+            [0.0; 3]
+        }
     }
 
     /// The volume centroid of cell `c`.
@@ -608,12 +693,80 @@ impl FieldSet {
                         return v;
                     }
                 }
+                // What the cells around predict, each gradient made
+                // for these few cells alone (a probe or a sample).
                 comps
                     .iter()
-                    .map(|v| idw(at, t.cells_of(p), &t.centre, v))
+                    .enumerate()
+                    .map(|(j, v)| {
+                        let b = boundary
+                            .and_then(|b| b.get(j))
+                            .map(|b| (b.as_slice(), t.face_centre.as_slice()));
+                        let mut around = Vec::new();
+                        predicted(at, t.cells_of(p), &t.centre, v, |c| {
+                            around.clear();
+                            t.near(c, &mut around);
+                            crate::gradient::gradient_of(mesh, &t.centre, v, b, c, &around)
+                        })
+                    })
                     .collect()
             }
         }
+    }
+
+    /// The node values of each component of cell field `comps` (with the
+    /// boundary values `twin` when the file has them), every cell's
+    /// gradient made once per component; with the gradients of
+    /// component `keep`.
+    fn cell_nodes(
+        &self,
+        mesh: &Mesh,
+        comps: &[Vec<f64>],
+        twin: Option<&[Vec<f64>]>,
+        keep: Option<usize>,
+    ) -> (Vec<Vec<f64>>, Vec<[f64; 3]>) {
+        let t = self.topology(mesh);
+        let np = mesh.points.len();
+        let mut kept = Vec::new();
+        let nodes = comps
+            .iter()
+            .enumerate()
+            .map(|(j, v)| {
+                let b = twin.and_then(|b| b.get(j));
+                let g = crate::gradient::cell_gradients(
+                    mesh,
+                    &t.centre,
+                    v,
+                    b.map(|b| (b.as_slice(), t.face_centre.as_slice())),
+                    &|c, out| t.near(c, out),
+                );
+                let out: Vec<f64> = murmel_mesh::par::map(np, 8192, |r| {
+                    r.map(|p| {
+                        let at = mesh.points[p];
+                        if let Some(b) = b
+                            && !t.faces_of(p).is_empty()
+                        {
+                            let x = idw(at, t.faces_of(p), &t.face_centre, b);
+                            if x.is_finite() {
+                                return x;
+                            }
+                        }
+                        predicted(at, t.cells_of(p), &t.centre, v, |c| {
+                            g.get(c).copied().unwrap_or([0.0; 3])
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                })
+                .into_iter()
+                .flatten()
+                .collect();
+                if keep == Some(j) {
+                    kept = g;
+                }
+                out
+            })
+            .collect();
+        (nodes, kept)
     }
 
     /// The boundary values of the cell field `f` (a boundary field of the
@@ -637,6 +790,17 @@ impl FieldSet {
         }
         let comps = components(f);
         let twin = self.boundary_twin(mesh, f);
+        if f.location == Location::Cell {
+            let (by_comp, _) = self.cell_nodes(mesh, &comps, twin.as_deref(), None);
+            return Some(
+                (0..mesh.points.len())
+                    .map(|p| {
+                        let v: Vec<f64> = by_comp.iter().map(|n| n[p]).collect();
+                        pick(&v, component)
+                    })
+                    .collect(),
+            );
+        }
         Some(
             (0..mesh.points.len())
                 .map(|p| {
@@ -713,14 +877,49 @@ impl FieldSet {
         let comps = components(f);
         let twin = self.boundary_twin(mesh, f);
         let np = mesh.points.len();
-        let node_comps: Vec<Vec<f64>> = (0..np)
-            .map(|p| self.node_components(mesh, f, &comps, twin.as_deref(), p))
-            .collect();
-        let node: Vec<f64> = node_comps.iter().map(|v| pick(v, component)).collect();
         let nc = mesh.cell_count();
+        // The component whose gradient the values keep (a vector's
+        // magnitude gets its own below).
+        let keep = match (comps.len(), component) {
+            (1, _) => Some(0),
+            (_, Component::X) => Some(0),
+            (_, Component::Y) => Some(1),
+            (_, Component::Z) => Some(2),
+            (_, Component::Magnitude) => None,
+        };
+        let (node, mut grad) = if f.location == Location::Cell {
+            let (by_comp, kept) = self.cell_nodes(mesh, &comps, twin.as_deref(), keep);
+            let node: Vec<f64> = (0..np)
+                .map(|p| {
+                    let v: Vec<f64> = by_comp.iter().map(|n| n[p]).collect();
+                    pick(&v, component)
+                })
+                .collect();
+            (node, kept)
+        } else {
+            let node = (0..np)
+                .map(|p| pick(&self.node_components(mesh, f, &comps, None, p), component))
+                .collect();
+            (node, Vec::new())
+        };
         let (cell, boundary, range) = match f.location {
             Location::Cell => {
                 let cell: Vec<f64> = (0..nc).map(|c| combine(&comps, c, component)).collect();
+                if keep.is_none() {
+                    let t = self.topology(mesh);
+                    let b: Option<Vec<f64>> = twin.as_deref().map(|b| {
+                        (0..mesh.boundary.len())
+                            .map(|i| combine(b, i, component))
+                            .collect()
+                    });
+                    grad = crate::gradient::cell_gradients(
+                        mesh,
+                        &t.centre,
+                        &cell,
+                        b.as_deref().map(|b| (b, t.face_centre.as_slice())),
+                        &|c, out| t.near(c, out),
+                    );
+                }
                 let r = range_of(cell.iter().copied());
                 (cell, Vec::new(), r)
             }
@@ -765,6 +964,7 @@ impl FieldSet {
             cell,
             node,
             boundary,
+            grad: grad.into_iter().map(|g| g.map(|x| x as f32)).collect(),
             range,
             origin,
         })
@@ -784,6 +984,10 @@ pub struct FieldValues {
     pub node: Vec<f64>,
     /// Per boundary face, for a field of the boundary; else empty.
     pub boundary: Vec<f64>,
+    /// Per cell, the gradient of `cell` ([`crate::gradient`]), which
+    /// the values between cells are rebuilt from; empty for a field not
+    /// on the cells.
+    pub grad: Vec<[f32; 3]>,
     /// The smallest and largest finite value the file has: over the
     /// cells, the points or the boundary faces.
     pub range: Option<(f64, f64)>,
@@ -964,14 +1168,17 @@ mod tests {
         (m, FieldSet::new(r))
     }
 
-    /// Invariant: node values are convex means of the cells around each
-    /// node, so they lie inside the cell range; a linear field is
-    /// reproduced closely in the interior (IDW is exact for a constant
-    /// and close for a linear field on a regular grid); every node of a
-    /// cell mesh gets a value. A weight on the wrong side of the division
-    /// or a node left out would break one of these.
+    /// Invariant: each node takes what its cells predict there from their
+    /// least-squares gradients, kept within those cells' values: so node
+    /// values lie inside the cell range, a constant stays constant, a
+    /// field linear in space is exact at every node off the boundary
+    /// (inverse distance weighting was not, and its iso-surfaces waved),
+    /// every node of a cell mesh gets a value, and a probe's few nodes
+    /// (gradients made for their cells alone) read the same as the whole
+    /// mesh's. Breaks when a gradient or a weight is wrong, the bound is
+    /// dropped, or the two ways of making node values part.
     #[test]
-    fn node_values_by_inverse_distance() {
+    fn node_values_from_cell_gradients() {
         let (m, set) = channel();
         let choice = FieldChoice {
             name: "pressure".into(),
@@ -981,6 +1188,7 @@ mod tests {
         let (lo, hi) = v.range.unwrap();
         assert_eq!(v.cell.len(), m.cell_count());
         assert_eq!(v.node.len(), m.points.len());
+        assert_eq!(v.grad.len(), m.cell_count());
         assert!(v.node.iter().all(|x| x.is_finite()));
         assert!(v.node.iter().all(|&x| x >= lo - 1e-9 && x <= hi + 1e-9));
         // A constant field stays constant at every node.
@@ -995,6 +1203,44 @@ mod tests {
             .node_values(&m, "pressure", Component::Magnitude)
             .unwrap();
         assert!(n.iter().all(|&x| (x - 7.5).abs() < 1e-12));
+        // A linear field (cell values only) is exact inside.
+        let g0 = [0.7, -1.3, 2.1];
+        let lin = |x: [f64; 3]| 3.0 + g0[0] * x[0] + g0[1] * x[1] + g0[2] * x[2];
+        let mut r = set.results.clone();
+        r.fields
+            .retain(|f| f.name != "pressure" || f.location == Location::Cell);
+        for f in &mut r.fields {
+            if f.name == "pressure" {
+                for (c, x) in f.values.iter_mut().enumerate() {
+                    *x = lin(crate::inspect::cell_centroid(&m, c));
+                }
+            }
+        }
+        let linear = FieldSet::new(r);
+        let n = linear
+            .node_values(&m, "pressure", Component::Magnitude)
+            .unwrap();
+        let mut inner = 0;
+        for (p, &x) in n.iter().enumerate() {
+            let on_wall = m.boundary.iter().any(|f| f.contains(&(p as u32)));
+            if on_wall {
+                continue;
+            }
+            inner += 1;
+            let want = lin(m.points[p]);
+            assert!(
+                (x - want).abs() < 1e-9 * want.abs().max(1.0),
+                "node {p}: {x} vs {want}"
+            );
+        }
+        assert!(inner > 0, "no inner node");
+        // A probe's nodes read the same as the whole mesh's.
+        let f = linear.get("pressure").unwrap();
+        let comps = components(f);
+        for p in (0..m.points.len()).step_by(37) {
+            let local = linear.node_components(&m, f, &comps, None, p);
+            assert!((local[0] - n[p]).abs() < 1e-9, "node {p}");
+        }
     }
 
     /// Invariant: a vector's magnitude at the nodes is the length of the
