@@ -43,12 +43,16 @@ pub(crate) const HEX_FACES: &[&[usize]] = &[
     &[0, 3, 2, 1],
     &[4, 5, 6, 7],
 ];
+/// The faces of VTK's wedge, outward: its base (0, 1, 2) points
+/// towards the top (3, 4, 5), as for the base of the tetrahedron,
+/// hexahedron and pyramid (VTK 9 `vtkWedge` and its cell sizes; written
+/// so by FoehnCraft and KoflCraft).
 pub(crate) const WEDGE_FACES: &[&[usize]] = &[
-    &[0, 1, 2],
-    &[3, 5, 4],
-    &[0, 3, 4, 1],
-    &[1, 4, 5, 2],
-    &[2, 5, 3, 0],
+    &[0, 2, 1],
+    &[3, 4, 5],
+    &[0, 1, 4, 3],
+    &[1, 2, 5, 4],
+    &[2, 0, 3, 5],
 ];
 pub(crate) const PYRAMID_FACES: &[&[usize]] = &[
     &[0, 3, 2, 1],
@@ -1340,6 +1344,50 @@ mod tests {
         assert_eq!(m.boundary_owner, [0; 4]);
         assert_eq!(m.unique_faces, 4);
         assert_eq!(m.patches.len(), 1);
+    }
+
+    /// The signed volume of cell `c` by the divergence theorem over its
+    /// fan-triangulated faces; positive when the faces point outward.
+    fn signed_volume(m: &Mesh, c: usize) -> f64 {
+        let mut v = 0.0;
+        for f in m.cell(c) {
+            let p0 = m.points[f.at(0) as usize];
+            for k in 1..f.len() - 1 {
+                let (a, b) = (m.points[f.at(k) as usize], m.points[f.at(k + 1) as usize]);
+                v += p0[0] * (a[1] * b[2] - a[2] * b[1]) - p0[1] * (a[0] * b[2] - a[2] * b[0])
+                    + p0[2] * (a[0] * b[1] - a[1] * b[0]);
+            }
+        }
+        v / 6.0
+    }
+
+    /// Invariant: the linear cells in VTK's node order (the base of the
+    /// tetrahedron, hexahedron, wedge and pyramid pointing towards the
+    /// rest of the cell, as VTK 9, FoehnCraft and KoflCraft write them)
+    /// open with outward faces: a positive volume, the unit volume of
+    /// each shape. A wedge was read inside out before 2026-11-24.
+    #[test]
+    fn linear_cells_open_outward() {
+        let cells: [(&str, &str, f64); 4] = [
+            ("10", "0 0 0 1 0 0 0 1 0 0 0 1", 1.0 / 6.0),
+            ("12", "0 0 0 1 0 0 1 1 0 0 1 0 0 0 1 1 0 1 1 1 1 0 1 1", 1.0),
+            ("13", "0 0 0 1 0 0 0 1 0 0 0 1 1 0 1 0 1 1", 0.5),
+            ("14", "0 0 0 1 0 0 1 1 0 0 1 0 0.5 0.5 1", 1.0 / 3.0),
+        ];
+        for (ty, points, volume) in cells {
+            let n = points.split_whitespace().count() / 3;
+            let ids: Vec<String> = (0..n).map(|i| i.to_string()).collect();
+            let text = TET
+                .replace("NumberOfPoints=\"4\"", &format!("NumberOfPoints=\"{n}\""))
+                .replace("0 0 0 1 0 0 0 1 0 0 0 1<", &format!("{points}<"))
+                .replace(">0 1 2 3<", &format!(">{}<", ids.join(" ")))
+                .replace(">4</", &format!(">{n}</"))
+                .replace(">10</", &format!(">{ty}</"));
+            let m = read_vtu_str(&text).unwrap();
+            assert_eq!(m.cell_count(), 1, "type {ty}");
+            let v = signed_volume(&m, 0);
+            assert!((v - volume).abs() < 1e-12, "type {ty}: volume {v}");
+        }
     }
 
     /// Invariant: binary (base64) arrays decode the same as ascii ones.
