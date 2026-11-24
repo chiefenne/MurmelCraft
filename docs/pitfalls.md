@@ -198,6 +198,11 @@ problem took more than a few minutes to understand.
   tool calls `Session::settle` first (tools do it for you, except
   `clip.set` and `clip.rotate`, which keep a drag going). A window test
   that moves a plane and then looks at the surface settles too.
+- **The window may leave the edges out while the view moves**
+  (`edges::MovingEdges`, when frames with edges took over 33 ms). The
+  viewport's render key holds the edges, so a frame at rest draws them
+  again; a window test that looks at a frame while the camera moves on a
+  slow machine may see none. Offscreen pictures always draw them.
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,
