@@ -22,6 +22,7 @@
 //! against the file before it is used, so a broken file gives `MESH016`
 //! and never a panic or an allocation larger than the file allows.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::io::Read as _;
 use std::ops::Range;
@@ -259,6 +260,134 @@ enum ChunkIndex {
 struct Filter {
     id: u16,
     data: Vec<u32>,
+}
+
+/// How the values of a numeric dataset are stored.
+#[derive(Clone, Copy, Debug)]
+enum Num {
+    I64Le,
+    F64Le,
+    Int {
+        size: usize,
+        signed: bool,
+        be: bool,
+    },
+    F32 {
+        be: bool,
+    },
+    F64Be,
+    /// Sizes the readers do not convert (no values).
+    Unread,
+}
+
+/// The values of a numeric dataset, read where they lie ([`H5::values`]).
+pub struct Values<'a> {
+    bytes: Cow<'a, [u8]>,
+    num: Num,
+    len: usize,
+}
+
+impl<'a> Values<'a> {
+    /// The values of `bytes` stored as `dtype`; `None` when it is not a
+    /// number type. A size the readers do not convert gives no values, as
+    /// [`H5::read_i64`] and [`H5::read_f64`] give none.
+    pub(crate) fn new(bytes: Cow<'a, [u8]>, dtype: &Dtype) -> Option<Values<'a>> {
+        let num = match *dtype {
+            Dtype::Int {
+                size: 8, be: false, ..
+            } => Num::I64Le,
+            Dtype::Float { size: 8, be: false } => Num::F64Le,
+            Dtype::Int { size, signed, be } if (1..=8).contains(&size) => {
+                Num::Int { size, signed, be }
+            }
+            Dtype::Float { size: 4, be } => Num::F32 { be },
+            Dtype::Float { size: 8, be: true } => Num::F64Be,
+            Dtype::Int { .. } | Dtype::Float { .. } => Num::Unread,
+            _ => return None,
+        };
+        let len = match num {
+            Num::Unread => 0,
+            _ => bytes.len() / dtype.size(),
+        };
+        Some(Values { bytes, num, len })
+    }
+
+    /// Values of 64-bit integers, for tests.
+    #[cfg(test)]
+    pub(crate) fn of_ints(v: &[i64]) -> Values<'static> {
+        let bytes = v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let dtype = Dtype::Int {
+            size: 8,
+            signed: true,
+            be: false,
+        };
+        Values::new(Cow::Owned(bytes), &dtype).unwrap_or_else(|| unreachable!())
+    }
+
+    /// Values of 64-bit floats, for tests.
+    #[cfg(test)]
+    pub(crate) fn of_floats(v: &[f64]) -> Values<'static> {
+        let bytes = v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        let dtype = Dtype::Float { size: 8, be: false };
+        Values::new(Cow::Owned(bytes), &dtype).unwrap_or_else(|| unreachable!())
+    }
+}
+
+impl Values<'_> {
+    /// How many values there are.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Value `i` as an integer (a float is truncated); `i < len()`.
+    pub fn int(&self, i: usize) -> i64 {
+        match self.num {
+            Num::I64Le => i64::from_le_bytes(self.eight(i)),
+            Num::Int { size, signed, be } => {
+                let b = &self.bytes[i * size..(i + 1) * size];
+                let mut v = 0u64;
+                for k in 0..size {
+                    let byte = if be { b[size - 1 - k] } else { b[k] };
+                    v |= (byte as u64) << (8 * k);
+                }
+                if signed && size < 8 && v & (1 << (8 * size - 1)) != 0 {
+                    v |= u64::MAX << (8 * size);
+                }
+                v as i64
+            }
+            Num::Unread => 0,
+            _ => self.float(i) as i64,
+        }
+    }
+
+    /// Value `i` as a float (an integer converts); `i < len()`.
+    pub fn float(&self, i: usize) -> f64 {
+        match self.num {
+            Num::F64Le => f64::from_le_bytes(self.eight(i)),
+            Num::F32 { be } => {
+                let mut a = [0u8; 4];
+                a.copy_from_slice(&self.bytes[i * 4..i * 4 + 4]);
+                (if be {
+                    f32::from_be_bytes(a)
+                } else {
+                    f32::from_le_bytes(a)
+                }) as f64
+            }
+            Num::F64Be => f64::from_be_bytes(self.eight(i)),
+            Num::Unread => 0.0,
+            _ => self.int(i) as f64,
+        }
+    }
+
+    fn eight(&self, i: usize) -> [u8; 8] {
+        let mut a = [0u8; 8];
+        a.copy_from_slice(&self.bytes[i * 8..i * 8 + 8]);
+        a
+    }
 }
 
 /// What is needed to read a dataset.
@@ -1045,6 +1174,29 @@ impl H5 {
 
     /// The raw bytes of a dataset, `count × element size` long.
     pub fn raw(&self, ds: &Dataset) -> Result<Vec<u8>, MeshError> {
+        self.raw_in_place(ds).map(Cow::into_owned)
+    }
+
+    /// The values of a numeric dataset where they lie: in the file's
+    /// bytes when it is stored whole (compact or contiguous), decoded
+    /// once when it is chunked. Integers and floats convert as
+    /// [`H5::read_i64`] and [`H5::read_f64`] convert them, without the
+    /// copies.
+    pub fn values(&self, ds: &Dataset) -> Result<Values<'_>, MeshError> {
+        self.values_or(ds, "a non-numeric dataset where numbers are expected")
+    }
+
+    /// [`H5::values`] of a dataset read for its integers.
+    pub fn int_values(&self, ds: &Dataset) -> Result<Values<'_>, MeshError> {
+        self.values_or(ds, "a non-numeric dataset where integers are expected")
+    }
+
+    fn values_or(&self, ds: &Dataset, not_numbers: &str) -> Result<Values<'_>, MeshError> {
+        let bytes = self.raw_in_place(ds)?;
+        Values::new(bytes, &ds.dtype).ok_or_else(|| unsupported(not_numbers))
+    }
+
+    fn raw_in_place(&self, ds: &Dataset) -> Result<Cow<'_, [u8]>, MeshError> {
         let elem = ds.dtype.size();
         if elem == 0 {
             return Err(unsupported("reading a dataset of this datatype"));
@@ -1074,18 +1226,20 @@ impl H5 {
                 if b.len() < total {
                     return Err(broken("compact data too short"));
                 }
-                Ok(b[..total].to_vec())
+                Ok(Cow::Borrowed(&b[..total]))
             }
             Layout::Contiguous { addr, size } => match addr {
-                None => Ok(vec![0; total]),
+                None => Ok(Cow::Owned(vec![0; total])),
                 Some(a) => {
                     if *size < total as u64 {
                         return Err(broken("contiguous data shorter than its dataspace"));
                     }
-                    Ok(self.slice(*a, total as u64)?.to_vec())
+                    Ok(Cow::Borrowed(self.slice(*a, total as u64)?))
                 }
             },
-            Layout::Chunked { dims, index } => self.chunked(ds, dims, index, elem, total),
+            Layout::Chunked { dims, index } => {
+                self.chunked(ds, dims, index, elem, total).map(Cow::Owned)
+            }
         }
     }
 
@@ -1944,6 +2098,53 @@ mod tests {
             H5::from_bytes(b"not hdf5".to_vec()).err().map(|e| e.code),
             Some("MESH018")
         );
+    }
+
+    /// Invariant: [`Values`] give, value by value, what [`H5::read_i64`]
+    /// and [`H5::read_f64`] give for every integer size (1, 2, 4, 8 bytes,
+    /// signed or not, either byte order), both float sizes in either byte
+    /// order, and sizes the readers do not convert (no values); integers
+    /// convert to floats and floats truncate to integers. Breaks when a
+    /// byte order is swapped, a signed integer is not sign-extended, or
+    /// `len` counts bytes. The fixture tests read only the sizes FoehnCraft
+    /// and our writer use (8-byte little-endian), so no other test reads
+    /// the rest.
+    #[test]
+    fn values_convert_as_the_copies_do() {
+        let raw: Vec<u8> = (0..64u32).map(|i| (i * 37 + 200) as u8).collect();
+        let mut dtypes = Vec::new();
+        for size in [1, 2, 3, 4, 8, 16] {
+            for signed in [false, true] {
+                for be in [false, true] {
+                    dtypes.push(Dtype::Int { size, signed, be });
+                }
+            }
+        }
+        for size in [2, 4, 8] {
+            for be in [false, true] {
+                dtypes.push(Dtype::Float { size, be });
+            }
+        }
+        for dt in dtypes {
+            let v = Values::new(Cow::Borrowed(&raw[..]), &dt).unwrap();
+            let (i, f) = match dt {
+                Dtype::Int { .. } => {
+                    let i = ints(&dt, &raw);
+                    let f: Vec<f64> = i.iter().map(|&x| x as f64).collect();
+                    (i, f)
+                }
+                _ => {
+                    let f = floats(&dt, &raw);
+                    (f.iter().map(|&x| x as i64).collect(), f)
+                }
+            };
+            assert_eq!(v.len(), i.len(), "{dt:?}");
+            for k in 0..v.len() {
+                assert_eq!(v.int(k), i[k], "{dt:?} value {k}");
+                assert_eq!(v.float(k).to_bits(), f[k].to_bits(), "{dt:?} value {k}");
+            }
+        }
+        assert!(Values::new(Cow::Borrowed(&raw[..]), &Dtype::VarString).is_none());
     }
 
     /// Invariant: the shuffle filter puts byte b of element i back from

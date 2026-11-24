@@ -25,14 +25,16 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 use crate::field::{Field, Location, Results, group_vectors, parse_units};
-use crate::hdf5::{H5, Object, Target, Value};
-use crate::vtu::{
-    HEX_FACES, HEXAHEDRON, POLYGON, POLYHEDRON, PYRAMID, PYRAMID_FACES, QUAD, TETRA, TETRA_FACES,
-    TRIANGLE, WEDGE, WEDGE_FACES, push_cell,
-};
-use crate::{CellKind, Mesh, MeshError, Patch, Polygons, boundary};
+use crate::hdf5::{H5, Object, Target, Value, Values};
+use crate::{Mesh, MeshError, Patch, Polygons, boundary, par};
+
+mod cells;
+
+/// No mesh point yet for a global point id.
+const NO_POINT: u32 = u32::MAX;
 
 fn bad(message: impl Into<String>) -> MeshError {
     MeshError::new("MESH018", message)
@@ -73,14 +75,17 @@ pub(crate) fn read_vtkhdf_with(path: &Path, hash: bool) -> Result<(Mesh, Results
     let h = H5::open(path)?;
     drop(io);
     crate::profile::check()?;
-    let _t = crate::profile::span("read.vtkhdf");
+    let t = crate::profile::span("read.vtkhdf");
     // Hash the file on another thread while it is read.
     let (read, digest) = std::thread::scope(|s| {
         let digest = hash.then(|| s.spawn(|| crate::FileHash::Blake3.of_bytes(h.bytes())));
-        let read = read_h5(&h);
+        let read = read_parts(&h);
         (read, digest.map(|d| d.join().unwrap_or_default()))
     });
-    let (mut mesh, results) = read?;
+    drop(t);
+    // The faces are linked after the file's bytes are freed.
+    drop(h);
+    let (mut mesh, results) = read?.finish()?;
     mesh.files = vec![path.to_path_buf()];
     mesh.file_blake3 = digest.into_iter().collect();
     Ok((mesh, results))
@@ -88,6 +93,22 @@ pub(crate) fn read_vtkhdf_with(path: &Path, hash: bool) -> Result<(Mesh, Results
 
 /// Read the mesh and fields of an open HDF5 file in the VTKHDF layout.
 pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
+    read_parts(h)?.finish()
+}
+
+/// What a VTKHDF file gives before its faces are linked: all that needs
+/// the file's bytes.
+struct Parts {
+    b: Builder,
+    cell_fields: Vec<Vec<Field>>,
+    point_fields: Vec<Vec<Field>>,
+    boundary_fields: Vec<(usize, Vec<Field>)>,
+    /// The text attributes of the root group and of `/VTKHDF`.
+    attrs: BTreeMap<String, String>,
+    vtk_attrs: Vec<(String, String)>,
+}
+
+fn read_parts(h: &H5) -> Result<Parts, MeshError> {
     let vtk = h
         .path("/VTKHDF")
         .map_err(|_| bad("the file has no /VTKHDF group: it is HDF5 but not VTKHDF"))?;
@@ -213,14 +234,6 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
             )?,
         ));
     }
-    let mut mesh = b.finish()?;
-
-    // Fields: the cell and point data of every volume block joined block
-    // after block (a field missing in one block is NaN there), the cell
-    // data of the patches as boundary fields.
-    let mut fields = join(cell_fields, mesh.cell_count());
-    fields.extend(join(point_fields, mesh.points.len()));
-    fields.extend(join_boundary(boundary_fields, mesh.boundary.len()));
     let root = h.root()?;
     let mut attrs = BTreeMap::new();
     for (k, v) in h.attrs(&root)? {
@@ -228,38 +241,72 @@ pub fn read_h5(h: &H5) -> Result<(Mesh, Results), MeshError> {
             attrs.insert(k, t);
         }
     }
-    let units = attrs
-        .get("units")
-        .map(|u| parse_units(u))
-        .unwrap_or_default();
-    for f in &mut fields {
-        f.unit = units.get(&f.name).cloned();
-    }
-    let num = |k: &str| attrs.get(k).and_then(|v| v.parse::<f64>().ok());
-    let results = Results {
-        fields: group_vectors(fields),
-        time: num("time"),
-        step: num("step").map(|v| v as u64),
-        iteration: num("iteration").map(|v| v as u64),
-        attrs: attrs.clone(),
-    };
-    for (k, v) in &attrs {
-        if k == "case" || k.starts_with("foehncraft_") || k.starts_with("koflcraft_") {
-            mesh.metadata.insert(k.clone(), v.clone());
-        }
-    }
-    // the strings of /VTKHDF: the block layout, digests and versions
+    let mut vtk_attrs = Vec::new();
     for (k, v) in h.attrs(&vtk)? {
         if k == "Type" || k == "Version" {
             continue;
         }
         if let Some(t) = v.text() {
-            mesh.metadata.insert(k, t);
+            vtk_attrs.push((k, t));
         }
     }
-    // Front ends name the format from this key.
-    mesh.metadata.insert("vtkhdf".into(), "2".into());
-    Ok((mesh, results))
+    Ok(Parts {
+        b,
+        cell_fields,
+        point_fields,
+        boundary_fields,
+        attrs,
+        vtk_attrs,
+    })
+}
+
+impl Parts {
+    /// Link the faces and gather the fields.
+    fn finish(self) -> Result<(Mesh, Results), MeshError> {
+        let Parts {
+            b,
+            cell_fields,
+            point_fields,
+            boundary_fields,
+            attrs,
+            vtk_attrs,
+        } = self;
+        let mut mesh = b.finish()?;
+
+        // Fields: the cell and point data of every volume block joined
+        // block after block (a field missing in one block is NaN there),
+        // the cell data of the patches as boundary fields.
+        let mut fields = join(cell_fields, mesh.cell_count());
+        fields.extend(join(point_fields, mesh.points.len()));
+        fields.extend(join_boundary(boundary_fields, mesh.boundary.len()));
+        let units = attrs
+            .get("units")
+            .map(|u| parse_units(u))
+            .unwrap_or_default();
+        for f in &mut fields {
+            f.unit = units.get(&f.name).cloned();
+        }
+        let num = |k: &str| attrs.get(k).and_then(|v| v.parse::<f64>().ok());
+        let results = Results {
+            fields: group_vectors(fields),
+            time: num("time"),
+            step: num("step").map(|v| v as u64),
+            iteration: num("iteration").map(|v| v as u64),
+            attrs: attrs.clone(),
+        };
+        for (k, v) in &attrs {
+            if k == "case" || k.starts_with("foehncraft_") || k.starts_with("koflcraft_") {
+                mesh.metadata.insert(k.clone(), v.clone());
+            }
+        }
+        // the strings of /VTKHDF: the block layout, digests and versions
+        for (k, t) in vtk_attrs {
+            mesh.metadata.insert(k, t);
+        }
+        // Front ends name the format from this key.
+        mesh.metadata.insert("vtkhdf".into(), "2".into());
+        Ok((mesh, results))
+    }
 }
 
 fn type_of(h: &H5, obj: &Object) -> Result<String, MeshError> {
@@ -337,16 +384,7 @@ fn data_fields(
                 ));
             }
         };
-        let mut values = h.read_f64(&ds)?;
-        if let Some(keep) = keep {
-            values = keep
-                .iter()
-                .flat_map(|&r| {
-                    let at = r as usize * comps;
-                    values[at..at + comps].iter().copied()
-                })
-                .collect();
-        }
+        let values = gather(&h.values(&ds)?, comps, keep);
         if comps == 1 || comps == 3 {
             out.push(Field {
                 name: link.name.clone(),
@@ -369,6 +407,32 @@ fn data_fields(
         }
     }
     Ok(out)
+}
+
+/// The values of a field of `comps` components, of the rows `keep`
+/// names when it is given (else of all rows), on all threads. A dataset
+/// whose values the reader does not convert gives none, as before.
+fn gather(v: &Values, comps: usize, keep: Option<&[u32]>) -> Vec<f64> {
+    let Some(keep) = keep else {
+        let mut out = vec![0.0; v.len()];
+        par::chunks_mut(&mut out, 1 << 15, |at, part| {
+            for (k, o) in part.iter_mut().enumerate() {
+                *o = v.float(at + k);
+            }
+        });
+        return out;
+    };
+    if keep.iter().any(|&r| (r as usize + 1) * comps > v.len()) {
+        return Vec::new();
+    }
+    let mut out = vec![0.0; keep.len() * comps];
+    par::chunks_mut(&mut out, 1 << 15, |at, part| {
+        for (k, o) in part.iter_mut().enumerate() {
+            let i = at + k;
+            *o = v.float(keep[i / comps] as usize * comps + i % comps);
+        }
+    });
+    out
 }
 
 /// Fields of several blocks joined block after block; `blocks[i]` has
@@ -446,12 +510,45 @@ fn join_boundary(patches: Vec<(usize, Vec<Field>)>, total: usize) -> Vec<Field> 
         .collect()
 }
 
+/// Volume points by their `GlobalPointIds`: in a list by id when the ids
+/// are small numbers (as the blocked writers number points), else in a
+/// map.
+enum Gids {
+    Dense(Vec<u32>),
+    Hash(HashMap<i64, u32>),
+}
+
+impl Gids {
+    fn get(&self, id: i64) -> Option<u32> {
+        match self {
+            Gids::Dense(points) => usize::try_from(id)
+                .ok()
+                .and_then(|i| points.get(i).copied())
+                .filter(|&p| p != NO_POINT),
+            Gids::Hash(map) => map.get(&id).copied(),
+        }
+    }
+
+    fn into_map(self) -> HashMap<i64, u32> {
+        match self {
+            Gids::Hash(map) => map,
+            Gids::Dense(points) => points
+                .into_iter()
+                .enumerate()
+                .filter(|&(_, p)| p != NO_POINT)
+                .map(|(id, p)| (id as i64, p))
+                .collect(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Builder {
     mesh: Mesh,
     /// The faces of the volume cells as read (`Polygons::new()` once the
-    /// first grid starts).
+    /// first grid starts), and each face's smallest point.
     polys: Polygons,
+    least: Vec<u32>,
     zone_max: Option<u32>,
     /// The `zone` cell data of a single volume block.
     zone_values: Option<Vec<u32>>,
@@ -459,7 +556,7 @@ struct Builder {
     /// Volume points by their exact coordinates, for the patches.
     lookup: Option<HashMap<[u64; 3], u32>>,
     /// Volume points by their `GlobalPointIds`, when the file has them.
-    gids: Option<HashMap<i64, u32>>,
+    gids: Option<Gids>,
 }
 
 /// What [`Builder::grid`] read besides the mesh: the `zone` cell data, and
@@ -471,6 +568,31 @@ struct GridRead {
     cell_rows: Option<Vec<u32>>,
     point_rows_total: usize,
     point_rows: Option<Vec<u32>>,
+}
+
+/// The dataset `name` of `obj`, read where it lies.
+fn values<'h>(h: &'h H5, obj: &Object, name: &str) -> Result<Values<'h>, MeshError> {
+    let o = h
+        .child(obj, name)?
+        .ok_or_else(|| bad(format!("no {name} dataset")))?;
+    h.int_values(&h.dataset(&o)?)
+}
+
+/// The integer dataset `name` of subgroup `group`, when there is one,
+/// read where it lies.
+fn optional_values<'h>(
+    h: &'h H5,
+    obj: &Object,
+    group: &str,
+    name: &str,
+) -> Result<Option<Values<'h>>, MeshError> {
+    let Some(g) = h.child(obj, group)? else {
+        return Ok(None);
+    };
+    match h.child(&g, name)? {
+        Some(o) => Ok(Some(h.int_values(&h.dataset(&o)?)?)),
+        None => Ok(None),
+    }
 }
 
 /// The integer dataset `name` of subgroup `group`, when there is one.
@@ -489,11 +611,39 @@ fn optional_ints(
     }
 }
 
+/// `more` added after the polygons of `to`.
+fn append(to: &mut Polygons, more: Polygons) {
+    if to.is_empty() && to.nodes.is_empty() {
+        *to = more;
+        return;
+    }
+    let base = to.nodes.len() as u32;
+    to.start.extend(more.start[1..].iter().map(|&e| base + e));
+    to.nodes.extend_from_slice(&more.nodes);
+}
+
+/// Point `r` of `xyz` (rows of three).
+fn xyz_at(xyz: &Values, r: usize) -> [f64; 3] {
+    [xyz.float(3 * r), xyz.float(3 * r + 1), xyz.float(3 * r + 2)]
+}
+
+/// Rows `0..n` of `xyz` as points, on all threads.
+fn points_of(xyz: &Values, n: usize) -> Vec<[f64; 3]> {
+    let mut out = vec![[0.0; 3]; n];
+    par::chunks_mut(&mut out, 1 << 15, |at, part| {
+        for (k, q) in part.iter_mut().enumerate() {
+            *q = xyz_at(xyz, at + k);
+        }
+    });
+    out
+}
+
 impl Builder {
     /// Read an UnstructuredGrid block (all its partitions). Ghost cells
     /// (`vtkGhostType` with the duplicate bit) are left out, and points
     /// with the same `GlobalPointIds` are one point, so the partitions of
-    /// a blocked file join into one mesh.
+    /// a blocked file join into one mesh. The datasets are read where they
+    /// lie and the cells built on all threads (`cells.rs`).
     fn grid(&mut self, h: &H5, g: &Object, zone: Option<u32>) -> Result<GridRead, MeshError> {
         let np = ints(h, g, "NumberOfPoints")?;
         let nc = ints(h, g, "NumberOfCells")?;
@@ -504,7 +654,15 @@ impl Builder {
                 "NumberOfPoints, NumberOfCells and NumberOfConnectivityIds differ in length",
             ));
         }
-        let (xyz, dims) = floats(h, g, "Points")?;
+        let xyz = {
+            let o = h
+                .child(g, "Points")?
+                .ok_or_else(|| bad("no Points dataset"))?;
+            let ds = h.dataset(&o)?;
+            let dims = ds.dims.clone();
+            (h.values(&ds)?, dims)
+        };
+        let (xyz, dims) = xyz;
         let total_points: usize = np
             .iter()
             .map(|&n| count(n, "points"))
@@ -515,31 +673,31 @@ impl Builder {
                 format!("Points has {} values for {total_points} points", xyz.len()),
             ));
         }
-        let types = ints(h, g, "Types")?;
-        let offsets = ints(h, g, "Offsets")?;
-        let conn = ints(h, g, "Connectivity")?;
+        let types = values(h, g, "Types")?;
+        let offsets = values(h, g, "Offsets")?;
+        let conn = values(h, g, "Connectivity")?;
         let poly = h.child(g, "PolyhedronOffsets")?.is_some();
-        let (p_off, p_faces, f_off, f_conn, n_faces, n_p2f, n_fconn) = if poly {
-            (
-                ints(h, g, "PolyhedronOffsets")?,
-                ints(h, g, "PolyhedronToFaces")?,
-                ints(h, g, "FaceOffsets")?,
-                ints(h, g, "FaceConnectivity")?,
+        let poly_sets = if poly {
+            Some((
+                values(h, g, "PolyhedronOffsets")?,
+                values(h, g, "PolyhedronToFaces")?,
+                values(h, g, "FaceOffsets")?,
+                values(h, g, "FaceConnectivity")?,
                 ints(h, g, "NumberOfFaces")?,
                 ints(h, g, "NumberOfPolyhedronToFaceIds")?,
                 ints(h, g, "NumberOfFaceConnectivityIds")?,
-            )
+            ))
         } else {
-            Default::default()
+            None
         };
         let zone_data = match h.child(g, "CellData")? {
             Some(cd) => match h.child(&cd, "zone")? {
-                Some(z) => Some(h.read_f64(&h.dataset(&z)?)?),
+                Some(z) => Some(h.values(&h.dataset(&z)?)?),
                 None => None,
             },
             None => None,
         };
-        let ghost = optional_ints(h, g, "CellData", "vtkGhostType")?;
+        let ghost = optional_values(h, g, "CellData", "vtkGhostType")?;
         let total_cells: usize = nc
             .iter()
             .map(|&n| count(n, "cells"))
@@ -550,24 +708,12 @@ impl Builder {
                 "CellData/vtkGhostType does not have one value per cell",
             ));
         }
-        let gids = optional_ints(h, g, "PointData", "GlobalPointIds")?;
+        let gids = optional_values(h, g, "PointData", "GlobalPointIds")?;
         // the mesh point of each row of Points
-        let mut pmap: Vec<u32> = Vec::with_capacity(total_points);
-        let mut point_rows: Option<Vec<u32>> = None;
-        match gids {
+        let (points, point_rows) = match gids {
             Some(ids) if ids.len() == total_points => {
-                let map = self.gids.get_or_insert_with(HashMap::new);
-                let points = &mut self.mesh.points;
-                let mut rows = Vec::new();
-                for (r, (q, id)) in xyz.as_chunks::<3>().0.iter().zip(ids).enumerate() {
-                    let i = *map.entry(id).or_insert_with(|| {
-                        points.push(*q);
-                        rows.push(r as u32);
-                        (points.len() - 1) as u32
-                    });
-                    pmap.push(i);
-                }
-                point_rows = Some(rows);
+                let (map, rows) = self.join_points(&xyz, &ids, total_points);
+                (map, Some(rows))
             }
             Some(_) => {
                 return Err(MeshError::new(
@@ -577,198 +723,209 @@ impl Builder {
             }
             None => {
                 let base = self.mesh.points.len() as u32;
-                pmap.extend((0..total_points as u32).map(|r| base + r));
-                self.mesh
-                    .points
-                    .extend(xyz.as_chunks::<3>().0.iter().copied());
+                let new = points_of(&xyz, total_points);
+                if self.mesh.points.is_empty() {
+                    self.mesh.points = new;
+                } else {
+                    self.mesh.points.extend_from_slice(&new);
+                }
+                (cells::PointMap::Offset(base), None)
             }
-        }
-        let mut cell_rows: Vec<u32> = Vec::with_capacity(total_cells);
+        };
+        drop(xyz);
         if self.mesh.cell_faces.is_empty() {
             self.mesh.cell_faces.push(0);
             self.polys = Polygons::new();
+            self.least = Vec::new();
             self.mesh.boundary = Polygons::new();
         }
-        // running starts of each partition in the concatenated arrays
-        let (mut pb, mut cb, mut ob, mut kb) = (0usize, 0usize, 0usize, 0usize);
-        let (mut pob, mut p2fb, mut fob, mut fcb) = (0usize, 0usize, 0usize, 0usize);
-        let mut zones_out = Vec::new();
-        for part in 0..parts {
-            let npart = count(np[part], "points")?;
-            let ncell = count(nc[part], "cells")?;
-            let ncn = count(ncon[part], "connectivity ids")?;
-            let offs = offsets
-                .get(ob..ob + ncell + 1)
-                .ok_or_else(|| bad("Offsets is shorter than the cells"))?;
-            let cn = conn
-                .get(kb..kb + ncn)
-                .ok_or_else(|| bad("Connectivity is shorter than NumberOfConnectivityIds"))?;
-            let tys = types
-                .get(cb..cb + ncell)
-                .ok_or_else(|| bad("Types is shorter than the cells"))?;
-            let (po, pf, fo, fc) = if poly {
-                let nf = count(*n_faces.get(part).unwrap_or(&0), "faces")?;
-                let np2f = count(*n_p2f.get(part).unwrap_or(&0), "polyhedron faces")?;
-                let nfc = count(*n_fconn.get(part).unwrap_or(&0), "face ids")?;
-                let r = (
-                    p_off.get(pob..pob + ncell + 1),
-                    p_faces.get(p2fb..p2fb + np2f),
-                    f_off.get(fob..fob + nf + 1),
-                    f_conn.get(fcb..fcb + nfc),
-                );
-                pob += ncell + 1;
-                p2fb += np2f;
-                fob += nf + 1;
-                fcb += nfc;
-                match r {
-                    (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
-                    _ => return Err(bad("the polyhedron arrays are shorter than their counts")),
-                }
-            } else {
-                (&[][..], &[][..], &[][..], &[][..])
-            };
-            let point = |v: i64| -> Result<u32, MeshError> {
-                usize::try_from(v)
-                    .ok()
-                    .filter(|&v| v < npart)
-                    .and_then(|v| pmap.get(v + pb).copied())
-                    .ok_or_else(|| {
-                        MeshError::new("MESH006", format!("point {v} is out of range 0..{npart}"))
-                    })
-            };
-            for c in 0..ncell {
-                if ghost.as_ref().is_some_and(|g| g[cb + c] & 1 != 0) {
-                    continue;
-                }
-                let (s, e) = (offs[c], offs[c + 1]);
-                let nodes = usize::try_from(s)
-                    .ok()
-                    .zip(usize::try_from(e).ok())
-                    .filter(|(s, e)| s <= e && *e <= cn.len())
-                    .map(|(s, e)| &cn[s..e])
-                    .ok_or_else(|| {
-                        MeshError::new("MESH006", format!("cell {c}: offsets {s}..{e}"))
-                    })?;
-                let z = match (zone, &zone_data) {
-                    (Some(z), _) => z,
-                    (None, Some(zd)) => {
-                        let v = zd.get(cb + c).copied().unwrap_or(0.0);
-                        if !(0.0..1e6).contains(&v) {
-                            return Err(MeshError::new("MESH006", format!("cell {c}: zone {v}")));
-                        }
-                        v as u32
-                    }
-                    (None, None) => 0,
-                };
-                let t = tys[c];
-                let table = match t {
-                    TETRA => Some(TETRA_FACES),
-                    HEXAHEDRON => Some(HEX_FACES),
-                    WEDGE => Some(WEDGE_FACES),
-                    PYRAMID => Some(PYRAMID_FACES),
-                    _ => None,
-                };
-                if let Some(table) = table {
-                    let need = table
-                        .iter()
-                        .flat_map(|f| f.iter())
-                        .max()
-                        .map_or(0, |m| m + 1);
-                    if nodes.len() != need {
-                        return Err(MeshError::new(
-                            "MESH006",
-                            format!("cell {c}: type {t} with {} points", nodes.len()),
-                        ));
-                    }
-                    let ids: Vec<u32> =
-                        nodes.iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
-                    let mut sizes = Vec::with_capacity(table.len());
-                    for f in table {
-                        self.polys.push(f.iter().map(|&i| ids[i]));
-                        sizes.push(f.len());
-                    }
-                    push_cell(
-                        &mut self.mesh,
-                        self.polys.len(),
-                        z,
-                        CellKind::classify(sizes),
-                        &mut self.zone_max,
-                    );
-                    zones_out.push(z);
-                    cell_rows.push((cb + c) as u32);
-                } else if t == POLYHEDRON {
-                    let (a, b) = (po.get(c), po.get(c + 1));
-                    let range = a
-                        .zip(b)
-                        .and_then(|(&a, &b)| {
-                            Some(usize::try_from(a).ok()?..usize::try_from(b).ok()?)
-                        })
-                        .filter(|r| r.start < r.end && r.end <= pf.len())
-                        .ok_or_else(|| {
-                            MeshError::new("MESH009", format!("cell {c}: PolyhedronOffsets"))
-                        })?;
-                    let mut sizes = Vec::with_capacity(range.len());
-                    for &face in &pf[range] {
-                        let fr = usize::try_from(face)
-                            .ok()
-                            .filter(|&f| f + 1 < fo.len())
-                            .and_then(|f| {
-                                Some(
-                                    usize::try_from(fo[f]).ok()?
-                                        ..usize::try_from(fo[f + 1]).ok()?,
-                                )
-                            })
-                            .filter(|r| r.end >= r.start + 3 && r.end <= fc.len())
-                            .ok_or_else(|| {
-                                MeshError::new("MESH009", format!("cell {c}: face {face}"))
-                            })?;
-                        let ids: Vec<u32> =
-                            fc[fr].iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
-                        sizes.push(ids.len());
-                        self.polys.push(ids);
-                    }
-                    push_cell(
-                        &mut self.mesh,
-                        self.polys.len(),
-                        z,
-                        CellKind::classify(sizes),
-                        &mut self.zone_max,
-                    );
-                    orient_last(&self.mesh, &mut self.polys);
-                    zones_out.push(z);
-                    cell_rows.push((cb + c) as u32);
-                } else if matches!(t, TRIANGLE | POLYGON | QUAD) {
-                    if nodes.len() < 3 {
-                        return Err(MeshError::new(
-                            "MESH006",
-                            format!("cell {c}: polygon with {} points", nodes.len()),
-                        ));
-                    }
-                    let ids: Vec<u32> =
-                        nodes.iter().map(|&v| point(v)).collect::<Result<_, _>>()?;
-                    self.mesh.boundary.push(ids);
-                    self.mesh.boundary_patch.push(u32::MAX);
-                } else {
-                    return Err(MeshError::new(
-                        "MESH008",
-                        format!("cell {c} has VTK type {t}"),
-                    ));
-                }
-            }
-            pb += npart;
-            cb += ncell;
-            ob += ncell + 1;
-            kb += ncn;
-        }
+        let counts = poly_sets
+            .as_ref()
+            .map(|(.., nf, np2f, nfc)| [&nf[..], &np2f[..], &nfc[..]]);
+        let part_list = cells::parts(&np, &nc, &ncon, counts);
+        let t = crate::profile::span("read.cells");
+        let read =
+            cells::read(
+                &cells::Input {
+                    parts: &part_list,
+                    types: &types,
+                    offsets: &offsets,
+                    conn: &conn,
+                    poly: poly_sets.as_ref().map(
+                        |(offsets, to_faces, face_offsets, face_conn, ..)| cells::Poly {
+                            offsets,
+                            to_faces,
+                            face_offsets,
+                            face_conn,
+                        },
+                    ),
+                    ghost: ghost.as_ref(),
+                    zone_data: zone_data.as_ref(),
+                    zone,
+                    points: &points,
+                    xyz: &self.mesh.points,
+                },
+                total_cells,
+            )?;
+        drop(t);
+        // back to the phase of reading the datasets (the window's text)
+        drop(crate::profile::span("read.vtkhdf"));
+        let zones = zone_data.is_some().then(|| read.zone.clone());
+        self.add(read.polys, read.least, read.cell_end);
+        self.mesh.cell_zone.extend_from_slice(&read.zone);
+        self.mesh.cell_kind.extend_from_slice(&read.kind);
+        self.zone_max = self.zone_max.max(read.zone_max);
+        let polygons = read.boundary.len();
+        append(&mut self.mesh.boundary, read.boundary);
+        self.mesh
+            .boundary_patch
+            .extend(std::iter::repeat_n(u32::MAX, polygons));
+        let cell_rows = read.rows;
         let all_cells = cell_rows.len() == total_cells;
         let all_points = point_rows.as_ref().is_none_or(|r| r.len() == total_points);
         Ok(GridRead {
-            zones: zone_data.map(|_| zones_out),
+            zones,
             cell_rows_total: total_cells,
             cell_rows: (!all_cells).then_some(cell_rows),
             point_rows_total: total_points,
             point_rows: point_rows.filter(|_| !all_points),
         })
+    }
+
+    /// Add a grid's cell faces after those read before.
+    fn add(&mut self, polys: Polygons, least: Vec<u32>, cell_end: Vec<u32>) {
+        let faces = self.polys.len() as u32;
+        if self.polys.is_empty() && self.polys.nodes.is_empty() {
+            self.polys = polys;
+            self.least = least;
+        } else {
+            append(&mut self.polys, polys);
+            self.least.extend_from_slice(&least);
+        }
+        self.mesh
+            .cell_faces
+            .extend(cell_end.iter().map(|&e| faces + e));
+    }
+
+    /// Join the points of rows `0..total` of `xyz` by their global `ids`:
+    /// a row whose id came before is that point, any other a new point,
+    /// in row order. Gives the point of each row and the rows that became
+    /// new points.
+    fn join_points(
+        &mut self,
+        xyz: &Values,
+        ids: &Values,
+        total: usize,
+    ) -> (cells::PointMap, Vec<u32>) {
+        let before = self.mesh.points.len();
+        let (lo, hi) = par::map(total, 1 << 15, |r| {
+            r.map(|row| ids.int(row))
+                .fold((i64::MAX, i64::MIN), |(lo, hi), id| {
+                    (lo.min(id), hi.max(id))
+                })
+        })
+        .into_iter()
+        .fold((i64::MAX, i64::MIN), |(lo, hi), (a, b)| {
+            (lo.min(a), hi.max(b))
+        });
+        // Ids up to twice the points (and a little) go in a list by id.
+        let limit = 2 * (before + total) as u64 + (1 << 16);
+        let small = total == 0 || (lo >= 0 && (hi as u64) < limit);
+        let mut dense = match self.gids.take() {
+            None if small => Vec::new(),
+            Some(Gids::Dense(points)) if small => points,
+            other => {
+                let mut map = other.map(Gids::into_map).unwrap_or_default();
+                let joined = self.join_mapped(xyz, ids, total, &mut map);
+                self.gids = Some(Gids::Hash(map));
+                return joined;
+            }
+        };
+        if total > 0 && dense.len() <= hi as usize {
+            dense.resize(hi as usize + 1, NO_POINT);
+        }
+        // The first row of each id that is not a point yet.
+        let mut first = vec![NO_POINT; dense.len()];
+        {
+            let firsts = AtomicU32::from_mut_slice(&mut first);
+            let known = &dense;
+            par::map(total, 1 << 15, |r| {
+                for row in r {
+                    let id = ids.int(row) as usize;
+                    if known[id] == NO_POINT {
+                        firsts[id].fetch_min(row as u32, Relaxed);
+                    }
+                }
+            });
+        }
+        let is_new = |row: usize| first[ids.int(row) as usize] == row as u32;
+        let ranges = par::ranges(total, 1 << 15);
+        let counts = par::each(ranges.clone(), |r| r.filter(|&row| is_new(row)).count());
+        let mut at = Vec::with_capacity(counts.len());
+        let mut new = 0;
+        for c in counts {
+            at.push(new);
+            new += c;
+        }
+        let mut points = vec![[0.0; 3]; new];
+        let mut rows = vec![0u32; new];
+        {
+            let ds = AtomicU32::from_mut_slice(&mut dense);
+            let cuts: Vec<usize> = at.iter().copied().chain([new]).collect();
+            let jobs: Vec<_> = ranges
+                .into_iter()
+                .zip(par::split_mut(&mut points, &cuts))
+                .zip(par::split_mut(&mut rows, &cuts))
+                .zip(&at)
+                .collect();
+            par::each(jobs, |(((r, pts), rws), &base)| {
+                let mut k = 0;
+                for row in r {
+                    if is_new(row) {
+                        pts[k] = xyz_at(xyz, row);
+                        rws[k] = row as u32;
+                        ds[ids.int(row) as usize].store((before + base + k) as u32, Relaxed);
+                        k += 1;
+                    }
+                }
+            });
+        }
+        let mut map = vec![0u32; total];
+        par::chunks_mut(&mut map, 1 << 15, |at, part| {
+            for (k, m) in part.iter_mut().enumerate() {
+                *m = dense[ids.int(at + k) as usize];
+            }
+        });
+        if self.mesh.points.is_empty() {
+            self.mesh.points = points;
+        } else {
+            self.mesh.points.extend_from_slice(&points);
+        }
+        self.gids = Some(Gids::Dense(dense));
+        (cells::PointMap::Rows(map), rows)
+    }
+
+    /// [`Builder::join_points`] by a map, for ids that are not small
+    /// numbers.
+    fn join_mapped(
+        &mut self,
+        xyz: &Values,
+        ids: &Values,
+        total: usize,
+        map: &mut HashMap<i64, u32>,
+    ) -> (cells::PointMap, Vec<u32>) {
+        let points = &mut self.mesh.points;
+        let mut rows = Vec::new();
+        let mut pmap = Vec::with_capacity(total);
+        for r in 0..total {
+            let i = *map.entry(ids.int(r)).or_insert_with(|| {
+                points.push(xyz_at(xyz, r));
+                rows.push(r as u32);
+                (points.len() - 1) as u32
+            });
+            pmap.push(i);
+        }
+        (cells::PointMap::Rows(pmap), rows)
     }
 
     /// Read a PolyData block's polygons as boundary faces of patch `p`.
@@ -800,7 +957,7 @@ impl Builder {
         ) && gp.len() == total
         {
             for id in gp {
-                ids.push(*map.get(&id).ok_or_else(|| {
+                ids.push(map.get(id).ok_or_else(|| {
                     bad(format!(
                         "patch {p} has the global point {id}, which no volume cell uses"
                     ))
@@ -906,7 +1063,11 @@ impl Builder {
             })
             .collect();
         let _ = &self.zone_values;
-        boundary::link(mesh, std::mem::take(&mut self.polys), None);
+        let polys = std::mem::take(&mut self.polys);
+        let least = std::mem::take(&mut self.least);
+        let least = (least.len() == polys.len()).then_some(least);
+        let _t = crate::profile::span("read.topology");
+        boundary::link(mesh, polys, least);
         if mesh.cell_count() == 0 && mesh.boundary.is_empty() {
             return Err(MeshError::new(
                 "MESH010",
@@ -914,36 +1075,6 @@ impl Builder {
             ));
         }
         Ok(self.mesh)
-    }
-}
-
-/// Turn the faces of the last cell, a polyhedron, outward when they
-/// point in (its signed volume, by the divergence theorem over fan
-/// triangles, is negative): VTK asks for outward polyhedron faces but
-/// does not check them. The linear cells take their faces from the
-/// tables of VTK's node orders and are not turned, so a cell given
-/// inside out stays visible to the quality check.
-fn orient_last(mesh: &Mesh, polys: &mut Polygons) {
-    let c = mesh.cell_count() - 1;
-    let range = mesh.cell_face_range(c);
-    let mut v = 0.0;
-    for f in range.clone() {
-        let face = polys.get(f);
-        let p0 = mesh.points[face[0] as usize];
-        for k in 1..face.len().saturating_sub(1) {
-            let (a, b) = (
-                mesh.points[face[k] as usize],
-                mesh.points[face[k + 1] as usize],
-            );
-            v += p0[0] * (a[1] * b[2] - a[2] * b[1]) - p0[1] * (a[0] * b[2] - a[2] * b[0])
-                + p0[2] * (a[0] * b[1] - a[1] * b[0]);
-        }
-    }
-    if v < 0.0 {
-        for f in range {
-            let (s, e) = (polys.start[f] as usize, polys.start[f + 1] as usize);
-            polys.nodes[s..e].reverse();
-        }
     }
 }
 
@@ -959,6 +1090,7 @@ pub fn attr_text(h: &H5, obj: &Object, name: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::field::Component;
+    use std::collections::HashSet;
 
     fn fixture(rel: &str) -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1063,6 +1195,85 @@ mod tests {
         assert_eq!((ra.step, ra.time), (Some(12), Some(0.25)));
         assert_eq!(a.cell_count(), 4);
         assert!(ra.get("velocity").is_some_and(|v| v.components == 3));
+    }
+
+    /// Invariant: points join by their global ids alike whether the ids
+    /// go in a list by id (small numbers, as the blocked writers number
+    /// points) or in a map (any other ids), on one thread or several, and
+    /// across grids, also when a grid's ids move a list into a map: a
+    /// row whose id came before, in its grid or an earlier one, is that
+    /// point, any other row a new point, in row order. Breaks when the
+    /// threads number new points in the order they finish, a row takes
+    /// the first row of its id within its own range only, or a list that
+    /// becomes a map loses an id. The blocked files of the other tests
+    /// number their points 0 … n − 1, so they join by list only.
+    #[test]
+    fn points_join_alike_by_list_or_map() {
+        let mut seed = 5u64;
+        let mut next = |m: u64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) % m) as i64
+        };
+        // three grids whose ids repeat within each and across them; the
+        // last has one large id
+        let mut grids: Vec<(Vec<i64>, Vec<f64>)> = [(300, 120), (200, 260), (50, 40)]
+            .into_iter()
+            .map(|(rows, ids)| {
+                let ids = (0..rows).map(|_| next(ids)).collect();
+                let xyz = (0..3 * rows).map(|_| next(1000) as f64).collect();
+                (ids, xyz)
+            })
+            .collect();
+        grids[2].0[17] = 1 << 40;
+        let distinct: HashSet<i64> = grids.iter().flat_map(|(ids, _)| ids.clone()).collect();
+        let join = |threads: usize, shift: i64| {
+            par::with_threads(threads, || {
+                let mut b = Builder::default();
+                let mut out = Vec::new();
+                for (ids, xyz) in &grids {
+                    let ids: Vec<i64> = ids.iter().map(|&i| i + shift).collect();
+                    let (map, rows) =
+                        b.join_points(&Values::of_floats(xyz), &Values::of_ints(&ids), ids.len());
+                    let cells::PointMap::Rows(map) = map else {
+                        panic!("no rows")
+                    };
+                    let list = matches!(b.gids, Some(Gids::Dense(_)));
+                    out.push((map, rows, list));
+                }
+                (b.mesh.points, out)
+            })
+        };
+        let by_map = join(1, -(1 << 50));
+        assert_eq!(by_map.0.len(), distinct.len());
+        for threads in [1, 2, 3, 7] {
+            let (points, grids) = join(threads, 0);
+            let lists: Vec<bool> = grids.iter().map(|g| g.2).collect();
+            assert_eq!(lists, [true, true, false], "{threads} threads");
+            assert_eq!(points, by_map.0, "{threads} threads");
+            for (g, (a, b)) in grids.iter().zip(&by_map.1).enumerate() {
+                assert_eq!((&a.0, &a.1), (&b.0, &b.1), "grid {g}, {threads} threads");
+            }
+        }
+    }
+
+    /// Invariant: a field's values are gathered row by row, all its
+    /// components, in the order of the rows kept (the owned cells of a
+    /// blocked file); a dataset whose values the reader does not convert
+    /// (half floats) gives no values, whether rows are kept or not. Breaks
+    /// when the kept rows index the values unchecked: before this test a
+    /// blocked file with ghosts and a half-float field panicked. The
+    /// fixtures hold no such field.
+    #[test]
+    fn fields_gather_the_rows_kept() {
+        let v = Values::of_floats(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(gather(&v, 2, Some(&[2, 0])), [5.0, 6.0, 1.0, 2.0]);
+        assert_eq!(gather(&v, 3, None), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let half = crate::hdf5::Dtype::Float { size: 2, be: false };
+        let half = Values::new(std::borrow::Cow::Owned(vec![0; 12]), &half).unwrap();
+        assert!(gather(&half, 1, Some(&[0, 3])).is_empty());
+        assert!(gather(&half, 1, None).is_empty());
     }
 
     /// Invariant: a file that is not HDF5 is refused with MESH018, not

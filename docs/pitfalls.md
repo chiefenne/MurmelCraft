@@ -264,6 +264,20 @@ problem took more than a few minutes to understand.
   points after noting them hands `None` instead, or the face lands in the
   wrong group and loses its twin. Turning a face round keeps its points
   and its smallest one.
+- **The VTKHDF reader reads the datasets where they lie** (`H5::values`,
+  `hdf5::Values`): a compact or contiguous dataset is borrowed from the
+  file's bytes, a chunked one decoded once. The `H5` therefore lives
+  until the cells are built, and `read_vtkhdf_with` drops it before the
+  faces are linked, so the peak holds the file or the linking, not both.
+  Code that keeps a dataset after `read_parts` copies it out
+  (`H5::read_i64`, `H5::read_f64`).
+- **The VTKHDF cells are read in ranges, in two passes**
+  (`vtkhdf/cells.rs`), as the `.vtu` cells are. A range checks each
+  partition when it comes to it; a partition without cells is checked by
+  the range at whose first row it lies, and the last range checks those
+  after the last cell, so every partition is checked once, in file
+  order. A new check of a partition goes into `enter`, which both passes
+  call.
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,
