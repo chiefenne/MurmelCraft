@@ -32,7 +32,7 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `digest` | SHA-256 of the mesh files (the validity badge needs it) |
 | `open` | `mesh.open` as the window does it: read, evidence, first surface (the files are hashed afterwards) |
 | `open.digest` | the wait, after `open`, until the SHA-256 of the files is in place (the validity badge) |
-| `surface` | the surface of the default display (boundary faces) |
+| `surface` | the surface of the default display (boundary faces), with its phases: `surface.polygons` (which faces to draw), `surface.points` (corners and normals), `surface.buffers` (vertices, triangles, edges), `surface.extras` (slices, iso-surfaces, arrows) |
 | `surface.crinkle`, `surface.flat` | the surface with one clip plane through the centre |
 | `surface.hidden_zone` | one zone hidden, so the faces between zones lie open |
 | `surface.cell_type` | colour by cell type |
@@ -238,3 +238,38 @@ Without SHA instructions opening was bound by the hash (13 s of the
 12.6 s later. With the instructions, the parsing sets the pace either
 way. A 10 M cell ascii `.vtu` on the iMac should show in about the time
 its parsing takes, with the badge some 15 to 30 s later (estimate).
+
+## Quality and surface on all threads (2026-11-24)
+
+- **Cell quality** (colour by quality) was one loop on one thread that
+  collected the points of every face into a new list, about five times
+  per face. Now the centroid and volume of each cell, and the values of
+  each distinct face, are computed on all threads (`murmel_mesh::par`),
+  and the face and cell geometry helpers walk a face's points without
+  collecting them. Faces go in blocks of 2^20; each block gives its
+  values to the cells in face order, so the result is the same for any
+  number of threads (a test compares 1, 2, 3, 5 and 8 threads and blocks
+  of 7 faces).
+- **Surface.** Filling the buffers was three quarters of a surface build,
+  and most of that was the set of edges already drawn, hashed with the
+  standard library's SipHash. The edge sets now use FxHash (the
+  multiply-rotate word hash of Firefox and rustc), and the buffers are
+  sized before they are filled. The bench reports the build's phases.
+
+polyMesh binary, same machine (4 threads). "was" is main at 204e509.
+
+| Stage (ms) | 1 M (was) | 4 M (was) |
+|---|---:|---:|
+| quality | 528 (2,118) | 2,050 (8,001) |
+| surface | 200 (443) | 562 (994) |
+| surface.crinkle | 245 (374) | 808 (1,245) |
+| surface.flat | 312 (458) | 1,081 (1,337) |
+| surface.hidden_zone | 162 (259) | 508 (699) |
+| surface.cell_type | 205 (433) | 691 (924) |
+| surface.feature_edges | 361 (756) | 1,189 (1,790) |
+
+At 4 M cells the default surface now spends about 110 ms choosing faces,
+60 ms on corners and normals and 340 ms filling buffers, 200 ms of it on
+the edge set. With 8 cores (the iMac) quality should take well under a
+second at 4 M cells (estimate). Picking (30 ms a pick at 4 M cells) and
+the clip modes' cutting are next.
