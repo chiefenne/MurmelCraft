@@ -640,6 +640,17 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
             ]);
             v
         }
+        Item::Blocks => {
+            let Some(b) = display.block_boxes.as_deref() else {
+                return Vec::new();
+            };
+            vec![
+                row("blocks", b.count()),
+                row("blocks_read", b.read.len()),
+                row("drawn", open.surface.block_boxes),
+                row("enabled", display.show_blocks),
+            ]
+        }
         Item::Parcels => {
             let (Some(v), Some(p)) = (&display.parcels, display.parcel_data.as_deref()) else {
                 return Vec::new();

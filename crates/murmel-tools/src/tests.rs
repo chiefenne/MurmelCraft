@@ -3464,3 +3464,128 @@ fn the_memory_budget_decides_how_a_mesh_opens() {
     assert_eq!(e.diagnostics[0].code, "TOOL002");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Invariant (the maintainer's card 7 of 2026-11-24: the overview is the
+/// surface, the block ranges and a preview grid): through the tools, a
+/// slice and an iso-surface on a mesh open as an overview draw on its
+/// preview grid, read before the tool returns, and mesh.info's overview
+/// tells the grid (`preview`). Breaks when the tool returns before the
+/// grid is read (nothing drawn for a script or an agent), or when the
+/// result does not tell it. The engine tests do not go through the
+/// tools.
+#[test]
+fn slices_on_an_overview_draw_through_the_tools() {
+    let dir = std::env::temp_dir().join(format!("murmel-preview-tool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = None;
+    s.preview_cells = 16;
+    let e = call(
+        "mesh.open",
+        json!({"path": path, "mode": "overview"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let preview = &e.result["overview"]["preview"];
+    assert!(preview["grid"].is_null() && preview["reading"] == json!(false));
+
+    let e = call("slice.set", json!({"axis": "x"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let sliced = s.mesh.as_ref().unwrap().surface.triangles();
+    assert!(sliced > 0);
+    let e = call("iso.set", json!({"field": "pressure"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(s.mesh.as_ref().unwrap().surface.triangles() > sliced);
+    let e = call("mesh.info", json!({}), &mut s);
+    let preview = &e.result["overview"]["preview"];
+    assert_eq!(preview["grid"], json!([16, 8, 4]));
+    assert_eq!(preview["cells"], json!(512));
+    assert!(preview["not_read"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant: through the tools, the boxes of an overview's blocks show
+/// and hide with display.visibility on `blocks`, take the colour set on
+/// it, are told by mesh.info's overview (`block_boxes`), come back from
+/// a session file, are kept as the view's default (`show_blocks`), and
+/// the item is refused on a mesh read whole. Breaks when `blocks` is not
+/// an item the tools take, when the session file or the view default
+/// loses the setting, or when a mesh without blocks takes it. The engine
+/// test draws them but never through the tools, the session file or the
+/// defaults.
+#[test]
+fn block_boxes_through_the_tools() {
+    let dir = std::env::temp_dir().join(format!("murmel-boxes-tool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = Some(dir.join("config"));
+    let open = json!({"path": path, "mode": "overview"});
+    let e = call("mesh.open", open.clone(), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let boxes = &e.result["overview"]["block_boxes"];
+    assert_eq!(boxes["shown"], json!(false));
+    let n = boxes["boxes"].as_u64().unwrap();
+    assert!(n > 2, "{boxes}");
+    assert_eq!(boxes["drawn"], json!(0));
+
+    let show = json!({"action": "show", "items": ["blocks"]});
+    let e = call("display.visibility", show, &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let e = call("mesh.info", json!({}), &mut s);
+    let boxes = &e.result["overview"]["block_boxes"];
+    assert_eq!(boxes["shown"], json!(true));
+    assert_eq!(boxes["drawn"], json!(n));
+    let color = json!({"item": "blocks", "color": "#7040C0"});
+    let e = call("display.set_color", color, &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let violet = murmel_engine::theme::Rgb([0x70, 0x40, 0xC0]).linear();
+    let sf = &s.mesh.as_ref().unwrap().surface;
+    assert!(!sf.stream_colors.is_empty() && sf.stream_colors.iter().all(|&c| c == violet));
+
+    // a session file brings them back
+    let file = dir.join("boxes.murmel");
+    assert!(call("session.save", json!({"path": file}), &mut s).ok());
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(saved["display"]["show_blocks"], json!(true));
+    let mut t = Session::new(Tokens::builtin().unwrap());
+    t.config_dir = None;
+    let e = call("session.load", json!({"path": file}), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(t.display.show_blocks);
+    // (within the budget the session opens it whole: no blocks; as an
+    // overview, they show at once)
+    assert!(call("mesh.open", open, &mut t).ok());
+    assert_eq!(t.mesh.as_ref().unwrap().surface.block_boxes as u64, n);
+
+    // the view's default keeps them
+    let e = call("settings.set_default", json!({"kind": "view"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(
+        e.result["saved"]["show_blocks"],
+        json!(true),
+        "{}",
+        e.result
+    );
+    let hide = json!({"action": "hide", "items": ["blocks"]});
+    assert!(call("display.visibility", hide, &mut s).ok());
+    assert!(!s.display.show_blocks);
+    murmel_engine::defaults::start_view(&mut s);
+    assert!(s.display.show_blocks);
+
+    // a mesh read whole has no blocks
+    let whole = json!({"path": path, "mode": "whole"});
+    assert!(call("mesh.open", whole, &mut s).ok());
+    let show = json!({"action": "show", "items": ["blocks"]});
+    let e = call("display.visibility", show, &mut s);
+    assert!(!e.ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}

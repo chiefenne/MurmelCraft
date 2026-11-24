@@ -17,6 +17,10 @@ KoflCraft's Manifold mesh, 229,615 polyhedra and prisms. The slides are
 also [full-size stills](assets/readme/tour); how they were made is in
 [tools/readme-tour](tools/readme-tour/README.md).</sub>
 
+[![CI](https://github.com/chiefenne/MurmelCraft/actions/workflows/ci.yml/badge.svg)](https://github.com/chiefenne/MurmelCraft/actions/workflows/ci.yml)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 ## What works today
 
 Not released yet (version 0.1.0): the V0.2 to V0.6 milestones of the UI
@@ -165,7 +169,9 @@ every change.
   `murmel bench`). A blocked VTKHDF file that needs more than the memory
   budget (half the computer's memory unless set in Settings) opens as an
   overview: its boundary with the cell fields on it, without reading the
-  cells ([docs/blocked-vtkhdf.md](docs/blocked-vtkhdf.md)).
+  cells, and slices, iso-surfaces and arrows across the whole volume on a
+  preview grid of the cell fields, with the boxes of its blocks on
+  request ([docs/blocked-vtkhdf.md](docs/blocked-vtkhdf.md)).
 - Mouse presets (three-button, Apple, Fusion, ParaView), every binding
   editable through `settings.set_bindings` and saved in `navigation.toml`.
 - Title bar, toolbar, viewport with view note and axis triad, status bar.

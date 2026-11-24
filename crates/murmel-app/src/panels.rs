@@ -89,6 +89,7 @@ impl MurmelApp {
                 | Item::Iso(_)
                 | Item::Arrows
                 | Item::Parcels
+                | Item::Blocks
                 | Item::Stream(_)
                 | Item::Region(_) => {}
             }
@@ -179,7 +180,21 @@ impl MurmelApp {
                 }
                 None => self.i18n.tr("overview-regions-tip"),
             };
-            format!("{note}\n{regions}")
+            // what slices and iso-surfaces draw on meanwhile
+            let preview = match (&m.blocks, m.fields.preview()) {
+                (None, Some(p)) => {
+                    let [nx, ny, nz] = p.grid.shape.map(|n| (n as f64).into());
+                    format!(
+                        "\n{}",
+                        self.i18n.tr_args(
+                            "overview-preview-note",
+                            &[("nx", nx), ("ny", ny), ("nz", nz)],
+                        )
+                    )
+                }
+                _ => String::new(),
+            };
+            format!("{note}\n{regions}{preview}")
         });
         let selection = self.session.display.selection.clone();
         let mut action: Option<(&'static str, Value)> = None;
@@ -753,6 +768,7 @@ impl MurmelApp {
                 format!("{} · {name}", self.i18n.tr(&format!("props-area-{area}")))
             }
             None if c.item == "arrows" => self.i18n.tr("props-area-arrows"),
+            None if c.item == "blocks" => self.i18n.tr("props-area-blocks"),
             None => self.i18n.tr("props-area-mesh"),
         };
         ui.heading(heading);

@@ -114,7 +114,7 @@ impl Kind {
                 "reverse",
                 "range",
             ],
-            Kind::View => &["render_mode", "mesh_look", "projection"],
+            Kind::View => &["render_mode", "mesh_look", "projection", "show_blocks"],
             Kind::Reference => &crate::derive::REFERENCE_KEYS,
             Kind::Rotation => &["rpm", "axis"],
             Kind::Parcels => &["size", "scale", "map", "reverse"],
@@ -278,6 +278,9 @@ pub struct View {
     pub render_mode: RenderMode,
     pub mesh_look: MeshLook,
     pub projection: Projection,
+    /// Whether the boxes of an overview's blocks show.
+    #[serde(default)]
+    pub show_blocks: bool,
 }
 
 impl View {
@@ -287,6 +290,7 @@ impl View {
             render_mode: s.display.render_mode,
             mesh_look: s.display.mesh_look,
             projection: s.camera.projection,
+            show_blocks: s.display.show_blocks,
         }
     }
 
@@ -295,6 +299,7 @@ impl View {
         s.display.render_mode = self.render_mode;
         s.display.mesh_look = self.mesh_look;
         s.camera.projection = self.projection;
+        s.display.show_blocks = self.show_blocks;
     }
 }
 

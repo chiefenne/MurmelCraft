@@ -103,8 +103,48 @@ fn overview_json(s: &Session, o: &murmel_mesh::vtkhdf::Overview) -> Value {
         "budget_gib": gib(s.budget_bytes()),
         "fields_on_boundary": on.iter().map(|f| &f.name).collect::<Vec<_>>(),
         "fields_not_shown": off.iter().map(|f| &f.name).collect::<Vec<_>>(),
-        "note": "the volume cells are not read: the mesh is its boundary, and each cell field shows on it as the value of the cell behind each face; a box, sphere or slab region (region.set) reads the cells of the blocks it touches; open it with mode \"whole\" or raise the memory budget (settings.set_memory) to read all cells",
+        "note": "the volume cells are not read: the mesh is its boundary, and each cell field shows on it as the value of the cell behind each face; slices, iso-surfaces and arrows draw on a preview grid of the cell fields (preview) until a box, sphere or slab region (region.set) reads the cells of the blocks it touches; open it with mode \"whole\" or raise the memory budget (settings.set_memory) to read all cells",
         "regions": crate::region::blocks_json(s),
+        "preview": preview_json(s),
+        "block_boxes": block_boxes_json(s),
+    })
+}
+
+/// The boxes of the open overview's blocks: whether they show (the item
+/// `blocks`, display.visibility) and how many the regions read.
+fn block_boxes_json(s: &Session) -> Value {
+    let Some(b) = s.display.block_boxes.as_deref() else {
+        return Value::Null;
+    };
+    json!({
+        "shown": s.display.show_blocks,
+        "boxes": b.count(),
+        "read": b.read.len(),
+        "drawn": s.mesh.as_ref().map_or(0, |m| m.surface.block_boxes),
+        "note": "show or hide them with display.visibility on the item \"blocks\"; the blocks the regions read take their own colour (field colour block_read), the others the item's colour (display.set_color on \"blocks\", field colour block)",
+    })
+}
+
+/// The preview grid of the open overview: its shape and cells once read,
+/// whether it is read now, and why it is not.
+fn preview_json(s: &Session) -> Value {
+    let Some(m) = &s.mesh else {
+        return Value::Null;
+    };
+    let fields = match &m.blocks {
+        Some(b) => &b.overview.1,
+        None => &m.fields,
+    };
+    let problem = s.preview_problem.as_ref().map(|(_, e)| match e {
+        Some(e) => json!(Diagnostic::new(e.code, e.message.clone())),
+        None => json!("stopped"),
+    });
+    json!({
+        "grid": fields.preview().map(|p| p.grid.shape),
+        "cells": fields.preview().map(|p| p.mesh.cell_count()),
+        "reading": s.preview_job.is_some(),
+        "not_read": problem,
+        "note": "read the first time a slice, an iso-surface or the arrows show on the overview: each grid cell has the values of the cell its centre lies in; fields made on the overview and streamlines need a region's cells",
     })
 }
 
@@ -2881,7 +2921,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-display-visibility",
-        summary: "Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts.",
+        summary: "Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>; on an overview, blocks: the boxes of its blocks), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts.",
         outputs: &[],
         reads: &[],
         input_schema: || {

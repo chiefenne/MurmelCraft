@@ -5,4 +5,4 @@
 - The wall distance measures to the case's walls (`type = "wall"`), else to the patches whose role is wall; the window lets you tick others.
 - The kinematic viscosity ν and C_μ come from the case too (`[fluid]`, `[turbulence.constants]`), else your default, else air at sea level and 0.09.
 - The window shows one group at a time (Vortices, Pressure, Turbomachinery, Turbulence, Wall), the values its quantities take above the rows.
-- `field.derive` takes `k`, `dissipation` (ω or ε), `nu_t`, `rotation` and `walls`; `field.catalogue` lists the rotation, the walls, the mesh's zones and patches. New refusals FIELD016 (turning zones) and FIELD017 (walls). Session files are format 1.16.
+- `field.derive` takes `k`, `dissipation` (ω or ε), `nu_t`, `rotation` and `walls`; `field.catalogue` lists the rotation, the walls, the mesh's zones and patches. New refusals FIELD016 (turning zones) and FIELD017 (walls). Session files are format 1.17.
