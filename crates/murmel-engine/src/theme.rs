@@ -114,6 +114,32 @@ pub struct Tokens {
     pub light: Palette,
     pub mesh: MeshTokens,
     pub gizmo: GizmoTokens,
+    pub measure: MeasureTokens,
+}
+
+/// The colours of measurements and probes drawn over the viewport, per
+/// theme.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct MeasureTokens {
+    pub dark: MeasureColors,
+    pub light: MeasureColors,
+}
+
+impl MeasureTokens {
+    pub fn colors(&self, dark: bool) -> &MeasureColors {
+        if dark { &self.dark } else { &self.light }
+    }
+}
+
+/// Measurement colours in one theme.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct MeasureColors {
+    /// Distance and angle lines, their points and the snap marker.
+    pub line: Rgb,
+    /// Probe markers.
+    pub probe: Rgb,
+    /// The halo under lines and markers, so they read on any face.
+    pub halo: Rgb,
 }
 
 /// The shading of the clip plane's handles in the viewport: the accent
@@ -235,6 +261,10 @@ pub struct MeshColors {
     /// of `slide` and `tilt` to a colour.
     #[serde(default, skip_serializing_if = "UserGizmo::is_empty")]
     pub gizmo: UserGizmo,
+    /// The measurement colours per theme (`dark`, `light`), each a map of
+    /// `line`, `probe` and `halo` to a colour (same shape as `gizmo`).
+    #[serde(default, skip_serializing_if = "UserGizmo::is_empty")]
+    pub measure: UserGizmo,
 }
 
 /// The user's clip handle colours (`[colors.gizmo.dark]` and
@@ -273,6 +303,8 @@ impl MeshColors {
         }
         self.gizmo.dark.extend(other.gizmo.dark);
         self.gizmo.light.extend(other.gizmo.light);
+        self.measure.dark.extend(other.measure.dark);
+        self.measure.light.extend(other.measure.light);
     }
 }
 
@@ -332,6 +364,19 @@ impl Tokens {
                     "slide" => &mut g.slide,
                     "tilt" => &mut g.tilt,
                     _ => return Err(format!("unknown handle {name} (gizmo.{theme})")),
+                } = rgb;
+            }
+        }
+        for (theme, user, g) in [
+            ("dark", &c.measure.dark, &mut t.measure.dark),
+            ("light", &c.measure.light, &mut t.measure.light),
+        ] {
+            for (name, &rgb) in user {
+                *match name.as_str() {
+                    "line" => &mut g.line,
+                    "probe" => &mut g.probe,
+                    "halo" => &mut g.halo,
+                    _ => return Err(format!("unknown measure colour {name} (measure.{theme})")),
                 } = rgb;
             }
         }

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::Camera;
 use crate::clip::Clip;
+use crate::measure::{Measurement, Probe};
 use crate::quality::{Metric, Quality};
 use crate::theme::{Rgb, Tokens};
 
@@ -114,6 +115,10 @@ pub enum Item {
     /// A clip plane, by index into `Display::clips`; its id counts from
     /// one (`clip:1` is the first plane).
     Clip(u32),
+    /// A distance or an angle, by its number (`measure:<n>`).
+    Measure(u32),
+    /// A probe, by its number (`probe:<n>`).
+    Probe(u32),
 }
 
 impl Item {
@@ -135,6 +140,8 @@ impl Item {
             Item::Cell(c) => format!("cell:{c}"),
             Item::Face(f) => format!("face:{f}"),
             Item::Clip(i) => format!("clip:{}", i + 1),
+            Item::Measure(n) => format!("measure:{n}"),
+            Item::Probe(n) => format!("probe:{n}"),
         }
     }
 
@@ -182,6 +189,17 @@ impl Item {
                 .ok()
                 .filter(|&n| n >= 1)
                 .map(|n| Item::Clip(n - 1)),
+            // Whether it exists is the display's to say, as for planes.
+            "measure" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&n| n >= 1)
+                .map(Item::Measure),
+            "probe" => name
+                .parse::<u32>()
+                .ok()
+                .filter(|&n| n >= 1)
+                .map(Item::Probe),
             _ => None,
         }
     }
@@ -257,6 +275,12 @@ pub struct Display {
     /// Named camera bookmarks of the open mesh (`views.save`), in the
     /// order they were saved.
     pub views: Vec<SavedView>,
+    /// Distances and angles of the open mesh (`measure.add`), in the
+    /// order they were made.
+    pub measurements: Vec<Measurement>,
+    /// Probes of the open mesh (`probe.add`), in the order they were
+    /// made.
+    pub probes: Vec<Probe>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -297,25 +321,78 @@ impl Display {
         self.hidden.contains(&item)
     }
 
+    /// Measurement `measure:<n>`.
+    pub fn measurement(&self, n: u32) -> Option<&Measurement> {
+        self.measurements.iter().find(|m| m.n == n)
+    }
+
+    /// Probe `probe:<n>`.
+    pub fn probe(&self, n: u32) -> Option<&Probe> {
+        self.probes.iter().find(|p| p.n == n)
+    }
+
+    /// The number the next measurement gets: one after the highest.
+    pub fn next_measure(&self) -> u32 {
+        self.measurements.iter().map(|m| m.n).max().unwrap_or(0) + 1
+    }
+
+    /// The number the next probe gets: one after the highest.
+    pub fn next_probe(&self) -> u32 {
+        self.probes.iter().map(|p| p.n).max().unwrap_or(0) + 1
+    }
+
+    /// Remove measurements and probes named by `items`; the selection
+    /// forgets them. Returns how many went.
+    pub fn remove_measures(&mut self, items: &[Item]) -> usize {
+        let before = self.measurements.len() + self.probes.len();
+        self.measurements
+            .retain(|m| !items.contains(&Item::Measure(m.n)));
+        self.probes.retain(|p| !items.contains(&Item::Probe(p.n)));
+        self.selection.retain(|i| !items.contains(i));
+        before - self.measurements.len() - self.probes.len()
+    }
+
     /// Apply a visibility change to `items` of `mesh`.
     pub fn set_visibility(&mut self, v: Visibility, items: &[Item], mesh: &Mesh) {
-        // A clip plane's eye turns its cut on and off; planes are never
-        // in `hidden`.
+        // A clip plane's eye turns its cut on and off, a measurement's or
+        // a probe's shows it; they are never in `hidden`.
         for &i in items {
-            if let Item::Clip(k) = i
-                && let Some(c) = self.clips.get_mut(k as usize)
-            {
-                match v {
-                    Visibility::Show | Visibility::Isolate => c.enabled = true,
-                    Visibility::Hide => c.enabled = false,
-                    Visibility::ShowAll => {}
+            let on = match v {
+                Visibility::Show | Visibility::Isolate => Some(true),
+                Visibility::Hide => Some(false),
+                Visibility::ShowAll => None,
+            };
+            match (i, on) {
+                (Item::Clip(k), Some(on)) => {
+                    if let Some(c) = self.clips.get_mut(k as usize) {
+                        c.enabled = on;
+                    }
                 }
+                (Item::Measure(n), Some(on)) => {
+                    for m in self.measurements.iter_mut().filter(|m| m.n == n) {
+                        m.visible = on;
+                    }
+                }
+                (Item::Probe(n), Some(on)) => {
+                    for p in self.probes.iter_mut().filter(|p| p.n == n) {
+                        p.visible = on;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if v == Visibility::ShowAll {
+            for m in &mut self.measurements {
+                m.visible = true;
+            }
+            for p in &mut self.probes {
+                p.visible = true;
             }
         }
         let kept: Vec<Item> = items
             .iter()
             .copied()
-            .filter(|i| !matches!(i, Item::Clip(_)))
+            .filter(|i| !matches!(i, Item::Clip(_) | Item::Measure(_) | Item::Probe(_)))
             .collect();
         let items = kept.as_slice();
         match v {
@@ -526,6 +603,8 @@ impl Display {
     pub fn has(&self, item: Item) -> bool {
         match item {
             Item::Clip(k) => (k as usize) < self.clips.len(),
+            Item::Measure(n) => self.measurement(n).is_some(),
+            Item::Probe(n) => self.probe(n).is_some(),
             _ => true,
         }
     }
@@ -650,7 +729,7 @@ impl Display {
             Item::Kind(k) => owner.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
             Item::Cell(c) => owner == Some(c as usize),
             Item::Face(u) => mesh.boundary_face_id.get(f) == Some(&u),
-            Item::Clip(_) => false,
+            Item::Clip(_) | Item::Measure(_) | Item::Probe(_) => false,
         }
     }
 
@@ -686,6 +765,27 @@ impl Display {
                     b.add(p);
                 }
                 return (!b.is_empty()).then_some(b);
+            }
+            // The points, with room around them (a probe's cell, or a
+            // twentieth of the mesh), so a short distance or a lone point
+            // still fills part of the view.
+            Some(Item::Measure(n)) => {
+                for a in &self.measurement(n)?.points {
+                    b.add(a.point);
+                }
+                return Some(padded(b, mesh));
+            }
+            Some(Item::Probe(n)) => {
+                let p = self.probe(n)?;
+                b.add(p.at.point);
+                if let Some(c) = p.at.cell.filter(|&c| (c as usize) < mesh.cell_count()) {
+                    for f in mesh.cell(c as usize) {
+                        for &i in f {
+                            b.add(mesh.points[i as usize]);
+                        }
+                    }
+                }
+                return Some(padded(b, mesh));
             }
             _ => {}
         }
@@ -727,6 +827,17 @@ impl Display {
             .count();
         (cells, faces)
     }
+}
+
+/// `b` grown on every side by a twentieth of the radius of `mesh`'s box,
+/// at least.
+fn padded(mut b: Bounds, mesh: &Mesh) -> Bounds {
+    let pad = (0.05 * mesh.bounds().radius()).max(b.radius() * 0.1);
+    for k in 0..3 {
+        b.min[k] -= pad;
+        b.max[k] += pad;
+    }
+    b
 }
 
 /// Every tree item of `mesh` below the root, in tree order: zones, the

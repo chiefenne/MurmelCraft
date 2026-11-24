@@ -794,7 +794,8 @@ fn reads_only_tools_change_nothing() {
         );
         // Inputs that need a point take the centre of the view.
         let input = match t.id {
-            "inspect.at" => json!({"ndc": [0.0, 0.0]}),
+            "inspect.at" | "measure.snap" => json!({"ndc": [0.0, 0.0]}),
+            "probe.at" => json!({"at": {"ndc": [0.0, 0.0]}}),
             _ => json!({}),
         };
         let e = call(t.id, input, &mut s);
@@ -828,8 +829,8 @@ fn channel_case(dir: &Path) -> PathBuf {
 
 /// Invariant: session.load in a fresh session gives back what
 /// session.save wrote: camera, display (colour mode, quality metric and
-/// threshold, render mode, hidden, isolated and coloured items, clip),
-/// the selection, the mesh colours and the view cube placement, with an
+/// threshold, render mode, hidden, isolated and coloured items, clip,
+/// measurements and probes), the selection, the mesh colours and the view cube placement, with an
 /// empty journal; saving again writes the same file. Breaks when a field
 /// of the display is added to the session but not to the file, or when
 /// loading leaves a part of the state at its default; no other test
@@ -866,8 +867,22 @@ fn sessions_round_trip() {
             "clip.set",
             json!({"axis": "x", "mode": "flat", "offset": 0.01}),
         ),
+        (
+            "measure.add",
+            json!({"kind": "angle", "points": [{"node": 0}, {"face": 3}, {"point": [0.1, 0.2, 0.3]}], "name": "Corner"}),
+        ),
+        (
+            "measure.add",
+            json!({"kind": "distance", "points": [{"node": 0}, {"cell": 5}]}),
+        ),
+        (
+            "display.visibility",
+            json!({"action": "hide", "items": ["measure:2"]}),
+        ),
+        ("probe.add", json!({"at": {"point": [0.5, 0.25, 0.25]}})),
         ("select.item", json!({"item": "patch:inlet"})),
         ("select.item", json!({"item": "cell:7", "add": true})),
+        ("select.item", json!({"item": "probe:1", "add": true})),
         (
             "settings.set_view_cube",
             json!({"placement": "bottom_left"}),
@@ -902,6 +917,8 @@ fn sessions_round_trip() {
     assert_eq!(t.colors, s.colors);
     assert_eq!(t.tokens.mesh.solid, s.tokens.mesh.solid);
     assert_eq!(t.display.views, s.display.views, "saved views come back");
+    assert_eq!(t.display.measurements.len(), 2, "measurements come back");
+    assert_eq!(t.display.probes, s.display.probes, "probes come back");
     assert!(t.display.quality.is_some(), "quality colouring computes it");
     assert!(t.journal.undo.is_empty());
     let again = dir.join("again.murmel");
@@ -1298,7 +1315,7 @@ fn sessions_keep_every_clip_plane() {
 
     let mut v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    assert_eq!(v["format_version"], "1.2");
+    assert_eq!(v["format_version"], "1.3");
     let first = v["display"]["clips"][0].clone();
     let d = v["display"].as_object_mut().unwrap();
     d.remove("clips");
@@ -1312,4 +1329,166 @@ fn sessions_keep_every_clip_plane() {
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert_eq!(u.display.clips, s.display.clips[..1]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant (measuring, 2026-11-24): measure.add keeps a distance
+/// between two points (the node-to-node length, with dx, dy, dz) and an
+/// angle at its middle point as tree items measure:1, measure:2; a probe
+/// at typed coordinates finds the cell holding them, one at a screen
+/// point the cell under it; probe.at reads the same rows without keeping
+/// anything. Rename, hide, select, fit and remove work on the ids, every
+/// change is one undo step, and bad input fails with its code. Breaks
+/// when a measuring tool skips the journal, a point is resolved against
+/// the wrong mesh entity, or the ids stop matching the tree's; the engine
+/// tests check the geometry, not the tools.
+#[test]
+fn measuring_tools() {
+    let mut s = session();
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    let m = s.mesh.as_ref().unwrap().mesh.clone();
+    let (p0, p1) = (m.points[0], m.points[1]);
+    let len: f64 = (0..3).map(|k| (p1[k] - p0[k]).powi(2)).sum::<f64>().sqrt();
+    let e = call(
+        "measure.add",
+        json!({"kind": "distance", "points": [{"node": 0}, {"node": 1}]}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["id"], "measure:1");
+    assert!((e.result["value"].as_f64().unwrap() - len).abs() < 1e-12);
+    assert_eq!(e.result["points"][0]["snap"], "node");
+    let e = call(
+        "measure.add",
+        json!({"kind": "angle", "points": [
+            {"point": [1.0, 0.0, 0.0]}, {"point": [0.0, 0.0, 0.0]}, {"point": [0.0, 1.0, 0.0]}
+        ]}),
+        &mut s,
+    );
+    assert_eq!(e.result["id"], "measure:2");
+    assert!((e.result["value"].as_f64().unwrap() - 90.0).abs() < 1e-9);
+    assert_eq!(e.result["unit"], "°");
+    assert_eq!(s.journal.undo.len(), 2, "each measurement is a step");
+
+    // A probe at a cell's centroid finds that cell.
+    let c = 123usize;
+    let centre = murmel_engine::inspect::cell_centroid(&m, c);
+    let e = call("probe.add", json!({"at": {"point": centre}}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["id"], "probe:1");
+    assert_eq!(e.result["at"]["cell"], c);
+    let rows = e.result["rows"].as_array().unwrap();
+    let row = |k: &str| {
+        rows.iter()
+            .find(|r| r["key"] == k)
+            .map(|r| r["value"].clone())
+    };
+    assert_eq!(row("cell"), Some(json!(format!("cell:{c}"))));
+    assert_eq!(row("distance_to_centroid"), Some(json!(0.0)));
+    // At the centre of the view: the cell under it, as inspect.at says.
+    let under = call("inspect.at", json!({"ndc": [0.0, 0.0]}), &mut s);
+    let e = call("probe.at", json!({"at": {"ndc": [0.0, 0.0]}}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(
+        format!("cell:{}", e.result["at"]["cell"]),
+        under.result["hit"]["cell"].as_str().unwrap()
+    );
+    assert_eq!(s.display.probes.len(), 1, "probe.at keeps nothing");
+    let outside = call(
+        "probe.at",
+        json!({"at": {"point": [99.0, 0.0, 0.0]}}),
+        &mut s,
+    );
+    assert_eq!(outside.result["rows"][2]["key"], "inside");
+    assert_eq!(outside.result["rows"][2]["value"], false);
+
+    // Rename, hide, select, properties, fit.
+    assert!(
+        call(
+            "measure.rename",
+            json!({"item": "measure:1", "name": "Inlet gap"}),
+            &mut s
+        )
+        .ok()
+    );
+    assert_eq!(
+        s.display.measurement(1).unwrap().name.as_deref(),
+        Some("Inlet gap")
+    );
+    let bad = call(
+        "measure.rename",
+        json!({"item": "measure:1", "name": " "}),
+        &mut s,
+    );
+    assert_eq!(bad.diagnostics[0].code, "MEAS003");
+    let not = call(
+        "measure.rename",
+        json!({"item": "patch:inlet", "name": "x"}),
+        &mut s,
+    );
+    assert_eq!(not.diagnostics[0].code, "VIEW002");
+    assert!(
+        call(
+            "display.visibility",
+            json!({"action": "hide", "items": ["measure:2", "probe:1"]}),
+            &mut s
+        )
+        .ok()
+    );
+    assert!(!s.display.measurement(2).unwrap().visible);
+    assert!(!s.display.probe(1).unwrap().visible);
+    assert!(s.display.hidden.is_empty(), "not hidden as mesh items");
+    assert!(call("display.visibility", json!({"action": "show_all"}), &mut s).ok());
+    assert!(s.display.measurement(2).unwrap().visible);
+    assert!(call("select.item", json!({"item": "measure:1"}), &mut s).ok());
+    let e = call("inspect.item", json!({}), &mut s);
+    assert_eq!(e.result["item"], "measure:1");
+    let rows = e.result["rows"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|r| r["key"] == "distance" && r["unit"] == "m")
+    );
+    let cam = s.camera.clone();
+    assert!(call("view.fit", json!({"item": "probe:1"}), &mut s).ok());
+    assert_ne!(s.camera, cam, "fit frames the probe's cell");
+
+    // Remove, undo, redo; the ids are not reused.
+    let steps = s.journal.undo.len();
+    let e = call("measure.remove", json!({"items": ["measure:1"]}), &mut s);
+    assert_eq!(e.result["removed"], 1);
+    assert!(s.display.selection.is_empty(), "the selection forgets it");
+    assert!(call("journal.undo", json!({}), &mut s).ok());
+    assert!(s.display.measurement(1).is_some(), "undo brings it back");
+    assert!(call("journal.redo", json!({}), &mut s).ok());
+    assert!(s.display.measurement(1).is_none());
+    let e = call(
+        "measure.add",
+        json!({"kind": "distance", "points": [{"edge": [0, 1]}, {"cell": 0}]}),
+        &mut s,
+    );
+    assert_eq!(e.result["id"], "measure:3", "the next after the highest");
+    assert_eq!(e.result["points"][0]["snap"], "edge_midpoint");
+    assert_eq!(s.journal.undo.len(), steps + 2);
+    let e = call("measure.remove", json!({"all": true}), &mut s);
+    assert_eq!(e.result["removed"], 3);
+
+    // Bad input; the whole mesh in view again, so a corner is empty.
+    assert!(call("view.standard", json!({"view": "front"}), &mut s).ok());
+    let code = |s: &mut Session, tool: &str, input: serde_json::Value| {
+        call(tool, input, s).diagnostics[0].code
+    };
+    let two = json!({"kind": "distance", "points": [{"node": 0, "cell": 1}, {"node": 1}]});
+    assert_eq!(code(&mut s, "measure.add", two), "TOOL002");
+    let short = json!({"kind": "angle", "points": [{"node": 0}, {"node": 1}]});
+    assert_eq!(code(&mut s, "measure.add", short), "TOOL002");
+    let far = json!({"kind": "distance", "points": [{"node": 0}, {"node": 999999}]});
+    assert_eq!(code(&mut s, "measure.add", far), "MEAS002");
+    let empty = json!({"at": {"ndc": [0.99, 0.99]}});
+    assert_eq!(code(&mut s, "probe.add", empty), "MEAS001");
+    let snap = call("measure.snap", json!({"ndc": [0.99, 0.99]}), &mut s);
+    assert!(snap.ok() && snap.result["anchor"].is_null(), "empty space");
+    assert_eq!(code(&mut s, "measure.remove", json!({})), "TOOL002");
+    let e = call("measure.list", json!({}), &mut s);
+    assert_eq!(e.result["measurements"], json!([]));
+    assert_eq!(e.result["probes"], json!([]));
 }

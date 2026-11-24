@@ -61,6 +61,10 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `H` | Hide the selection | `display.visibility` (input from the session) |
 | `I` | Isolate the selection | `display.visibility` (input from the session) |
 | `Alt + H` | Show all | `display.visibility` (input from the session) |
+| `M` | Measure a distance | window, then `measure.add` |
+| `Shift + M` | Measure an angle | window, then `measure.add` |
+| `Shift + P` | Place a probe | window, then `probe.add` |
+| `Delete`, `Backspace` | Delete the selected measurements and probes | `measure.remove` (input from the session) |
 | `Escape` | Clear the selection | `select.clear` (input from the session) |
 | `Ctrl + Z` | Undo (camera and display) | `journal.undo` (input from the session) |
 | `Ctrl + Shift + Z` | Redo | `journal.redo` (input from the session) |
@@ -115,6 +119,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Turn the clip plane on or off | `clip.set` (input from the session) |
 | palette | Remove the current clip plane | `clip.clear` (input from the session) |
 | palette | Remove all clip planes | `clip.clear` (input from the session) |
+| palette | Delete all measurements and probes | `measure.remove` (input from the session) |
 | palette | Fit the selection | `view.fit` (input from the session) |
 | palette | Click picks cells | `select.filter` `{"target":"cell"}` |
 | palette | Click picks faces | `select.filter` `{"target":"face"}` |

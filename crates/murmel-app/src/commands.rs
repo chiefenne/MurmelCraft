@@ -115,6 +115,9 @@ impl MurmelApp {
                 }
                 "window.settings" => self.settings_open = true,
                 "window.save_view" => self.save_view(),
+                "window.measure_distance" => self.toggle_measuring(crate::measure::Mode::Distance),
+                "window.measure_angle" => self.toggle_measuring(crate::measure::Mode::Angle),
+                "window.probe" => self.toggle_measuring(crate::measure::Mode::Probe),
                 "window.next_region" => self.cycle_region(ctx, true),
                 "window.previous_region" => self.cycle_region(ctx, false),
                 "window.color_by" => {
@@ -160,6 +163,15 @@ impl MurmelApp {
             )
         });
         let typing = ctx.text_edit_focused();
+        // Esc stops measuring before it clears the selection.
+        if self.measuring.is_some()
+            && !typing
+            && self.palette.is_none()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            self.measuring = None;
+            self.snap_hover = None;
+        }
         // A widget the keyboard reached keeps the arrows (tree rows,
         // sliders, the next button) and Esc (leave it); the viewport and
         // a clicked button leave them to the view (docs/pitfalls.md).

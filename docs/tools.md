@@ -47,12 +47,19 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `journal.list` | 1 | read | The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
-| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
+| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
 | `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_agents` | 1 | write-files | Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
 | `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the mesh colours and the view cube placement. |
 | `session.load` | 1 | read | Load a .murmel session file: open its mesh unless that mesh is already open (tried relative to the file first, then at its absolute path), then restore the camera, the display, the selection and the clip plane; the mesh colours and the view cube placement apply to this session and are not written to settings.toml. A mesh changed since the save (SESS003) or items it no longer has (SESS004) give warnings. A new journal starts. |
+| `measure.snap` | 1 | read | The point a click at a screen point would measure from: the face under it gives its nodes, edge midpoints, centre (and its cell's centre), projected to the screen; the first kind in the order node, edge_midpoint, face_centre, cell_centre, edge, surface with a candidate within radius_px (default 12) wins; snap lists the kinds allowed (default all but cell_centre). Null over empty space. Changes nothing. |
+| `measure.add` | 1 | read | Measure in the open mesh and keep the result as a tree item measure:<n>: a distance between two points (with dx, dy, dz) or the angle at the second of three points (degrees). Each point is a screen point snapped as measure.snap does, typed coordinates, a node, the midpoint of two nodes, a face centre or a cell centre. Kept in session files; undo removes it. |
+| `measure.rename` | 1 | read | Name a measurement or a probe (measure:<n>, probe:<n>); a null name goes back to "Distance n", "Angle n" or "Probe n". |
+| `measure.remove` | 1 | read | Remove measurements and probes: the items named (measure:<n>, probe:<n>), or all of them. Undo brings them back. |
+| `measure.list` | 1 | read | The measurements (value, unit, points and what they snapped to) and the probes (point, cell and what it reads) of the open mesh. |
+| `probe.add` | 1 | read | Place a probe (tree item probe:<n>) that reads the cell holding a point: the point, the cell, its type, zone, centroid and the distance to it, its volume and worst non-orthogonality and skewness. The point is given as for measure.add; typed coordinates are located in the mesh (generalised winding number). Kept in session files; undo removes it. |
+| `probe.at` | 1 | read | What a probe at a point would read, without keeping it: the point given as for measure.add, the cell holding it and that cell's values. Changes nothing. |
 
 ## Inputs
 
@@ -1064,6 +1071,40 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       },
       "type": "object"
     },
+    "measure": {
+      "additionalProperties": false,
+      "properties": {
+        "dark": {
+          "additionalProperties": {
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "type": "string"
+          },
+          "propertyNames": {
+            "enum": [
+              "line",
+              "probe",
+              "halo"
+            ]
+          },
+          "type": "object"
+        },
+        "light": {
+          "additionalProperties": {
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "type": "string"
+          },
+          "propertyNames": {
+            "enum": [
+              "line",
+              "probe",
+              "halo"
+            ]
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "patch": {
       "items": {
         "pattern": "^#[0-9A-Fa-f]{6}$",
@@ -1289,6 +1330,500 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `measure.snap`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "ndc": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "radius_px": {
+      "maximum": 200,
+      "minimum": 0,
+      "type": "number"
+    },
+    "snap": {
+      "items": {
+        "enum": [
+          "node",
+          "edge_midpoint",
+          "face_centre",
+          "cell_centre",
+          "edge",
+          "surface"
+        ]
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "ndc"
+  ],
+  "type": "object"
+}
+```
+
+### `measure.add`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "enum": [
+        "distance",
+        "angle"
+      ]
+    },
+    "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    },
+    "points": {
+      "items": {
+        "additionalProperties": false,
+        "description": "Exactly one of: ndc (a screen point, -1..1 with y up, snapped), anchor (as measure.snap returns it), point (typed x y z), node, edge (the midpoint of two nodes), face (a face centre), cell (a cell centre).",
+        "properties": {
+          "anchor": {
+            "additionalProperties": false,
+            "properties": {
+              "cell": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "edge": {
+                "items": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "face": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "node": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "point": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "snap": {
+                "enum": [
+                  "node",
+                  "edge_midpoint",
+                  "face_centre",
+                  "cell_centre",
+                  "edge",
+                  "surface",
+                  "typed"
+                ]
+              }
+            },
+            "required": [
+              "point"
+            ],
+            "type": "object"
+          },
+          "cell": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "edge": {
+            "items": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "face": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ndc": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "node": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "point": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "radius_px": {
+            "maximum": 200,
+            "minimum": 0,
+            "type": "number"
+          },
+          "snap": {
+            "items": {
+              "enum": [
+                "node",
+                "edge_midpoint",
+                "face_centre",
+                "cell_centre",
+                "edge",
+                "surface"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "maxItems": 3,
+      "minItems": 2,
+      "type": "array"
+    }
+  },
+  "required": [
+    "kind",
+    "points"
+  ],
+  "type": "object"
+}
+```
+
+### `measure.rename`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "item": {
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "item"
+  ],
+  "type": "object"
+}
+```
+
+### `measure.remove`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "all": {
+      "type": "boolean"
+    },
+    "items": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `measure.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `probe.add`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "at": {
+      "additionalProperties": false,
+      "description": "Exactly one of: ndc (a screen point, -1..1 with y up, snapped), anchor (as measure.snap returns it), point (typed x y z), node, edge (the midpoint of two nodes), face (a face centre), cell (a cell centre).",
+      "properties": {
+        "anchor": {
+          "additionalProperties": false,
+          "properties": {
+            "cell": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "edge": {
+              "items": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "face": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "node": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "point": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "snap": {
+              "enum": [
+                "node",
+                "edge_midpoint",
+                "face_centre",
+                "cell_centre",
+                "edge",
+                "surface",
+                "typed"
+              ]
+            }
+          },
+          "required": [
+            "point"
+          ],
+          "type": "object"
+        },
+        "cell": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "edge": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "face": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ndc": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "node": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "point": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "radius_px": {
+          "maximum": 200,
+          "minimum": 0,
+          "type": "number"
+        },
+        "snap": {
+          "items": {
+            "enum": [
+              "node",
+              "edge_midpoint",
+              "face_centre",
+              "cell_centre",
+              "edge",
+              "surface"
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "at"
+  ],
+  "type": "object"
+}
+```
+
+### `probe.at`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "at": {
+      "additionalProperties": false,
+      "description": "Exactly one of: ndc (a screen point, -1..1 with y up, snapped), anchor (as measure.snap returns it), point (typed x y z), node, edge (the midpoint of two nodes), face (a face centre), cell (a cell centre).",
+      "properties": {
+        "anchor": {
+          "additionalProperties": false,
+          "properties": {
+            "cell": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "edge": {
+              "items": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "face": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "node": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "point": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "snap": {
+              "enum": [
+                "node",
+                "edge_midpoint",
+                "face_centre",
+                "cell_centre",
+                "edge",
+                "surface",
+                "typed"
+              ]
+            }
+          },
+          "required": [
+            "point"
+          ],
+          "type": "object"
+        },
+        "cell": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "edge": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "face": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "ndc": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "node": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "point": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "radius_px": {
+          "maximum": 200,
+          "minimum": 0,
+          "type": "number"
+        },
+        "snap": {
+          "items": {
+            "enum": [
+              "node",
+              "edge_midpoint",
+              "face_centre",
+              "cell_centre",
+              "edge",
+              "surface"
+            ]
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "at"
+  ],
+  "type": "object"
+}
+```
+
 ## Diagnostic codes
 
 | Code | Severity | Meaning | Fix |
@@ -1308,6 +1843,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `LIVE003` | error | The window could not listen for agents: another window listens already, or the socket folder is not private. | Close the other window, or make the socket folder private (chmod 700); MURMEL_LIVE_SOCKET names another socket. |
 | `SET001` | error | A settings file could not be written, or no config folder is known. | Set MURMEL_CONFIG_DIR to a writable folder. |
 | `SET002` | error | The navigation bindings bind one input to two actions. | Give each gesture, button and modifier combination one action. |
+| `MEAS001` | error | Nothing of the mesh lies under the screen point, so there is no point to measure from. | Point at a face of the mesh, or give typed coordinates (point), a node, a face or a cell. |
+| `MEAS002` | error | The open mesh has no node, face or cell with this number. | mesh.info gives the counts; numbers start at 0. |
+| `MEAS003` | error | The name of a measurement or probe is empty, longer than 64 characters or holds control characters. |  |
 | `SESS001` | error | A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values. | Check the path; save the session again with session.save. |
 | `SESS002` | error | A session file could not be written. | Choose a writable folder. |
 | `SESS003` | warning | The session's mesh changed since the session was saved (its SHA-256 differs). | Check the view; save the session again to accept the new mesh. |

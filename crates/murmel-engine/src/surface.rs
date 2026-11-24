@@ -626,13 +626,13 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         Item::Kind(k) => cell.is_some_and(|c| mesh.cell_kind.get(c) == Some(&k)),
         Item::Cell(c) => poly.cell == c,
         Item::Face(u) => poly.face == u,
-        Item::Clip(_) => false,
+        Item::Clip(_) | Item::Measure(_) | Item::Probe(_) => false,
     })
 }
 
 /// The outline of the picked cells and faces: every edge of a selected
-/// cell, every edge of a selected face, each once, as line pairs of point
-/// ids. Drawn over everything (UI spec: "an accent outline"), so a picked
+/// cell (or of the cell holding a selected probe), every edge of a
+/// selected face, each once, as line pairs of point ids. Drawn over everything (UI spec: "an accent outline"), so a picked
 /// cell stays visible behind others.
 fn outline(mesh: &Mesh, display: &Display) -> Vec<(u32, u32)> {
     let mut seen: HashSet<(u32, u32)> = HashSet::new();
@@ -646,6 +646,13 @@ fn outline(mesh: &Mesh, display: &Display) -> Vec<(u32, u32)> {
         }
     };
     for &item in &display.selection {
+        let item = match item {
+            Item::Probe(n) => match display.probe(n).and_then(|p| p.at.cell) {
+                Some(c) => Item::Cell(c),
+                None => continue,
+            },
+            other => other,
+        };
         match item {
             Item::Cell(c) if (c as usize) < mesh.cell_count() => {
                 for f in mesh.cell(c as usize) {
@@ -966,6 +973,42 @@ mod tests {
         assert!((area - want).abs() < 1e-4 * want, "{area} vs {want}");
         // Everything drawn is on the kept side (y <= centre, to f32).
         assert!(s.positions.iter().all(|p| p[1] <= 1e-5));
+    }
+
+    /// Invariant: a selected probe outlines the cell that holds it, the
+    /// same lines as selecting that cell, and a probe outside the mesh
+    /// outlines nothing. Breaks if `outline` stops mapping probes to their
+    /// cell; the window draws the probe marker with egui, so no render
+    /// test would notice the missing outline.
+    #[test]
+    fn a_selected_probe_outlines_its_cell() {
+        let m = channel();
+        let t = Tokens::builtin().unwrap();
+        let mut cell = Display::default();
+        cell.selection.push(Item::Cell(7));
+        let want = Surface::build(&m, &t, &cell).outline;
+        assert!(!want.is_empty());
+        let mut d = Display::default();
+        let at = |c: Option<u32>| crate::measure::Anchor {
+            cell: c,
+            ..crate::measure::Anchor::typed([0.0; 3])
+        };
+        d.probes.push(crate::measure::Probe {
+            n: 1,
+            name: None,
+            at: at(Some(7)),
+            visible: true,
+        });
+        d.probes.push(crate::measure::Probe {
+            n: 2,
+            name: None,
+            at: at(None),
+            visible: true,
+        });
+        d.selection.push(Item::Probe(1));
+        assert_eq!(Surface::build(&m, &t, &d).outline, want);
+        d.selection = vec![Item::Probe(2)];
+        assert!(Surface::build(&m, &t, &d).outline.is_empty());
     }
 
     /// Invariant: every boundary polygon becomes a closed fan (n triangles
