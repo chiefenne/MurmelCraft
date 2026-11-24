@@ -6,12 +6,14 @@ license.workspace = true
 description = "Scene, camera, navigation bindings, theme tokens and session of MurmelCraft (no window, no GPU)"
 
 [dependencies]
+fluent-bundle.workspace = true
 glam.workspace = true
 murmel-mesh.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 toml.workspace = true
+unic-langid.workspace = true
 
 [lints]
 workspace = true

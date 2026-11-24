@@ -5,7 +5,7 @@
 
 use egui::{Align, Color32, Layout, RichText, Role, Sense, Ui, WidgetInfo};
 use murmel_engine::display::all_items;
-use murmel_engine::{ColorBy, Item, Validity};
+use murmel_engine::{Item, Validity};
 use serde_json::{Value, json};
 
 use crate::app::MurmelApp;
@@ -799,53 +799,28 @@ impl MurmelApp {
         }
     }
 
-    /// Legend of the colouring, top left under the view note.
+    /// Legend of the colouring, top left under the view note: the swatches
+    /// of `murmel_engine::Legend` (exported pictures draw the same model).
     pub(crate) fn legend(&self, ui: &Ui, rect: egui::Rect, dark: bool) {
-        let Some(m) = &self.session.mesh else {
+        let Some(legend) = murmel_engine::Legend::of(&self.session) else {
+            return;
+        };
+        // A ramp (quality) has its own legend with the histogram
+        // (quality.rs).
+        let murmel_engine::legend::Body::Categories(swatches) = &legend.body else {
             return;
         };
         let p = self.session.tokens.palette(dark);
-        let t = &self.session.tokens;
-        let mesh = &m.mesh;
-        let d = &self.session.display;
-        let name = |i: Item| -> String {
-            match i {
-                Item::Mesh => self.i18n.tr("props-area-mesh"),
-                Item::Kind(k) => self.i18n.tr(&format!("kind-{}", k.name())),
-                other => other
-                    .id(mesh)
-                    .split_once(':')
-                    .map_or(String::new(), |(_, n)| n.to_string()),
-            }
-        };
-        let entries: Vec<(murmel_engine::Rgb, String)> = match d.color_by {
-            ColorBy::Solid => std::iter::once(Item::Mesh)
-                .chain(murmel_engine::display::all_items(mesh))
-                .filter(|&i| !d.is_hidden(i))
-                .filter_map(|i| d.item_color(mesh, t, i).map(|c| (c, name(i))))
-                .collect(),
-            ColorBy::Role => murmel_mesh_roles(mesh)
-                .into_iter()
-                .map(|r| (t.role_color(r), self.i18n.tr(&format!("role-{}", r.name()))))
-                .collect(),
-            ColorBy::Patch | ColorBy::CellType | ColorBy::Zone => {
-                murmel_engine::display::all_items(mesh)
-                    .into_iter()
-                    .filter(|&i| !d.is_hidden(i))
-                    .filter_map(|i| d.item_color(mesh, t, i).map(|c| (c, name(i))))
-                    .collect()
-            }
-            // The quality legend (quality.rs) takes its place.
-            ColorBy::Quality => Vec::new(),
-        };
+        let entries: Vec<(murmel_engine::Rgb, String)> = swatches
+            .iter()
+            .map(|e| (e.color, e.label.text(&self.i18n)))
+            .collect();
         if entries.is_empty() {
             return;
         }
         let painter = ui.painter_at(rect);
         let font = egui::FontId::proportional(12.0);
-        let title = self
-            .i18n
-            .tr(&format!("color-by-{}", self.session.display.color_by.key()));
+        let title = legend.title.text(&self.i18n);
         let mut galleys =
             vec![painter.layout_no_wrap(title, font.clone(), color(p.text_secondary))];
         for (_, name) in &entries {
@@ -870,14 +845,6 @@ impl MurmelApp {
             y += line;
         }
     }
-}
-
-/// The roles the patches of `mesh` have, in the spec's order.
-fn murmel_mesh_roles(mesh: &murmel_mesh::Mesh) -> Vec<murmel_mesh::PatchRole> {
-    murmel_mesh::PatchRole::ALL
-        .into_iter()
-        .filter(|r| mesh.patches.iter().any(|p| p.role == *r))
-        .collect()
 }
 
 /// A number with up to six significant digits, without trailing zeros.
