@@ -243,6 +243,27 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
     murmel_mesh::sha256_hex(bytes)
 }
 
+/// Whether two displays are equal, with the values they colour by (the
+/// quality, the field's values) compared by allocation, not value by
+/// value: they are made once and shared by every copy of the display,
+/// and the preview compares displays on every frame, where comparing
+/// millions of values would cost more than the frame.
+fn same_display(a: &Display, b: &Display) -> bool {
+    fn same<T>(x: &Option<Arc<T>>, y: &Option<Arc<T>>) -> bool {
+        match (x, y) {
+            (None, None) => true,
+            (Some(p), Some(q)) => Arc::ptr_eq(p, q),
+            _ => false,
+        }
+    }
+    let bare = |d: &Display| Display {
+        quality: None,
+        field_values: None,
+        ..d.clone()
+    };
+    same(&a.quality, &b.quality) && same(&a.field_values, &b.field_values) && bare(a) == bare(b)
+}
+
 /// The clip planes that move in `new` against `old` (their origin or
 /// normal changed, nothing else in the display), or `None` when the
 /// change is not only such a move.
@@ -259,10 +280,13 @@ fn clip_moves(old: &Display, new: &Display) -> Option<Vec<usize>> {
             moving.push(k);
         }
     }
-    let same_otherwise = Display {
-        clips: new.clips.clone(),
-        ..old.clone()
-    } == *new;
+    let same_otherwise = same_display(
+        &Display {
+            clips: new.clips.clone(),
+            ..old.clone()
+        },
+        new,
+    );
     (same_otherwise && !moving.is_empty()).then_some(moving)
 }
 
@@ -769,7 +793,7 @@ impl Session {
         };
         if let Some(surface) = p.exact_job.as_ref().and_then(|j| j.take(false)) {
             let job = p.exact_job.take();
-            if let Some(job) = job.filter(|j| j.display == self.display) {
+            if let Some(job) = job.filter(|j| same_display(&j.display, &self.display)) {
                 m.surface = surface;
                 m.built_for = job.display;
                 self.surface_revision += 1;
@@ -779,12 +803,15 @@ impl Session {
         }
         let base = p.base_display(&m.built_for, &self.display);
         if let Some(surface) = p.base_job.as_ref().and_then(|j| j.take(false))
-            && let Some(job) = p.base_job.take().filter(|j| j.display == base)
+            && let Some(job) = p
+                .base_job
+                .take()
+                .filter(|j| same_display(&j.display, &base))
         {
             self.surface_revision += 1;
             p.base = Some((job.display, Arc::new(surface), self.surface_revision));
         }
-        if p.base_job.is_none() && p.base.as_ref().is_none_or(|b| b.0 != base) {
+        if p.base_job.is_none() && p.base.as_ref().is_none_or(|b| !same_display(&b.0, &base)) {
             p.base_job = Some(SurfaceJob::start(m, &self.tokens, base));
         }
         let rested = p.changed.is_none_or(|t| t.elapsed() >= ClipPreview::REST);
@@ -807,7 +834,7 @@ impl Session {
         };
         let done = p
             .exact_job
-            .filter(|j| j.display == self.display)
+            .filter(|j| same_display(&j.display, &self.display))
             .and_then(|j| j.take(true));
         m.surface = done.unwrap_or_else(|| {
             Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display)
@@ -826,7 +853,7 @@ impl Session {
         };
         let base = p.base_display(&m.built_for, &self.display);
         let (surface, revision) = match &p.base {
-            Some((d, s, r)) if *d == base => (s.as_ref(), *r),
+            Some((d, s, r)) if same_display(d, &base) => (s.as_ref(), *r),
             _ => (&m.surface, self.surface_revision),
         };
         let o = surface.origin;
@@ -976,6 +1003,16 @@ mod tests {
         s.display.hidden.insert(Item::Zone(0));
         s.redraw();
         assert!(s.preview.is_none());
+        assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
+        // Colouring by quality keeps its values across moves (shared, not
+        // copied), so a move still previews.
+        s.display.color_by = ColorBy::Quality;
+        s.redraw();
+        assert!(s.preview.is_none());
+        s.display.clips = vec![at(0.45)];
+        s.redraw();
+        assert!(s.preview.is_some());
+        s.settle();
         assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
         // Without defer_clips (the command line, agents) a move cuts at once.
         s.defer_clips = false;

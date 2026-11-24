@@ -322,7 +322,11 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
     // cut is built on a thread of its own once the plane rests. As
     // before, a step that builds the cut before it returns.
     let along = |f: f64| Clip {
-        origin: [b.min[0] + f * (b.max[0] - b.min[0]), b.center()[1], b.center()[2]],
+        origin: [
+            b.min[0] + f * (b.max[0] - b.min[0]),
+            b.center()[1],
+            b.center()[2],
+        ],
         normal: [1.0, 0.0, 0.0],
         mode: ClipMode::Crinkle,
         enabled: true,
