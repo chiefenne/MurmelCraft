@@ -180,7 +180,10 @@ mod tests {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../test-fixtures/channel/foehncraft.vtu");
         let t = Tokens::builtin().unwrap();
-        for mesh in [murmel_mesh::read(&p).unwrap(), murmel_mesh::synth::honeycomb(5)] {
+        for mesh in [
+            murmel_mesh::read(&p).unwrap(),
+            murmel_mesh::synth::honeycomb(5),
+        ] {
             let b = mesh.bounds();
             let clip = |mode| Display {
                 clips: vec![crate::Clip {
