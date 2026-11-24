@@ -183,7 +183,10 @@ struct OpenInput {
 
 pub(crate) fn series_open(input: Value, s: &mut Session) -> Run {
     let i: OpenInput = parse(input)?;
-    let r = Series::read(&i.path).map_err(|e| Diagnostic::new("SERIES001", e.0))?;
+    let mut r = Series::read(&i.path).map_err(|e| Diagnostic::new("SERIES001", e.0))?;
+    // Your player defaults: its speed and loop (paused all the same).
+    r.playback = crate::defaults::fresh(s, murmel_engine::defaults::Kind::Player, r.playback);
+    r.playback.playing = false;
     let k = match i.step {
         Some(st) => r.index_of_step(st).ok_or_else(|| missing_step(&r, st))?,
         None => 0,

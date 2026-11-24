@@ -1427,6 +1427,49 @@ fn player_bar_steps_and_plays() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Invariant: a playing series reads its next step ahead on a thread of
+/// its own and shows every step in turn. Breaks if the player waited
+/// for a reading that never came, or skipped steps.
+#[test]
+fn playing_reads_ahead() {
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-ahead-play-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fields = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    for step in [10, 20, 30] {
+        std::fs::copy(&fields, dir.join(format!("fields_{step:06}.vtkhdf"))).unwrap();
+    }
+    let app = h.state_mut();
+    assert!(
+        app.call("series.open", serde_json::json!({"path": dir}))
+            .is_some()
+    );
+    assert!(
+        app.call(
+            "series.play",
+            serde_json::json!({"playing": true, "rate": 60.0, "loop": false})
+        )
+        .is_some()
+    );
+    let mut seen = Vec::new();
+    for _ in 0..400 {
+        h.run_steps(1);
+        let r = h.state().session.series.as_ref().unwrap();
+        if seen.last() != Some(&r.entry().step) {
+            seen.push(r.entry().step);
+        }
+        if !r.playback.playing {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(seen, vec![10, 20, 30]);
+    assert!(h.state().ahead.is_none(), "nothing left reading");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Invariant (the maintainer's card of 2026-11-24, "Range over all
 /// steps"): with a series open, a field shown is coloured over every
 /// step, read by the window on a thread of its own; the range then

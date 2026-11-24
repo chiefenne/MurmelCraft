@@ -32,6 +32,7 @@ use crate::field::{FieldChoice, FieldStyle};
 use crate::glyph::Arrows;
 use crate::parcel::ParcelView;
 use crate::region::{Region, Shape};
+use crate::series::Playback;
 use crate::session::Session;
 use crate::stream::{Seed, Stream};
 
@@ -58,10 +59,13 @@ pub enum Kind {
     /// from when the result's case does not give them (the axis point
     /// and zone belong to one mesh).
     Rotation,
+    /// How the player plays a time series newly opened: its speed and
+    /// whether it loops.
+    Player,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Arrows,
         Kind::Slice,
         Kind::Iso,
@@ -73,6 +77,7 @@ impl Kind {
         Kind::Reference,
         Kind::Parcels,
         Kind::Rotation,
+        Kind::Player,
     ];
 
     pub fn key(self) -> &'static str {
@@ -88,6 +93,7 @@ impl Kind {
             Kind::Reference => "reference",
             Kind::Parcels => "parcels",
             Kind::Rotation => "rotation",
+            Kind::Player => "player",
         }
     }
 
@@ -118,6 +124,7 @@ impl Kind {
             Kind::Reference => &crate::derive::REFERENCE_KEYS,
             Kind::Rotation => &["rpm", "axis"],
             Kind::Parcels => &["size", "scale", "map", "reverse"],
+            Kind::Player => &["rate", "loop"],
         }
     }
 
@@ -168,6 +175,7 @@ impl Kind {
             Kind::Reference => serde_json::to_value(Reference::default()),
             Kind::Parcels => serde_json::to_value(ParcelView::new("p".into())),
             Kind::Rotation => serde_json::to_value(crate::turbo::Turning::default()),
+            Kind::Player => serde_json::to_value(Playback::default()),
         };
         v.unwrap_or(Value::Null)
     }
@@ -212,6 +220,7 @@ impl Kind {
                     .check()
                 })
                 .map_err(serde::de::Error::custom),
+            Kind::Player => serde_json::from_value::<Playback>(item).map(|_| ()),
         };
         typed.map_err(|e| format!("{}.{key} = {value}: {e}", self.key()))?;
         let number = value.as_f64().unwrap_or(f64::NAN);
@@ -238,6 +247,7 @@ impl Kind {
                 Err(format!("parcels.scale = {value} must be above 0"))
             }
             (Kind::Parcels, "scale") => within(0.0, crate::parcel::MAX_SCALE),
+            (Kind::Player, "rate") => within(crate::series::MIN_RATE, crate::series::MAX_RATE),
             (Kind::Slice, "count") => within(1.0, crate::extract::MAX_SERIES as f64),
             (Kind::Stream, "count") => within(
                 crate::stream::MIN_COUNT as f64,

@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The manifest's format and the version read.
 pub const FORMAT: &str = "foehncraft.series";
@@ -48,13 +48,17 @@ pub struct Entry {
 }
 
 /// How the player plays (the window follows it; the command line and
-/// agents step with `series.go`).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// agents step with `series.go`). The rate and the loop can be your
+/// defaults ([`crate::defaults::Kind::Player`]), named as `series.play`
+/// names them.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Playback {
     pub playing: bool,
     /// Steps a second.
     pub rate: f64,
     /// Start again at the first step after the last.
+    #[serde(rename = "loop")]
     pub looping: bool,
 }
 

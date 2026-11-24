@@ -51,6 +51,8 @@ pub struct MurmelApp {
     pub(crate) now: f64,
     /// When the player last showed a step (while a series plays).
     pub(crate) played_at: Option<f64>,
+    /// The next step of the playing series, read on its own thread.
+    pub(crate) ahead: Option<crate::player::Ahead>,
     /// The edges hidden while the view moves when frames with them are
     /// slow.
     pub(crate) moving_edges: crate::edges::MovingEdges,
@@ -204,6 +206,7 @@ impl MurmelApp {
             shortcuts_open: false,
             flight: None,
             played_at: None,
+            ahead: None,
             now: 0.0,
             moving_edges: Default::default(),
             rotate_axis: murmel_engine::ScreenAxis::Z,
