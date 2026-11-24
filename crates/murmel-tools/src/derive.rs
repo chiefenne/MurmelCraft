@@ -7,7 +7,10 @@
 
 use murmel_engine::Session;
 use murmel_engine::calc::{self, FUNCTIONS, Formula, MAX_FORMULA, MAX_NAME};
-use murmel_engine::derive::{self, Group, Input, Quantity, Recipe, Reference, Refusal, Source};
+use murmel_engine::derive::{
+    self, Group, Input, Quantity, REFERENCE_KEYS, Recipe, Refusal, Source,
+};
+use murmel_engine::turbo::{self, Rotation};
 use murmel_mesh::Component;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -27,6 +30,20 @@ struct PartReference {
     density: Option<f64>,
     pressure: Option<f64>,
     velocity: Option<f64>,
+    viscosity: Option<f64>,
+    c_mu: Option<f64>,
+}
+
+impl PartReference {
+    fn get(&self, k: usize) -> Option<f64> {
+        [
+            self.density,
+            self.pressure,
+            self.velocity,
+            self.viscosity,
+            self.c_mu,
+        ][k]
+    }
 }
 
 #[derive(Deserialize)]
@@ -38,7 +55,17 @@ struct DeriveInput {
     #[serde(default)]
     pressure: Option<String>,
     #[serde(default)]
+    k: Option<String>,
+    #[serde(default)]
+    dissipation: Option<String>,
+    #[serde(default)]
+    nu_t: Option<String>,
+    #[serde(default)]
     reference: Option<PartReference>,
+    #[serde(default)]
+    rotation: Option<Rotation>,
+    #[serde(default)]
+    walls: Option<Vec<String>>,
     #[serde(default)]
     remove: bool,
 }
@@ -49,11 +76,26 @@ pub(crate) fn field_derive_schema() -> Value {
             "quantity": {"enum": Quantity::ALL.map(Quantity::key)},
             "velocity": {"type": "string", "description": "the velocity field (a vector); left out: found by its name"},
             "pressure": {"type": "string", "description": "the pressure field (a scalar); left out: found by its name"},
+            "k": {"type": "string", "description": "the turbulent kinetic energy (a scalar); left out: found by its name"},
+            "dissipation": {"type": "string", "description": "omega or epsilon (a scalar; epsilon by its name, else by the unit m2/s3); left out: found by its name"},
+            "nu_t": {"type": "string", "description": "the eddy viscosity (a scalar); left out: found by its name"},
             "reference": object(json!({
                 "density": {"type": "number", "exclusiveMinimum": 0},
                 "pressure": {"type": "number"},
-                "velocity": {"type": "number", "exclusiveMinimum": 0}
+                "velocity": {"type": "number", "exclusiveMinimum": 0},
+                "viscosity": {"type": "number", "exclusiveMinimum": 0, "description": "kinematic viscosity (m2/s)"},
+                "c_mu": {"type": "number", "exclusiveMinimum": 0, "description": "C_mu of the turbulence model (beta* of SST)"}
             }), &[]),
+            "rotation": object(json!({
+                "zones": {"type": "array", "minItems": 1, "maxItems": turbo::MAX_ZONES, "items": object(json!({
+                    "zone": {"type": "string", "description": "the cell zone that turns; left out: every cell"},
+                    "origin": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                    "axis": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                    "rpm": {"type": "number"}
+                }), &["origin", "axis", "rpm"])},
+                "frame": {"type": "string", "description": "the zone whose frame every cell is seen in; left out: each cell in its own zone's"}
+            }), &["zones"]),
+            "walls": {"type": "array", "items": {"type": "string"}, "description": "the wall patches (wall distance); left out: the case's walls, else the patches whose role is wall"},
             "remove": {"type": "boolean"}
         }),
         &["quantity"],
@@ -115,7 +157,15 @@ pub(crate) fn field_derive(input: Value, s: &mut Session) -> Run {
     })?;
     need_fields(s)?;
     if i.remove {
-        if i.velocity.is_some() || i.pressure.is_some() || i.reference.is_some() {
+        if i.velocity.is_some()
+            || i.pressure.is_some()
+            || i.k.is_some()
+            || i.dissipation.is_some()
+            || i.nu_t.is_some()
+            || i.reference.is_some()
+            || i.rotation.is_some()
+            || i.walls.is_some()
+        {
             return Err(Diagnostic::new(
                 "TOOL002",
                 "remove takes the quantity alone",
@@ -124,42 +174,71 @@ pub(crate) fn field_derive(input: Value, s: &mut Session) -> Run {
         s.underive(q.field()).map_err(refused)?;
         return Ok(json!({"removed": q.field()}));
     }
+    let own = s.fields().and_then(|f| f.recipe(q.field())).cloned();
     let mut recipe = Recipe::new(q);
     recipe.velocity = i.velocity;
     recipe.pressure = i.pressure;
+    recipe.k = i.k;
+    recipe.dissipation = i.dissipation;
+    recipe.nu_t = i.nu_t;
+    for (given, what) in [
+        (
+            recipe.velocity.is_some() && !q.inputs().contains(&Input::Velocity),
+            "velocity",
+        ),
+        (
+            recipe.pressure.is_some() && !q.inputs().contains(&Input::Pressure),
+            "pressure",
+        ),
+        (recipe.k.is_some() && !q.inputs().contains(&Input::K), "k"),
+        (
+            recipe.dissipation.is_some() && !q.inputs().contains(&Input::Dissipation),
+            "dissipation",
+        ),
+        (
+            recipe.nu_t.is_some() && !q.inputs().contains(&Input::NuT),
+            "nu_t",
+        ),
+        (i.rotation.is_some() && !q.turns(), "rotation"),
+        (i.walls.is_some() && !q.walls(), "walls"),
+    ] {
+        if given {
+            return Err(Diagnostic::new(
+                "TOOL002",
+                format!("{} takes no {what}", q.key()),
+            ));
+        }
+    }
     let mut sources = None;
     if !q.references().is_empty() {
         // Values given win; the rest are the field's own when it is
         // made again, else where new fields start from.
-        let set = s.fields();
-        let (start, from) = match set
-            .and_then(|f| f.recipe(q.field()))
-            .and_then(|r| r.reference)
-        {
-            Some(r) => (r, [None; 3]),
+        let (start, from) = match own.as_ref().and_then(|r| r.reference) {
+            Some(r) => (r, [None; 5]),
             None => {
                 let (r, f) = derive::start_reference(s);
                 (r, f.map(Some))
             }
         };
         let part = i.reference.unwrap_or_default();
-        let r = Reference {
-            density: part.density.unwrap_or(start.density),
-            pressure: part.pressure.unwrap_or(start.pressure),
-            velocity: part.velocity.unwrap_or(start.velocity),
-        };
-        let given = [part.density, part.pressure, part.velocity].map(|x| x.is_some());
+        let mut r = start;
+        for k in 0..REFERENCE_KEYS.len() {
+            if let Some(x) = part.get(k) {
+                *r.get_mut(k) = x;
+            }
+        }
         sources = Some(
-            ["density", "pressure", "velocity"]
+            REFERENCE_KEYS
                 .into_iter()
-                .zip(given.into_iter().zip(from))
-                .map(|(k, (given, from))| {
-                    let src = if given {
+                .enumerate()
+                .filter(|(_, key)| q.references().contains(key))
+                .map(|(k, key)| {
+                    let src = if part.get(k).is_some() {
                         json!("given")
                     } else {
-                        from.map_or(json!("kept"), |f| json!(f))
+                        from[k].map_or(json!("kept"), |f| json!(f))
                     };
-                    (k.to_string(), src)
+                    (key.to_string(), src)
                 })
                 .collect::<serde_json::Map<_, _>>(),
         );
@@ -170,10 +249,43 @@ pub(crate) fn field_derive(input: Value, s: &mut Session) -> Run {
             format!("{} takes no reference values", q.key()),
         ));
     }
+    let mut rotation_from = None;
+    if q.turns() {
+        recipe.rotation = Some(
+            match (i.rotation, own.as_ref().and_then(|r| r.rotation.clone())) {
+                (Some(r), _) => {
+                    rotation_from = Some(json!("given"));
+                    r
+                }
+                (None, Some(r)) => {
+                    rotation_from = Some(json!("kept"));
+                    r
+                }
+                (None, None) => {
+                    let (r, from) = turbo::start_rotation(s);
+                    rotation_from = Some(json!(from));
+                    r
+                }
+            },
+        );
+    }
+    if q.walls() {
+        recipe.walls = i
+            .walls
+            .or_else(|| own.as_ref().and_then(|r| r.walls.clone()))
+            .or_else(|| {
+                let m = s.mesh.as_ref()?;
+                let w = murmel_engine::walls::find_walls(&m.mesh, Some(&m.path));
+                (!w.is_empty()).then_some(w)
+            });
+    }
     let name = s.derive(recipe).map_err(refused)?;
     let mut out = derived_json(s, name);
     if let Some(src) = sources {
         out["reference_from"] = Value::Object(src);
+    }
+    if let Some(r) = rotation_from {
+        out["rotation_from"] = r;
     }
     Ok(out)
 }
@@ -349,6 +461,8 @@ pub(crate) fn field_catalogue(_: Value, s: &mut Session) -> Run {
                 "unit": q.unit(),
                 "inputs": q.inputs().iter().map(|&i| input_json(s, &recipe, i)).collect::<Vec<_>>(),
                 "references": q.references(),
+                "turns": q.turns(),
+                "walls": q.walls(),
                 "missing": missing,
                 "available": missing.is_empty() && !in_file,
                 "in_file": in_file,
@@ -357,6 +471,18 @@ pub(crate) fn field_catalogue(_: Value, s: &mut Session) -> Run {
         })
         .collect();
     let (r, from) = derive::start_reference(s);
+    let (rotation, rotation_from) = turbo::start_rotation(s);
+    let (walls, patches, mesh_zones) = s.mesh.as_ref().map_or_else(Default::default, |m| {
+        (
+            murmel_engine::walls::find_walls(&m.mesh, Some(&m.path)),
+            m.mesh
+                .patches
+                .iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>(),
+            m.mesh.zones.clone(),
+        )
+    });
     let formulas: Vec<Value> = s
         .formulas
         .iter()
@@ -393,11 +519,23 @@ pub(crate) fn field_catalogue(_: Value, s: &mut Session) -> Run {
             "density": r.density,
             "pressure": r.pressure,
             "velocity": r.velocity,
-            "from": {
-                "density": from[0],
-                "pressure": from[1],
-                "velocity": from[2],
-            },
+            "viscosity": r.viscosity,
+            "c_mu": r.c_mu,
+            "from": REFERENCE_KEYS
+                .into_iter()
+                .zip(from)
+                .map(|(k, f)| (k.to_string(), json!(f)))
+                .collect::<serde_json::Map<_, _>>(),
+        },
+        "rotation": {
+            "zones": rotation.zones,
+            "frame": rotation.frame,
+            "from": rotation_from,
+            "mesh_zones": mesh_zones,
+        },
+        "walls": {
+            "patches": walls,
+            "mesh_patches": patches,
         },
         "sources": [Source::Case, Source::Defaults, Source::BuiltIn],
     }))

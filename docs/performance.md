@@ -1201,8 +1201,37 @@ holds), against the same file read whole:
 
 The grid holds at most 2 M cells whatever the size of the file, so on
 100 M cells moving a slice costs what it costs here; only reading the
-grid grows with the file. Keeping the grid in the cache folder, so a
-second open does not sample again, comes next.
+grid grows with the file. The grid is kept in the cache folder, so a
+second open does not sample again (next section).
+
+## The preview grid kept (2026-11-24)
+
+Sampling the preview grid reads every point and point list of the
+volume: about 1.1 s for the 1 M and 4 M files from the page cache, and
+it grows with the file (on 100 M cells, tens of GB read). The grid it
+gives holds at most 2 M cells whatever the file, so it is kept
+(the engine's `preview_cache.rs`) in `preview/` of the cache folder
+(`MURMEL_CACHE_DIR`, else `~/Library/Caches/MurmelCraft` on macOS,
+`%LOCALAPPDATA%\MurmelCraft\cache` on Windows, `~/.cache/murmelcraft`
+elsewhere) and read from there while the file is unchanged (its size,
+times and file id, as for the files checked).
+
+| file, 128³ grid, 4 threads | sampled | kept grid read | kept file |
+|---|---:|---:|---:|
+| 1 M cells, fields `p`, `U`, `T` | 1.07 s | 0.63 to 0.67 s | 117 MB |
+| 4 M cells, no fields | 1.09 s | 0.53 to 0.59 s | 34 MB |
+
+- Reading the kept grid is mostly building its hexahedra and their
+  links again (0.50 to 0.59 s of it); the file is 16 bytes a grid cell
+  and 8 a field component.
+- The 16 grids used last stay, and no more than 2 GiB in all.
+- A file modified less than 3 s before it was sampled is not kept, and
+  a kept grid whose length is not what its header declares, or whose
+  voxels leave the grid, is sampled again.
+- The command line and the window keep grids; the MCP server, confined
+  to its folders, does not.
+- On 100 M cells the saving is the whole sampling: the kept grid reads in
+  the same half second.
 
 ## Fields on a large mesh: where the time goes (2026-11-24)
 

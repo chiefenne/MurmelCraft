@@ -5,7 +5,7 @@
 //! buttons that add a box, a sphere, a slab or a region of the picked
 //! cells. Every change calls a tool.
 
-use egui::{RichText, Role, Ui, WidgetInfo};
+use egui::{RichText, Role, Sense, Ui, WidgetInfo};
 use murmel_engine::Item;
 use murmel_engine::region::{MAX_REGIONS, Shape};
 use serde_json::{Value, json};
@@ -76,6 +76,9 @@ impl MurmelApp {
         .id_salt("tree-regions")
         .default_open(true)
         .show(ui, |ui| {
+            if let Some(a) = self.blocks_row(ui, p) {
+                action = Some(a);
+            }
             for (k, r) in d.regions.iter().enumerate() {
                 let item = Item::Region(k as u32);
                 let id = item.id(mesh);
@@ -183,6 +186,77 @@ impl MurmelApp {
                     }
                 });
             }
+        });
+        action
+    }
+
+    /// The row of an overview's block boxes: their eye, colour and how
+    /// many the regions read.
+    fn blocks_row(
+        &self,
+        ui: &mut Ui,
+        p: &murmel_engine::theme::Palette,
+    ) -> Option<(&'static str, Value)> {
+        let m = self.session.mesh.as_ref()?;
+        let d = &self.session.display;
+        let boxes = d.block_boxes.as_deref()?;
+        let item = Item::Blocks;
+        let id = item.id(&m.mesh);
+        let label = self.i18n.tr("tree-blocks");
+        let on = d.show_blocks;
+        let secondary = color(p.text_secondary);
+        let mut action = None;
+        ui.horizontal(|ui| {
+            if self.eye(ui, on, &label, p).clicked() {
+                let verb = if on { "hide" } else { "show" };
+                action = Some(("display.visibility", json!({"action": verb, "items": [id]})));
+            }
+            if let Some(c) = d.item_color(&m.mesh, &self.session.tokens, item) {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+                ui.painter().rect_filled(rect, 2.0, color(c));
+            }
+            let selected = d.is_selected(item);
+            let text = if on {
+                RichText::new(&label)
+            } else {
+                RichText::new(&label).color(secondary)
+            };
+            let count = self.i18n.tr_args(
+                "tree-blocks-count",
+                &[
+                    ("read", (boxes.read.len() as f64).into()),
+                    ("blocks", (boxes.count() as f64).into()),
+                ],
+            );
+            let row = ui.selectable_label(selected, text);
+            let name = format!("{label}, {count}");
+            row.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, name.clone()));
+            let row = row.on_hover_text(self.i18n.tr("tree-blocks-tip"));
+            if row.clicked() {
+                action = Some(("select.item", json!({ "item": id })));
+            }
+            row.context_menu(|ui| {
+                // The colour opens a window of its own: a picker inside
+                // the menu closed with it (docs/pitfalls.md).
+                if ui.button(self.i18n.tr("tree-color-edit")).clicked() {
+                    action = Some(("window.color", json!({"item": id, "label": label})));
+                    ui.close();
+                }
+                if d.colors.contains_key(&item)
+                    && ui.button(self.i18n.tr("tree-reset-color")).clicked()
+                {
+                    action = Some(("display.set_color", json!({"item": id, "color": null})));
+                    ui.close();
+                }
+                ui.separator();
+                if let Some(a) = self.view_default_entries(ui, "show_blocks") {
+                    action = Some(a);
+                    ui.close();
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(count).monospace().color(secondary));
+            });
         });
         action
     }

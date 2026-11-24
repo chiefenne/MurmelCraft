@@ -51,13 +51,17 @@ Example: a headless screenshot of a KoflCraft mesh
 Settings are read from MURMEL_CONFIG_DIR or the platform's config folder. The
 digest (BLAKE3, or SHA-256 for older evidence) of each mesh file hashed is
 remembered there (checked-files.json), so a file opened again unchanged is
-not hashed again.";
+not hashed again. The preview grid of a mesh opened as an overview is kept
+in MURMEL_CACHE_DIR or the platform's cache folder, so it is not sampled
+again.";
 
 fn session() -> Result<Session, String> {
     let tokens = Tokens::builtin()?;
     let mut s = Session::new(tokens);
     // A mesh file hashed before and unchanged since is not hashed again.
     s.remember_checked = true;
+    // An overview's preview grid, kept so it is not sampled again.
+    s.cache_dir = settings::cache_dir();
     if let Some(dir) = settings::config_dir() {
         let (st, nav, problems) = settings::load(&dir, cfg!(target_os = "macos"));
         for p in problems {

@@ -1039,7 +1039,16 @@ fn reads_only_tools_change_nothing() {
             && s.fields()
                 .is_none_or(murmel_engine::field::FieldSet::is_empty)
             && e.diagnostics.first().is_some_and(|d| d.code == "PROBE001");
-        assert!(e.ok() || no_results, "{}: {:?}", t.id, e.diagnostics);
+        // No series is open, so no range over its steps.
+        let no_series = t.id == "series.range"
+            && s.series.is_none()
+            && e.diagnostics.first().is_some_and(|d| d.code == "SERIES002");
+        assert!(
+            e.ok() || no_results || no_series,
+            "{}: {:?}",
+            t.id,
+            e.diagnostics
+        );
         let after = (
             murmel_engine::Snapshot::of(&s),
             s.display.selection.clone(),
@@ -2535,9 +2544,21 @@ fn derived_field_tools() {
     let e = call("field.catalogue", json!({}), &mut s);
     assert!(e.ok(), "{:?}", e.diagnostics);
     let qs = e.result["quantities"].as_array().unwrap();
-    assert_eq!(qs.len(), 5);
-    assert!(qs.iter().all(|q| q["available"] == true), "{qs:?}");
+    assert_eq!(qs.len(), murmel_engine::derive::Quantity::ALL.len());
+    // The velocity and pressure ones can be made from the channel's
+    // fields; the turbulence ones need k, ω or ε and ν_t.
+    for q in qs {
+        let group = q["group"].as_str().unwrap();
+        if matches!(group, "vortices" | "pressure" | "turbomachinery") {
+            assert_eq!(q["available"], true, "{q}");
+        }
+    }
     assert_eq!(qs[0]["inputs"][0]["field"], "velocity");
+    assert_eq!(e.result["rotation"]["from"], "built_in");
+    assert_eq!(
+        e.result["rotation"]["zones"][0]["axis"],
+        json!([0.0, 0.0, 1.0])
+    );
     assert_eq!(e.result["reference"]["from"]["density"], "built_in");
     assert_eq!(e.result["reference"]["density"], 1.225);
 
@@ -2576,10 +2597,13 @@ fn derived_field_tools() {
     assert_eq!(e.result["recipe"]["reference"]["velocity"], 2.0);
     assert_eq!(e.result["reference_from"]["velocity"], "kept");
     let e = call("field.catalogue", json!({}), &mut s);
-    assert_eq!(
-        e.result["quantities"][4]["derived"]["reference"]["density"],
-        1.0
-    );
+    let cp = e.result["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| q["quantity"] == "pressure-coefficient")
+        .unwrap();
+    assert_eq!(cp["derived"]["reference"]["density"], 1.0);
 
     for (input, code) in [
         (
@@ -2614,6 +2638,92 @@ fn derived_field_tools() {
     );
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert!(s.fields().unwrap().get("vorticity").is_none());
+}
+
+/// Invariant: beside FoehnCraft's case the turbomachinery quantities
+/// take its turning zones and the wall distance its walls, the
+/// catalogue says so, and values given win; the turbulence quantities
+/// need their fields. Breaks when the case beside the result is not
+/// read or a given rotation is replaced by the case's.
+#[test]
+fn derived_fields_from_the_case() {
+    let dir = std::env::temp_dir().join(format!("murmel-derived-case-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("fields.vtkhdf");
+    std::fs::copy(
+        root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf"),
+        &path,
+    )
+    .unwrap();
+    let mut s = session();
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    let e = call("field.catalogue", json!({}), &mut s);
+    let patches: Vec<String> = e.result["walls"]["mesh_patches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_string())
+        .collect();
+    assert!(patches.len() >= 2, "{patches:?}");
+    std::fs::write(
+        dir.join("case.resolved.toml"),
+        format!(
+            "[[mrf]]\norigin = [0.0, 0.0, 0.0]\naxis = [1, 0, 0]\nrpm = 1200.0\n[boundary.{}]\ntype = \"wall\"\n[boundary.{}]\ntype = \"velocity-inlet\"\n",
+            patches[0], patches[1]
+        ),
+    )
+    .unwrap();
+    let e = call("field.catalogue", json!({}), &mut s);
+    assert_eq!(e.result["rotation"]["from"], "case");
+    assert_eq!(e.result["rotation"]["zones"][0]["rpm"], 1200.0);
+    assert_eq!(e.result["walls"]["patches"], json!([patches[0]]));
+
+    let e = call("field.derive", json!({"quantity": "flow-angle"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["rotation_from"], "case");
+    assert_eq!(e.result["recipe"]["rotation"]["zones"][0]["rpm"], 1200.0);
+    assert_eq!(e.result["places"][0]["unit"], "°");
+    let mine = json!({"zones": [{"origin": [0, 0, 0], "axis": [0, 0, 1], "rpm": 10}]});
+    let e = call(
+        "field.derive",
+        json!({"quantity": "relative-velocity", "rotation": mine}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["rotation_from"], "given");
+    assert_eq!(e.result["recipe"]["rotation"]["zones"][0]["rpm"], 10.0);
+
+    let e = call("field.derive", json!({"quantity": "wall-distance"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["recipe"]["walls"], json!([patches[0]]));
+    assert_eq!(e.result["places"][0]["unit"], "m");
+    let r = e.result["places"][0]["range"].as_array().unwrap();
+    assert!(r[0].as_f64().unwrap() > 0.0, "{r:?}");
+
+    for (input, code) in [
+        (
+            json!({"quantity": "viscosity-ratio", "nu_t": "nothing"}),
+            "FIELD005",
+        ),
+        (
+            json!({"quantity": "flow-angle", "rotation": {"zones": [{"zone": "impeller", "origin": [0, 0, 0], "axis": [0, 0, 1], "rpm": 1}]}}),
+            "FIELD016",
+        ),
+        (
+            json!({"quantity": "wall-distance", "walls": ["nowhere"]}),
+            "FIELD017",
+        ),
+        (
+            json!({"quantity": "vorticity", "rotation": mine}),
+            "TOOL002",
+        ),
+        (json!({"quantity": "flow-angle", "walls": []}), "TOOL002"),
+    ] {
+        let e = call("field.derive", input.clone(), &mut s);
+        assert!(!e.ok(), "{input} was made: {}", e.result);
+        assert_eq!(e.diagnostics[0].code, code, "{input}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Invariant: field.calculate adds a formula's field (no journal step),
@@ -3405,4 +3515,195 @@ fn slices_on_an_overview_draw_through_the_tools() {
     assert_eq!(preview["cells"], json!(512));
     assert!(preview["not_read"].is_null());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Invariant: through the tools, the boxes of an overview's blocks show
+/// and hide with display.visibility on `blocks`, take the colour set on
+/// it, are told by mesh.info's overview (`block_boxes`), come back from
+/// a session file, are kept as the view's default (`show_blocks`), and
+/// the item is refused on a mesh read whole. Breaks when `blocks` is not
+/// an item the tools take, when the session file or the view default
+/// loses the setting, or when a mesh without blocks takes it. The engine
+/// test draws them but never through the tools, the session file or the
+/// defaults.
+#[test]
+fn block_boxes_through_the_tools() {
+    let dir = std::env::temp_dir().join(format!("murmel-boxes-tool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = Some(dir.join("config"));
+    let open = json!({"path": path, "mode": "overview"});
+    let e = call("mesh.open", open.clone(), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let boxes = &e.result["overview"]["block_boxes"];
+    assert_eq!(boxes["shown"], json!(false));
+    let n = boxes["boxes"].as_u64().unwrap();
+    assert!(n > 2, "{boxes}");
+    assert_eq!(boxes["drawn"], json!(0));
+
+    let show = json!({"action": "show", "items": ["blocks"]});
+    let e = call("display.visibility", show, &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let e = call("mesh.info", json!({}), &mut s);
+    let boxes = &e.result["overview"]["block_boxes"];
+    assert_eq!(boxes["shown"], json!(true));
+    assert_eq!(boxes["drawn"], json!(n));
+    let color = json!({"item": "blocks", "color": "#7040C0"});
+    let e = call("display.set_color", color, &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let violet = murmel_engine::theme::Rgb([0x70, 0x40, 0xC0]).linear();
+    let sf = &s.mesh.as_ref().unwrap().surface;
+    assert!(!sf.stream_colors.is_empty() && sf.stream_colors.iter().all(|&c| c == violet));
+
+    // a session file brings them back
+    let file = dir.join("boxes.murmel");
+    assert!(call("session.save", json!({"path": file}), &mut s).ok());
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(saved["display"]["show_blocks"], json!(true));
+    let mut t = Session::new(Tokens::builtin().unwrap());
+    t.config_dir = None;
+    let e = call("session.load", json!({"path": file}), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(t.display.show_blocks);
+    // (within the budget the session opens it whole: no blocks; as an
+    // overview, they show at once)
+    assert!(call("mesh.open", open, &mut t).ok());
+    assert_eq!(t.mesh.as_ref().unwrap().surface.block_boxes as u64, n);
+
+    // the view's default keeps them
+    let e = call("settings.set_default", json!({"kind": "view"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(
+        e.result["saved"]["show_blocks"],
+        json!(true),
+        "{}",
+        e.result
+    );
+    let hide = json!({"action": "hide", "items": ["blocks"]});
+    assert!(call("display.visibility", hide, &mut s).ok());
+    assert!(!s.display.show_blocks);
+    murmel_engine::defaults::start_view(&mut s);
+    assert!(s.display.show_blocks);
+
+    // a mesh read whole has no blocks
+    let whole = json!({"path": path, "mode": "whole"});
+    assert!(call("mesh.open", whole, &mut s).ok());
+    let show = json!({"action": "show", "items": ["blocks"]});
+    let e = call("display.visibility", show, &mut s);
+    assert!(!e.ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A run of three steps of the box (`test-fixtures/box`) as VTU files with
+/// a cell field `temperature` of `factor × (k + 1)` on entry `k`: the
+/// factors 1, 2 and −1 give the ranges 1 to 4, 2 to 8 and −4 to −1.
+fn box_steps(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("murmel-steps-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let vtu = std::fs::read_to_string(root().join("test-fixtures/box/foehncraft.vtu")).unwrap();
+    // 4 cells and 16 boundary polygons; the polygons get no value.
+    let mut entries = Vec::new();
+    for (step, factor) in [(10u64, 1.0f64), (20, 2.0), (30, -1.0)] {
+        let values: Vec<String> = (0..20)
+            .map(|k| {
+                if k < 4 {
+                    (factor * (k + 1) as f64).to_string()
+                } else {
+                    "nan".into()
+                }
+            })
+            .collect();
+        let array = format!(
+            "        <DataArray type=\"Float64\" Name=\"temperature\" format=\"ascii\">\n{}\n        </DataArray>\n      </CellData>",
+            values.join("\n")
+        );
+        let file = format!("step_{step}.vtu");
+        std::fs::write(
+            dir.join(&file),
+            vtu.replacen("      </CellData>", &array, 1),
+        )
+        .unwrap();
+        entries.push(json!({"step": step, "time": step as f64 / 100.0, "files": {"fields": file}}));
+    }
+    let m = json!({"format": "foehncraft.series", "format_version": 1, "entries": entries});
+    std::fs::write(dir.join("series.json"), m.to_string()).unwrap();
+    dir
+}
+
+/// Invariant: while a series is open, a field first shown is coloured
+/// over every step (range steps, the maintainer's card of 2026-11-24):
+/// until read, its range is the step's own; series.range reads every
+/// step once and the range then spans them all, at every step, without
+/// reading again; range field gives the step's own back; parcels refuse
+/// range steps; a session file keeps it. Breaks if colours rescaled at
+/// each step of a playing series, or a step outside the shown one was
+/// missed.
+#[test]
+fn range_over_the_steps() {
+    let mut s = session();
+    let e = call("series.range", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let dir = box_steps("range");
+    let e = call(
+        "series.open",
+        json!({ "path": dir.join("series.json") }),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let e = call("series.range", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES004", "no field shown yet");
+    let e = call(
+        "display.color_by",
+        json!({"by": "field", "field": "temperature"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.field_style().range, murmel_engine::RangeMode::Steps);
+    let (lo, hi) = s.field_range().unwrap();
+    assert!(
+        (lo, hi) == (1.0, 4.0),
+        "the step's own until read: {lo} {hi}"
+    );
+    let e = call("field.style", json!({}), &mut s);
+    assert_eq!(e.result["steps_range"]["complete"], false);
+    let e = call("series.range", json!({}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["range"], json!([-4.0, 8.0]));
+    assert_eq!(
+        (e.result["read"].clone(), e.result["total"].clone()),
+        (json!(3), json!(3))
+    );
+    assert_eq!(s.field_range(), Some((-4.0, 8.0)));
+    // Another step keeps the range; nothing is read again (the files
+    // of the other steps are gone).
+    assert!(call("series.go", json!({"step": 20}), &mut s).ok());
+    let _ = std::fs::remove_file(dir.join("step_30.vtu"));
+    assert_eq!(s.field_range(), Some((-4.0, 8.0)));
+    let e = call("series.range", json!({}), &mut s);
+    assert_eq!(
+        e.result["range"],
+        json!([-4.0, 8.0]),
+        "kept, not read again"
+    );
+    // The step's own range again.
+    assert!(call("field.style", json!({"range": "field"}), &mut s).ok());
+    assert_eq!(s.field_range(), Some((2.0, 8.0)));
+    assert!(call("field.style", json!({"range": "steps"}), &mut s).ok());
+    assert_eq!(s.field_range(), Some((-4.0, 8.0)));
+    // A session file keeps range steps.
+    let file = dir.join("steps.murmel");
+    assert!(call("session.save", json!({ "path": file }), &mut s).ok());
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("\"steps\""), "{text}");
+    assert!(call("field.style", json!({"range": "field"}), &mut s).ok());
+    let e = call("session.load", json!({ "path": file }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.field_style().range, murmel_engine::RangeMode::Steps);
+    let _ = std::fs::remove_dir_all(dir);
 }

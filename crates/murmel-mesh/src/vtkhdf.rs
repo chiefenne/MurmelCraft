@@ -41,7 +41,7 @@ mod subset;
 pub use overview::{
     Block, OPEN_BYTES_PER_CELL, Overview, Size, VolumeField, read_overview, size_of,
 };
-pub use preview::{PREVIEW_CELLS, PreviewGrid, read_preview};
+pub use preview::{PREVIEW_CELLS, PREVIEW_VERSION, PreviewGrid, read_preview};
 pub use subset::{Subset, read_blocks};
 
 /// No mesh point yet for a global point id.

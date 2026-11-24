@@ -14,7 +14,8 @@
 //! overview showing meanwhile, by the tools before they return. It is
 //! kept with the overview's fields ([`crate::field::FieldSet::preview`]),
 //! so it stays while a region's blocks show and comes back with the
-//! overview.
+//! overview, and in the cache folder ([`crate::preview_cache`]), so the
+//! file opened again unchanged does not sample its volume again.
 //!
 //! Fields made on the overview (derived and calculated) and the
 //! streamlines do not draw on the grid; they need a region's cells.
@@ -49,13 +50,30 @@ pub struct Preview {
 /// Read the preview grid of the blocked VTKHDF file at `path` with
 /// `cells` grid cells along the longest side ([`PREVIEW_CELLS`] in the
 /// window and the tools), its fields coloured over the volume's
-/// `ranges`.
+/// `ranges`: the grid kept in `cache` while the file is unchanged, else
+/// sampled from the file (and kept there).
 pub fn read(
     path: &Path,
     cells: usize,
     ranges: Vec<(String, (f64, f64))>,
+    cache: Option<&Path>,
 ) -> Result<Preview, MeshError> {
-    let (mesh, results, grid) = murmel_mesh::vtkhdf::read_preview(path, cells)?;
+    let kept = cache.and_then(|dir| {
+        let _t = profile::span("read.preview.cache");
+        crate::preview_cache::load(dir, path, cells)
+    });
+    let (mesh, results, grid) = match kept {
+        Some(k) => k,
+        None => {
+            let before = crate::checked::Stamp::of(path);
+            let k = murmel_mesh::vtkhdf::read_preview(path, cells)?;
+            if let (Some(dir), Some(before)) = (cache, before) {
+                let _t = profile::span("read.preview.keep");
+                crate::preview_cache::store(dir, path, &before, cells, &k);
+            }
+            k
+        }
+    };
     let fields = FieldSet::new(results).with_volume_ranges(ranges);
     Ok(Preview { mesh, fields, grid })
 }
@@ -66,6 +84,11 @@ pub fn read(
 /// zone holds. Their triangles name no cell, as the cells they come from
 /// are the grid's.
 pub(crate) fn append(s: &mut Surface, p: &Preview, tokens: &Tokens, display: &Display) {
+    // The block boxes alone draw nothing on the grid.
+    let cuts = display.slices.iter().any(|s| s.enabled) || display.isos.iter().any(|i| i.enabled);
+    if !cuts && !display.arrows_shown() {
+        return;
+    }
     let mut d = display.clone();
     d.field_values = None;
     crate::field::ensure_field(&mut d, &p.mesh, &p.fields);
@@ -96,13 +119,18 @@ pub struct PreviewJob {
 impl PreviewJob {
     /// Start reading the preview grid of the file at `path` (see
     /// [`read`]).
-    pub fn start(path: PathBuf, cells: usize, ranges: Vec<(String, (f64, f64))>) -> PreviewJob {
+    pub fn start(
+        path: PathBuf,
+        cells: usize,
+        ranges: Vec<(String, (f64, f64))>,
+        cache: Option<PathBuf>,
+    ) -> PreviewJob {
         let done: Slot = Arc::new((Mutex::new(None), Condvar::new()));
         let progress = Arc::new(Progress::default());
         let (out, watched) = (done.clone(), progress.clone());
         std::thread::spawn(move || {
             let r = profile::watch(watched, || {
-                let p = read(&path, cells, ranges)?;
+                let p = read(&path, cells, ranges, cache.as_deref())?;
                 profile::check()?;
                 Ok(p)
             });

@@ -95,6 +95,11 @@ stream = "#36B7C4"
 # Spray parcels drawn in a solid colour: a warm amber, apart from the
 # streamlines' cyan and the arrows' grey, readable on both viewports.
 parcel = "#E8A33D"
+# The boxes of an overview's blocks: a muted violet, apart from the
+# mesh's grey outline inside which they lie; the blocks the regions read
+# take a clear yellow that stands out from the others on both viewports.
+block = "#8E86C4"
+block_read = "#E9CF4A"
 
 # Patch roles (UI spec, Colour by): wall grey, inlet blue, outlet orange,
 # symmetry green, interface violet, unspecified sand. Searched in OKLCH

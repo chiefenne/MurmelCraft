@@ -33,15 +33,15 @@ impl Drop for Reset {
     }
 }
 
-/// Run `f` (a call of `probe.history` or `probe.export` on this thread)
-/// with `p` counting its steps and taking its Cancel.
+/// Run `f` (a call of `probe.history`, `probe.export` or `series.range`
+/// on this thread) with `p` counting its steps and taking its Cancel.
 pub fn with_progress<R>(p: Arc<Progress>, f: impl FnOnce() -> R) -> R {
     PROGRESS.with(|c| *c.borrow_mut() = Some(p));
     let _reset = Reset;
     f()
 }
 
-fn progress() -> Arc<Progress> {
+pub(crate) fn progress() -> Arc<Progress> {
     PROGRESS.with(|c| c.borrow().clone()).unwrap_or_default()
 }
 

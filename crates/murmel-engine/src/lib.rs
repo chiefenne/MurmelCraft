@@ -6,6 +6,7 @@
 
 pub mod animation;
 mod bins;
+pub mod block_boxes;
 pub mod blocks;
 pub mod calc;
 pub mod camera;
@@ -32,16 +33,20 @@ pub mod navigation;
 pub mod parcel;
 pub mod pick;
 pub mod preview;
+pub mod preview_cache;
 pub mod quality;
 pub mod region;
 pub mod series;
 pub mod session;
 pub mod session_file;
 pub mod settings;
+pub mod steps_range;
 pub mod stream;
 pub mod surface;
 mod tets;
 pub mod theme;
+pub mod turbo;
+pub mod walls;
 
 pub use camera::{Camera, Projection, ScreenAxis, StandardView};
 pub use clip::{Clip, ClipMode};

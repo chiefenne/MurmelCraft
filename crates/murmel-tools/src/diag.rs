@@ -195,6 +195,12 @@ const OWN: &[Code] = &[
         fix: Some("series.open's result gives the count, the first and last step and the times."),
     },
     Code {
+        code: "SERIES004",
+        severity: Severity::Error,
+        meaning: "The colour range over the steps was not read: the field is not one of the open mesh's, or the reading was cancelled.",
+        fix: Some("Colour by a field of the open mesh (field.list) and read the range again."),
+    },
+    Code {
         code: "CHART001",
         severity: Severity::Error,
         meaning: "The tables of a run cannot be read: the path does not exist, the folder has neither datums.csv nor spray.csv, or a table is not of its format version 1 (foehncraft-datums, foehncraft-spray), has no header or a short row before its last.",
@@ -504,6 +510,22 @@ const OWN: &[Code] = &[
         meaning: "The formula reads its own field, or a field made from it, so it would go round in a circle.",
         fix: Some(
             "Read the fields it is made from instead, or remove the field made from it first.",
+        ),
+    },
+    Code {
+        code: "FIELD016",
+        severity: Severity::Error,
+        meaning: "The turning zones of a turbomachinery quantity cannot be used: an axis of length 0, a speed or axis point that is not finite, a zone the mesh does not have, a frame that is not one of the zones, or more than 16 zones.",
+        fix: Some(
+            "Give each zone a cell zone of the mesh (field.catalogue lists them under rotation.mesh_zones) or none for every cell, an axis that is not zero and a finite rpm.",
+        ),
+    },
+    Code {
+        code: "FIELD017",
+        severity: Severity::Error,
+        meaning: "The wall distance has no wall face to measure to: no patch is a wall (by the result's case or the patch role), a named patch is not one of the mesh's, or the patches have no face.",
+        fix: Some(
+            "Name the wall patches with walls (field.catalogue lists the mesh's patches under walls.mesh_patches).",
         ),
     },
 ];

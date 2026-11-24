@@ -359,6 +359,8 @@ fn phase_message(phase: &str) -> &'static str {
         "read.cells" => "loading-phase-cells",
         "read.overview" => "loading-phase-overview",
         p if p.starts_with("read.blocks") => "loading-phase-blocks",
+        "read.preview.cache" => "loading-phase-preview-cache",
+        "read.preview.keep" => "loading-phase-preview-keep",
         p if p.starts_with("read.preview") => "loading-phase-preview",
         p if p == "read.topology" || p.starts_with("topology.") => "loading-phase-topology",
         p if p == "open.surface" || p.starts_with("surface.") => "loading-phase-surface",
@@ -393,5 +395,14 @@ mod tests {
         for p in ["read.preview", "read.preview.cells", "read.preview.fields"] {
             assert_eq!(phase_message(p), "loading-phase-preview", "{p}");
         }
+        // but a grid kept from before as read, or being kept, as such
+        assert_eq!(
+            phase_message("read.preview.cache"),
+            "loading-phase-preview-cache"
+        );
+        assert_eq!(
+            phase_message("read.preview.keep"),
+            "loading-phase-preview-keep"
+        );
     }
 }

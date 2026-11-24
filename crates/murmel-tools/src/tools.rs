@@ -106,6 +106,22 @@ fn overview_json(s: &Session, o: &murmel_mesh::vtkhdf::Overview) -> Value {
         "note": "the volume cells are not read: the mesh is its boundary, and each cell field shows on it as the value of the cell behind each face; slices, iso-surfaces and arrows draw on a preview grid of the cell fields (preview) until a box, sphere or slab region (region.set) reads the cells of the blocks it touches; open it with mode \"whole\" or raise the memory budget (settings.set_memory) to read all cells",
         "regions": crate::region::blocks_json(s),
         "preview": preview_json(s),
+        "block_boxes": block_boxes_json(s),
+    })
+}
+
+/// The boxes of the open overview's blocks: whether they show (the item
+/// `blocks`, display.visibility) and how many the regions read.
+fn block_boxes_json(s: &Session) -> Value {
+    let Some(b) = s.display.block_boxes.as_deref() else {
+        return Value::Null;
+    };
+    json!({
+        "shown": s.display.show_blocks,
+        "boxes": b.count(),
+        "read": b.read.len(),
+        "drawn": s.mesh.as_ref().map_or(0, |m| m.surface.block_boxes),
+        "note": "show or hide them with display.visibility on the item \"blocks\"; the blocks the regions read take their own colour (field colour block_read), the others the item's colour (display.set_color on \"blocks\", field colour block)",
     })
 }
 
@@ -530,6 +546,7 @@ fn view_screenshot(input: Value, s: &mut Session) -> Run {
         s.open(m).map_err(mesh_err)?;
     }
     need_mesh(s)?;
+    crate::series::ensure_steps_range(s)?;
     s.viewport = [i.width as f64, i.height as f64];
     if let Some(v) = i.view {
         s.camera.set_standard(v);
@@ -2028,6 +2045,7 @@ fn field_shown_json(s: &Session) -> Value {
         "location": v.location,
         "range": s.field_range().map(|(a, b)| [a, b]),
         "field_range": v.range.map(|(a, b)| [a, b]),
+        "steps_range": crate::series::steps_range_json(s),
         "map": s.field_map().map(|(m, _)| m.id.clone()),
         "style": s.field_style(),
     })
@@ -2083,6 +2101,7 @@ pub(crate) enum RangeKey {
     Shown,
     Symmetric,
     Fixed,
+    Steps,
 }
 
 #[derive(Deserialize)]
@@ -2204,6 +2223,7 @@ fn field_style(input: Value, s: &mut Session) -> Run {
         Some(RangeKey::Field) => st.range = RangeMode::Field,
         Some(RangeKey::Shown) => st.range = RangeMode::Shown,
         Some(RangeKey::Symmetric) => st.range = RangeMode::Symmetric,
+        Some(RangeKey::Steps) => st.range = RangeMode::Steps,
         Some(RangeKey::Fixed) => {
             // A bound left out keeps the range shown now (or the field's).
             let now = if s.display.field.as_ref().is_some_and(|c| c.name == name) {
@@ -2365,6 +2385,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
         "shows another time step of the run; the view stays as it is",
     ),
     ("series.play", "how the window plays the series, not a view"),
+    ("series.range", READS_ONLY),
     (
         "charts.open",
         "opens the tables of a run; the view stays as it is",
@@ -2806,7 +2827,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-field-derive",
-        summary: "Compute a derived field from the open result's fields and add it to them, as if the file had it (colour by it, slice it, iso-surfaces, arrows and streamlines of it; saved in sessions as its recipe and computed again on loading). quantity: vorticity (the vector field vorticity, ω = ∇ × u, 1/s), q-criterion (q_criterion, Q = ½ (‖Ω‖² − ‖S‖²), vortices where Q > 0, 1/s²), lambda2 (lambda2, the middle eigenvalue of S² + Ω², vortices where λ₂ < 0, 1/s²), total-pressure (total_pressure, p + ½ ρ u·u, Pa) or pressure-coefficient (pressure_coefficient, (p − p_ref) / (½ ρ_ref U_ref²)). S and Ω are the symmetric and antisymmetric parts of the velocity gradient, taken in each cell by least squares from the cells around it (the vortex quantities are cell fields); the pressure quantities are taken wherever the pressure is (cells, nodes, boundary faces). velocity and pressure name the input fields; left out, they are found by name (velocity, U, u; pressure, p, static_pressure). A pressure in m²/s² is kinematic and takes no density; a density field (density, rho) wins over the reference density. reference: density (kg/m³), pressure (p_ref) and velocity (U_ref); values left out are the field's own when it is made again, else FoehnCraft's (case.resolved.toml beside the result), else your defaults (settings.set_default kind reference), else air at sea level (1.225), 0 and the largest speed of the velocity; the result's reference_from says where each came from. Computing a field again replaces it. remove: true removes the derived field (refused while an iso-surface, the arrows or a streamline set is made from it). A field the file already has is not computed again. field.catalogue lists what can be derived.",
+        summary: "Compute a derived field from the open result's fields and add it to them, as if the file had it (colour by it, slice it, iso-surfaces, arrows and streamlines of it; saved in sessions as its recipe and computed again on loading). The quantities and fields are FoehnCraft's names and units; field.catalogue lists each with its formula, unit and inputs. Vortices: vorticity (vector, 1/s), q-criterion, lambda2, enstrophy (½ ω·ω), strain-rate (√(2 S:S)). Pressure: total-pressure (p + ½ ρ u·u), pressure-coefficient ((p − p_ref) / (½ ρ_ref U_ref²)), taken wherever the pressure is. Turbomachinery, in the cells, from the turning zones of rotation (zones: zone, origin, axis, rpm; frame): relative-velocity and frame-velocity (vectors w = c − u, u = Ω × (x − x0)), velocity-radial, velocity-circumferential, velocity-axial, velocity-meridional, relative-velocity-circumferential, flow-angle and relative-flow-angle (°), relative-total-pressure (p + ½ ρ w·w), rothalpy (p/ρ + ½ w·w − ½ u·u); each cell is seen in the frame of the first zone that holds it (the fixed frame outside them), or of frame in every cell. Turbulence, in the cells: dissipation-rate, specific-dissipation-rate, time-scale, length-scale (from k and ω or ε, with C_mu), viscosity-ratio (nu_t / ν), reynolds-stress-xx … -xz (Boussinesq). Wall: wall-distance (exact, from each cell centroid to the nearest face of walls). velocity, pressure, k, dissipation (ω or ε) and nu_t name the input fields; left out, they are found by name. A pressure in m²/s² is kinematic and takes no density; a density field (density, rho) wins over the reference density. reference: density, pressure, velocity, viscosity (kinematic, m²/s) and c_mu; rotation and walls: each left out is the field's own when it is made again, else FoehnCraft's (case.resolved.toml beside the result: [output.reference], [fluid], [turbulence.constants], [[mrf]], [[sliding]], [output] frame, boundaries of type wall), else your defaults (settings.set_default kinds reference and rotation), else built in (air at sea level, 0, the largest speed, C_mu 0.09; every cell about z at 0 rpm; the patches whose role is wall); reference_from and rotation_from say where they came from. Computing a field again replaces it. remove: true removes the derived field (refused while an iso-surface, the arrows or a streamline set is made from it). A field the file already has is not computed again.",
         outputs: &[],
         reads: &[],
         input_schema: crate::derive::field_derive_schema,
@@ -2853,7 +2874,7 @@ pub static TOOLS: &[Tool] = &[
                     "line_count": {"type": "integer", "minimum": 1, "maximum": 64},
                     "map": {"type": "string", "description": "auto, or a colour map id (field.list)"},
                     "reverse": {"type": "boolean"},
-                    "range": {"enum": ["field", "shown", "symmetric", "fixed"]},
+                    "range": {"enum": ["field", "shown", "symmetric", "fixed", "steps"], "description": "field: the whole field at the step shown; shown: what is drawn; symmetric: about zero; fixed: min to max; steps: the whole field over every step of the open time series (series.range reads it; the window reads it by itself)"},
                     "min": {"type": "number"},
                     "max": {"type": "number"}
                 }),
@@ -2905,7 +2926,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-display-visibility",
-        summary: "Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts.",
+        summary: "Show, hide or isolate items by id (mesh, zone:<name>, kind:<cell type>, patch:<name>, cell:<n>, face:<n>; on an overview, blocks: the boxes of its blocks), or show all; isolating cells or faces shows only them. Returns the hidden and isolated items and the visible counts.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -3138,6 +3159,17 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::series::series_go_schema,
         run: crate::series::series_go,
+    },
+    Tool {
+        id: "series.range",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-series-range",
+        summary: "Read the colour range of a field (field and component; left out: the field shown) over every step of the open series, as range mode steps of field.style colours with: each step's fields file is read (the step shown is not read again), the derived and calculated fields are made again of its values, and the smallest and largest value over the cells (points, boundary faces) is taken. Steps without a fields file or with another mesh add nothing. The range is kept until the series or the derived fields change, so playing and movies read nothing again. The result gives field, component, range [lo, hi], read and total steps. Changes nothing.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::series::series_range_schema,
+        run: crate::series::series_range,
     },
     Tool {
         id: "series.play",

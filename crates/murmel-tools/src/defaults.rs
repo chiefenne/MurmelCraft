@@ -24,11 +24,16 @@ pub(crate) fn fresh<T: Serialize + DeserializeOwned>(s: &Session, kind: Kind, it
 /// own yet and a default style is saved, so a field shown for the first
 /// time starts from it; fields with a style keep it.
 pub(crate) fn adopt_style(s: &mut Session, name: &str) {
-    if s.defaults.of(Kind::FieldStyle).is_none() || s.display.field_styles.contains_key(name) {
+    let series = s.series.is_some();
+    if (s.defaults.of(Kind::FieldStyle).is_none() && !series)
+        || s.display.field_styles.contains_key(name)
+    {
         return;
     }
     let st = fresh(s, Kind::FieldStyle, FieldStyle::default());
     s.display.field_styles.insert(name.to_string(), st);
+    // While a series is open, a field first shown spans every step.
+    crate::series::steps_by_default_one(s, Some(name));
 }
 
 fn not_a_default(m: String) -> Diagnostic {

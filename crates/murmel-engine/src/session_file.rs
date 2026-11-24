@@ -15,7 +15,9 @@
 //! parcels shown, their file read again on loading (since 1.12), the time
 //! series walked and the step shown (since 1.13), the fields of your
 //! formulas beside the derived ones (since 1.14), the mesh's BLAKE3
-//! hash in place of its SHA-256 (since 1.15), the user's mesh
+//! hash in place of its SHA-256 (since 1.15), whether an overview's
+//! block boxes show (since 1.16), the colour range over every step of a
+//! series (range `steps`, since 1.17), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -47,7 +49,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.15";
+pub const SESSION_VERSION: &str = "1.17";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -150,6 +152,13 @@ pub struct DisplayState {
     pub parcels: Option<ParcelView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parcels_absolute: Option<PathBuf>,
+    /// Whether the boxes of an overview's blocks show (1.16).
+    #[serde(skip_serializing_if = "is_false")]
+    pub show_blocks: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_outline(l: &MeshLook) -> bool {
@@ -302,6 +311,7 @@ impl SessionFile {
                     Vec::new()
                 },
                 mesh_look: d.mesh_look,
+                show_blocks: d.show_blocks,
                 arrows: if s.mesh.is_some() {
                     d.arrows.clone()
                 } else {
@@ -668,6 +678,7 @@ impl Session {
         d.parcels = None;
         d.parcel_data = None;
         d.mesh_look = s.mesh_look;
+        d.show_blocks = s.show_blocks;
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
                 let i = Item::parse(id, &m.mesh);
