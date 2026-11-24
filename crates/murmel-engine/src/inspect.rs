@@ -324,6 +324,18 @@ fn region_rows(display: &Display, k: usize) -> Vec<Row> {
         row("shape", r.shape.kind()),
         row("enabled", r.enabled),
     ];
+    if r.shape.cuts_flat() {
+        v.push(row("mode", r.cut.key()));
+        // A flat sphere between the nodes shows whole cells.
+        if display
+            .region_cells
+            .as_ref()
+            .filter(|rc| rc.regions == display.regions)
+            .is_some_and(|rc| rc.whole_instead.get(k) == Some(&true))
+        {
+            v.push(row("shown_as", crate::ClipMode::Crinkle.key()));
+        }
+    }
     match &r.shape {
         Shape::Box { center, size } => {
             v.push(unit("centre", vec3(*center, 6), "m"));

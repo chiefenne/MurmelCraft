@@ -3,7 +3,7 @@
 //! cells they take are the engine's ([`murmel_engine::region`]).
 
 use murmel_engine::region::{Estimate, MAX_REGIONS, MAX_RINGS, Region, Shape};
-use murmel_engine::{Item, Session};
+use murmel_engine::{ClipMode, Item, Session};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -38,14 +38,27 @@ pub(crate) fn region_json(s: &Session, k: usize) -> Value {
         .filter(|rc| rc.regions == s.display.regions)
         .and_then(|rc| rc.estimates.get(k))
         .map(estimate_json);
-    json!({
+    let whole_instead = s
+        .display
+        .region_cells
+        .as_ref()
+        .filter(|rc| rc.regions == s.display.regions)
+        .is_some_and(|rc| rc.whole_instead.get(k) == Some(&true));
+    let mut v = json!({
         "id": Item::Region(k as u32).id(&m.mesh),
         "region": k + 1,
         "enabled": r.enabled,
+        "cut": r.cut,
         "shape": r.shape,
         "takes": estimate,
         "current": s.display.current_region() == Some(k),
-    })
+    });
+    if whole_instead {
+        v["note"] = json!(
+            "no node of the mesh lies inside this sphere (it is smaller than the cells around it), so it shows whole cells; make it larger to cut it flat"
+        );
+    }
+    v
 }
 
 /// Every region, and what the enabled ones take together (`null` while
@@ -106,6 +119,7 @@ struct RegionSet {
     cells: Option<Vec<u32>>,
     rings: Option<u32>,
     enabled: Option<bool>,
+    cut: Option<ClipMode>,
 }
 
 /// The index of region `n` (counted from 1), or of the current region.
@@ -292,10 +306,25 @@ pub(crate) fn region_set(input: Value, s: &mut Session) -> Run {
         };
         return Err(Diagnostic::new("REGION002", why));
     }
+    if i.cut == Some(ClipMode::Flat) && !shape.cuts_flat() {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            format!(
+                "a {name} region has no border to cut flat; only box, sphere and slab regions cut flat"
+            ),
+        ));
+    }
     let mut region = old.unwrap_or_else(|| Region::new(shape.clone()));
     region.shape = shape;
     if let Some(e) = i.enabled {
         region.enabled = e;
+    }
+    if let Some(c) = i.cut {
+        region.cut = c;
+    }
+    // A region that becomes a set of cells keeps whole cells.
+    if !region.shape.cuts_flat() {
+        region.cut = ClipMode::Crinkle;
     }
     match at {
         Some(k) => s.display.regions[k] = region,
@@ -368,7 +397,8 @@ pub(crate) fn region_set_schema() -> Value {
             "layers": {"type": "integer", "minimum": 1, "maximum": MAX_RINGS},
             "cells": {"type": "array", "items": {"type": "integer", "minimum": 0}},
             "rings": {"type": "integer", "minimum": 0, "maximum": MAX_RINGS},
-            "enabled": {"type": "boolean"}
+            "enabled": {"type": "boolean"},
+            "cut": {"enum": ["crinkle", "flat"]}
         }),
         &[],
     )
@@ -531,6 +561,43 @@ mod tests {
         assert!(s.display.regions.is_empty());
     }
 
+    /// Invariant (stage 1b, card 6): a box, sphere or slab region cuts
+    /// flat on request and back to whole cells, one undo step each, the
+    /// cells it takes unchanged; a zone, patch or cell region refuses a
+    /// flat cut (TOOL002), and a flat region that becomes a set of cells
+    /// keeps whole cells. Breaks when the cut is dropped, refused for
+    /// shapes that have a border, or accepted for ones that have none.
+    #[test]
+    fn a_region_cuts_flat_or_whole() {
+        let mut s = channel();
+        let e = call("region.set", json!({"shape": "box"}), &mut s);
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        assert_eq!(e.result["regions"]["regions"][0]["cut"], "crinkle");
+        let taken = e.result["visible_cells"].clone();
+        let e = call("region.set", json!({"cut": "flat"}), &mut s);
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        assert_eq!(e.result["regions"]["regions"][0]["cut"], "flat");
+        assert_eq!(e.result["visible_cells"], taken);
+        assert!(s.display.region_cells.as_ref().unwrap().cuts_flat());
+        assert!(call("journal.undo", json!({}), &mut s).ok());
+        assert_eq!(s.display.regions[0].cut, murmel_engine::ClipMode::Crinkle);
+        assert!(call("journal.redo", json!({}), &mut s).ok());
+        assert_eq!(s.display.regions[0].cut, murmel_engine::ClipMode::Flat);
+
+        let zone = s.mesh.as_ref().unwrap().mesh.zones[0].clone();
+        let z = json!({"new": true, "shape": "zone", "zone": zone, "cut": "flat"});
+        let e = call("region.set", z, &mut s);
+        assert_eq!(e.diagnostics[0].code, "TOOL002", "{:?}", e.diagnostics);
+        let e = call(
+            "region.set",
+            json!({"region": 1, "shape": "zone", "zone": zone}),
+            &mut s,
+        );
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        assert_eq!(e.result["regions"]["regions"][0]["cut"], "crinkle");
+        assert!(!s.display.region_cells.as_ref().unwrap().cuts_flat());
+    }
+
     /// Invariant (session format 1.7): regions come back from a session
     /// file with the same cells shown; a region of a zone the mesh does
     /// not have is skipped and reported.
@@ -545,7 +612,7 @@ mod tests {
         assert!(
             call(
                 "region.set",
-                json!({"shape": "sphere", "radius": 0.3}),
+                json!({"shape": "sphere", "radius": 0.3, "cut": "flat"}),
                 &mut s
             )
             .ok()
@@ -555,8 +622,9 @@ mod tests {
         let e = call("session.save", json!({"path": file}), &mut s);
         assert!(e.ok(), "{:?}", e.diagnostics);
         let text = std::fs::read_to_string(&file).unwrap();
-        assert!(text.contains("\"format_version\": \"1.7\""));
+        assert!(text.contains("\"format_version\": \"1.8\""));
         assert!(text.contains("\"kind\": \"sphere\""), "{text}");
+        assert_eq!(text.matches("\"cut\": \"flat\"").count(), 1, "{text}");
 
         let mut t = Session::new(Tokens::builtin().unwrap());
         t.config_dir = None;

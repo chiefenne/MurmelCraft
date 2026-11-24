@@ -86,7 +86,9 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   The kinds are `box` (`center`, `size`), `sphere` (`center`, `radius`),
   `slab` (`origin`, unit `normal`, `thickness`), `zone` (`zone`, a cell
   zone's name), `patch` (`patch`, `layers` from 1 to 64) and `cells`
-  (`cells`, ids, and `rings` from 0 to 64). At most 16. A region whose
+  (`cells`, ids, and `rings` from 0 to 64). `"cut": "flat"` (format
+  1.8; left out for whole cells) clips a box, sphere or slab region's
+  border cells to the shape. At most 16. A region whose
   zone, patch or cells the mesh lacks is skipped as `region:<n>`. The
   cells a region takes are found again on loading, never stored.
 - **Saved views** (format 1.1) are the named cameras of the model tree's

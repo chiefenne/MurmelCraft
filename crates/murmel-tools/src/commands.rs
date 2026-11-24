@@ -959,6 +959,25 @@ pub fn commands() -> Vec<Command> {
             })
         }),
     ));
+    // Alt + Shift + R: the current box, sphere or slab region cuts flat,
+    // or whole cells again.
+    v.push(cmd(
+        "region.set:cut",
+        "cmd-region-cut",
+        "region",
+        &["Alt+Shift+R"],
+        Dynamic("region.set", |s| {
+            let k = s.display.current_region()?;
+            let r = &s.display.regions[k];
+            r.shape.cuts_flat().then(|| {
+                let cut = match r.cut {
+                    murmel_engine::ClipMode::Flat => "crinkle",
+                    murmel_engine::ClipMode::Crinkle => "flat",
+                };
+                json!({"region": k + 1, "cut": cut})
+            })
+        }),
+    ));
     for shape in ["box", "sphere", "slab"] {
         v.push(cmd(
             format!("region.set:{shape}"),

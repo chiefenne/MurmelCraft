@@ -69,6 +69,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Alt + I` | Add an iso-surface | `iso.set` (input from the session) |
 | `Alt + V` | Vector arrows: show or hide | `arrows.set` (input from the session) |
 | `Alt + R` | Region: show or hide (adds a box if there is none) | `region.set` (input from the session) |
+| `Alt + Shift + R` | Region: cut flat along its border, or whole cells | `region.set` (input from the session) |
 | `H` | Hide the selection | `display.visibility` (input from the session) |
 | `I` | Isolate the selection | `display.visibility` (input from the session) |
 | `Alt + H` | Show all | `display.visibility` (input from the session) |

@@ -836,6 +836,15 @@ impl Display {
         self.region_cells.as_ref().is_none_or(|r| r.contains(c))
     }
 
+    /// Whether the region cutting cell `c` flat keeps point `p` (true
+    /// when no region cuts it).
+    pub fn region_keeps(&self, c: usize, p: [f64; 3]) -> bool {
+        self.region_cells
+            .as_ref()
+            .filter(|rc| rc.regions == self.regions)
+            .is_none_or(|rc| rc.borders_of(c).iter().all(|b| b.distance(p) <= 0.0))
+    }
+
     /// Whether enabled regions limit the cells shown.
     pub fn region_filtering(&self) -> bool {
         self.region_cells.as_ref().is_some_and(|r| r.filtering())

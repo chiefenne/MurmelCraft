@@ -857,7 +857,8 @@ impl MurmelApp {
             Value::String(s) => match key {
                 "validity" => self.i18n.tr(&format!("validity-{s}")),
                 "role" => self.i18n.tr(&format!("role-{s}")),
-                "mode" => self.i18n.tr(&format!("clip-mode-{s}")),
+                "mode" | "shown_as" => self.i18n.tr(&format!("clip-mode-{s}")),
+                "shape" => self.i18n.tr(&format!("region-shape-{s}")),
                 "type" => self.i18n.tr(&format!("kind-{s}")),
                 "kind" => self.i18n.tr(&format!("measure-kind-{s}")),
                 "color" => self.i18n.tr(&format!("iso-color-{s}")),

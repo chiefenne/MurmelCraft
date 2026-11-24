@@ -305,7 +305,7 @@ pub(crate) fn on_surface(
                 .sum::<f64>()
                 / k
         });
-        if !display.clips_keep(c) {
+        if !display.clips_keep(c) || !display.region_keeps(owner as usize, c) {
             continue;
         }
         let key = [0, 1, 2].map(|d| ((c[d] - origin[d]) / h).floor() as i64);

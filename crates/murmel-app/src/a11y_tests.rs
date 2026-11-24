@@ -891,8 +891,8 @@ fn large_meshes_open_in_the_background() {
 /// of 2026-11-24): the tree's "Add a box region" adds a box region that
 /// shows only the cells it takes, named in the tree with its shape and
 /// its cell count; a click on the row selects it so the Properties panel
-/// shows the region; its eye turns it off and every cell shows again;
-/// every control keeps a clean name. Breaks if the region section loses
+/// shows the region; its context menu cuts it flat; its eye turns it off
+/// and every cell shows again; every control keeps a clean name. Breaks if the region section loses
 /// its buttons, the row its name, or the eye stops reaching region.set.
 #[test]
 fn regions_in_the_window() {
@@ -921,6 +921,20 @@ fn regions_in_the_window() {
         [murmel_engine::Item::Region(0)]
     );
     assert_eq!(problems(&h), Vec::<String>::new(), "region properties");
+
+    // The context menu cuts it flat; the row says so.
+    h.get_by_label(&label).click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Cut flat along the border").click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.display.regions[0].cut,
+        murmel_engine::ClipMode::Flat
+    );
+    let label = h.state().region_label(0);
+    assert!(label.starts_with("Region 1: box, cut flat · "), "{label}");
+    assert!(named(&h, &label), "flat region row");
+    assert_eq!(problems(&h), Vec::<String>::new(), "a flat region");
 
     h.get_by_label(&format!("Hide {label}")).click();
     h.run_steps(3);
