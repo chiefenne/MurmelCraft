@@ -152,9 +152,9 @@ impl MurmelApp {
     fn describe(&self) -> String {
         let (cells, faces) = self.session.mesh.as_ref().map_or((0, 0), |m| {
             // An overview draws no cells: it tells those of the file.
-            let cells = match &m.overview {
-                Some(_) => m.cells(),
-                None => m.surface.cells,
+            let cells = match (&m.overview, &m.blocks) {
+                (Some(_), None) => m.cells(),
+                _ => m.surface.cells,
             };
             (cells, m.surface.faces)
         });

@@ -1538,6 +1538,102 @@ fn readme_chart_panel() {
     img.save(&out).unwrap();
 }
 
+/// Whether a node's name starts with `text`.
+fn named_from(h: &Harness<'_, MurmelApp>, text: &str) -> bool {
+    h.root().children_recursive().any(|n| {
+        let a = n.accesskit_node();
+        [a.label(), a.value()]
+            .into_iter()
+            .flatten()
+            .any(|t| t.starts_with(text))
+    })
+}
+
+/// Invariant (the maintainer's card 1 of 2026-11-24, overview plus
+/// regions): in the window a box drawn on an overview reads its blocks on
+/// a thread of its own; the status bar says how many and of how many
+/// cells, with Cancel, the tree's note tells the blocks shown once they
+/// are in, and Esc stops a read, which leaves the blocks shown as they
+/// were. Every control keeps a clean name. Breaks when the read holds the
+/// window, the status or the note is lost, or Esc does not reach the
+/// read; the engine tests do not draw the window.
+#[test]
+fn regions_on_an_overview_in_the_window() {
+    let dir = std::env::temp_dir().join(format!("murmel-regions-win-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let (open, config) = (path.clone(), dir.clone());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .build_eframe(move |cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = Some(config);
+            app.bridge_path = None;
+            app.session.memory_budget = Some(1e-9);
+            app.open_path(open);
+            app
+        });
+    h.run_steps(3);
+    opened(&mut h);
+    assert!(h.state().session.mesh.as_ref().unwrap().overview.is_some());
+    assert!(named_from(&h, "Overview: the 776 cells"));
+    assert!(named_from(&h, "A box, sphere or slab region reads"));
+    h.state_mut().session.memory_budget = None;
+
+    // A box near a corner: blocks 0 and 3, 200 cells.
+    let corner =
+        serde_json::json!({"shape": "box", "center": [0.4, 0.175, 0.1], "size": [0.4, 0.25, 0.1]});
+    assert!(h.state_mut().call("region.set", corner).is_some());
+    assert!(
+        h.state().session.block_job.is_some(),
+        "read in the background"
+    );
+    h.run_steps(1);
+    assert!(
+        named_from(&h, "Reading 2 blocks (200 cells) for the regions"),
+        "the status bar"
+    );
+    assert!(named(
+        &h,
+        "Cancel. Stop reading these blocks; the overview stays (Esc)"
+    ));
+    let start = std::time::Instant::now();
+    while h.state().session.block_job.is_some() {
+        assert!(start.elapsed().as_secs() < 60, "the read never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    let m = h.state().session.mesh.as_ref().unwrap();
+    assert_eq!(m.blocks.as_ref().unwrap().subset.blocks, vec![0, 3]);
+    assert!(named_from(
+        &h,
+        "The regions show the cells of 2 of the 8 blocks"
+    ));
+    assert_eq!(problems(&h), Vec::<String>::new(), "blocks shown");
+
+    // The box to the other end: another read, which Esc stops.
+    let far = serde_json::json!({"center": [3.6, 1.825, 0.9]});
+    assert!(h.state_mut().call("region.set", far).is_some());
+    assert!(h.state().session.block_job.is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    let s = &h.state().session;
+    assert!(s.block_job.is_none());
+    assert!(
+        matches!(&s.blocks_problem, Some((_, None))),
+        "{:?}",
+        s.blocks_problem
+    );
+    let m = s.mesh.as_ref().unwrap();
+    assert_eq!(m.blocks.as_ref().unwrap().subset.blocks, vec![0, 3]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Invariant (the maintainer's card of 2026-11-24: beyond the memory
 /// budget a blocked VTKHDF file opens as an overview): the model tree
 /// says so, with the file's cells and blocks, and "Read the cells

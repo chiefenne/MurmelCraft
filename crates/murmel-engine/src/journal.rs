@@ -67,6 +67,11 @@ impl Snapshot {
             v.path.clone_from(&now.path);
             d.parcel_data = s.display.parcel_data.clone();
         }
+        // Probes and measurements of a step name the cells of the mesh
+        // shown then; an overview's regions may show other blocks now.
+        if let Some(m) = s.mesh.as_ref().filter(|m| m.blocks.is_some()) {
+            crate::session::anchor_to(&mut d, &m.mesh);
+        }
         s.display = d;
         if redraw {
             s.redraw();

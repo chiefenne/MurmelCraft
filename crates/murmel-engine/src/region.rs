@@ -486,6 +486,12 @@ pub const NOT_CUT: u8 = u8::MAX;
 impl RegionCells {
     /// The regions on `mesh`; `None` when there are none.
     pub fn of(mesh: &Mesh, regions: &[Region]) -> Option<RegionCells> {
+        Self::of_on(mesh, regions, None)
+    }
+
+    /// As [`RegionCells::of`] on a mesh read in pieces: no region takes a
+    /// cell of `halo` (by cell; the halo of an overview's blocks).
+    pub fn of_on(mesh: &Mesh, regions: &[Region], halo: Option<&[bool]>) -> Option<RegionCells> {
         if regions.is_empty() {
             return None;
         }
@@ -496,7 +502,12 @@ impl RegionCells {
         let mut flat: Vec<(usize, Vec<bool>)> = Vec::new();
         let mut whole_instead = vec![false; regions.len()];
         for (k, r) in regions.iter().enumerate() {
-            let own = r.shape.cells(mesh);
+            let mut own = r.shape.cells(mesh);
+            if let Some(h) = halo {
+                for (o, &h) in own.iter_mut().zip(h) {
+                    *o &= !h;
+                }
+            }
             estimates.push(Estimate::of(mesh, &own));
             if !r.enabled {
                 continue;
@@ -615,12 +626,18 @@ impl RegionCells {
 /// Find the regions' cells when the regions changed since they were last
 /// found (`Session::redraw` calls it before the surface is built).
 pub fn ensure(display: &mut crate::Display, mesh: &Mesh) {
+    ensure_on(display, mesh, None);
+}
+
+/// As [`ensure`] on a mesh read in pieces, whose `halo` cells no region
+/// takes.
+pub fn ensure_on(display: &mut crate::Display, mesh: &Mesh, halo: Option<&[bool]>) {
     let fresh = match &display.region_cells {
         Some(rc) => rc.regions == display.regions,
         None => display.regions.is_empty(),
     };
     if !fresh {
-        display.region_cells = RegionCells::of(mesh, &display.regions).map(Arc::new);
+        display.region_cells = RegionCells::of_on(mesh, &display.regions, halo).map(Arc::new);
     }
 }
 
@@ -979,6 +996,36 @@ mod tests {
         let none = RegionCells::of(&m, &[off, s]).unwrap();
         assert!(!none.filtering() && (0..m.cell_count()).all(|c| none.contains(c)));
         assert!(RegionCells::of(&m, &[]).is_none());
+    }
+
+    /// Invariant: on a mesh read in pieces no region takes a cell of the
+    /// halo, a shape (a sphere over all of it) as little as a zone, and
+    /// the cells it does take are those it takes on the whole mesh. A box
+    /// region on an overview never reaches a halo cell (its blocks would
+    /// be read), but a zone region a session file brings does, so the
+    /// session's test cannot catch a halo that shows; dropping the mask
+    /// in `of_on` breaks this one.
+    #[test]
+    fn regions_leave_out_the_halo() {
+        let m = honeycomb();
+        let b = m.bounds();
+        let halo: Vec<bool> = (0..m.cell_count()).map(|c| c % 3 == 0).collect();
+        let regions = [
+            Region::new(Shape::Sphere {
+                center: b.center(),
+                radius: 2.0 * b.radius(),
+            }),
+            Region::new(Shape::Zone {
+                zone: m.zones[0].clone(),
+            }),
+        ];
+        let whole = RegionCells::of(&m, &regions).unwrap();
+        let on = RegionCells::of_on(&m, &regions, Some(&halo)).unwrap();
+        for (c, &h) in halo.iter().enumerate() {
+            assert_eq!(on.contains(c), whole.contains(c) && !h, "cell {c}");
+        }
+        assert!((0..m.cell_count()).any(|c| on.contains(c)));
+        assert!(on.estimates[0].cells < whole.estimates[0].cells);
     }
 
     #[test]

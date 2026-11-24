@@ -217,6 +217,10 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   that no block read owns, with the patch faces their cells own. It
   needs `GlobalPointIds` (§ 3), and `GlobalCellIds` for the halo; a
   block number the file does not have is BLOCK005.
+- A box, sphere or slab region drawn on an overview reads, with
+  `read_blocks`, the blocks whose `BlockBounds` it touches, with their
+  halo (the engine's `blocks.rs`); beyond the memory budget it is
+  refused with BLOCK006.
 
 ## Writers
 

@@ -981,8 +981,8 @@ its cells to the power 2/3, so the overview of a 100 M mesh of this
 shape (about 4.9 M boundary faces) should read in 2 to 3 s within about
 1 GB; its whole read would need some 150 GB.
 
-Not yet: the block boxes, the preview grid, and regions that read the
-blocks they touch.
+Not yet: the block boxes and the preview grid. Regions that read the
+blocks they touch follow below.
 
 ## Reading some blocks of a blocked file (2026-11-24)
 
@@ -1022,3 +1022,51 @@ reads are many and small, so a fast SSD (the iMac's) matters more than
 it does for a whole read. The patches are still read whole to find
 their faces of the blocks (5 M boundary faces on a 100 M mesh).
 
+## Regions on an overview read their blocks (2026-11-24)
+
+A box, sphere or slab region drawn on an overview reads the blocks whose
+bounds it touches, with their halo, and shows on those cells what it
+shows on the mesh read whole (the maintainer's card 1 of 2026-11-24,
+overview plus regions; engine `blocks.rs`):
+
+- A block's bounds hold the points of its owned cells, so a cell whose
+  box touches the region lies in a block the region touches: the region
+  takes the same cells, by their number in the file, and draws as many
+  faces as on the whole mesh (checked on a blocked copy of the channel).
+- The halo is read for the values at the border and never taken by a
+  region (`RegionCells::of_on`), so it never draws.
+- A region made smaller keeps the blocks read; one that needs a block
+  not read reads exactly the blocks it needs; with none enabled the
+  overview shows again, without reading.
+- The memory a read needs is estimated before it starts: the whole
+  read's share of the blocks' cells and a quarter more for the halo.
+  Beyond the budget the region is refused (BLOCK006) and stays as it
+  was.
+- On an overview a region is a box, a sphere or a slab; a zone, a patch
+  or picked cells need the cells read whole (REGION004).
+- The window reads on a thread of its own (`Session::defer_blocks`): the
+  overview shows meanwhile, the status bar says how many blocks and
+  cells are read, and Cancel or Esc stops the read. The tools read
+  before they return; `region.list` and `mesh.info` tell the blocks
+  read, the cells and halo read, a read running and a read refused.
+- Picked cells and faces are dropped when other blocks show, the cell of
+  each probe is found again from its point, and Properties gives a
+  cell's number in the file.
+
+4 M blocked file (62 blocks of 65,536 cells), 4 threads, file in the
+page cache; the time of the read alone and of the whole redraw (the
+read, the region's cells and the surface):
+
+| region | blocks | cells read (halo) | region cells | read | redraw |
+|---|---:|---:|---:|---:|---:|
+| box 0.1 at a corner | 1 | 72,215 (6,679) | 4,941 | 0.18 s | 0.25 s |
+| sphere, radius 0.15, in the middle | 14 | 1,013,934 (96,430) | 63,783 | 2.47 s | 2.65 s |
+| box 0.4 in the middle | 14 | 1,013,934 (96,430) | 273,259 | 2.66 s | 2.86 s |
+| slab 0.02 across x | 33 | 2,268,537 (105,849) | 111,891 | 6.12 s | 7.03 s |
+
+`region.clear` back to the overview: 0.25 to 0.3 s (the overview's
+surface built again). The read is nine tenths of the time and reads the
+blocks one after the other, about 0.18 s each; reading them on all
+threads comes next. A box whose sides lie on the block borders touches
+the blocks on both sides (a box of 0.5 in the middle of this file
+touches all 62 blocks, as the Hilbert blocks are cubes of a quarter).

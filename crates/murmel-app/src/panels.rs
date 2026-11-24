@@ -154,7 +154,7 @@ impl MurmelApp {
         // a mesh beyond the memory budget, open as an overview
         let overview = m.overview.as_deref().map(|o| {
             use murmel_engine::memory::gib;
-            self.i18n.tr_args(
+            let note = self.i18n.tr_args(
                 "overview-note",
                 &[
                     ("cells", (o.cells as f64).into()),
@@ -162,7 +162,24 @@ impl MurmelApp {
                     ("needs", gib(o.size.open_bytes()).into()),
                     ("budget", gib(self.session.budget_bytes()).into()),
                 ],
-            )
+            );
+            // what the regions read of it
+            let regions = match &m.blocks {
+                Some(b) => {
+                    let halo = b.halo_cells();
+                    self.i18n.tr_args(
+                        "overview-blocks-note",
+                        &[
+                            ("read", (b.subset.blocks.len() as f64).into()),
+                            ("blocks", (o.blocks.len() as f64).into()),
+                            ("cells", ((m.mesh.cell_count() - halo) as f64).into()),
+                            ("halo", (halo as f64).into()),
+                        ],
+                    )
+                }
+                None => self.i18n.tr("overview-regions-tip"),
+            };
+            format!("{note}\n{regions}")
         });
         let selection = self.session.display.selection.clone();
         let mut action: Option<(&'static str, Value)> = None;

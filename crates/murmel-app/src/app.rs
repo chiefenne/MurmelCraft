@@ -157,6 +157,7 @@ impl MurmelApp {
         session.hash_after_open = true;
         session.remember_checked = true;
         session.defer_clips = true;
+        session.defer_blocks = true;
         let mut error = None;
         if let Some(dir) = settings::config_dir() {
             let (st, nav, problems) = settings::load(&dir, cfg!(target_os = "macos"));
@@ -1050,7 +1051,7 @@ impl MurmelApp {
                     .monospace()
                     .color(secondary),
                 );
-                if self.opening_status(ui, &mut said) {
+                if self.opening_status(ui, &mut said) || self.blocks_status(ui, &mut said) {
                 } else if let Some(e) = &self.error {
                     let text = self.i18n.tr_args(
                         "status-error",
@@ -1451,6 +1452,7 @@ impl eframe::App for MurmelApp {
         self.probe_history_window(&ctx);
         self.play_series(&ctx);
         self.poll_opening(&ctx);
+        self.poll_blocks(&ctx);
         self.poll_digest(&ctx);
         self.poll_surface(&ctx);
         self.movie_window(&ctx);

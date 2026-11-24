@@ -135,6 +135,14 @@ const OWN: &[Code] = &[
         fix: Some("Remove a region with region.clear, or change one with region.set."),
     },
     Code {
+        code: "REGION004",
+        severity: Severity::Error,
+        meaning: "On a mesh open as an overview, regions are boxes, spheres and slabs: each reads the blocks it touches. A zone, patch or cell region needs the cells read whole.",
+        fix: Some(
+            "Draw a box, sphere or slab around what you need, or open the mesh whole (mesh.open with mode whole) if the memory allows.",
+        ),
+    },
+    Code {
         code: "ARROW002",
         severity: Severity::Error,
         meaning: "The arrows' density is outside 4 to 200, or their scale is not above 0 and up to 100.",

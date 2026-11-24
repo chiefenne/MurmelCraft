@@ -188,6 +188,11 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "Ask for blocks 0 to one less than the file's block count (the overview's `blocks`).",
     ),
     (
+        "BLOCK006",
+        "The regions drawn on a mesh open as an overview touch blocks whose cells need more memory than the budget.",
+        "Make the regions smaller or fewer (each reads the blocks its box, sphere or slab touches), or raise the memory budget (settings.set_memory).",
+    ),
+    (
         "MESH015",
         "The OpenFOAM boundary patches do not cover the boundary faces once each (startFace, nFaces).",
         "Check constant/polyMesh/boundary; renumbering or checkMesh shows the faces of each patch.",

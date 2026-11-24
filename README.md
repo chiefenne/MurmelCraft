@@ -148,7 +148,9 @@ every change.
   exact cut follows.
 - Regions of interest (Alt + R): a box, sphere, slab, cell zone, layers
   along a patch or picked cells, whole cells or cut flat; only their cells
-  are shown and computed.
+  are shown and computed. On a mesh beyond the memory budget, open as an
+  overview, a box, sphere or slab reads the cells of the blocks it
+  touches.
 - Measuring (M) with snapping to nodes, edge midpoints and face or cell
   centres (distances and angles), and probes (Shift + P) that read every
   field at a point; both stay in the tree.
