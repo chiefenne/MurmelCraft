@@ -564,7 +564,6 @@ impl Builder {
                         CellKind::classify(sizes),
                         &mut self.zone_max,
                     );
-                    orient_last(&self.mesh, &mut self.polys);
                     zones_out.push(z);
                 } else if t == POLYHEDRON {
                     let (a, b) = (po.get(c), po.get(c + 1));
@@ -763,12 +762,12 @@ impl Builder {
     }
 }
 
-/// Turn the faces of the last cell outward when they point in (its
-/// signed volume, by the divergence theorem over fan triangles, is
-/// negative). Writers disagree on the node order of VTK's wedge: VTK's
-/// face table has the base (0, 1, 2) pointing away from (3, 4, 5), and
-/// FoehnCraft writes the base pointing towards it. Turning by volume
-/// reads both, and any cell given inside out.
+/// Turn the faces of the last cell, a polyhedron, outward when they
+/// point in (its signed volume, by the divergence theorem over fan
+/// triangles, is negative): VTK asks for outward polyhedron faces but
+/// does not check them. The linear cells take their faces from the
+/// tables of VTK's node orders and are not turned, so a cell given
+/// inside out stays visible to the quality check.
 fn orient_last(mesh: &Mesh, polys: &mut Polygons) {
     let c = mesh.cell_count() - 1;
     let range = mesh.cell_face_range(c);
