@@ -82,6 +82,10 @@ none = "#8C9198"
 edge = "#2B2F35"
 line = "#0E1012"
 line_mix = 0.85
+# The mesh's feature edges while slices or iso-surfaces show: a mid grey
+# that reads on both the dark and the light viewport without competing
+# with the colours inside.
+outline = "#7A8089"
 
 # Patch roles (UI spec, Colour by): wall grey, inlet blue, outlet orange,
 # symmetry green, interface violet, unspecified sand. Searched in OKLCH

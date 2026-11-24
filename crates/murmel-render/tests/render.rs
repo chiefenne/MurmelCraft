@@ -405,6 +405,56 @@ fn field_export_with_legend() {
     check_shot("field-export-legend", &shot);
 }
 
+/// Stage 2 slices (decided 2026-11-24: placed like clip planes, the mesh
+/// a faint outline, the mesh's field style, a series with count and
+/// spacing): three cross-sections of the channel's speed spread along
+/// the flow, in smooth colours, inside the mesh's faint feature edges.
+/// The duct's peak shows in the middle of each section although the core
+/// is one cell across: slices cut the cells' tetrahedra, whose centroid
+/// carries the cell's own value. A wrong section, series spacing, value
+/// inside a cell or outline colour moves pixels here.
+#[test]
+fn field_slice_series() {
+    let mut s = field_session("velocity", murmel_mesh::Component::Magnitude);
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    let mut slice = murmel_engine::Slice::new(b.center(), [1.0, 0.0, 0.0]);
+    slice.spread(&b, 3);
+    s.display.slices = vec![slice];
+    s.redraw();
+    check_session("field-slice-series", &s);
+}
+
+/// Stage 2 iso-surfaces (decided 2026-11-24: one value each, solid or
+/// coloured by the field shown): the tube where the speed is 1.2 m/s in
+/// its own colour, and the plane where the pressure is 0 Pa (half way
+/// along the duct) coloured by the speed, over the faint outline.
+/// Marching tetrahedra that leave holes, flip normals or lose the colour
+/// mode would show here.
+#[test]
+fn field_iso_surfaces() {
+    let mut s = field_session("velocity", murmel_mesh::Component::Magnitude);
+    let choice = |name: &str| murmel_engine::FieldChoice {
+        name: name.into(),
+        component: murmel_mesh::Component::Magnitude,
+    };
+    s.display.isos = vec![
+        murmel_engine::Iso {
+            field: choice("speed"),
+            value: 1.2,
+            enabled: true,
+            color: murmel_engine::IsoColor::Solid,
+        },
+        murmel_engine::Iso {
+            field: choice("pressure"),
+            value: 0.0,
+            enabled: true,
+            color: murmel_engine::IsoColor::Field,
+        },
+    ];
+    s.redraw();
+    check_session("field-iso-surfaces", &s);
+}
+
 /// Export (the maintainer's cards of 2026-11-24, "same look as on
 /// screen"): the channel coloured by patch at 1.5 times a 320 x 213
 /// viewport, edges 1.5 pixels wide, with the patch legend top left and

@@ -16,6 +16,7 @@
 pub mod commands;
 mod diag;
 pub mod export;
+mod extract;
 pub mod live;
 mod markdown;
 pub mod movie;

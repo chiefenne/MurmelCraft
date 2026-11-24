@@ -20,8 +20,8 @@
 //! the range, the colour map, the bands and the contour lines are
 //! uniforms, so changing them draws again without building the surface.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 pub use murmel_mesh::field::{Component, Field, Location, Results, range_of};
 use murmel_mesh::{Mesh, NO_CELL};
@@ -367,11 +367,17 @@ fn components(f: &Field) -> Vec<Vec<f64>> {
         .collect()
 }
 
+/// The values of the fields computed so far, by field and component.
+type ValueCache = Arc<Mutex<HashMap<(String, Component), Arc<FieldValues>>>>;
+
 /// The fields of the open mesh.
 #[derive(Clone, Debug, Default)]
 pub struct FieldSet {
     pub results: Results,
     topology: OnceLock<Arc<Topology>>,
+    /// Values made once per field and component (colour mode field and
+    /// every iso-surface ask for them again on each redraw).
+    cache: ValueCache,
 }
 
 impl FieldSet {
@@ -379,7 +385,43 @@ impl FieldSet {
         Self {
             results,
             topology: OnceLock::new(),
+            cache: ValueCache::default(),
         }
+    }
+
+    /// [`FieldSet::values`], made once per field and component.
+    pub fn values_cached(&self, mesh: &Mesh, choice: &FieldChoice) -> Option<Arc<FieldValues>> {
+        let f = self.get(&choice.name)?;
+        let component = if f.is_vector() {
+            choice.component
+        } else {
+            Component::Magnitude
+        };
+        let key = (choice.name.clone(), component);
+        let cached = self
+            .cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+            .cloned();
+        if cached.is_some() {
+            return cached;
+        }
+        let v = Arc::new(self.values(mesh, choice)?);
+        self.cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key, v.clone());
+        Some(v)
+    }
+
+    /// The volume centroid of cell `c`.
+    pub(crate) fn centroid(&self, mesh: &Mesh, c: usize) -> [f64; 3] {
+        self.topology(mesh)
+            .centre
+            .get(c)
+            .copied()
+            .unwrap_or([f64::NAN; 3])
     }
 
     pub fn fields(&self) -> &[Field] {
@@ -900,7 +942,7 @@ pub(crate) fn ensure_field(display: &mut crate::display::Display, mesh: &Mesh, f
         v.choice.name == choice.name && (!v.vector || v.choice.component == choice.component)
     });
     if !fresh {
-        display.field_values = fields.values(mesh, &choice).map(Arc::new);
+        display.field_values = fields.values_cached(mesh, &choice);
     }
 }
 

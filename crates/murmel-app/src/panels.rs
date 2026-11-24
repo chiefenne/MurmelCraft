@@ -82,7 +82,9 @@ impl MurmelApp {
                 | Item::Face(_)
                 | Item::Clip(_)
                 | Item::Measure(_)
-                | Item::Probe(_) => {}
+                | Item::Probe(_)
+                | Item::Slice(_)
+                | Item::Iso(_) => {}
             }
         }
         patches.sort_by(|a, b| a.label.cmp(&b.label));
@@ -193,6 +195,9 @@ impl MurmelApp {
                     action = Some(a);
                 }
                 if let Some(a) = self.clip_row(ui, &p) {
+                    action = Some(a);
+                }
+                if let Some(a) = self.extract_section(ui, &p) {
                     action = Some(a);
                 }
                 if let Some(a) = self.measure_section(ui, &p, &filter) {
@@ -673,7 +678,7 @@ impl MurmelApp {
             Some((area, name)) => {
                 let name = if area == "kind" {
                     self.i18n.tr(&format!("kind-{name}"))
-                } else if area == "clip" {
+                } else if area == "clip" || area == "slice" || area == "iso" {
                     self.i18n
                         .tr_args("props-clip-name", &[("n", name.to_string().into())])
                 } else if area == "measure" || area == "probe" {
@@ -848,6 +853,7 @@ impl MurmelApp {
                 "mode" => self.i18n.tr(&format!("clip-mode-{s}")),
                 "type" => self.i18n.tr(&format!("kind-{s}")),
                 "kind" => self.i18n.tr(&format!("measure-kind-{s}")),
+                "color" => self.i18n.tr(&format!("iso-color-{s}")),
                 "snap" | "snap_a" | "snap_b" | "snap_vertex" => self.i18n.tr(&format!("snap-{s}")),
                 "name"
                     if self

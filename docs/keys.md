@@ -62,6 +62,11 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Alt + Right` | Tilt the clip plane right 5° | `clip.rotate` (input from the session) |
 | `Alt + Up` | Tilt the clip plane up 5° | `clip.rotate` (input from the session) |
 | `Alt + Down` | Tilt the clip plane down 5° | `clip.rotate` (input from the session) |
+| `Shift + X` | Slice normal to X | `slice.set` `{"axis":"x"}` |
+| `Shift + Y` | Slice normal to Y | `slice.set` `{"axis":"y"}` |
+| `Shift + Z` | Slice normal to Z | `slice.set` `{"axis":"z"}` |
+| `Alt + S` | Add a slice | `slice.set` (input from the session) |
+| `Alt + I` | Add an iso-surface | `iso.set` (input from the session) |
 | `H` | Hide the selection | `display.visibility` (input from the session) |
 | `I` | Isolate the selection | `display.visibility` (input from the session) |
 | `Alt + H` | Show all | `display.visibility` (input from the session) |
@@ -142,6 +147,19 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Turn the clip plane on or off | `clip.set` (input from the session) |
 | palette | Remove the current clip plane | `clip.clear` (input from the session) |
 | palette | Remove all clip planes | `clip.clear` (input from the session) |
+| palette | Slice along the view direction | `slice.set` `{"axis":"view"}` |
+| palette | Slice: a series of 5 through the mesh | `slice.set` (input from the session) |
+| palette | Slice: one plane instead of a series | `slice.set` (input from the session) |
+| palette | Slice: show or hide | `slice.set` (input from the session) |
+| palette | Remove the slice | `slice.clear` (input from the session) |
+| palette | Remove all slices | `slice.clear` (input from the session) |
+| palette | Iso-surface: solid colour | `iso.set` (input from the session) |
+| palette | Iso-surface: coloured by the field shown | `iso.set` (input from the session) |
+| palette | Iso-surface: show or hide | `iso.set` (input from the session) |
+| palette | Remove the iso-surface | `iso.clear` (input from the session) |
+| palette | Remove all iso-surfaces | `iso.clear` (input from the session) |
+| palette | Mesh beside slices: faint outline | `display.mesh_look` `{"look":"outline"}` |
+| palette | Mesh beside slices: faces | `display.mesh_look` `{"look":"faces"}` |
 | palette | Delete all measurements and probes | `measure.remove` (input from the session) |
 | palette | Fit the selection | `view.fit` (input from the session) |
 | palette | Click picks cells | `select.filter` `{"target":"cell"}` |

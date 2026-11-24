@@ -72,6 +72,7 @@ pub const GROUPS: &[&str] = &[
     "display",
     "field",
     "clip",
+    "slice",
     "measure",
     "selection",
     "settings",
@@ -687,6 +688,144 @@ pub fn commands() -> Vec<Command> {
             (!s.display.clips.is_empty()).then(|| json!({"all": true}))
         }),
     ));
+    // Slices are placed like clip planes (decided 2026-11-24): Shift +
+    // X, Y, Z set the current one's normal (adding one when there is
+    // none), Alt + S adds one.
+    for (axis, key) in [("x", "Shift+X"), ("y", "Shift+Y"), ("z", "Shift+Z")] {
+        v.push(cmd(
+            format!("slice.set:{axis}"),
+            format!("cmd-slice-{axis}"),
+            "slice",
+            &[key],
+            Tool("slice.set", json!({ "axis": axis })),
+        ));
+    }
+    v.push(cmd(
+        "slice.set:new",
+        "cmd-slice-new",
+        "slice",
+        &["Alt+S"],
+        Dynamic("slice.set", |s| {
+            (s.mesh.is_some() && s.display.slices.len() < murmel_engine::extract::MAX_SLICES)
+                .then(|| json!({"new": true, "axis": "x"}))
+        }),
+    ));
+    v.push(cmd(
+        "slice.set:view",
+        "cmd-slice-view",
+        "slice",
+        &[],
+        Tool("slice.set", json!({"axis": "view"})),
+    ));
+    v.push(cmd(
+        "slice.set:series",
+        "cmd-slice-series",
+        "slice",
+        &[],
+        Dynamic("slice.set", |s| {
+            s.display.current_slice().map(|_| json!({"count": 5}))
+        }),
+    ));
+    v.push(cmd(
+        "slice.set:single",
+        "cmd-slice-single",
+        "slice",
+        &[],
+        Dynamic("slice.set", |s| {
+            let k = s.display.current_slice()?;
+            (s.display.slices[k].count > 1).then(|| json!({"count": 1}))
+        }),
+    ));
+    v.push(cmd(
+        "slice.set:toggle",
+        "cmd-slice-toggle",
+        "slice",
+        &[],
+        Dynamic("slice.set", |s| {
+            let k = s.display.current_slice()?;
+            Some(json!({"enabled": !s.display.slices[k].enabled}))
+        }),
+    ));
+    v.push(cmd(
+        "slice.clear",
+        "cmd-slice-clear",
+        "slice",
+        &[],
+        Dynamic("slice.clear", |s| {
+            s.display.current_slice().map(|_| json!({}))
+        }),
+    ));
+    v.push(cmd(
+        "slice.clear:all",
+        "cmd-slice-clear-all",
+        "slice",
+        &[],
+        Dynamic("slice.clear", |s| {
+            (!s.display.slices.is_empty()).then(|| json!({"all": true}))
+        }),
+    ));
+    v.push(cmd(
+        "iso.set:new",
+        "cmd-iso-new",
+        "slice",
+        &["Alt+I"],
+        Dynamic("iso.set", |s| {
+            let fields = s.mesh.as_ref().map(|m| !m.fields.is_empty())?;
+            (fields && s.display.isos.len() < murmel_engine::extract::MAX_ISOS)
+                .then(|| json!({"new": true}))
+        }),
+    ));
+    for c in murmel_engine::IsoColor::ALL {
+        v.push(cmd(
+            format!("iso.set:{}", c.key()),
+            format!("cmd-iso-{}", c.key()),
+            "slice",
+            &[],
+            match c {
+                murmel_engine::IsoColor::Solid => Dynamic("iso.set", |s| {
+                    s.display.current_iso().map(|_| json!({"color": "solid"}))
+                }),
+                murmel_engine::IsoColor::Field => Dynamic("iso.set", |s| {
+                    s.display.current_iso().map(|_| json!({"color": "field"}))
+                }),
+            },
+        ));
+    }
+    v.push(cmd(
+        "iso.set:toggle",
+        "cmd-iso-toggle",
+        "slice",
+        &[],
+        Dynamic("iso.set", |s| {
+            let k = s.display.current_iso()?;
+            Some(json!({"enabled": !s.display.isos[k].enabled}))
+        }),
+    ));
+    v.push(cmd(
+        "iso.clear",
+        "cmd-iso-clear",
+        "slice",
+        &[],
+        Dynamic("iso.clear", |s| s.display.current_iso().map(|_| json!({}))),
+    ));
+    v.push(cmd(
+        "iso.clear:all",
+        "cmd-iso-clear-all",
+        "slice",
+        &[],
+        Dynamic("iso.clear", |s| {
+            (!s.display.isos.is_empty()).then(|| json!({"all": true}))
+        }),
+    ));
+    for l in murmel_engine::MeshLook::ALL {
+        v.push(cmd(
+            format!("display.mesh_look:{}", l.key()),
+            format!("cmd-mesh-look-{}", l.key()),
+            "slice",
+            &[],
+            Tool("display.mesh_look", json!({ "look": l })),
+        ));
+    }
     v.push(cmd(
         "display.visibility:hide",
         "cmd-hide",
@@ -871,6 +1010,10 @@ pub fn commands() -> Vec<Command> {
 /// Tools no command calls, and why: they answer questions whose answers
 /// the window already shows, or need an input only a panel can give.
 pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
+    (
+        "slice.rotate",
+        "the slice handle's tilt arcs call it, as for clip planes",
+    ),
     (
         "system.info",
         "the status bar shows the GPU, the CLI the version",
@@ -1089,6 +1232,11 @@ mod tests {
             // "remove all".
             for _ in 0..2 {
                 assert!(crate::call("clip.set", json!({"new": true}), s).ok());
+            }
+            // Two slices and two iso-surfaces, for the same reason.
+            for _ in 0..2 {
+                assert!(crate::call("slice.set", json!({"new": true}), s).ok());
+                assert!(crate::call("iso.set", json!({"new": true}), s).ok());
             }
             // A measurement (selected too) and a probe, so deleting the
             // selected ones and then all of them applies.
