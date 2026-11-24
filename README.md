@@ -36,7 +36,7 @@ every change.
   linear field stays exactly linear) or banded, contour lines
   on or off with their own count, nine colour maps (Rainbow
   Desaturated by default, the same as in FoehnCraft and KoflCraft,
-  Inferno second, cool-warm for ranges symmetric about zero), each reversible, and a
+  Inferno second, Rainbow Uniform for ranges symmetric about zero), each reversible, and a
   colour bar with its settings menu. Properties and probes show the
   values.
 - Slices and iso-surfaces of the results (`slice.set`, `slice.rotate`,

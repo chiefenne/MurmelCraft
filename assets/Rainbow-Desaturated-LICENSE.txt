@@ -1,6 +1,7 @@
-The colour map "Rainbow Desaturated" in colormaps.toml is the table of eight
-control points of the ParaView preset of that name (Remoting/Views/ColorMaps.json
-in github.com/Kitware/ParaView), shipped under the licence of ParaView:
+The colour maps "Rainbow Desaturated" and "Rainbow Uniform" (Colin Ware) in
+colormaps.toml are the control points of the ParaView presets of those names
+(Remoting/Views/ColorMaps.json in github.com/Kitware/ParaView), shipped under
+the licence of ParaView:
 
 Copyright (c) 2000 Kitware Inc.
 

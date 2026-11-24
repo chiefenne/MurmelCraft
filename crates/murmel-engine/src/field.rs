@@ -116,7 +116,7 @@ pub struct FieldStyle {
     /// edges).
     pub line_count: u32,
     /// A colour map id (`colormap::ids`); `None` takes
-    /// rainbow_desaturated, or cool_warm when the range is symmetric
+    /// rainbow_desaturated, or rainbow_uniform when the range is symmetric
     /// about zero (decided 2026-11-24).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub map: Option<String>,
@@ -1480,7 +1480,7 @@ mod tests {
     fn maps_ranges_and_contours() {
         let st = FieldStyle::default();
         assert_eq!(map_for(&st, (0.0, 5.0)).unwrap().id, "rainbow_desaturated");
-        assert_eq!(map_for(&st, (-2.0, 2.1)).unwrap().id, "cool_warm");
+        assert_eq!(map_for(&st, (-2.0, 2.1)).unwrap().id, "rainbow_uniform");
         assert_eq!(map_for(&st, (-0.5, 2.0)).unwrap().id, "rainbow_desaturated");
         let turbo = FieldStyle {
             map: Some("turbo".into()),

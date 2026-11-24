@@ -11,6 +11,10 @@ Sources and licences (assets/PROVENANCE.md):
   colour space RGB), Copyright (c) 2000 Kitware Inc., BSD 3-Clause
   (Rainbow-Desaturated-LICENSE.txt). The points are written as they are,
   with their positions; nothing is sampled.
+- rainbow_uniform (the map of ranges centred on zero, maintainer's
+  decision 2026-11-24, shared with FoehnCraft): the 43 RGB control points
+  of ParaView's "Rainbow Uniform" preset by Colin Ware (same file and
+  licence), at even steps, rounded to 8 bits.
 - viridis, magma, inferno, plasma: the data of Nathaniel J. Smith,
   Stefan van der Walt and Eric Firing (github.com/BIDS/colormap), CC0 1.0,
   sampled from the 256-entry tables that matplotlib ships.
@@ -137,6 +141,58 @@ RAINBOW_DESATURATED = [
 ]
 
 
+# ParaView's "Rainbow Uniform" (Colin Ware): 43 colours at even steps,
+# interpolated in RGB, rounded to 8 bits. Blue through green to a bright
+# yellow at the middle, then orange, red and magenta: the lightness peaks
+# at the middle, so zero of a range centred on it reads as the brightest
+# colour.
+RAINBOW_UNIFORM = [
+    "#0561FF",
+    "#056CF7",
+    "#0577F0",
+    "#0582E8",
+    "#058BDF",
+    "#0595D5",
+    "#059ECB",
+    "#05A6BF",
+    "#05AFB3",
+    "#05B8A8",
+    "#05C19A",
+    "#05CA8C",
+    "#05D47F",
+    "#05DC6D",
+    "#06E55C",
+    "#04ED4B",
+    "#46F327",
+    "#7EF51C",
+    "#A4F90C",
+    "#C2FB09",
+    "#E1FD06",
+    "#FFFF03",
+    "#FFF414",
+    "#FFE826",
+    "#FFDD37",
+    "#FFD137",
+    "#FFC437",
+    "#FFB837",
+    "#FFAC37",
+    "#FF9F37",
+    "#FF9337",
+    "#FF8537",
+    "#FF7737",
+    "#FF6837",
+    "#FE5536",
+    "#FC4230",
+    "#FD2636",
+    "#F21E40",
+    "#E6144A",
+    "#DA0A54",
+    "#CC0B5B",
+    "#BD0C62",
+    "#AE0D6A",
+]
+
+
 def rainbow():
     c = lambda v: min(max(v, 0.0), 1.0)
     return [(c(1.5 - abs(4 * t - 3)), c(1.5 - abs(4 * t - 2)), c(1.5 - abs(4 * t - 1)))
@@ -146,6 +202,7 @@ def rainbow():
 MAPS = [
     ("rainbow_desaturated", "rainbow", RAINBOW_DESATURATED),
     ("inferno", "sequential", lambda: sampled("inferno")),
+    ("rainbow_uniform", "diverging", RAINBOW_UNIFORM),
     ("cool_warm", "diverging", cool_warm),
     ("viridis", "sequential", lambda: sampled("viridis")),
     ("plasma", "sequential", lambda: sampled("plasma")),
@@ -163,16 +220,18 @@ def main():
         "# end to the high end (mixed in sRGB), at even steps unless `at`",
         "# gives their positions. Sources and licences: assets/PROVENANCE.md.",
         "# The first map is the default for one-sided ranges, the same in",
-        "# FoehnCraft and KoflCraft; cool_warm for symmetric ranges",
+        "# FoehnCraft and KoflCraft; rainbow_uniform for symmetric ranges",
         "# (maintainer's decisions, 2026-11-24).",
         "",
     ]
     for name, kind, make in MAPS:
         out.append(f"[{name}]")
         out.append(f'kind = "{kind}"')
-        if isinstance(make, list):
+        if isinstance(make, list) and isinstance(make[0], tuple):
             out.append("at = [" + ", ".join(repr(a) for a, _ in make) + "]")
             cols = [f'"{c}"' for _, c in make]
+        elif isinstance(make, list):
+            cols = [f'"{c}"' for c in make]
         else:
             cols = hexes(make())
         out.append("stops = [")
