@@ -17,7 +17,11 @@ KoflCraft's Manifold mesh, 229,615 polyhedra and prisms. The slides are
 also [still images with captions](docs/gallery.md); how they were made is
 in [tools/readme-tour](tools/readme-tour/README.md).</sub>
 
-## Status: V0.1
+## What works today
+
+Not released yet (version 0.1.0): the V0.2 to V0.6 milestones of the UI
+spec are done and V1.0 is in progress; [changelog.d](changelog.d) lists
+every change.
 
 - Opens KoflCraft's `foehncraft.vtu` (VTK polyhedra, boundary polygons, zone
   and patch names and roles) and the `mesh-evidence.json` beside it.
@@ -45,9 +49,41 @@ in [tools/readme-tour](tools/readme-tour/README.md).</sub>
   density setting, and on the mesh surface on request; as long as the
   magnitude (with a length factor), the full vector or only its part in
   the slice, solid or coloured by the field shown.
-- Shaded with edges, patch colours, orbit, pan, zoom to the cursor, fit,
+- Shaded with edges, shaded, wireframe or feature edges (keys 1 to 4);
+  one solid colour (green by default) or colours by patch, patch role,
+  cell type, cell zone or cell quality (non-orthogonality, skewness,
+  volume ratio, face count) with a histogram and a threshold that shows
+  only the worst cells. Every colour is configurable, dark and light
+  themes switch live.
+- Model tree (T): the mesh with its evidence badge, cell zones, cell
+  types, patches, saved views (Ctrl + B), clip planes, slices,
+  iso-surfaces, arrows, regions, measurements and probes, each with an
+  eye, a context menu and double click to fit; H hides, I isolates.
+- Picking of cells and faces and a Properties panel (P) for the mesh,
+  any item, a cell, a face or a probe, with the field values of results.
+- Orbit about the point under the cursor, pan, zoom to the cursor, fit,
   home, the three projection modes (default: perspective with orthographic
-  faces), dark and light themes switched live.
+  faces), cursor coordinates, and a view cube with all 26 views and roll
+  arrows, placed in any corner, floating, hidden or shown on approach.
+- Up to 8 clip planes, crinkle (whole cells) or flat (cut cells), moved
+  by drag handles (slide arrow and tilt arcs), X/Y/Z, keys or typed
+  values; on large meshes the GPU cuts at once while dragging and the
+  exact cut follows.
+- Regions of interest (Alt + R): a box, sphere, slab, cell zone, layers
+  along a patch or picked cells, whole cells or cut flat; only their cells
+  are shown and computed.
+- Measuring (M) with snapping to nodes, edge midpoints and face or cell
+  centres (distances and angles), and probes (Shift + P) that read every
+  field at a point; both stay in the tree.
+- Undo and redo of the camera and the display (Ctrl + Z, Ctrl + Shift + Z),
+  a command palette (Ctrl + K) and a shortcut sheet (F1,
+  [docs/keys.md](docs/keys.md)).
+- Session files (`.murmel`, Ctrl + S): mesh, camera, display, clip planes,
+  saved views, regions, measurements ([docs/sessions.md](docs/sessions.md)).
+- Large meshes: files read, surfaces built and edges found on all threads,
+  the SHA-256 taken after the mesh shows, edges hidden while orbiting only
+  when frames get slow ([docs/performance.md](docs/performance.md),
+  `murmel bench`).
 - Mouse presets (three-button, Apple, Fusion, ParaView), every binding
   editable through `settings.set_bindings` and saved in `navigation.toml`.
 - Title bar, toolbar, viewport with view note and axis triad, status bar.
@@ -65,15 +101,11 @@ in [tools/readme-tour](tools/readme-tour/README.md).</sub>
   bar and Cancel.
 - An MCP server for agents (`murmel mcp`, [docs/mcp.md](docs/mcp.md)): every
   tool of the registry on one headless session, paths confined to read and
-  write roots, screenshots returned as images.
+  write roots, screenshots returned as images; with `--live` the agent
+  drives the open window instead, its steps undoable, with a Stop button.
 - Keyboard and screen-reader use ([docs/accessibility.md](docs/accessibility.md)):
   F6 between the regions, a visible focus ring, AccessKit names for every
   pane and control, palettes checked for WCAG AA contrast.
-
-Not yet (see the milestones of the UI spec): model tree, properties, colour
-by role or cell type (V0.2), view cube and command palette (V0.3), clip
-plane, picking, orbit about the point under the cursor and cursor
-coordinates (V0.4).
 
 ## Build and run
 
