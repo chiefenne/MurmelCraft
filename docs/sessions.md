@@ -143,6 +143,15 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   Loading compares the digest with the hash it names, so an older
   session still finds its mesh unchanged (its SHA-256 is taken once and
   remembered in `checked-files.json`).
+- **Derived fields** (`derived`) keep how each was made, re-derived
+  first on loading: `{"quantity": "flow-angle", "rotation": {"zones":
+  [{"zone": "rotor", "origin": [0, 0, 0], "axis": [0, 0, 1], "rpm":
+  1500}], "frame": "rotor"}}`. From format 1.16 a recipe can name the
+  turbulence fields `k`, `dissipation` (ω or ε) and `nu_t`, carry the
+  turning zones `rotation` (turbomachinery quantities) and the wall
+  patches `walls` (wall distance), and its `reference` takes the
+  kinematic `viscosity` (m²/s) and `c_mu` (left out: air at sea level and
+  0.09, so a 1.11 to 1.15 file loads unchanged).
 - **Colours and the view cube** (`colors`, `view_cube`) are the user's
   settings when the session was saved. Loading applies them to this
   session only; `settings.toml` is not written (decided 2026-11-24). A

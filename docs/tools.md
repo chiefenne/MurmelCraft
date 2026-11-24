@@ -856,6 +856,18 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 {
   "additionalProperties": false,
   "properties": {
+    "dissipation": {
+      "description": "omega or epsilon (a scalar; epsilon by its name, else by the unit m2/s3); left out: found by its name",
+      "type": "string"
+    },
+    "k": {
+      "description": "the turbulent kinetic energy (a scalar); left out: found by its name",
+      "type": "string"
+    },
+    "nu_t": {
+      "description": "the eddy viscosity (a scalar); left out: found by its name",
+      "type": "string"
+    },
     "pressure": {
       "description": "the pressure field (a scalar); left out: found by its name",
       "type": "string"
@@ -865,13 +877,43 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "vorticity",
         "q-criterion",
         "lambda2",
+        "enstrophy",
+        "strain-rate",
         "total-pressure",
-        "pressure-coefficient"
+        "pressure-coefficient",
+        "relative-velocity",
+        "frame-velocity",
+        "velocity-radial",
+        "velocity-circumferential",
+        "velocity-axial",
+        "velocity-meridional",
+        "relative-velocity-circumferential",
+        "flow-angle",
+        "relative-flow-angle",
+        "relative-total-pressure",
+        "rothalpy",
+        "dissipation-rate",
+        "specific-dissipation-rate",
+        "time-scale",
+        "length-scale",
+        "viscosity-ratio",
+        "reynolds-stress-xx",
+        "reynolds-stress-yy",
+        "reynolds-stress-zz",
+        "reynolds-stress-xy",
+        "reynolds-stress-yz",
+        "reynolds-stress-xz",
+        "wall-distance"
       ]
     },
     "reference": {
       "additionalProperties": false,
       "properties": {
+        "c_mu": {
+          "description": "C_mu of the turbulence model (beta* of SST)",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
         "density": {
           "exclusiveMinimum": 0,
           "type": "number"
@@ -882,6 +924,11 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "velocity": {
           "exclusiveMinimum": 0,
           "type": "number"
+        },
+        "viscosity": {
+          "description": "kinematic viscosity (m2/s)",
+          "exclusiveMinimum": 0,
+          "type": "number"
         }
       },
       "required": [],
@@ -890,9 +937,68 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     "remove": {
       "type": "boolean"
     },
+    "rotation": {
+      "additionalProperties": false,
+      "properties": {
+        "frame": {
+          "description": "the zone whose frame every cell is seen in; left out: each cell in its own zone's",
+          "type": "string"
+        },
+        "zones": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "origin": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 3,
+                "type": "array"
+              },
+              "rpm": {
+                "type": "number"
+              },
+              "zone": {
+                "description": "the cell zone that turns; left out: every cell",
+                "type": "string"
+              }
+            },
+            "required": [
+              "origin",
+              "axis",
+              "rpm"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "zones"
+      ],
+      "type": "object"
+    },
     "velocity": {
       "description": "the velocity field (a vector); left out: found by its name",
       "type": "string"
+    },
+    "walls": {
+      "description": "the wall patches (wall distance); left out: the case's walls, else the patches whose role is wall",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     }
   },
   "required": [
@@ -2715,7 +2821,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "field_style",
         "view",
         "reference",
-        "parcels"
+        "parcels",
+        "rotation"
       ]
     },
     "values": {
@@ -2747,7 +2854,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "field_style",
         "view",
         "reference",
-        "parcels"
+        "parcels",
+        "rotation"
       ]
     }
   },
@@ -3551,6 +3659,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `FIELD013` | error | The formula's types or places do not fit: a vector where a scalar goes (or the other way), a function given the wrong number of arguments, a field with neither 1 nor 3 components, or fields with no place in common (one only on the boundary faces, one only in the cells). | Take a component (U.x) or the magnitude (mag(U)), or use dot or cross; the message says which argument. |
 | `FIELD014` | error | A formula's field cannot have this name (it must start with a letter or _, then letters, digits and _, at most 64 long, and not be a derived quantity's field), or its unit is longer than 64 characters. | Choose another name, such as speed or p_rel. |
 | `FIELD015` | error | The formula reads its own field, or a field made from it, so it would go round in a circle. | Read the fields it is made from instead, or remove the field made from it first. |
+| `FIELD016` | error | The turning zones of a turbomachinery quantity cannot be used: an axis of length 0, a speed or axis point that is not finite, a zone the mesh does not have, a frame that is not one of the zones, or more than 16 zones. | Give each zone a cell zone of the mesh (field.catalogue lists them under rotation.mesh_zones) or none for every cell, an axis that is not zero and a finite rpm. |
+| `FIELD017` | error | The wall distance has no wall face to measure to: no patch is a wall (by the result's case or the patch role), a named patch is not one of the mesh's, or the patches have no face. | Name the wall patches with walls (field.catalogue lists the mesh's patches under walls.mesh_patches). |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
 | `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a .vtu file such as KoflCraft's foehncraft.vtu. |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |

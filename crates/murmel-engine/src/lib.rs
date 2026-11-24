@@ -40,6 +40,8 @@ pub mod stream;
 pub mod surface;
 mod tets;
 pub mod theme;
+pub mod turbo;
+pub mod walls;
 
 pub use camera::{Camera, Projection, ScreenAxis, StandardView};
 pub use clip::{Clip, ClipMode};

@@ -148,8 +148,33 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Derive vorticity | `field.derive` `{"quantity":"vorticity"}` |
 | palette | Derive Q criterion | `field.derive` `{"quantity":"q-criterion"}` |
 | palette | Derive λ₂ | `field.derive` `{"quantity":"lambda2"}` |
+| palette | Derive enstrophy | `field.derive` `{"quantity":"enstrophy"}` |
+| palette | Derive strain rate | `field.derive` `{"quantity":"strain-rate"}` |
 | palette | Derive total pressure | `field.derive` `{"quantity":"total-pressure"}` |
 | palette | Derive pressure coefficient | `field.derive` `{"quantity":"pressure-coefficient"}` |
+| palette | Derive relative velocity | `field.derive` `{"quantity":"relative-velocity"}` |
+| palette | Derive frame velocity | `field.derive` `{"quantity":"frame-velocity"}` |
+| palette | Derive radial velocity | `field.derive` `{"quantity":"velocity-radial"}` |
+| palette | Derive circumferential velocity | `field.derive` `{"quantity":"velocity-circumferential"}` |
+| palette | Derive axial velocity | `field.derive` `{"quantity":"velocity-axial"}` |
+| palette | Derive meridional velocity | `field.derive` `{"quantity":"velocity-meridional"}` |
+| palette | Derive relative circumferential velocity | `field.derive` `{"quantity":"relative-velocity-circumferential"}` |
+| palette | Derive flow angle | `field.derive` `{"quantity":"flow-angle"}` |
+| palette | Derive relative flow angle | `field.derive` `{"quantity":"relative-flow-angle"}` |
+| palette | Derive relative total pressure | `field.derive` `{"quantity":"relative-total-pressure"}` |
+| palette | Derive rothalpy | `field.derive` `{"quantity":"rothalpy"}` |
+| palette | Derive dissipation rate ε | `field.derive` `{"quantity":"dissipation-rate"}` |
+| palette | Derive specific dissipation rate ω | `field.derive` `{"quantity":"specific-dissipation-rate"}` |
+| palette | Derive turbulence time scale | `field.derive` `{"quantity":"time-scale"}` |
+| palette | Derive turbulence length scale | `field.derive` `{"quantity":"length-scale"}` |
+| palette | Derive viscosity ratio | `field.derive` `{"quantity":"viscosity-ratio"}` |
+| palette | Derive Reynolds stress xx | `field.derive` `{"quantity":"reynolds-stress-xx"}` |
+| palette | Derive Reynolds stress yy | `field.derive` `{"quantity":"reynolds-stress-yy"}` |
+| palette | Derive Reynolds stress zz | `field.derive` `{"quantity":"reynolds-stress-zz"}` |
+| palette | Derive Reynolds stress xy | `field.derive` `{"quantity":"reynolds-stress-xy"}` |
+| palette | Derive Reynolds stress yz | `field.derive` `{"quantity":"reynolds-stress-yz"}` |
+| palette | Derive Reynolds stress xz | `field.derive` `{"quantity":"reynolds-stress-xz"}` |
+| palette | Derive wall distance | `field.derive` `{"quantity":"wall-distance"}` |
 | palette | Colour by: quality, non-orthogonality | `display.color_by` `{"by":"quality","metric":"non_orthogonality"}` |
 | palette | Colour by: quality, skewness | `display.color_by` `{"by":"quality","metric":"skewness"}` |
 | palette | Colour by: quality, volume ratio | `display.color_by` `{"by":"quality","metric":"volume_ratio"}` |

@@ -54,10 +54,14 @@ pub enum Kind {
     Reference,
     /// The look of spray parcels.
     Parcels,
+    /// The speed and axis of rotation the turbomachinery fields start
+    /// from when the result's case does not give them (the axis point
+    /// and zone belong to one mesh).
+    Rotation,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 10] = [
+    pub const ALL: [Kind; 11] = [
         Kind::Arrows,
         Kind::Slice,
         Kind::Iso,
@@ -68,6 +72,7 @@ impl Kind {
         Kind::View,
         Kind::Reference,
         Kind::Parcels,
+        Kind::Rotation,
     ];
 
     pub fn key(self) -> &'static str {
@@ -82,6 +87,7 @@ impl Kind {
             Kind::View => "view",
             Kind::Reference => "reference",
             Kind::Parcels => "parcels",
+            Kind::Rotation => "rotation",
         }
     }
 
@@ -109,7 +115,8 @@ impl Kind {
                 "range",
             ],
             Kind::View => &["render_mode", "mesh_look", "projection"],
-            Kind::Reference => &["density", "pressure", "velocity"],
+            Kind::Reference => &crate::derive::REFERENCE_KEYS,
+            Kind::Rotation => &["rpm", "axis"],
             Kind::Parcels => &["size", "scale", "map", "reverse"],
         }
     }
@@ -160,6 +167,7 @@ impl Kind {
             Kind::View => serde_json::to_value(View::default()),
             Kind::Reference => serde_json::to_value(Reference::default()),
             Kind::Parcels => serde_json::to_value(ParcelView::new("p".into())),
+            Kind::Rotation => serde_json::to_value(crate::turbo::Turning::default()),
         };
         v.unwrap_or(Value::Null)
     }
@@ -194,6 +202,16 @@ impl Kind {
             Kind::View => serde_json::from_value::<View>(item).map(|_| ()),
             Kind::Reference => serde_json::from_value::<Reference>(item).map(|_| ()),
             Kind::Parcels => serde_json::from_value::<ParcelView>(item).map(|_| ()),
+            Kind::Rotation => serde_json::from_value::<crate::turbo::Turning>(item)
+                .map_err(|e| e.to_string())
+                .and_then(|t| {
+                    crate::turbo::Rotation {
+                        zones: vec![t],
+                        frame: None,
+                    }
+                    .check()
+                })
+                .map_err(serde::de::Error::custom),
         };
         typed.map_err(|e| format!("{}.{key} = {value}: {e}", self.key()))?;
         let number = value.as_f64().unwrap_or(f64::NAN);
@@ -237,7 +255,7 @@ impl Kind {
                 )),
                 _ => Ok(()),
             },
-            (Kind::Reference, "density" | "velocity") if number <= 0.0 => {
+            (Kind::Reference, "density" | "velocity" | "viscosity" | "c_mu") if number <= 0.0 => {
                 Err(format!("reference.{key} = {value} must be above 0"))
             }
             (Kind::Reference, _) => {
