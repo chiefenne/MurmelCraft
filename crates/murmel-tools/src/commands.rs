@@ -1283,6 +1283,10 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "the model tree and the Properties panel show the regions",
     ),
     (
+        "blocks.make",
+        "a conversion for the command line and agents; the window offers it when a mesh too large for memory opens",
+    ),
+    (
         "field.list",
         "the colour-by menu and the legend show the fields",
     ),

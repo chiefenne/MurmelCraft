@@ -22,6 +22,7 @@ use crate::h5write::{AttrValue, Element, H5Writer, Link};
 use crate::hdf5::H5;
 use crate::vtu::{
     HEX_FACES, HEXAHEDRON, POLYHEDRON, PYRAMID, PYRAMID_FACES, TETRA, TETRA_FACES, WEDGE,
+    WEDGE_FACES,
 };
 use crate::{Bounds, CellKind, Mesh, MeshError, NO_CELL, hilbert, par};
 
@@ -32,19 +33,6 @@ pub const DEFAULT_BLOCK_CELLS: usize = 1 << 16;
 /// The block sizes a writer may pick (§ 2).
 pub const MIN_BLOCK_CELLS: usize = 1 << 14;
 pub const MAX_BLOCK_CELLS: usize = 1 << 20;
-
-/// The faces of VTK's wedge as `vtkWedge` lists them since VTK 9 (all
-/// outward, the base (0, 1, 2) turning towards (3, 4, 5) as the base of
-/// every other linear cell does). The reader's older table
-/// ([`crate::vtu::WEDGE_FACES`]) turns the triangles the other way; the
-/// reader takes either, since it turns each cell out by its volume.
-const WEDGE_OUT: &[&[usize]] = &[
-    &[0, 2, 1],
-    &[3, 4, 5],
-    &[0, 1, 4, 3],
-    &[1, 2, 5, 4],
-    &[2, 0, 3, 5],
-];
 
 /// Cell and point arrays the layout uses itself; a field of one of these
 /// names is not written.
@@ -201,7 +189,7 @@ fn linear(kind: CellKind, f: &Faces) -> Option<(i64, Vec<u32>)> {
             for &b in &base {
                 nodes.push(f.across(b, &base)?);
             }
-            (WEDGE, nodes, WEDGE_OUT)
+            (WEDGE, nodes, WEDGE_FACES)
         }
         CellKind::Hexahedron => {
             let q = f.first_of(4)?;
@@ -1341,7 +1329,7 @@ mod tests {
         let cases: [(CellKind, i64, &[&[usize]], usize); 4] = [
             (CellKind::Tetrahedron, TETRA, TETRA_FACES, 4),
             (CellKind::Pyramid, PYRAMID, PYRAMID_FACES, 5),
-            (CellKind::Prism, WEDGE, WEDGE_OUT, 6),
+            (CellKind::Prism, WEDGE, WEDGE_FACES, 6),
             (CellKind::Hexahedron, HEXAHEDRON, HEX_FACES, 8),
         ];
         for (kind, ty, table, nodes) in cases {
