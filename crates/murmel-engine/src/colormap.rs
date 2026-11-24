@@ -8,8 +8,9 @@
 //! Decided by the maintainer (2026-11-24): Rainbow Desaturated (ParaView's
 //! eight control points) for one-sided ranges, the same default as
 //! FoehnCraft's and KoflCraft's pictures, with Inferno as the second
-//! choice; the diverging cool-to-warm map (Moreland 2009) for symmetric
-//! ranges.
+//! choice; Rainbow Uniform (Colin Ware's map in ParaView, brightest at
+//! its yellow middle) for symmetric ranges. Cool to warm (Moreland 2009)
+//! stays in the list.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -23,7 +24,7 @@ const MAPS: &str = include_str!("../../../assets/colormaps.toml");
 /// The map of one-sided ranges when the user chose none.
 pub const DEFAULT: &str = "rainbow_desaturated";
 /// The map of symmetric ranges when the user chose none.
-pub const DIVERGING: &str = "cool_warm";
+pub const DIVERGING: &str = "rainbow_uniform";
 /// Texels of the colour table the renderer samples.
 pub const LUT_SIZE: usize = 256;
 
@@ -167,7 +168,7 @@ impl Colormap {
 mod tests {
     use super::*;
 
-    /// Invariant: the file parses into the nine maps in its order, the
+    /// Invariant: the file parses into the ten maps in its order, the
     /// maintainer's two preferred maps first (2026-11-24); viridis runs
     /// from its dark violet to its yellow and cool_warm from Moreland's
     /// blue through a light grey to his red. A map dropped or misread
@@ -180,6 +181,7 @@ mod tests {
             [
                 "rainbow_desaturated",
                 "inferno",
+                "rainbow_uniform",
                 "cool_warm",
                 "viridis",
                 "plasma",
@@ -196,7 +198,7 @@ mod tests {
         assert_eq!(v.sample(1.0, true), Rgb([0x44, 0x01, 0x54]));
         assert_eq!(v.at.len(), v.stops.len());
         assert!((v.at[1] - 1.0 / 85.0).abs() < 1e-12);
-        let c = get(DIVERGING).unwrap();
+        let c = get("cool_warm").unwrap();
         assert_eq!(c.kind, Kind::Diverging);
         assert_eq!(c.sample(0.0, false), Rgb([59, 76, 192]));
         assert_eq!(c.sample(1.0, false), Rgb([180, 4, 38]));
@@ -245,6 +247,34 @@ mod tests {
         let lut = m.lut(false);
         assert_eq!(lut[0], [0x47, 0x47, 0xDB, 255]);
         assert_eq!(lut[LUT_SIZE - 1], [0xE0, 0x4D, 0x4D, 255]);
+    }
+
+    /// Invariant (maintainer, 2026-11-24): ranges centred on zero take
+    /// ParaView's "Rainbow Uniform" (Colin Ware), 43 colours at even
+    /// steps, the same table as FoehnCraft's. Blue at the low end, the
+    /// bright yellow at the middle (zero of a symmetric range), magenta at
+    /// the high end; the lightness peaks at the middle, so zero is the
+    /// brightest colour of the bar.
+    #[test]
+    fn rainbow_uniform_is_paraviews() {
+        let m = get(DIVERGING).unwrap();
+        assert_eq!(m.id, "rainbow_uniform");
+        assert_eq!(m.kind, Kind::Diverging);
+        assert_eq!(m.stops.len(), 43);
+        assert!((m.at[1] - 1.0 / 42.0).abs() < 1e-12);
+        assert_eq!(m.sample(0.0, false), Rgb([0x05, 0x61, 0xFF]));
+        assert_eq!(m.sample(0.5, false), Rgb([0xFF, 0xFF, 0x03]));
+        assert_eq!(m.sample(1.0, false), Rgb([0xAE, 0x0D, 0x6A]));
+        assert_eq!(m.stops[16], Rgb([0x46, 0xF3, 0x27]));
+        assert_eq!(m.stops[36], Rgb([0xFD, 0x26, 0x36]));
+        let lum = |c: Rgb| {
+            let l = c.linear();
+            0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
+        };
+        let mid = lum(m.sample(0.5, false));
+        for (i, &c) in m.stops.iter().enumerate() {
+            assert!(lum(c) <= mid + 1e-9, "stop {i} brighter than the middle");
+        }
     }
 
     /// A map whose positions don't rise from 0 to 1, or don't match its

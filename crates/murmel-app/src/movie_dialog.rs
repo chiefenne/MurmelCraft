@@ -1,6 +1,7 @@
 //! The movie window (File, "Export movie…", Ctrl + Shift + M): what moves
 //! (the camera turning about its target, a clip plane sweeping through the
-//! mesh, or a flight through the saved views), how long, the frame rate,
+//! mesh, a flight through the saved views, or the steps of the open time
+//! series), how long, the frame rate,
 //! the format (MP4, GIF or PNG frames), the size and the overlays.
 //! "Export…" asks for the file and calls `export.movie` on a copy of the
 //! session on a thread of its own, so the window stays live: a progress
@@ -39,6 +40,8 @@ pub struct MovieDialog {
     /// Views: seconds at each view and of each flight.
     pub hold: f64,
     pub travel: f64,
+    /// Series: seconds each step shows.
+    pub step_hold: f64,
     pub fps: u32,
     pub format: Format,
     pub size: SizeChoice,
@@ -62,6 +65,7 @@ impl Default for MovieDialog {
             plane: 1,
             hold: murmel_tools::movie::HOLD,
             travel: murmel_tools::movie::TRAVEL,
+            step_hold: 1.0 / murmel_engine::series::RATE,
             fps: 30,
             format: Format::Mp4,
             size: SizeChoice::FullHd,
@@ -98,6 +102,9 @@ impl MovieDialog {
                 v["hold"] = json!(self.hold);
                 v["travel"] = json!(self.travel);
             }
+            Motion::Series => {
+                v["hold"] = json!(self.step_hold);
+            }
         }
         if self.transparent && self.format != Format::Mp4 {
             v["transparent"] = json!(true);
@@ -106,12 +113,14 @@ impl MovieDialog {
         v
     }
 
-    /// Frames of the movie with `views` saved views.
-    pub fn frames(&self, views: usize) -> usize {
+    /// Frames of the movie with `views` saved views and `steps` steps of
+    /// the series.
+    pub fn frames(&self, views: usize, steps: usize) -> usize {
         let fps = self.fps as f64;
         match self.motion {
             Motion::Orbit | Motion::Clip => animation::frame_count(self.seconds, fps),
             Motion::Views => animation::flight_count(views, self.hold, self.travel, fps),
+            Motion::Series => steps * animation::frame_count(self.step_hold, fps),
         }
     }
 }
@@ -131,6 +140,7 @@ impl MurmelApp {
             Motion::Orbit => "movie-motion-orbit",
             Motion::Clip => "movie-motion-clip",
             Motion::Views => "movie-motion-views",
+            Motion::Series => "movie-motion-series",
         })
     }
 
@@ -231,10 +241,11 @@ impl MurmelApp {
         let mut cancel = false;
         let clips = self.session.display.clips.len() as u32;
         let views = self.session.display.views.len();
+        let steps = self.session.series.as_ref().map_or(0, |r| r.len());
         md.plane = md.plane.clamp(1, clips.max(1));
         let input = md.input();
         let pixels = SizeChoice::pixels(&input, self.session.viewport);
-        let frames = md.frames(views);
+        let frames = md.frames(views, steps);
         let running = self
             .movie_job
             .as_ref()
@@ -345,6 +356,27 @@ impl MurmelApp {
                                 .labelled_by(label.id);
                                 ui.end_row();
                             }
+                            Motion::Series => {
+                                ui.label(self.i18n.tr("movie-steps"));
+                                let note = if steps == 0 {
+                                    self.i18n.tr("movie-no-series")
+                                } else {
+                                    self.i18n
+                                        .tr_args("movie-steps-n", &[("n", (steps as i64).into())])
+                                };
+                                ui.label(RichText::new(note).color(color(p.text_secondary)));
+                                ui.end_row();
+                                let label = ui.label(self.i18n.tr("movie-step-hold"));
+                                ui.add(
+                                    egui::DragValue::new(&mut md.step_hold)
+                                        .range(0.02..=60.0)
+                                        .speed(0.01)
+                                        .max_decimals(2)
+                                        .suffix(" s"),
+                                )
+                                .labelled_by(label.id);
+                                ui.end_row();
+                            }
                         }
                         let label = ui.label(self.i18n.tr("movie-fps"));
                         let rate = |n: u32| {
@@ -441,6 +473,7 @@ impl MurmelApp {
                                 Motion::Orbit => true,
                                 Motion::Clip => clips > 0,
                                 Motion::Views => views >= 2,
+                                Motion::Series => steps > 0,
                             };
                         if ui
                             .add_enabled(ready, egui::Button::new(self.i18n.tr("export-save")))
@@ -513,7 +546,7 @@ mod tests {
             (json!(1920), json!(30))
         );
         assert!(v.get("hold").is_none() && v.get("plane").is_none());
-        assert_eq!(d.frames(0), 180);
+        assert_eq!(d.frames(0, 0), 180);
         d.motion = Motion::Views;
         d.transparent = true;
         let v = d.input();
@@ -521,8 +554,13 @@ mod tests {
         assert!(v.get("transparent").is_none(), "no transparent MP4");
         d.format = Format::Gif;
         assert_eq!(d.input()["transparent"], true);
-        assert_eq!(d.frames(3), 3 * 15 + 2 * 59);
+        assert_eq!(d.frames(3, 0), 3 * 15 + 2 * 59);
         d.motion = Motion::Clip;
         assert_eq!(d.input()["plane"], 1);
+        d.motion = Motion::Series;
+        let v = d.input();
+        assert_eq!(v["hold"], 0.25);
+        assert!(v.get("travel").is_none() && v.get("seconds").is_none());
+        assert_eq!(d.frames(0, 60), 60 * 8);
     }
 }

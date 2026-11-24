@@ -8,7 +8,7 @@
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
-use crate::{Mesh, Patch, PatchRole, Polygons, par};
+use crate::{FaceList, Mesh, Patch, PatchRole, Polygons, par};
 
 /// No cell (or no face) is known.
 pub const NO_CELL: u32 = u32::MAX;
@@ -30,11 +30,11 @@ impl Buckets {
     /// faces deals its faces out to parts (consecutive ranges of points)
     /// in face order, and each part then sorts its own faces into its
     /// groups, so every group still lists its faces in face order.
-    fn new(faces: &Polygons, points: usize) -> Buckets {
-        let n = faces.len();
+    fn new(faces: &impl FaceList, points: usize) -> Buckets {
+        let n = faces.count();
         let smallest: Vec<u32> = par::collect(n, 1 << 15, |r| {
             r.map(|f| {
-                let m = faces.get(f).iter().copied().min().unwrap_or(u32::MAX);
+                let m = faces.face(f).iter().copied().min().unwrap_or(u32::MAX);
                 m.min(points as u32)
             })
             .collect()
@@ -136,8 +136,8 @@ fn same_points(a: &[u32], b: &[u32], sa: &mut Vec<u32>, sb: &mut Vec<u32>) -> bo
 /// For every cell face, the first cell face (in face order) with the
 /// same points: itself when it is the first. The groups are matched on
 /// all threads, each writing the twins of its own faces.
-fn first_twins(faces: &Polygons, buckets: &Buckets, points: usize) -> Vec<u32> {
-    let mut first = vec![0u32; faces.len()];
+fn first_twins(faces: &impl FaceList, buckets: &Buckets, points: usize) -> Vec<u32> {
+    let mut first = vec![0u32; faces.count()];
     let firsts: &[AtomicU32] = AtomicU32::from_mut_slice(&mut first);
     par::map(points + 1, 1 << 12, |r| {
         let (mut sa, mut sb) = (Vec::new(), Vec::new());
@@ -146,9 +146,9 @@ fn first_twins(faces: &Polygons, buckets: &Buckets, points: usize) -> Vec<u32> {
             let group = buckets.group(p);
             twins.clear();
             for (i, &f) in group.iter().enumerate() {
-                let face = faces.get(f as usize);
+                let face = faces.face(f as usize);
                 let twin = (0..i)
-                    .find(|&j| same_points(face, faces.get(group[j] as usize), &mut sa, &mut sb))
+                    .find(|&j| same_points(face, faces.face(group[j] as usize), &mut sa, &mut sb))
                     .map_or(f, |j| twins[j]);
                 twins.push(twin);
                 firsts[f as usize].store(twin, Relaxed);
@@ -280,7 +280,7 @@ fn turned(a: &[u32], b: &[u32]) -> bool {
 /// `face_neighbour`, `boundary_owner`, `boundary_face_id`,
 /// `face_boundary` and `unique_faces`; and extract the boundary when the
 /// file had none.
-pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
+pub(crate) fn link(mesh: &mut Mesh, polys: impl FaceList) {
     let cells = mesh.cell_count();
     if cells == 0 {
         let n = mesh.boundary.len();
@@ -296,8 +296,13 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
         return;
     }
     let points = mesh.points.len();
+    let t = crate::profile::span("topology.buckets");
     let buckets = Buckets::new(&polys, points);
+    drop(t);
+    let t = crate::profile::span("topology.twins");
     let twin = first_twins(&polys, &buckets, points);
+    drop(t);
+    let t = crate::profile::span("topology.number");
     let Numbered {
         cell_face_id,
         owner,
@@ -305,7 +310,9 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
         first,
         shared,
     } = number(&mesh.cell_faces, &twin);
-    let mut cell_face_flip = vec![false; polys.len()];
+    drop(t);
+    let t = crate::profile::span("topology.flip");
+    let mut cell_face_flip = vec![false; polys.count()];
     drop(twin);
     mesh.unique_faces = owner.len();
     let n_unique = owner.len();
@@ -315,15 +322,17 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
         for (k, flip) in part.iter_mut().enumerate() {
             let f = at + k;
             let owners = firsts[ids[f] as usize] as usize;
-            *flip = owners != f && turned(cell_polys.get(owners), cell_polys.get(f));
+            *flip = owners != f && turned(cell_polys.face(owners), cell_polys.face(f));
         }
     });
+    drop(t);
+    let t = crate::profile::span("topology.distinct");
     // The distinct faces as their owners list them, copied in parallel.
     let mut start = Vec::with_capacity(n_unique + 1);
     start.push(0u32);
     let mut at = 0u32;
     for &f in &first {
-        at += polys.start[f as usize + 1] - polys.start[f as usize];
+        at += polys.face(f as usize).len() as u32;
         start.push(at);
     }
     let mut nodes = vec![0u32; at as usize];
@@ -340,7 +349,7 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
             let base = starts[r.start] as usize;
             sc.spawn(move || {
                 for u in r.clone() {
-                    let src = cell_polys.get(firsts[u] as usize);
+                    let src = cell_polys.face(firsts[u] as usize);
                     let a = starts[u] as usize - base;
                     part[a..a + src.len()].copy_from_slice(src);
                 }
@@ -348,6 +357,8 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
         }
     });
     let distinct = Polygons { start, nodes };
+    drop(t);
+    let t = crate::profile::span("topology.boundary");
     if mesh.boundary.is_empty() {
         let mut b = Polygons::new();
         let mut bid = Vec::new();
@@ -383,7 +394,7 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
                 buckets
                     .group(m as usize)
                     .iter()
-                    .find(|&&f| same_points(poly, faces.get(f as usize), &mut sa, &mut sb))
+                    .find(|&&f| same_points(poly, faces.face(f as usize), &mut sa, &mut sb))
                     .map_or(NO_CELL, |&f| ids[f as usize])
             })
             .collect()
@@ -400,6 +411,8 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
             })
             .collect();
     }
+    drop(t);
+    let t = crate::profile::span("topology.rest");
     let mut face_boundary = vec![NO_CELL; n_unique];
     for (b, &u) in mesh.boundary_face_id.iter().enumerate() {
         if u != NO_CELL {
@@ -412,6 +425,7 @@ pub(crate) fn link(mesh: &mut Mesh, polys: Polygons) {
     mesh.face_owner = owner;
     mesh.face_neighbour = neighbour;
     mesh.face_boundary = face_boundary;
+    drop(t);
 }
 
 #[cfg(test)]

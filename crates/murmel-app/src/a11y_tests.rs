@@ -1333,3 +1333,56 @@ fn derived_fields_from_the_window() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Invariant: with a time series open the player bar shows below the
+/// viewport with named controls, F6 reaches it between the viewport and
+/// the properties, Next shows the next step, Play turns into Pause and
+/// back, and full stop steps on. Breaks if the bar lost its names, its
+/// buttons stopped calling the series tools, or Space and full stop no
+/// longer reached the player.
+#[test]
+fn player_bar_steps_and_plays() {
+    let mut h = harness();
+    let dir = std::env::temp_dir().join(format!("murmel-player-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fields = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    for step in [10, 20, 30] {
+        std::fs::copy(&fields, dir.join(format!("fields_{step:06}.vtkhdf"))).unwrap();
+    }
+    assert!(
+        h.state_mut()
+            .call("series.open", serde_json::json!({"path": dir}))
+            .is_some()
+    );
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "player bar");
+    let step = |h: &Harness<'_, MurmelApp>| h.state().session.series.as_ref().unwrap().entry().step;
+    assert_eq!(step(&h), 10);
+    h.get_by_label("Next step").click();
+    h.run_steps(2);
+    assert_eq!(step(&h), 20);
+    h.get_by_label("Play").click();
+    h.run_steps(2);
+    assert!(h.state().session.series.as_ref().unwrap().playback.playing);
+    assert!(named(&h, "Pause"));
+    h.get_by_label("Pause").click();
+    h.run_steps(2);
+    assert!(!h.state().session.series.as_ref().unwrap().playback.playing);
+    // The keys: full stop steps on (wrapping round while looping).
+    let before = step(&h);
+    h.key_press(egui::Key::Period);
+    h.run_steps(2);
+    assert_ne!(step(&h), before);
+    // F6 from the viewport reaches the player next.
+    let mut seen = Vec::new();
+    for _ in 0..7 {
+        h.key_press(egui::Key::F6);
+        h.run_steps(2);
+        seen.push(focused_pane(&h).unwrap_or_default());
+    }
+    let at = seen.iter().position(|p| p == "Viewport").unwrap();
+    assert_eq!(seen[at + 1], "Player", "{seen:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

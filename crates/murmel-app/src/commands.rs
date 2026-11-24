@@ -73,7 +73,12 @@ fn widget_key(s: &KeyboardShortcut) -> bool {
     plain
         && matches!(
             s.logical_key,
-            Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Escape
+            Key::ArrowLeft
+                | Key::ArrowRight
+                | Key::ArrowUp
+                | Key::ArrowDown
+                | Key::Escape
+                | Key::Space
         )
 }
 
@@ -101,6 +106,8 @@ impl MurmelApp {
             match c.id.as_str() {
                 "window.open" => self.open_dialog(),
                 "window.open_folder" => self.open_folder_dialog(),
+                "window.parcels_open" => self.parcels_open_dialog(),
+                "window.series_open" => self.series_open_dialog(),
                 "window.screenshot" => self.screenshot_dialog(),
                 "window.export_image" => self.export.open = true,
                 "window.export_movie" => self.movie.open = true,

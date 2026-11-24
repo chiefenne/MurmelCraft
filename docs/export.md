@@ -8,6 +8,8 @@ can be transparent, lines, legend and text grow with the scale so a 2x
 picture looks like the window ("same look as on screen"), PNG frames and
 GIF are written by MurmelCraft itself and MP4 by the system `ffmpeg`, and
 a flight through saved views eases into each view and can hold there.
+A movie of a time series (motion `series`, D268) plays the steps of the
+series opened with `series.open`, the camera still.
 
 | Where | How |
 |---|---|
@@ -55,14 +57,14 @@ were; the movie is no undo step.
 |---|---|---|
 | `path` | (required) | A `.mp4` or `.gif` file, or a folder for PNG frames (`frame-00001.png`, …), made if missing. |
 | `format` | from the path | `mp4`, `gif` or `png`. |
-| `motion` | (required) | `orbit`: the camera turns about the vertical axis through its target. `clip`: a clip plane sweeps through the mesh. `views`: the camera flies through saved views. |
+| `motion` | (required) | `orbit`: the camera turns about the vertical axis through its target. `clip`: a clip plane sweeps through the mesh. `views`: the camera flies through saved views. `series`: the steps of the open time series one after the other (`series.open`), the camera still; the step shown before the movie is shown again after it. |
 | `fps` | 30 | Frames a second, 1 to 60. A GIF times frames in hundredths of a second, so it plays at most 50 (the result says the rate it plays at). |
 | `seconds` | 6 | `orbit` and `clip`: the length. At most 36000 frames (20 minutes at 30). |
 | `degrees` | 360 | `orbit`: the angle. A whole turn leaves out the last frame, which equals the first, so a looping movie does not stutter. |
 | `plane` | the current one | `clip`: the plane, counted from 1; it is switched on for the movie. |
-| `from`, `to` | the ends of the plane's slider | `clip`: offsets along the plane's normal from the centre of the mesh's bounds, from where the plane cuts nothing to where it cuts everything. |
+| `from`, `to` | the ends of the plane's slider | `clip`: offsets along the plane's normal from the centre of the mesh's bounds, from where the plane cuts nothing to where it cuts everything. `series`: the first and the last step (default the series' first and last; `to` before `from` plays backwards); a step the series lacks is refused (`SERIES003`). |
 | `views` | all, in the order they were saved | `views`: the names of two saved views or more. |
-| `hold` | 0.5 | `views`: seconds at each view (at least one frame). |
+| `hold` | 0.5 | `views`: seconds at each view (at least one frame). `series`: seconds each step shows, default one step at the player's rate (4 steps a second: 0.25 s). |
 | `travel` | 2 | `views`: seconds of each flight; it eases out of one view and into the next (smoothstep in time, shortest-arc rotation, as the window's view flights). |
 
 The fields of another motion are refused (`TOOL002`), so a mistyped call
@@ -80,14 +82,16 @@ then `ffmpeg` on the PATH, in `/opt/homebrew/bin` and in `/usr/local/bin`
 (a Mac app started from the Finder does not see the shell's PATH). Without
 one the call fails with `EXPORT002`; on macOS `brew install ffmpeg`.
 
-A turn and a flight from the command line:
+A turn, a flight and a time series from the command line:
 
 ```sh
 cat > movie.json <<'JSON'
 [
   {"tool": "session.load", "input": {"path": "rotor.murmel"}},
   {"tool": "export.movie", "input": {"path": "rotor-turn.mp4", "motion": "orbit", "seconds": 8, "width": 1920, "height": 1080}},
-  {"tool": "export.movie", "input": {"path": "rotor-tour.gif", "motion": "views", "hold": 1, "travel": 2, "fps": 25, "scale": 1}}
+  {"tool": "export.movie", "input": {"path": "rotor-tour.gif", "motion": "views", "hold": 1, "travel": 2, "fps": 25, "scale": 1}},
+  {"tool": "series.open", "input": {"path": "output/spray_duct"}},
+  {"tool": "export.movie", "input": {"path": "spray.mp4", "motion": "series", "hold": 0.1, "fps": 30}}
 ]
 JSON
 murmel run --script movie.json

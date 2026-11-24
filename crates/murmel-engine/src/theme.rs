@@ -110,6 +110,8 @@ pub struct FieldTokens {
     pub arrow: Rgb,
     /// Streamlines in their own colour.
     pub stream: Rgb,
+    /// Spray parcels in their own colour.
+    pub parcel: Rgb,
 }
 
 /// Colours of the patch roles.
@@ -418,6 +420,7 @@ impl Tokens {
                 "outline" => &mut f.outline,
                 "arrow" => &mut f.arrow,
                 "stream" => &mut f.stream,
+                "parcel" => &mut f.parcel,
                 _ => return Err(format!("unknown field colour {name}")),
             } = rgb;
         }

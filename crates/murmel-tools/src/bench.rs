@@ -173,21 +173,33 @@ impl Stages {
 }
 
 /// The peak resident memory of this process in MiB, where the system
-/// tells it (Linux `/proc/self/status` `VmHWM`).
+/// tells it (`getrusage` on Linux and macOS; none on Windows).
+#[cfg(unix)]
 pub fn peak_rss_mib() -> Option<f64> {
-    let s = std::fs::read_to_string("/proc/self/status").ok()?;
-    let kb: f64 = s
-        .lines()
-        .find_map(|l| l.strip_prefix("VmHWM:"))?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()?;
-    Some((kb / 1024.0 * 10.0).round() / 10.0)
+    use nix::sys::resource::{UsageWho, getrusage};
+    // macOS counts the peak in bytes, Linux in KiB.
+    let unit = if cfg!(target_vendor = "apple") {
+        1.0
+    } else {
+        1024.0
+    };
+    let peak = getrusage(UsageWho::RUSAGE_SELF).ok()?.max_rss() as f64 * unit;
+    Some(mib_of(peak))
+}
+
+/// The peak resident memory of this process in MiB, where the system
+/// tells it (`getrusage` on Linux and macOS; none on Windows).
+#[cfg(not(unix))]
+pub fn peak_rss_mib() -> Option<f64> {
+    None
 }
 
 fn mib(bytes: usize) -> f64 {
-    (bytes as f64 / (1024.0 * 1024.0) * 10.0).round() / 10.0
+    mib_of(bytes as f64)
+}
+
+fn mib_of(bytes: f64) -> f64 {
+    (bytes / (1024.0 * 1024.0) * 10.0).round() / 10.0
 }
 
 /// The phases recorded since the last `profile::record(true)`, in
@@ -466,6 +478,20 @@ pub fn table(report: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Invariant: on Linux and macOS the bench reports the peak memory in
+    /// MiB, at least what the process touched. Linux counts the peak in
+    /// KiB and macOS in bytes; taking one unit for the other makes the
+    /// peak 1024 times too small (below the 64 MiB touched here) or too
+    /// large (64 GiB or more). No other test reads the peak's value.
+    #[cfg(unix)]
+    #[test]
+    fn peak_memory_counts_what_the_process_touched() {
+        let touched = vec![1u8; 64 << 20];
+        std::hint::black_box(&touched);
+        let peak = peak_rss_mib().unwrap_or(0.0);
+        assert!((64.0..64.0 * 1024.0).contains(&peak), "peak {peak} MiB");
+    }
 
     /// Invariant: `make` writes every format and `run` reads each back to
     /// the same cell count and reports every stage with a time. A stage

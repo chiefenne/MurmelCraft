@@ -101,6 +101,12 @@ pub struct Surface {
     /// faces.
     pub stream_positions: Vec<[f32; 3]>,
     pub stream_colors: Vec<[f32; 3]>,
+    /// Spray parcels drawn, and whether more passed the filters than
+    /// were drawn ([`crate::parcel::MAX_DRAWN`]).
+    pub parcels: usize,
+    pub parcels_capped: bool,
+    /// The smallest and largest colour value of the parcels drawn.
+    pub parcel_range: Option<(f64, f64)>,
 }
 
 /// A corner of a drawn polygon: a mesh node, or a point where a clip
@@ -932,6 +938,7 @@ impl Surface {
         if extras {
             crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
             crate::stream::append(&mut s, mesh, fields, tokens, display);
+            crate::parcel::append(&mut s, mesh, tokens, display);
         }
         s.outline_color = sel.linear();
         for (a, b) in outline(mesh, display) {
@@ -1545,6 +1552,7 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         | Item::Slice(_)
         | Item::Iso(_)
         | Item::Arrows
+        | Item::Parcels
         | Item::Region(_)
         | Item::Stream(_) => false,
     })

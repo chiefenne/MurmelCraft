@@ -30,6 +30,7 @@ use crate::display::{Item, RenderMode};
 use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle};
 use crate::glyph::Arrows;
+use crate::parcel::ParcelView;
 use crate::region::{Region, Shape};
 use crate::session::Session;
 use crate::stream::{Seed, Stream};
@@ -51,10 +52,12 @@ pub enum Kind {
     /// The reference values derived pressure fields start from when the
     /// result's case does not give them.
     Reference,
+    /// The look of spray parcels.
+    Parcels,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 10] = [
         Kind::Arrows,
         Kind::Slice,
         Kind::Iso,
@@ -64,6 +67,7 @@ impl Kind {
         Kind::FieldStyle,
         Kind::View,
         Kind::Reference,
+        Kind::Parcels,
     ];
 
     pub fn key(self) -> &'static str {
@@ -77,6 +81,7 @@ impl Kind {
             Kind::FieldStyle => "field_style",
             Kind::View => "view",
             Kind::Reference => "reference",
+            Kind::Parcels => "parcels",
         }
     }
 
@@ -105,6 +110,7 @@ impl Kind {
             ],
             Kind::View => &["render_mode", "mesh_look", "projection"],
             Kind::Reference => &["density", "pressure", "velocity"],
+            Kind::Parcels => &["size", "scale", "map", "reverse"],
         }
     }
 
@@ -118,6 +124,7 @@ impl Kind {
             Item::Stream(_) => Kind::Stream,
             Item::Clip(_) => Kind::Clip,
             Item::Region(_) => Kind::Region,
+            Item::Parcels => Kind::Parcels,
             _ => return None,
         })
     }
@@ -152,6 +159,7 @@ impl Kind {
             Kind::FieldStyle => serde_json::to_value(FieldStyle::default()),
             Kind::View => serde_json::to_value(View::default()),
             Kind::Reference => serde_json::to_value(Reference::default()),
+            Kind::Parcels => serde_json::to_value(ParcelView::new("p".into())),
         };
         v.unwrap_or(Value::Null)
     }
@@ -185,6 +193,7 @@ impl Kind {
             Kind::FieldStyle => serde_json::from_value::<FieldStyle>(item).map(|_| ()),
             Kind::View => serde_json::from_value::<View>(item).map(|_| ()),
             Kind::Reference => serde_json::from_value::<Reference>(item).map(|_| ()),
+            Kind::Parcels => serde_json::from_value::<ParcelView>(item).map(|_| ()),
         };
         typed.map_err(|e| format!("{}.{key} = {value}: {e}", self.key()))?;
         let number = value.as_f64().unwrap_or(f64::NAN);
@@ -207,6 +216,10 @@ impl Kind {
                 Err(format!("arrows.scale = {value} must be above 0"))
             }
             (Kind::Arrows, "scale") => within(0.0, crate::glyph::MAX_SCALE),
+            (Kind::Parcels, "scale") if number <= 0.0 => {
+                Err(format!("parcels.scale = {value} must be above 0"))
+            }
+            (Kind::Parcels, "scale") => within(0.0, crate::parcel::MAX_SCALE),
             (Kind::Slice, "count") => within(1.0, crate::extract::MAX_SERIES as f64),
             (Kind::Stream, "count") => within(
                 crate::stream::MIN_COUNT as f64,
@@ -217,7 +230,7 @@ impl Kind {
                 crate::field::MAX_BANDS as f64,
             ),
             (Kind::FieldStyle, "line_count") => within(1.0, crate::field::MAX_LINES as f64),
-            (Kind::FieldStyle, "map") => match value.as_str() {
+            (Kind::FieldStyle | Kind::Parcels, "map") => match value.as_str() {
                 Some(m) if crate::colormap::get(m).is_none() => Err(format!(
                     "no colour map {m}; there are {}",
                     crate::colormap::ids().join(", ")
@@ -482,6 +495,8 @@ mod tests {
                                       "arrowheads": false}),
                 Kind::Region => json!({"cut": "crinkle"}),
                 Kind::FieldStyle => json!({"map": "viridis"}),
+                Kind::Parcels => json!({"size": "diameter", "scale": 2.0, "map": "inferno",
+                                       "reverse": true}),
                 _ => sample.clone(),
             };
             for key in kind.keys() {

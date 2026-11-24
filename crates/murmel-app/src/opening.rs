@@ -87,6 +87,7 @@ impl MurmelApp {
         // them afterwards); a session file needs the digest at once, to
         // tell whether its mesh changed, so its mesh is hashed here.
         let hash = matches!(then, Then::Session(_)) || !self.session.hash_after_open;
+        let checked = self.session.checked_dir().map(std::path::Path::to_path_buf);
         #[cfg(test)]
         let gate = self.opening_gate.take();
         let handle = std::thread::spawn(move || {
@@ -95,7 +96,7 @@ impl MurmelApp {
                 let _ = g.recv();
             }
             profile::watch(watched, || {
-                let mut l = murmel_engine::load_with(&from, hash)?;
+                let mut l = murmel_engine::load_checked(&from, hash, checked.as_deref())?;
                 profile::check()?;
                 l.prepare(&display, &tokens);
                 Ok(l)
@@ -194,20 +195,7 @@ impl MurmelApp {
     /// the seconds so far.
     pub(crate) fn opening_text(&self) -> Option<String> {
         let o = self.opening.as_ref()?;
-        let phase = match o.progress.phase() {
-            "read.xml"
-            | "read.numbers"
-            | "read.points"
-            | "read.faces"
-            | "read.owner_neighbour"
-            | "read.vtkhdf" => self.i18n.tr("loading-phase-numbers"),
-            "read.cells" => self.i18n.tr("loading-phase-cells"),
-            "read.topology" => self.i18n.tr("loading-phase-topology"),
-            p if p == "open.surface" || p.starts_with("surface.") => {
-                self.i18n.tr("loading-phase-surface")
-            }
-            _ => self.i18n.tr("loading-phase-file"),
-        };
+        let phase = self.i18n.tr(phase_message(o.progress.phase()));
         let file = o
             .path
             .file_name()
@@ -239,5 +227,41 @@ impl MurmelApp {
         ui.label(RichText::new(&text).small());
         said.push(text);
         true
+    }
+}
+
+/// The message the window shows for a phase of the reader (the name of
+/// its current `profile::span`).
+fn phase_message(phase: &str) -> &'static str {
+    match phase {
+        "read.xml"
+        | "read.numbers"
+        | "read.points"
+        | "read.faces"
+        | "read.owner_neighbour"
+        | "read.vtkhdf" => "loading-phase-numbers",
+        "read.cells" => "loading-phase-cells",
+        p if p == "read.topology" || p.starts_with("topology.") => "loading-phase-topology",
+        p if p == "open.surface" || p.starts_with("surface.") => "loading-phase-surface",
+        _ => "loading-phase-file",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::phase_message;
+
+    /// Invariant: while the cell faces are linked, the window says
+    /// "matching the faces" through every step of the linking
+    /// (`topology.*`), not only at its start. Dropping the `topology.` arm
+    /// would show "reading the file" for most of that time. The window test
+    /// of a background open reads the text once, before the reader starts,
+    /// so it would not notice.
+    #[test]
+    fn the_steps_of_linking_show_as_matching_the_faces() {
+        for p in ["read.topology", "topology.buckets", "topology.rest"] {
+            assert_eq!(phase_message(p), "loading-phase-topology", "{p}");
+        }
+        assert_eq!(phase_message("read.stream"), "loading-phase-file");
     }
 }

@@ -235,6 +235,29 @@ problem took more than a few minutes to understand.
   runs overlap. The edges keep the first polygon's colour in draw order
   however many threads there are; `threads_give_the_same_surface`
   checks both.
+- **Sessions that remember checked files write to the settings folder**
+  (`Session::remember_checked`, `checked-files.json`; the window and the
+  command line turn it on). A test that opens meshes with it on sets
+  `config_dir` to a folder of its own. A file modified less than
+  `checked::SETTLED` (3 s) ago is not remembered, so a test that writes
+  a mesh file and expects it remembered sets its modification time back
+  first.
+- **The `.vtu` cells are read in ranges, in two passes** (`vtu/cells.rs`).
+  Both passes walk the cells with the same `walk`, so a new check goes
+  there and holds in both. A range starts in the polyhedra's `faces`
+  stream where the last polyhedron before it ends (the face offsets of
+  other cells are -1), and its first error counts only when no range
+  before it has one.
+- **A `.vtu` of polyhedra and polygons leaves its cell faces in the
+  stream** (`InStream`: where each face's point count is), so the faces
+  that `boundary::link` reads are a `FaceList`, not always `Polygons`.
+  Code that needs the cell faces after reading takes them from the
+  mesh's distinct faces, which are copied out as before.
+- **A span names what the window shows while a mesh opens.**
+  `profile::span` also sets the phase that the opening overlay shows
+  (`opening.rs`, `phase_message`), so a new span inside a reader needs
+  its name mapped there, or the window says "reading the file" while it
+  runs. The `topology.*` steps map to "matching the faces".
 - **Picking tests boxes first.** `Surface::tri_boxes` holds a box per run
   of `PICK_RUN` triangles and is filled at the end of `build_with`; code
   that adds triangles to a surface adds them before that (as the slices,

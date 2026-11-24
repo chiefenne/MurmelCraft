@@ -11,8 +11,10 @@
 //! iso-surfaces and the mesh's look beside them (since 1.5), the
 //! vector arrows (since 1.6), the regions of interest (since 1.7; their
 //! flat cut since 1.8), the streamlines (since 1.9), the derived fields
-//! as recipes, computed again on loading (since 1.11), the fields of
-//! your formulas beside them (since 1.12), the user's mesh
+//! as recipes, computed again on loading (since 1.11), the spray
+//! parcels shown, their file read again on loading (since 1.12), the time
+//! series walked and the step shown (since 1.13), the fields of your
+//! formulas beside the derived ones (since 1.14), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -36,6 +38,7 @@ use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, RangeMode};
 use crate::glyph::Arrows;
 use crate::measure::{Measurement, Probe};
+use crate::parcel::ParcelView;
 use crate::quality::Metric;
 use crate::region::Region;
 use crate::session::Session;
@@ -43,9 +46,22 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.12";
+pub const SESSION_VERSION: &str = "1.14";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
+
+/// The time series a session walks (1.13): its manifest or folder, kept
+/// twice as the mesh is, the step shown and the player's rate and loop.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeriesRef {
+    pub path: PathBuf,
+    pub absolute: PathBuf,
+    pub step: u64,
+    pub rate: f64,
+    #[serde(rename = "loop")]
+    pub looping: bool,
+}
 
 /// The mesh a session shows.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -110,6 +126,12 @@ pub struct DisplayState {
     /// Sets of streamlines, in order (1.9).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub streams: Vec<Stream>,
+    /// The spray parcels shown (1.12): their path relative to the
+    /// session file's folder (as the mesh's), the absolute one beside.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parcels: Option<ParcelView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parcels_absolute: Option<PathBuf>,
 }
 
 fn is_outline(l: &MeshLook) -> bool {
@@ -135,10 +157,13 @@ pub struct SessionFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<SavedView>,
     /// The derived fields, as recipes (1.11), and the fields of your
-    /// formulas (1.12), each after the fields it reads; loading computes
+    /// formulas (1.14), each after the fields it reads; loading computes
     /// them again before the display returns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub derived: Vec<Made>,
+    /// The time series walked (1.13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<SeriesRef>,
 }
 
 /// `path` made absolute from the working folder, without touching the
@@ -269,6 +294,18 @@ impl SessionFile {
                 } else {
                     Vec::new()
                 },
+                parcels: d.parcels.clone().filter(|_| s.mesh.is_some()).map(|v| {
+                    let abs = absolute(&v.path);
+                    ParcelView {
+                        path: relative(&dir, &abs).unwrap_or(abs),
+                        ..v
+                    }
+                }),
+                parcels_absolute: d
+                    .parcels
+                    .as_ref()
+                    .filter(|_| s.mesh.is_some())
+                    .map(|v| absolute(&v.path)),
             },
             colors: s.colors.clone(),
             view_cube: s.view_cube.clone(),
@@ -278,6 +315,16 @@ impl SessionFile {
                 Vec::new()
             },
             derived: s.fields().map(|f| f.made().to_vec()).unwrap_or_default(),
+            series: s.series.as_ref().map(|r| {
+                let abs = absolute(&r.path);
+                SeriesRef {
+                    path: relative(&dir, &abs).unwrap_or_else(|| abs.clone()),
+                    absolute: abs,
+                    step: r.entry().step,
+                    rate: r.playback.rate,
+                    looping: r.playback.looping,
+                }
+            }),
         }
     }
 
@@ -431,6 +478,24 @@ impl SessionFile {
                 crate::glyph::MAX_SCALE
             )));
         }
+        if let Some(v) = &f.display.parcels
+            && !(v.scale.is_finite() && v.scale > 0.0 && v.scale <= crate::parcel::MAX_SCALE)
+        {
+            return Err(Refused(format!(
+                "parcels: a scale above 0 up to {}",
+                crate::parcel::MAX_SCALE
+            )));
+        }
+        if let Some(r) = &f.series
+            && !(r.rate.is_finite()
+                && (crate::series::MIN_RATE..=crate::series::MAX_RATE).contains(&r.rate))
+        {
+            return Err(Refused(format!(
+                "series: a rate of {} to {} steps a second",
+                crate::series::MIN_RATE,
+                crate::series::MAX_RATE
+            )));
+        }
         if f.display.streams.len() > crate::stream::MAX_STREAMS {
             return Err(Refused(format!(
                 "at most {} streamline sets",
@@ -477,6 +542,32 @@ impl SessionFile {
 
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_default() + "\n"
+    }
+
+    /// The parcel file to read: relative to `file`'s folder if that
+    /// exists, else the absolute path saved.
+    pub fn parcels_path(&self, file: &Path) -> Option<PathBuf> {
+        let v = self.display.parcels.as_ref()?;
+        let dir = absolute(file).parent().map(Path::to_path_buf)?;
+        let rel = absolute(&dir.join(&v.path));
+        let abs = self.display.parcels_absolute.clone();
+        Some(match abs {
+            Some(a) if !rel.exists() && a.exists() => a,
+            _ => rel,
+        })
+    }
+
+    /// The series manifest or folder to read: relative to `file`'s folder
+    /// if that exists, else the absolute path saved.
+    pub fn series_path(&self, file: &Path) -> Option<PathBuf> {
+        let r = self.series.as_ref()?;
+        let dir = absolute(file).parent().map(Path::to_path_buf)?;
+        let rel = absolute(&dir.join(&r.path));
+        Some(if rel.exists() || !r.absolute.exists() {
+            rel
+        } else {
+            r.absolute.clone()
+        })
     }
 
     /// The mesh file to open: relative to `file`'s folder if that exists,
@@ -551,6 +642,8 @@ impl Session {
         d.regions.clear();
         d.streams.clear();
         d.stream_traces = None;
+        d.parcels = None;
+        d.parcel_data = None;
         d.mesh_look = s.mesh_look;
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
@@ -686,6 +779,21 @@ impl Session {
                     }
                 }
             }
+            // The parcels, their file read again (the caller put the
+            // path to read in place, `SessionFile::parcels_path`).
+            if let Some(v) = s.parcels {
+                match murmel_mesh::read_parcels(&v.path) {
+                    Ok(p) => {
+                        d.parcel_data = Some(std::sync::Arc::new(p));
+                        d.parcels = Some(v);
+                    }
+                    Err(_) => missing.push(format!("parcels:{}", v.path.display())),
+                }
+            }
+            if d.parcels.is_none() {
+                d.selection.retain(|&i| i != Item::Parcels);
+                d.colors.remove(&Item::Parcels);
+            }
             let (ns, ni) = (d.slices.len(), d.isos.len());
             d.selection.retain(|&i| match i {
                 Item::Slice(k) => (k as usize) < ns,
@@ -753,6 +861,7 @@ mod tests {
                     unit: Some("m/s".into()),
                 }),
             ],
+            series: None,
         };
         assert!(SessionFile::parse(&ok.to_json()).is_ok());
         let with = |f: &dyn Fn(&mut serde_json::Value)| {
@@ -812,7 +921,7 @@ mod tests {
         );
         assert!(with(&|v| v["derived"] = serde_json::json!([{"quantity": "helicity"}])).is_err());
         // A formula that cannot be read, or names a quantity's field
-        // (1.12); a formula of fields the mesh lacks loads (they are
+        // (1.14); a formula of fields the mesh lacks loads (they are
         // reported missing then).
         for bad in [
             serde_json::json!({"name": "s", "formula": "mag(U"}),

@@ -49,6 +49,8 @@ pub struct MurmelApp {
     pub(crate) flight: Option<(murmel_engine::Camera, f64)>,
     /// The time of the frame, for flights started by a tool call.
     pub(crate) now: f64,
+    /// When the player last showed a step (while a series plays).
+    pub(crate) played_at: Option<f64>,
     /// The edges hidden while the view moves when frames with them are
     /// slow.
     pub(crate) moving_edges: crate::edges::MovingEdges,
@@ -144,10 +146,12 @@ impl MurmelApp {
         let tokens = Tokens::builtin()?;
         style::install(&cc.egui_ctx, &tokens);
         let mut session = Session::new(tokens);
-        // The window opens a mesh first and hashes its files afterwards,
+        // The window opens a mesh first and hashes its files afterwards
+        // (remembering them, so an unchanged file is not hashed again),
         // and a clip plane being dragged is cut on the GPU while the exact
         // cut is built on a thread of its own.
         session.hash_after_open = true;
+        session.remember_checked = true;
         session.defer_clips = true;
         let mut error = None;
         if let Some(dir) = settings::config_dir() {
@@ -189,6 +193,7 @@ impl MurmelApp {
             palette: None,
             shortcuts_open: false,
             flight: None,
+            played_at: None,
             now: 0.0,
             moving_edges: Default::default(),
             rotate_axis: murmel_engine::ScreenAxis::Z,
@@ -1092,6 +1097,23 @@ impl MurmelApp {
                     }
                     ui.label(RichText::new(&cells).small());
                     said.push(cells);
+                    if let Some(r) = &self.session.series {
+                        let text = match murmel_tools::series::shown_time(&self.session) {
+                            Some(t) => self.i18n.tr_args(
+                                "status-series-time",
+                                &[
+                                    ("time", format!("{t:.4}").into()),
+                                    ("step", (r.entry().step as i64).into()),
+                                ],
+                            ),
+                            None => self.i18n.tr_args(
+                                "status-series-step",
+                                &[("step", (r.entry().step as i64).into())],
+                            ),
+                        };
+                        ui.label(RichText::new(&text).small().monospace());
+                        said.push(text);
+                    }
                 }
             });
         });
@@ -1287,6 +1309,15 @@ impl eframe::App for MurmelApp {
                 self.region(ui, Region::Status);
                 self.status_bar(ui)
             });
+        if self.session.series.is_some() {
+            egui::Panel::bottom("player")
+                .exact_size(34.0)
+                .frame(bar(p.bg_panel))
+                .show(ui, |ui| {
+                    self.region(ui, Region::Player);
+                    self.player_bar(ui)
+                });
+        }
         if self.show_tree {
             egui::Panel::left("tree")
                 .default_size(264.0)
@@ -1330,6 +1361,7 @@ impl eframe::App for MurmelApp {
         self.export_window(&ctx);
         self.derived_window(&ctx);
         self.poll_movie(&ctx);
+        self.play_series(&ctx);
         self.poll_opening(&ctx);
         self.poll_digest(&ctx);
         self.poll_surface(&ctx);

@@ -494,6 +494,9 @@ impl MurmelApp {
             if let Some(a) = self.stream_rows(ui, p, ramp_ends) {
                 action = Some(a);
             }
+            if let Some(a) = self.parcel_rows(ui, p) {
+                action = Some(a);
+            }
             // One button per line, indented like the rows' labels.
             let adds = [
                 (

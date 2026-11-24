@@ -28,7 +28,7 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 
 | Stage | What it measures |
 |---|---|
-| `read` | the reader: file to mesh model, face topology included |
+| `read` | the reader: file to mesh model, face topology included; its phases name the reader's steps (`read.stream`, `read.cells`, `read.topology`, ...), and `topology.*` splits linking the cell faces of a `.vtu` or VTKHDF file: `buckets` (faces sorted by their smallest point), `twins` (each face finds its twin), `number` (distinct faces, owner and neighbour), `flip` (which cell faces run backwards), `distinct` (the distinct faces copied out), `boundary` (the boundary faces found), `rest` |
 | `digest` | SHA-256 of the mesh files (the validity badge needs it) |
 | `open` | `mesh.open` as the window does it: read, evidence, first surface (the files are hashed afterwards) |
 | `open.digest` | the wait, after `open`, until the SHA-256 of the files is in place (the validity badge) |
@@ -46,8 +46,8 @@ KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
 | `render.next.faces` | a later frame without the edges (the window while the view moves, when frames with edges are slow) |
 
-and reports the peak resident memory (Linux only; the `read` stage also
-reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
+and reports the peak resident memory (Linux and macOS, from
+`getrusage`; the `read` stage also reports its own peak, `peak_rss_mib`) and the size of the mesh model. `render.*` on a machine without a GPU runs on Mesa's software
 rasteriser and says nothing about a real GPU; run it on the Mac for those.
 
 ## Baseline (2026-11-24, before any optimisation)
@@ -594,3 +594,135 @@ ms, one thread), finding the cells shown and crossed (two walks over
 every cell's points, about 190 ms on all threads, which one walk could
 do), and the clip's distances, worked out twice (once for the cells
 shown and once for the cutter).
+
+## Remembering checked files (2026-11-24)
+
+On the iMac, the SHA-256 of a 4 M cell ascii `.vtu` (5 GB) takes 17 s
+after the mesh shows: its Core i9 has no SHA instructions, and SHA-256
+cannot be split over threads. The user's choice for it: remember the
+files already checked now, and hash with BLAKE3 in all three projects
+later.
+
+The window and the command line remember the SHA-256 of every mesh file
+they hash in `checked-files.json` in the settings folder
+(`murmel_engine::checked`). A file opened again with the same size and
+modification time, and on Unix the same change time and file id
+(device and inode), is not hashed again: its digest comes from the list
+and is checked against the evidence as before. Writing to a file
+changes its times, replacing it changes its id, and setting its
+modification time back by hand changes its change time, which programs
+cannot set. A file written while it was hashed is not remembered, nor
+one modified less than 3 s before: written again within the same tick
+of its file system's clock (2 s on FAT) at the same size, it would look
+unchanged. The list keeps the 500 files checked last; it is a cache,
+so a list that cannot be read or written means only that files are
+hashed again. The MCP server's headless sessions and `murmel bench` do
+not use it.
+
+- **The window** (hash after the open): for a file opened again, the
+  badge turns from *Checking* to its colour as soon as the mesh shows,
+  instead of 17 s later at 4 M cells on the iMac, and saving a session
+  no longer waits.
+- **The command line** (`murmel call mesh.open`, hash while reading): a
+  `.vtu` or `.vtkhdf` file is read without hashing, so the open is the
+  parsing alone. The files of a polyMesh folder are still hashed while
+  reading there; the window remembers them one by one.
+
+Here (4 threads, SHA instructions, 1 GB/s), `murmel call mesh.open` of
+the 4 M cell `.vtu` takes 8.2 s the first time and 7.2 s again. On the
+iMac the hash sets the pace instead: its benchmark read the same mesh in
+20.2 s while hashing and opened it in 5.3 s without, so opening it again
+from the command line should take about 5 s instead of 20 s, and in the
+window the badge should be final when the mesh shows instead of 17 s
+later (estimates from the iMac's benchmark of 2026-11-24).
+
+## Building the cells on all threads (2026-11-24)
+
+The first numbers from the iMac (4 M cells, the ascii `.vtu` still in
+the file cache, main at d91bb3a): the mesh showed after 5.3 s, of which
+2.2 s went to parsing the text, 2.0 s to linking the faces and 0.74 s to
+building the cells. Building the cells took as long there as on 4
+threads here, because it still ran on one thread. It turns each VTK
+cell into its faces (a polyhedron's from the `faces` stream, a standard
+cell's from its face table) or into a boundary polygon.
+
+It now runs on all threads (`vtu/cells.rs`), in two passes over one
+range of cells per thread. Both passes walk the cells with the same
+code:
+
+1. Each range checks its cells and counts its faces, their points, its
+   cells and its polygons. The counts give each range its place in the
+   arrays. A range starts reading the `faces` stream where the last
+   polyhedron before it ends.
+2. Each range writes its cells at that place.
+
+The first bad cell gives the error, as before, even when a later range
+holds another.
+
+The faces' points no longer move. One thread used to move them down
+over the stream they came from, dropping each face's point count; a
+first version of this change copied them into a new array on all
+threads instead, but writing 1.2 GB of fresh memory at 4 M cells left
+it at 0.55 s. A file of polyhedra and polygons only, as KoflCraft
+writes, now leaves its faces in the stream: the reader notes where each
+face's count is (`InStream`), and linking the faces reads them there
+(it takes any `FaceList`). The stream is freed after the linking. Files
+with standard cells (tetrahedra, hexahedra, prisms, pyramids) still
+copy their faces out, as their faces are not in the stream.
+
+The meshes are the same bit for bit: every array the reader gives was
+hashed on the fixtures and on 1 M cells, at 1 and 4 threads, against
+main. `threads_give_the_cells_of_one_walk` compares 1 to 7 threads on
+all cell types mixed and on polyhedra and polygons only,
+`threads_report_the_first_bad_cell` compares the errors, and
+`polyhedra_leave_their_faces_in_the_stream` checks the faces left in
+the stream.
+
+Same machine, 4 M cells ascii `.vtu` (4.99 GB), `--no-render`, two runs
+each alternating on 4 threads and one on 1 thread, main at d91bb3a
+against this branch:
+
+| | 4 threads | 1 thread |
+|---|---:|---:|
+| building the cells while opening, ms (was) | 306 (674) | 848 (689) |
+| open, ms (was) | 6,553 (6,854) | 14,283 (14,647) |
+| peak memory while reading, MiB (was) | 3,999 (4,011) | 3,904 (3,917) |
+
+What it shows:
+
+- Building the cells takes less than half as long on 4 threads, and
+  should take about a fifth of the 0.74 s on the iMac's 16 (estimate).
+- On one thread it takes a quarter longer: it walks the cells twice.
+- Linking the faces reads them from the stream as fast as from their
+  own array (1.5 to 1.7 s in both, within the noise of these runs), and
+  the peak memory falls slightly: the stream holds each face's count
+  besides its points, but the connectivity and the face offsets are now
+  freed before the linking.
+
+## The steps of linking the faces, and peak memory on macOS (2026-11-24)
+
+`bench run` now splits `read.topology` into its steps (`topology.*`, see
+the stages above) and reports the peak memory on macOS too: it asks
+`getrusage` on Linux and macOS (the `nix` crate, MIT) instead of reading
+Linux's `/proc/self/status`. On Linux both give the same peak (3,999.6
+and 3,998.8 MiB for the read of the 4 M mesh below; 5,915 and 5,914 MiB
+over the whole run).
+
+The 4 M cell `.vtu` of polyhedra here (`bench make --cells 4000000`),
+4 threads, two runs of `read` and `open` (ms):
+
+| Step | read | open |
+|---|---:|---:|
+| buckets (faces sorted by their smallest point) | 660, 603 | 635, 589 |
+| twins (each face finds its twin) | 376, 322 | 331, 368 |
+| number (distinct faces, owner and neighbour) | 224, 184 | 243, 197 |
+| flip (cell faces that run backwards) | 139, 142 | 141, 144 |
+| distinct (the distinct faces copied out) | 448, 424 | 457, 370 |
+| boundary | 31, 31 | 28, 31 |
+| rest | 55, 55 | 64, 54 |
+| all of `read.topology` | 1,995, 1,839 | 1,962, 1,805 |
+
+Sorting the faces into buckets and copying the distinct faces out take
+more than half of it. Both write large fresh arrays, which is where the
+iMac (2.0 s for this step at 16 threads) is limited by memory rather
+than by its cores; its own split will show whether that holds there.

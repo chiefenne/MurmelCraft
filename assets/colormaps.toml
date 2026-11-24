@@ -3,7 +3,7 @@
 # end to the high end (mixed in sRGB), at even steps unless `at`
 # gives their positions. Sources and licences: assets/PROVENANCE.md.
 # The first map is the default for one-sided ranges, the same in
-# FoehnCraft and KoflCraft; cool_warm for symmetric ranges
+# FoehnCraft and KoflCraft; rainbow_uniform for symmetric ranges
 # (maintainer's decisions, 2026-11-24).
 
 [rainbow_desaturated]
@@ -32,6 +32,19 @@ stops = [
   "#FBBC21", "#FAC228", "#F9C72F", "#F8CD37", "#F7D340", "#F5D949",
   "#F4DF53", "#F3E55D", "#F2EA69", "#F1EF75", "#F2F482", "#F4F88E",
   "#F8FB9A", "#FCFFA4",
+]
+
+[rainbow_uniform]
+kind = "diverging"
+stops = [
+  "#0561FF", "#056CF7", "#0577F0", "#0582E8", "#058BDF", "#0595D5",
+  "#059ECB", "#05A6BF", "#05AFB3", "#05B8A8", "#05C19A", "#05CA8C",
+  "#05D47F", "#05DC6D", "#06E55C", "#04ED4B", "#46F327", "#7EF51C",
+  "#A4F90C", "#C2FB09", "#E1FD06", "#FFFF03", "#FFF414", "#FFE826",
+  "#FFDD37", "#FFD137", "#FFC437", "#FFB837", "#FFAC37", "#FF9F37",
+  "#FF9337", "#FF8537", "#FF7737", "#FF6837", "#FE5536", "#FC4230",
+  "#FD2636", "#F21E40", "#E6144A", "#DA0A54", "#CC0B5B", "#BD0C62",
+  "#AE0D6A",
 ]
 
 [cool_warm]

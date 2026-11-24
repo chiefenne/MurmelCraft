@@ -113,16 +113,19 @@ pub enum Motion {
     Clip,
     /// The camera flies through saved views.
     Views,
+    /// The steps of the open time series, one after the other.
+    Series,
 }
 
 impl Motion {
-    pub const ALL: [Motion; 3] = [Motion::Orbit, Motion::Clip, Motion::Views];
+    pub const ALL: [Motion; 4] = [Motion::Orbit, Motion::Clip, Motion::Views, Motion::Series];
 
     pub fn name(self) -> &'static str {
         match self {
             Motion::Orbit => "orbit",
             Motion::Clip => "clip",
             Motion::Views => "views",
+            Motion::Series => "series",
         }
     }
 }
@@ -217,15 +220,15 @@ fn within(x: f64, lo: f64, hi: f64, open: bool, what: &str) -> Result<f64, Diagn
 /// Refuse the fields of another motion, so a mistyped call is not
 /// silently a different movie.
 fn only_for(i: &ExportMovie) -> Result<(), Diagnostic> {
-    use Motion::{Clip, Orbit, Views};
+    use Motion::{Clip, Orbit, Series, Views};
     let given: [(&str, bool, &[Motion]); 8] = [
         ("seconds", i.seconds.is_some(), &[Orbit, Clip]),
         ("degrees", i.degrees.is_some(), &[Orbit]),
         ("plane", i.plane.is_some(), &[Clip]),
-        ("from", i.from.is_some(), &[Clip]),
-        ("to", i.to.is_some(), &[Clip]),
+        ("from", i.from.is_some(), &[Clip, Series]),
+        ("to", i.to.is_some(), &[Clip, Series]),
         ("views", i.views.is_some(), &[Views]),
-        ("hold", i.hold.is_some(), &[Views]),
+        ("hold", i.hold.is_some(), &[Views, Series]),
         ("travel", i.travel.is_some(), &[Views]),
     ];
     for (name, set, motions) in given {
@@ -252,8 +255,79 @@ fn too_long(n: usize) -> Result<(), Diagnostic> {
 }
 
 /// The frames of the movie `i` asks for, and the motion as the result
-/// reports it.
-fn frames(i: &ExportMovie, s: &Session, fps: f64) -> Result<(Vec<Frame>, Value), Diagnostic> {
+/// reports it; for motion series also the series entry of each frame.
+type Frames = (Vec<Frame>, Value, Vec<usize>);
+
+fn frames(i: &ExportMovie, s: &Session, fps: f64) -> Result<Frames, Diagnostic> {
+    if i.motion == Motion::Series {
+        return series_frames(i, s, fps);
+    }
+    let (f, v) = moves(i, s, fps)?;
+    Ok((f, v, Vec::new()))
+}
+
+/// Each step of the open series from `from` to `to` (steps; default the
+/// first and the last) held `hold` seconds (default one step of the
+/// player's rate), the camera still.
+fn series_frames(i: &ExportMovie, s: &Session, fps: f64) -> Result<Frames, Diagnostic> {
+    let r = s.series.as_ref().ok_or_else(|| {
+        Diagnostic::new(
+            "SERIES002",
+            "motion series needs an open time series; open one with series.open",
+        )
+    })?;
+    let index = |x: Option<f64>, end: usize| -> Result<usize, Diagnostic> {
+        let Some(x) = x else {
+            return Ok(end);
+        };
+        let st = finite(x, "from/to")?;
+        let k = (st >= 0.0 && st.fract() == 0.0)
+            .then(|| r.index_of_step(st as u64))
+            .flatten();
+        k.ok_or_else(|| {
+            Diagnostic::new(
+                "SERIES003",
+                format!(
+                    "the series has no step {st}; its steps run from {} to {}",
+                    r.entries[0].step,
+                    r.entries[r.len() - 1].step
+                ),
+            )
+        })
+    };
+    let from = index(i.from, 0)?;
+    let to = index(i.to, r.len() - 1)?;
+    let hold = within(
+        i.hold.unwrap_or(1.0 / r.playback.rate),
+        0.0,
+        MAX_STEP,
+        true,
+        "hold",
+    )?;
+    let each = animation::frame_count(hold, fps);
+    let order: Vec<usize> = if from <= to {
+        (from..=to).collect()
+    } else {
+        (to..=from).rev().collect()
+    };
+    too_long(order.len().saturating_mul(each))?;
+    let entries: Vec<usize> = order
+        .iter()
+        .flat_map(|&k| std::iter::repeat_n(k, each))
+        .collect();
+    let still = Frame {
+        camera: s.camera.clone(),
+        clip: None,
+    };
+    Ok((
+        vec![still; entries.len()],
+        json!({"kind": "series", "from": r.entries[from].step, "to": r.entries[to].step, "steps": order.len(), "hold": hold}),
+        entries,
+    ))
+}
+
+/// The frames of a camera or clip motion.
+fn moves(i: &ExportMovie, s: &Session, fps: f64) -> Result<(Vec<Frame>, Value), Diagnostic> {
     let seconds = || {
         within(
             i.seconds.unwrap_or(SECONDS),
@@ -336,6 +410,10 @@ fn frames(i: &ExportMovie, s: &Session, fps: f64) -> Result<(Vec<Frame>, Value),
                 json!({"kind": "views", "views": names, "hold": hold, "travel": travel}),
             ))
         }
+        Motion::Series => Err(Diagnostic::new(
+            "TOOL002",
+            "motion series has frames of its own",
+        )),
     }
 }
 
@@ -709,6 +787,7 @@ impl Sink for Ffmpeg {
 fn render(
     s: &mut Session,
     frames: &[Frame],
+    entries: &[usize],
     look: &Look,
     sink: &mut dyn Sink,
     p: &Progress,
@@ -730,6 +809,11 @@ fn render(
                 ));
             }
             s.camera = f.camera.clone();
+            if let Some(&e) = entries.get(k)
+                && s.series.as_ref().is_some_and(|r| r.current != e)
+            {
+                crate::series::go_to(s, e)?;
+            }
             if let Some((plane, offset)) = f.clip
                 && let Some(c) = s.display.clips.get_mut(plane)
             {
@@ -756,7 +840,7 @@ pub fn export_movie(input: Value, s: &mut Session) -> Run {
     only_for(&i)?;
     let format = i.format.unwrap_or_else(|| Format::of(&i.path));
     let fps = within(i.fps, 1.0, 60.0, false, "fps")?;
-    let (frames, motion) = frames(&i, s, fps)?;
+    let (frames, motion, entries) = frames(&i, s, fps)?;
     let (mut width, mut height, scale) = picture_size(s.viewport, i.width, i.height, i.scale)?;
     if format == Format::Mp4 {
         if i.transparent {
@@ -796,14 +880,24 @@ pub fn export_movie(input: Value, s: &mut Session) -> Run {
         }
     };
     let keep = (s.camera.clone(), s.display.clips.clone(), s.theme);
+    let shown = s.series.as_ref().map(|r| r.current);
     if let Some(t) = i.theme {
         s.theme = t;
     }
-    let made = render(s, &frames, &look, sink.as_mut(), &p);
+    let made = render(s, &frames, &entries, &look, sink.as_mut(), &p);
     // The movie changes nothing: the camera, the planes and the theme go
     // back as they were.
     s.camera = keep.0;
     s.theme = keep.2;
+    // The step shown before the movie is shown again.
+    let mut made = made;
+    if let Some(k) = shown
+        && s.series.as_ref().is_some_and(|r| r.current != k)
+        && let Err(d) = crate::series::go_to(s, k)
+        && made.is_ok()
+    {
+        made = Err(d);
+    }
     if s.display.clips != keep.1 {
         s.display.clips = keep.1;
         s.redraw();
@@ -855,15 +949,15 @@ pub fn export_movie_schema() -> Value {
         json!({
             "path": {"type": "string", "description": "The movie to write: a .mp4 or .gif file, or a folder for PNG frames (frame-00001.png, …)"},
             "format": {"enum": ["mp4", "gif", "png"], "description": "Default: from the path (.mp4, .gif), else PNG frames. MP4 needs ffmpeg installed (brew install ffmpeg)"},
-            "motion": {"enum": ["orbit", "clip", "views"], "description": "orbit: the camera turns about the vertical axis through its target; clip: a clip plane sweeps through the mesh; views: the camera flies through saved views, easing into each"},
+            "motion": {"enum": ["orbit", "clip", "views", "series"], "description": "orbit: the camera turns about the vertical axis through its target; clip: a clip plane sweeps through the mesh; views: the camera flies through saved views, easing into each; series: the steps of the open time series (series.open) one after the other, the camera still"},
             "seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_SECONDS, "default": SECONDS, "description": "orbit and clip: the length of the movie"},
             "fps": {"type": "number", "minimum": 1, "maximum": 60, "default": 30, "description": "Frames a second (a GIF plays at most 50)"},
             "degrees": {"type": "number", "minimum": -3600, "maximum": 3600, "default": 360, "description": "orbit: the angle to turn; a whole turn loops without a stutter"},
             "plane": {"type": "integer", "minimum": 1, "description": "clip: the plane to sweep, counted from 1 (default: the current one)"},
-            "from": {"type": "number", "description": "clip: the first offset along the plane's normal from the centre of the mesh's bounds (default: the end where the plane cuts nothing)"},
-            "to": {"type": "number", "description": "clip: the last offset (default: the end where the plane cuts everything)"},
+            "from": {"type": "number", "description": "clip: the first offset along the plane's normal from the centre of the mesh's bounds (default: the end where the plane cuts nothing); series: the first step (default: the series' first)"},
+            "to": {"type": "number", "description": "clip: the last offset (default: the end where the plane cuts everything); series: the last step (default: the series' last; before from plays backwards)"},
             "views": {"type": "array", "items": {"type": "string"}, "minItems": 2, "description": "views: the saved views to fly through, in order (default: all, in the order they were saved)"},
-            "hold": {"type": "number", "minimum": 0, "maximum": MAX_STEP, "default": HOLD, "description": "views: seconds the camera stays at each view"},
+            "hold": {"type": "number", "minimum": 0, "maximum": MAX_STEP, "default": HOLD, "description": "views: seconds the camera stays at each view; series: seconds each step shows (above 0; default one step at the player's rate, 0.25 s)"},
             "travel": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_STEP, "default": TRAVEL, "description": "views: seconds of each flight from one view to the next"},
             "width": {"type": "integer", "minimum": 1, "maximum": max, "description": "Pixels, as in export.image (an MP4 makes odd sides even)"},
             "height": {"type": "integer", "minimum": 1, "maximum": max, "description": "Pixels, as in export.image"},

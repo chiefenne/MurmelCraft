@@ -1440,7 +1440,26 @@ fn session_load(input: Value, s: &mut Session) -> Run {
         }
         _ => s.close(),
     }
-    let missing = s.restore(f);
+    let mut f = f;
+    if let Some(p) = f.parcels_path(&i.path)
+        && let Some(v) = f.display.parcels.as_mut()
+    {
+        v.path = p;
+    }
+    let series = f.series.clone().zip(f.series_path(&i.path));
+    let mut missing = s.restore(f);
+    // The series walked, at the step shown (its files are open already).
+    if let Some((r, p)) = series {
+        match murmel_engine::series::Series::read(&p) {
+            Ok(mut walked) => {
+                walked.current = walked.index_of_step(r.step).unwrap_or(0);
+                walked.playback.rate = r.rate;
+                walked.playback.looping = r.looping;
+                s.series = Some(walked);
+            }
+            Err(_) => missing.push(format!("series:{}", p.display())),
+        }
+    }
     if !missing.is_empty() {
         warnings.push(json!(Diagnostic::new(
             "SESS004",
@@ -1452,6 +1471,7 @@ fn session_load(input: Value, s: &mut Session) -> Run {
         "mesh": s.mesh.as_ref().map(|m| &m.path),
         "camera": camera_json(s),
         "display": display_json(s),
+        "series": crate::series::series_json(s),
         "view_cube": s.view_cube,
         "skipped": missing,
         "warnings": warnings,
@@ -1963,7 +1983,7 @@ fn field_list(_: Value, s: &mut Session) -> Run {
 /// What the colour range of `field.style` spans.
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum RangeKey {
+pub(crate) enum RangeKey {
     Field,
     Shown,
     Symmetric,
@@ -2152,6 +2172,9 @@ pub const JOURNALED: &[&str] = &[
     "arrows.clear",
     "stream.set",
     "stream.clear",
+    "parcels.open",
+    "parcels.set",
+    "parcels.clear",
     "region.set",
     "region.clear",
     "display.mesh_look",
@@ -2235,6 +2258,15 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("probe.at", READS_ONLY),
     ("region.list", READS_ONLY),
     ("blocks.make", "writes a file; the view stays as it is"),
+    (
+        "series.open",
+        "opens files of a run; the view stays as it is",
+    ),
+    (
+        "series.go",
+        "shows another time step of the run; the view stays as it is",
+    ),
+    ("series.play", "how the window plays the series, not a view"),
 ];
 
 /// The reason in `NOT_JOURNALED` of a tool that changes nothing: no file,
@@ -2695,7 +2727,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::Read,
         label_key: "tool-field-style",
-        summary: "Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values rebuilt from the cells' least-squares gradients, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes rainbow_desaturated, or cool_warm for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style.",
+        summary: "Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values rebuilt from the cells' least-squares gradients, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes rainbow_desaturated, or rainbow_uniform for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -2939,6 +2971,72 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::stream::stream_clear_schema,
         run: crate::stream::stream_clear,
+    },
+    Tool {
+        id: "parcels.open",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-parcels-open",
+        summary: "Show the spray parcels of a parcel file with the open mesh: FoehnCraft's spray/parcels_<step>.vtkhdf (VTKHDF PolyData: points with velocity, diameter, droplets, age, parcel_id and later temperature and injector as point data; time and step as attributes) or any VTKHDF PolyData of points. Each parcel is a small shaded sphere. A file opened while parcels show keeps their settings (the next file of a run looks the same); the first one is coloured by diameter (else its first field) with a colour bar of its own. While parcels show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's parcels lists the file's time, step, count, the parcels drawn and each field's range.",
+        outputs: &[],
+        reads: &["path"],
+        input_schema: crate::parcel::parcels_open_schema,
+        run: crate::parcel::parcels_open,
+    },
+    Tool {
+        id: "parcels.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-parcels-set",
+        summary: "Change how the parcels show. color: a parcel field (component: magnitude, x, y or z of a vector) or solid (display.set_color on parcels); its colour bar keeps its own map (map: a colour map id or auto), reverse and range (field: all parcels of the file, the default; shown: the parcels drawn; symmetric; fixed with min and max), apart from the gas field of the same name. size: fixed (every parcel 1/400 of the mesh diagonal times scale) or diameter (the largest droplet diameter that size, the others in proportion); scale above 0 up to 100. Filters: diameter [min, max] in metres and injector (a number, needs the file's injector field), null for all. Parcels on the cut-away side of a clip plane are left out. At most 200 000 are drawn, thinned evenly beyond (capped in the result). enabled false keeps the settings and draws none. A field the file lacks is refused with the list of its fields.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::parcel::parcels_set_schema,
+        run: crate::parcel::parcels_set,
+    },
+    Tool {
+        id: "parcels.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-parcels-clear",
+        summary: "Remove the parcels and their settings.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::parcel::parcels_clear_schema,
+        run: crate::parcel::parcels_clear,
+    },
+    Tool {
+        id: "series.open",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-series-open",
+        summary: "Open a time series of one run and show its first step (or step): FoehnCraft's series.json (format foehncraft.series 1: entries of step, time and files fields and parcels, relative to its folder; other keys ignored) or an output folder (its series.json, else its fields_<step>.vtkhdf and spray/parcels_<step>.vtkhdf, matched by step). Each step opens its fields file as the next time step of the open mesh (same cells: the display, derived fields, camera and journal stay, only the values change) and its parcel file with the parcel settings kept; a step without a fields file keeps the mesh shown, one without parcels draws none. The result's series gives the count, the index, step and time shown, its files, the first and last step and time, and the playback. Opening another mesh ends the series.",
+        outputs: &[],
+        reads: &["path"],
+        input_schema: crate::series::series_open_schema,
+        run: crate::series::series_open,
+    },
+    Tool {
+        id: "series.go",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-series-go",
+        summary: "Show another step of the open series: index (from 0), step, time (the nearest entry with a time), by (entries on, negative back; wraps round while the player loops, else holds at the ends) or to first or last; exactly one. A step the series lacks is refused with the steps it has.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::series::series_go_schema,
+        run: crate::series::series_go,
+    },
+    Tool {
+        id: "series.play",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-series-play",
+        summary: "Play or pause the open series in the window (playing), at rate steps a second (0.1 to 60, default 4), looping or stopping at the last step (loop, default on). The window's player bar and the status bar show it; on the command line and for scripts the setting is kept and steps are made with series.go, and export.movie with motion series writes a movie of the steps.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::series::series_play_schema,
+        run: crate::series::series_play,
     },
     Tool {
         id: "region.set",

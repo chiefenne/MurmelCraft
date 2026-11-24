@@ -143,6 +143,50 @@ const OWN: &[Code] = &[
         ),
     },
     Code {
+        code: "PARCEL001",
+        severity: Severity::Error,
+        meaning: "No parcels are open.",
+        fix: Some(
+            "Open a parcel file (FoehnCraft's spray/parcels_<step>.vtkhdf) with parcels.open.",
+        ),
+    },
+    Code {
+        code: "PARCEL002",
+        severity: Severity::Error,
+        meaning: "The parcel file has no field of this name (to colour by, to size by diameter or to filter by diameter or injector).",
+        fix: Some(
+            "The message lists the fields of the file; parcels.open's result lists them too.",
+        ),
+    },
+    Code {
+        code: "PARCEL003",
+        severity: Severity::Error,
+        meaning: "A parcel setting is out of range: a scale not above 0 or above 100, a diameter range not 0 <= min <= max, an unknown colour map or a fixed range not min < max.",
+        fix: Some(
+            "Give a scale above 0 up to 100, diameters in metres with min <= max, a map of field.style's list or auto, and min < max.",
+        ),
+    },
+    Code {
+        code: "SERIES001",
+        severity: Severity::Error,
+        meaning: "The time series cannot be read: the path does not exist, the manifest is not foehncraft.series 1 or names a step twice or a step without files, or the folder holds no numbered files.",
+        fix: Some(
+            "Give FoehnCraft's series.json or its output folder (fields_<step>.vtkhdf, spray/parcels_<step>.vtkhdf).",
+        ),
+    },
+    Code {
+        code: "SERIES002",
+        severity: Severity::Error,
+        meaning: "No time series is open.",
+        fix: Some("Open a series.json or an output folder with series.open."),
+    },
+    Code {
+        code: "SERIES003",
+        severity: Severity::Error,
+        meaning: "The series has no such step, index or time, or the rate is outside 0.1 to 60 steps a second.",
+        fix: Some("series.open's result gives the count, the first and last step and the times."),
+    },
+    Code {
         code: "STREAM001",
         severity: Severity::Error,
         meaning: "No streamline set has this number, or the display has the most it holds (8).",

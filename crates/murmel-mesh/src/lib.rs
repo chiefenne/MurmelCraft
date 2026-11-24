@@ -20,6 +20,7 @@ pub mod hdf5;
 pub mod hilbert;
 mod numbers;
 pub mod par;
+pub mod parcels;
 pub mod polymesh;
 pub mod profile;
 pub mod synth;
@@ -36,6 +37,7 @@ use serde::Serialize;
 pub use boundary::NO_CELL;
 pub use evidence::{Evidence, EvidencePatch};
 pub use field::{Component, Field, Location, Results};
+pub use parcels::{Parcels, read_parcels};
 pub use polymesh::{PolyMeshFiles, read_polymesh, read_polymesh_bytes};
 pub use vtkhdf::read_vtkhdf;
 pub use vtu::{read_vtu, read_vtu_str};
@@ -222,6 +224,12 @@ impl CellKind {
                 _ => {}
             }
         }
+        CellKind::of_counts(faces, tris, quads)
+    }
+
+    /// [`CellKind::classify`] from the number of faces, triangles and
+    /// quads.
+    pub fn of_counts(faces: usize, tris: usize, quads: usize) -> CellKind {
         match (faces, tris, quads) {
             (4, 4, 0) => CellKind::Tetrahedron,
             (5, 4, 1) => CellKind::Pyramid,
@@ -318,6 +326,24 @@ impl Polygons {
 
     pub fn iter(&self) -> impl Iterator<Item = &[u32]> {
         (0..self.len()).map(|i| self.get(i))
+    }
+}
+
+/// Faces as the face topology reads them, each a slice of point ids:
+/// [`Polygons`], or the faces a `.vtu` reader leaves in the stream it read
+/// them from.
+pub(crate) trait FaceList: Sync {
+    fn count(&self) -> usize;
+    fn face(&self, i: usize) -> &[u32];
+}
+
+impl FaceList for Polygons {
+    fn count(&self) -> usize {
+        self.len()
+    }
+
+    fn face(&self, i: usize) -> &[u32] {
+        self.get(i)
     }
 }
 

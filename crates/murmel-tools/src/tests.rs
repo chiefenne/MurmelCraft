@@ -2657,3 +2657,327 @@ fn calculator_tools() {
     assert_eq!(e.diagnostics[0].code, "TOOL002");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Parcels at the centre of the channel's box and spread through it, in
+/// FoehnCraft's layout, written to a fresh file.
+fn parcel_file(s: &Session, name: &str) -> PathBuf {
+    use murmel_mesh::{Field, Location};
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    let at = |t: f64| [0, 1, 2].map(|k| b.min[k] + t * (b.max[k] - b.min[k]));
+    let points: Vec<[f64; 3]> = (1..=9).map(|i| at(i as f64 / 10.0)).collect();
+    let n = points.len();
+    let scalar = |name: &str, values: Vec<f64>| Field {
+        name: name.into(),
+        unit: None,
+        location: Location::Point,
+        components: 1,
+        values,
+    };
+    let fields = vec![
+        Field {
+            name: "velocity".into(),
+            unit: None,
+            location: Location::Point,
+            components: 3,
+            values: (0..3 * n).map(|i| (i % 3) as f64).collect(),
+        },
+        scalar("diameter", (1..=n).map(|i| i as f64 * 1e-5).collect()),
+        scalar("parcel_id", (0..n).map(|i| i as f64).collect()),
+    ];
+    let dir = std::env::temp_dir().join(format!("murmel-parcel-tools-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    murmel_mesh::parcels::write_parcels(&path, &points, &fields, 0.5, 100, "channel").unwrap();
+    path
+}
+
+/// Invariant: parcels.open needs a mesh (VIEW001), reads a parcel file
+/// and draws every parcel coloured by diameter with a colour bar of its
+/// own; parcels.set colours by a vector component, sizes by diameter,
+/// filters by diameter (and refuses an injector filter on a file without
+/// injectors, listing its fields: PARCEL002), refuses a scale out of
+/// range (PARCEL003); a clip plane drops the parcels it cuts away; each
+/// call is one undo step; a session file brings them back with their
+/// settings; parcels.clear removes them with their colour. A front end
+/// that called these with bad input would otherwise draw nothing and
+/// report success.
+#[test]
+fn parcel_tools() {
+    let mut s = session();
+    let e = call("parcels.open", json!({"path": "nowhere.vtkhdf"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let mesh = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": mesh }), &mut s).ok());
+    let e = call("parcels.set", json!({}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "PARCEL001");
+    let path = parcel_file(&s, "parcels_000100.vtkhdf");
+    let before = s.journal.undo.len();
+    let e = call("parcels.open", json!({ "path": path }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(s.journal.undo.len(), before + 1);
+    let p = &e.result["parcels"];
+    assert_eq!(p["parcels"], 9);
+    assert_eq!(p["drawn"], 9);
+    assert_eq!(p["time"], 0.5);
+    assert_eq!(p["step"], 100);
+    assert_eq!(p["color"]["name"], "diameter");
+    assert_eq!(p["color_range"][0], 1e-5);
+    assert!((p["color_range"][1].as_f64().unwrap() - 9e-5).abs() < 1e-18);
+    assert!(s.display.outline_mesh(), "the mesh is a faint outline");
+    let bars = murmel_engine::Legend::own_bars(&s);
+    assert!(
+        bars.iter()
+            .any(|(o, _)| *o == murmel_engine::legend::Owner::Parcels),
+        "the parcels have a colour bar of their own"
+    );
+    // 20 triangles a parcel, and none of the mesh (its faint outline is
+    // lines).
+    assert_eq!(s.mesh.as_ref().unwrap().surface.tri_cell.len(), 9 * 20);
+    let e = call("parcels.set", json!({"enabled": false}), &mut s);
+    assert_eq!(e.result["parcels"]["drawn"], 0);
+    assert!(
+        !s.display.outline_mesh(),
+        "hidden parcels show the mesh's faces"
+    );
+    let e = call(
+        "parcels.set",
+        json!({"enabled": true, "color": "velocity", "component": "y", "size": "diameter", "scale": 2.0}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let p = &e.result["parcels"];
+    assert_eq!(p["color"]["component"], "y");
+    // Every y component is 1: the range widens about it.
+    let r = [0, 1].map(|k| p["color_range"][k].as_f64().unwrap());
+    assert!(
+        (r[0] - 0.999).abs() < 1e-12 && (r[1] - 1.001).abs() < 1e-12,
+        "{r:?}"
+    );
+    assert_eq!(p["size"], "diameter");
+    let e = call("parcels.set", json!({"diameter": [2.5e-5, 6.5e-5]}), &mut s);
+    assert_eq!(e.result["parcels"]["drawn"], 4);
+    let e = call("parcels.set", json!({"diameter": null}), &mut s);
+    assert_eq!(e.result["parcels"]["drawn"], 9);
+    for (bad, code) in [
+        (json!({"injector": 1}), "PARCEL002"),
+        (json!({"color": "temperature"}), "PARCEL002"),
+        (json!({"scale": 0.0}), "PARCEL003"),
+        (json!({"scale": 101.0}), "PARCEL003"),
+        (json!({"diameter": [2.0, 1.0]}), "PARCEL003"),
+        (json!({"map": "plaid"}), "PARCEL003"),
+        (json!({"size": "huge"}), "TOOL002"),
+    ] {
+        let e = call("parcels.set", bad.clone(), &mut s);
+        assert_eq!(e.diagnostics[0].code, code, "{bad}");
+    }
+    let e = call("parcels.set", json!({"color": "temperature"}), &mut s);
+    assert!(
+        e.diagnostics[0]
+            .message
+            .contains("velocity, diameter, parcel_id"),
+        "{}",
+        e.diagnostics[0].message
+    );
+    // A clip plane through the middle leaves about half.
+    assert!(call("clip.set", json!({"axis": "x"}), &mut s).ok());
+    let drawn = s.mesh.as_ref().unwrap().surface.parcels;
+    assert!((3..=6).contains(&drawn), "{drawn}");
+    assert!(call("clip.clear", json!({}), &mut s).ok());
+    // A session brings them back.
+    let colour = json!({"item": "parcels", "color": "#ABCDEF"});
+    assert!(call("display.set_color", colour, &mut s).ok());
+    let file = path.with_extension("murmel");
+    assert!(call("session.save", json!({ "path": file }), &mut s).ok());
+    assert!(call("parcels.clear", json!({}), &mut s).ok());
+    assert!(s.display.parcels.is_none() && s.display.colors.is_empty());
+    assert_eq!(s.mesh.as_ref().unwrap().surface.parcels, 0);
+    let e = call("session.load", json!({ "path": file }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let v = s.display.parcels.as_ref().unwrap();
+    assert_eq!(v.scale, 2.0);
+    assert_eq!(v.color.as_ref().unwrap().name, "velocity");
+    assert_eq!(s.mesh.as_ref().unwrap().surface.parcels, 9);
+    assert!(s.display.colors.contains_key(&murmel_engine::Item::Parcels));
+    // The palette's toggle hides them.
+    let toggle = crate::commands::commands()
+        .into_iter()
+        .find(|c| c.id == "parcels.set:toggle")
+        .unwrap();
+    let (tool, input) = toggle.input(&s).unwrap();
+    let e = call(tool, input, &mut s);
+    assert_eq!(e.result["parcels"]["enabled"], false);
+}
+
+/// A run of two time steps of the channel (the same mesh and fields) with
+/// parcels: fields_000010/20.vtkhdf, spray/parcels_000010/20.vtkhdf and,
+/// with `manifest`, a series.json giving times 0.1 and 0.2.
+fn series_run(s: &mut Session, name: &str, manifest: bool) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("murmel-series-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("spray")).unwrap();
+    let mesh = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": mesh }), s).ok());
+    for step in [10u64, 20] {
+        std::fs::copy(&mesh, dir.join(format!("fields_{step:06}.vtkhdf"))).unwrap();
+        let p = parcel_file(s, &format!("parcels_{step:06}.vtkhdf"));
+        std::fs::copy(&p, dir.join(format!("spray/parcels_{step:06}.vtkhdf"))).unwrap();
+    }
+    if manifest {
+        let entry = |step: u64, t: f64| {
+            json!({"step": step, "time": t, "extra": true, "files": {
+                "fields": format!("fields_{step:06}.vtkhdf"),
+                "parcels": format!("spray/parcels_{step:06}.vtkhdf")}})
+        };
+        let m = json!({"format": "foehncraft.series", "format_version": 1, "case": "channel",
+            "entries": [entry(10, 0.1), entry(20, 0.2)]});
+        std::fs::write(dir.join("series.json"), m.to_string()).unwrap();
+    }
+    call("mesh.close", json!({}), s);
+    dir
+}
+
+/// Invariant: series.open reads FoehnCraft's manifest (or a folder) and
+/// shows the first step with its parcels; series.go to another step of
+/// the same mesh keeps the slice, the colouring, the parcel settings,
+/// the camera and the journal and only changes the files; steps, times
+/// and offsets out of the series are refused with what it has
+/// (SERIES003); series.play keeps the rate and refuses one out of range;
+/// a session file brings the series back at the step shown; export.movie
+/// with motion series writes one frame set per step and shows the step
+/// it started from again; opening another mesh ends the series. Breaks
+/// if stepping through a run reset the view (the player would be
+/// useless) or a movie left the session at its last step.
+#[test]
+fn series_tools() {
+    let mut s = session();
+    let e = call("series.go", json!({"by": 1}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES002");
+    let dir = series_run(&mut s, "tools", true);
+    let e = call("series.open", json!({"path": dir.join("nope")}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES001");
+    let e = call("series.open", json!({ "path": dir }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let r = &e.result["series"];
+    assert_eq!(
+        (r["count"].clone(), r["step"].clone(), r["time"].clone()),
+        (json!(2), json!(10), json!(0.1))
+    );
+    assert_eq!(r["source"], "manifest");
+    assert_eq!(e.result["parcels"]["parcels"], 9);
+    assert!(call("slice.set", json!({"axis": "z"}), &mut s).ok());
+    assert!(
+        call(
+            "parcels.set",
+            json!({"color": "velocity", "scale": 3.0}),
+            &mut s
+        )
+        .ok()
+    );
+    assert!(call("view.orbit", json!({"yaw_deg": 20.0}), &mut s).ok());
+    let camera = s.camera.clone();
+    let steps = s.journal.undo.len();
+    let e = call("series.go", json!({"step": 20}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["series"]["time"], 0.2);
+    assert_eq!(
+        s.mesh.as_ref().unwrap().path,
+        dir.join("fields_000020.vtkhdf")
+    );
+    assert_eq!(s.display.slices.len(), 1, "the slice stays");
+    let v = s.display.parcels.as_ref().unwrap();
+    assert_eq!(
+        (v.color.as_ref().unwrap().name.as_str(), v.scale),
+        ("velocity", 3.0)
+    );
+    assert_eq!(v.path, dir.join("spray/parcels_000020.vtkhdf"));
+    assert_eq!(s.camera, camera, "the camera stays");
+    assert_eq!(
+        s.journal.undo.len(),
+        steps,
+        "the journal stays, with no step"
+    );
+    // Undo keeps the step shown: the parcels stay those of step 20.
+    assert!(call("journal.undo", json!({}), &mut s).ok());
+    assert_eq!(
+        s.display.parcels.as_ref().unwrap().path,
+        dir.join("spray/parcels_000020.vtkhdf")
+    );
+    assert!(call("journal.redo", json!({}), &mut s).ok());
+    let e = call("series.go", json!({"step": 15}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES003");
+    assert!(
+        e.diagnostics[0].message.contains("10, 20"),
+        "{}",
+        e.diagnostics[0].message
+    );
+    assert_eq!(
+        call("series.go", json!({"index": 2}), &mut s).diagnostics[0].code,
+        "SERIES003"
+    );
+    let e = call("series.go", json!({"by": 1, "step": 10}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let e = call("series.go", json!({"by": 1}), &mut s);
+    assert_eq!(
+        e.result["series"]["step"], 10,
+        "by wraps round while looping"
+    );
+    let e = call("series.go", json!({"time": 0.18}), &mut s);
+    assert_eq!(e.result["series"]["step"], 20);
+    let e = call("series.play", json!({"rate": 100.0}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "SERIES003");
+    let e = call(
+        "series.play",
+        json!({"rate": 8.0, "loop": false, "playing": true}),
+        &mut s,
+    );
+    assert_eq!(
+        e.result["series"]["playback"],
+        json!({"playing": true, "rate": 8.0, "loop": false})
+    );
+    assert_eq!(
+        call("series.go", json!({"by": 1}), &mut s).result["series"]["step"],
+        20,
+        "held at the end"
+    );
+    // A movie of the steps: 2 steps of 3 frames, then step 20 again.
+    let frames = dir.join("movie");
+    let e = call(
+        "export.movie",
+        json!({"path": frames, "motion": "series", "hold": 0.25, "fps": 12, "width": 64, "height": 48}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["frames"], 6);
+    assert_eq!(e.result["motion"]["steps"], 2);
+    assert_eq!(s.series.as_ref().unwrap().entry().step, 20);
+    let e = call(
+        "export.movie",
+        json!({"path": frames, "motion": "series", "to": 15}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "SERIES003");
+    // A session file keeps the series and the step.
+    let file = dir.join("run.murmel");
+    assert!(call("session.save", json!({ "path": file }), &mut s).ok());
+    let mut t = session();
+    let e = call("session.load", json!({ "path": file }), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let r = t.series.as_ref().unwrap();
+    assert_eq!(
+        (r.entry().step, r.playback.rate, r.playback.looping),
+        (20, 8.0, false)
+    );
+    assert!(!r.playback.playing, "a loaded session does not play");
+    // Another mesh ends the series.
+    let mesh = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": mesh }), &mut s).ok());
+    assert!(s.series.is_none());
+    // A folder without a manifest: the numbered files, times from them.
+    let dir2 = series_run(&mut s, "folder", false);
+    let e = call("series.open", json!({"path": dir2, "step": 20}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["series"]["source"], "folder");
+    assert_eq!(e.result["series"]["time"], 0.5, "the parcel file's time");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
+}

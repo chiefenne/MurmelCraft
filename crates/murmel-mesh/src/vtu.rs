@@ -66,6 +66,8 @@ fn err(code: &'static str, message: impl Into<String>) -> MeshError {
     MeshError::new(code, message)
 }
 
+mod cells;
+
 /// The size of the chunks a `.vtu` file is read in.
 const CHUNK: usize = 32 << 20;
 
@@ -116,7 +118,7 @@ pub(crate) fn read_vtu_file(path: &Path, hash: bool) -> Result<(Mesh, Results), 
     let (mut mesh, polys, results) = parsed?;
     crate::profile::check()?;
     let _t = crate::profile::span("read.topology");
-    boundary::link(&mut mesh, polys);
+    polys.link(&mut mesh);
     mesh.file_sha256 = digest.into_iter().collect();
     Ok((mesh, results))
 }
@@ -303,7 +305,7 @@ pub fn read_vtu_str(text: &str) -> Result<Mesh, MeshError> {
 /// Read a `.vtu` from its text, with its data arrays as fields.
 pub fn read_vtu_str_results(text: &str) -> Result<(Mesh, Results), MeshError> {
     let (mut mesh, polys, results) = parse(text.as_bytes(), text.len() as u64)?;
-    boundary::link(&mut mesh, polys);
+    polys.link(&mut mesh);
     Ok((mesh, results))
 }
 
@@ -322,7 +324,7 @@ fn io_error(e: &std::io::Error) -> MeshError {
 /// topology (`boundary::link`), with the faces of its cells as listed, and
 /// its data arrays. The markup goes through the XML parser; the text of
 /// each array is parsed as it streams past (see [`values`]).
-fn parse<R: BufRead>(src: R, len: u64) -> Result<(Mesh, Polygons, Results), MeshError> {
+fn parse<R: BufRead>(src: R, len: u64) -> Result<(Mesh, CellFaces, Results), MeshError> {
     let stream = crate::profile::span("read.stream");
     let len = usize::try_from(len).unwrap_or(usize::MAX);
     let mut reader = Reader::from_reader(src);
@@ -1011,11 +1013,23 @@ fn points_in_range(ids: &[u32], points: usize) -> Result<(), MeshError> {
     }
 }
 
-fn face_len(p: &Polygons, f: usize) -> usize {
-    (p.start[f + 1] - p.start[f]) as usize
+/// The faces of the cells as the reader leaves them for linking.
+enum CellFaces {
+    Packed(Polygons),
+    InStream(cells::InStream),
 }
 
-fn assemble(h: &Header, arrays: &mut [Array]) -> Result<(Mesh, Polygons, Vec<Slot>), MeshError> {
+impl CellFaces {
+    /// Link the faces into `mesh`'s face topology.
+    fn link(self, mesh: &mut Mesh) {
+        match self {
+            CellFaces::Packed(p) => boundary::link(mesh, p),
+            CellFaces::InStream(s) => boundary::link(mesh, s),
+        }
+    }
+}
+
+fn assemble(h: &Header, arrays: &mut [Array]) -> Result<(Mesh, CellFaces, Vec<Slot>), MeshError> {
     let mut mesh = Mesh::default();
     let mut slots = Vec::with_capacity(h.cells);
 
@@ -1059,7 +1073,7 @@ fn assemble(h: &Header, arrays: &mut [Array]) -> Result<(Mesh, Polygons, Vec<Slo
             ),
         ));
     }
-    let mut stream = find(arrays, Section::Cells, "faces").map_or_else(Vec::new, Array::ids);
+    let stream = find(arrays, Section::Cells, "faces").map_or_else(Vec::new, Array::ids);
     let face_offsets =
         find(arrays, Section::Cells, "faceoffsets").map_or_else(Vec::new, Array::ints);
     let region = match find(arrays, Section::CellData, "region") {
@@ -1078,132 +1092,36 @@ fn assemble(h: &Header, arrays: &mut [Array]) -> Result<(Mesh, Polygons, Vec<Slo
 
     crate::profile::check()?;
     let _cells = crate::profile::span("read.cells");
-    let np = mesh.points.len();
-    // When no cell has more face points than its face stream holds (only
-    // polyhedra and polygons, as KoflCraft writes), the faces' points are
-    // written over the stream they come from: the stream loses its counts
-    // and becomes the points of the cell faces, without a second copy.
-    let in_place = types
-        .iter()
-        .all(|&t| matches!(t, POLYHEDRON | TRIANGLE | POLYGON | QUAD));
-    let mut polys = Polygons::new();
-    let mut written = 0usize;
-    mesh.cell_faces = vec![0];
-    mesh.boundary = Polygons::new();
-    let mut start = 0usize;
-    let mut face_pos = 0usize;
-    let mut zone_max: Option<u32> = None;
-    let mut patch_max: Option<u32> = None;
-    for c in 0..h.cells {
-        let end = usize::try_from(offsets[c])
-            .ok()
-            .filter(|&e| e >= start && e <= conn.len())
-            .ok_or_else(|| err("MESH006", format!("cell {c}: offset {}", offsets[c])))?;
-        let nodes = &conn[start..end];
-        start = end;
-        let reg = match &region {
-            Some(r) => {
-                if r[c] < 0 {
-                    return Err(err("MESH006", format!("cell {c}: region {}", r[c])));
-                }
-                u32::try_from(r[c]).map_err(|_| err("MESH006", format!("cell {c}: region")))?
-            }
-            None => 0,
-        };
-        let t = types[c];
-        let table = match t {
-            TETRA => Some(TETRA_FACES),
-            HEXAHEDRON => Some(HEX_FACES),
-            WEDGE => Some(WEDGE_FACES),
-            PYRAMID => Some(PYRAMID_FACES),
-            _ => None,
-        };
-        if t == POLYHEDRON {
-            let fo = face_offsets
-                .get(c)
-                .copied()
-                .ok_or_else(|| err("MESH009", format!("cell {c}: no faceoffsets entry")))?;
-            let fend = usize::try_from(fo)
-                .ok()
-                .filter(|&e| e > face_pos && e <= stream.len())
-                .ok_or_else(|| err("MESH009", format!("cell {c}: faceoffset {fo}")))?;
-            // The cell's part of the stream: its face count, then each
-            // face as its point count and points.
-            let nf = stream[face_pos] as usize;
-            let mut k = face_pos + 1;
-            let first = polys.len();
-            for _ in 0..nf {
-                let n = (k < fend)
-                    .then(|| stream[k] as usize)
-                    .filter(|&n| n >= 3)
-                    .ok_or_else(|| err("MESH009", format!("cell {c}: bad face size")))?;
-                let face = k + 1..k + 1 + n;
-                if face.end > fend {
-                    return Err(err("MESH009", format!("cell {c}: face runs past its cell")));
-                }
-                points_in_range(&stream[face.clone()], np)?;
-                if in_place {
-                    // `written` stays behind `k`: every face drops a count.
-                    stream.copy_within(face, written);
-                    written += n;
-                    polys.start.push(written as u32);
-                } else {
-                    polys.push(stream[face].iter().copied());
-                }
-                k += 1 + n;
-            }
-            if k != fend {
-                return Err(err(
-                    "MESH009",
-                    format!("cell {c}: {} values left after its faces", fend - k),
-                ));
-            }
-            face_pos = fend;
-            let sizes = (first..polys.len()).map(|f| face_len(&polys, f));
-            let kind = CellKind::classify(sizes);
-            push_cell(&mut mesh, polys.len(), reg, kind, &mut zone_max);
-            slots.push(Slot::Volume);
-        } else if let Some(table) = table {
-            let need = table
-                .iter()
-                .flat_map(|f| f.iter())
-                .max()
-                .map_or(0, |m| m + 1);
-            if nodes.len() != need {
-                return Err(err(
-                    "MESH006",
-                    format!("cell {c}: type {t} with {} points", nodes.len()),
-                ));
-            }
-            points_in_range(nodes, np)?;
-            for f in table {
-                polys.push(f.iter().map(|&i| nodes[i]));
-            }
-            let kind = CellKind::classify(table.iter().map(|f| f.len()));
-            push_cell(&mut mesh, polys.len(), reg, kind, &mut zone_max);
-            slots.push(Slot::Volume);
-        } else if matches!(t, TRIANGLE | POLYGON | QUAD) {
-            if nodes.len() < 3 {
-                return Err(err(
-                    "MESH006",
-                    format!("cell {c}: polygon with {} points", nodes.len()),
-                ));
-            }
-            points_in_range(nodes, np)?;
-            mesh.boundary.push(nodes.iter().copied());
-            mesh.boundary_patch.push(reg);
-            slots.push(Slot::Boundary);
-            patch_max = Some(patch_max.map_or(reg, |m: u32| m.max(reg)));
+    let read = cells::read(cells::Input {
+        connectivity: &conn,
+        offsets: &offsets,
+        types: &types,
+        stream: &stream,
+        face_offsets: &face_offsets,
+        region: region.as_deref(),
+        points: mesh.points.len(),
+    })?;
+    drop((conn, face_offsets, region));
+    slots.extend(types.iter().map(|&t| {
+        if matches!(t, TRIANGLE | POLYGON | QUAD) {
+            Slot::Boundary
         } else {
-            return Err(err("MESH008", format!("cell {c} has VTK type {t}")));
+            Slot::Volume
         }
-    }
-    if in_place {
-        stream.truncate(written);
-        polys.nodes = stream;
-    } else {
-        drop(stream);
-    }
+    }));
+    let polys = match read.faces {
+        cells::Faces::Packed(p) => {
+            drop(stream);
+            CellFaces::Packed(p)
+        }
+        cells::Faces::InStream(at) => CellFaces::InStream(cells::InStream { stream, at }),
+    };
+    mesh.cell_faces = read.cell_faces;
+    mesh.cell_zone = read.cell_zone;
+    mesh.cell_kind = read.cell_kind;
+    mesh.boundary = read.boundary;
+    mesh.boundary_patch = read.boundary_patch;
+    let (zone_max, patch_max) = (read.zone_max, read.patch_max);
 
     // Names and roles from the field data.
     let field = |arrays: &mut [Array], name: &str| -> Result<Vec<String>, MeshError> {
@@ -1553,7 +1471,7 @@ mod tests {
     fn read_in_pieces(bytes: &[u8], cap: usize) -> Result<(Mesh, Results), MeshError> {
         let src = std::io::BufReader::with_capacity(cap, bytes);
         let (mut m, polys, r) = parse(src, bytes.len() as u64)?;
-        boundary::link(&mut m, polys);
+        polys.link(&mut m);
         Ok((m, r))
     }
 
