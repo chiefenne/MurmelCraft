@@ -483,9 +483,6 @@ impl Surface {
         order.sort_unstable();
         s.faces = polys.iter().filter(|p| p.boundary != NO_CELL).count();
         s.open_faces = polys.len() - s.faces;
-        // Each corner starts one edge, and most edges are shared by two
-        // polygons.
-        let corners: usize = polys.iter().map(|p| p.verts.len()).sum();
         let pts: Vec<Vec<[f64; 3]>> = polys
             .iter()
             .map(|p| p.verts.iter().map(|&v| pos(v)).collect())
@@ -682,44 +679,17 @@ impl Surface {
             value_origin: s.value_origin,
             mesh_triangles,
         };
-        // The edges, each once, on a thread of their own beside the
-        // triangles: an edge two polygons share takes the colour of the
-        // first in draw order.
+        let parts = on_threads(outs, |(r, mut out)| fill.chunk(r, &mut out));
+        // The edges, each once: an edge two polygons share takes the
+        // colour of the first in draw order.
         let lines = Lines {
             order: &order,
             polys: &polys,
             pts: &pts,
             looks: &looks,
             features: features.as_ref(),
-            corners,
         };
-        let (edges, parts) = std::thread::scope(|sc| {
-            let edges = sc.spawn(|| lines.draw());
-            let mut outs = outs.into_iter();
-            let here = outs.next();
-            let others: Vec<_> = outs
-                .map(|(r, mut out)| {
-                    let fill = &fill;
-                    sc.spawn(move || fill.chunk(r, &mut out))
-                })
-                .collect();
-            let mut parts = Vec::with_capacity(others.len() + 1);
-            if let Some((r, mut out)) = here {
-                parts.push(fill.chunk(r, &mut out));
-            }
-            let join = |h: std::thread::ScopedJoinHandle<'_, _>| match h.join() {
-                Ok(r) => r,
-                Err(p) => std::panic::resume_unwind(p),
-            };
-            for h in others {
-                parts.push(join(h));
-            }
-            let edges: (Vec<[f32; 3]>, Vec<[f32; 3]>) = match edges.join() {
-                Ok(r) => r,
-                Err(p) => std::panic::resume_unwind(p),
-            };
-            (edges, parts)
-        });
+        let edges = lines.draw(&ranges);
         (s.edge_positions, s.edge_colors) = edges;
         let mut vb = Bounds::empty();
         let mut drawn = Bounds1::default();
@@ -920,46 +890,142 @@ impl Fill<'_> {
     }
 }
 
+/// Run `f` on each of `items`, each on a thread of its own (the first on
+/// this one), and give the results in order.
+fn on_threads<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
+    let f = &f;
+    std::thread::scope(|sc| {
+        let mut items = items.into_iter();
+        let here = items.next();
+        let others: Vec<_> = items.map(|t| sc.spawn(move || f(t))).collect();
+        let mut out = Vec::with_capacity(others.len() + 1);
+        out.extend(here.map(f));
+        for h in others {
+            match h.join() {
+                Ok(r) => out.push(r),
+                Err(p) => std::panic::resume_unwind(p),
+            }
+        }
+        out
+    })
+}
+
 /// What drawing the edges reads: the polygons in draw order, their
-/// corners and looks, the feature edges when only those are drawn, and
-/// the number of corners (most edges are shared by two polygons).
+/// corners and looks, and the feature edges when only those are drawn.
 struct Lines<'a> {
     order: &'a [(bool, u32, usize)],
     polys: &'a [Poly],
     pts: &'a [Vec<[f64; 3]>],
     looks: &'a [Look],
     features: Option<&'a FastSet<(V, V)>>,
-    corners: usize,
 }
 
 impl Lines<'_> {
+    /// The edge from corner `j` of the polygon at `o` in draw order, its
+    /// ends in increasing order.
+    fn key(&self, o: usize, j: usize) -> (V, V) {
+        let vs = &self.polys[self.order[o].2].verts;
+        let (a, b) = (vs[j], vs[(j + 1) % vs.len()]);
+        (a.min(b), a.max(b))
+    }
+
     /// The edge lines, two vertices per edge, each edge once, in the
-    /// colour of the first polygon in draw order that has it.
-    fn draw(&self) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
-        let mut seen: FastSet<(V, V)> = set_with_capacity(self.corners / 2 + 16);
-        // Feature edges are a few of the edges; the others are all drawn.
-        let room = if self.features.is_none() {
-            self.corners
-        } else {
-            0
+    /// colour of the first polygon in draw order that has it, in the
+    /// order of their first polygons. The polygons are split into `runs`
+    /// (in draw order) and the edges into as many shards by their
+    /// smaller end, so finding the first of each edge is split over the
+    /// threads too: each shard walks its edges in draw order, run by run.
+    fn draw(&self, runs: &[std::ops::Range<usize>]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        let shards = runs.len().max(1);
+        let shard = |k: (V, V)| -> usize {
+            let id = match k.0 {
+                V::Node(i) => u64::from(i),
+                V::Cut(i) => u64::from(i) | 1 << 32,
+            };
+            let mixed = id.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 32;
+            ((mixed * shards as u64) >> 32) as usize
         };
-        let (mut positions, mut colors) = (Vec::with_capacity(room), Vec::with_capacity(room));
-        for (o, &(_, _, i)) in self.order.iter().enumerate() {
-            let (vs, pts, ec) = (&self.polys[i].verts, &self.pts[i], self.looks[o].edge);
-            for j in 0..vs.len() {
-                let (a, b) = (vs[j], vs[(j + 1) % vs.len()]);
-                let key = (a.min(b), a.max(b));
-                if a == b || self.features.is_some_and(|fe| !fe.contains(&key)) {
-                    continue;
-                }
-                if seen.insert(key) {
-                    positions.push(pts[j].map(|v| v as f32));
-                    positions.push(pts[(j + 1) % vs.len()].map(|v| v as f32));
-                    colors.push(ec);
-                    colors.push(ec);
+        // The edges of each run that are drawn at all, by shard, as the
+        // polygon (its place in draw order) and the corner they start at.
+        let by_run: Vec<Vec<Vec<(u32, u32)>>> = on_threads(runs.to_vec(), |r| {
+            let mut out = vec![Vec::new(); shards];
+            for o in r {
+                let vs = &self.polys[self.order[o].2].verts;
+                for j in 0..vs.len() {
+                    let key = self.key(o, j);
+                    if key.0 == key.1 || self.features.is_some_and(|fe| !fe.contains(&key)) {
+                        continue;
+                    }
+                    out[shard(key)].push((o as u32, j as u32));
                 }
             }
+            out
+        });
+        // The first of each edge in draw order, shard by shard.
+        let firsts: Vec<Vec<(u32, u32)>> = on_threads((0..shards).collect(), |k| {
+            let n: usize = by_run.iter().map(|r| r[k].len()).sum();
+            let mut seen: FastSet<(V, V)> = set_with_capacity(n / 2 + 16);
+            let mut first = Vec::with_capacity(n / 2 + 16);
+            for run in &by_run {
+                for &(o, j) in &run[k] {
+                    if seen.insert(self.key(o as usize, j as usize)) {
+                        first.push((o, j));
+                    }
+                }
+            }
+            first
+        });
+        drop(by_run);
+        // Mark them per polygon corner, then write the lines run by run.
+        let mut corner_at = Vec::with_capacity(self.order.len() + 1);
+        corner_at.push(0usize);
+        for &(_, _, i) in self.order {
+            let last = corner_at.last().copied().unwrap_or(0);
+            corner_at.push(last + self.polys[i].verts.len());
         }
+        let mut drawn = vec![false; corner_at.last().copied().unwrap_or(0)];
+        for (o, j) in firsts.into_iter().flatten() {
+            drawn[corner_at[o as usize] + j as usize] = true;
+        }
+        let counts: Vec<usize> = runs
+            .iter()
+            .map(|r| {
+                drawn[corner_at[r.start]..corner_at[r.end]]
+                    .iter()
+                    .filter(|&&d| d)
+                    .count()
+            })
+            .collect();
+        let total: usize = counts.iter().sum();
+        let mut cuts = vec![0usize];
+        for c in &counts {
+            let last = cuts.last().copied().unwrap_or(0);
+            cuts.push(last + 2 * c);
+        }
+        let mut positions = vec![[0.0f32; 3]; 2 * total];
+        let mut colors = vec![[0.0f32; 3]; 2 * total];
+        let pieces = murmel_mesh::par::split_mut(&mut positions, &cuts)
+            .into_iter()
+            .zip(murmel_mesh::par::split_mut(&mut colors, &cuts));
+        let work: Vec<_> = runs.iter().cloned().zip(pieces).collect();
+        let (drawn, corner_at) = (&drawn, &corner_at);
+        on_threads(work, |(r, (pos, col))| {
+            let mut at = 0;
+            for o in r {
+                let (_, _, i) = self.order[o];
+                let (pts, ec) = (&self.pts[i], self.looks[o].edge);
+                let n = pts.len();
+                for j in 0..n {
+                    if drawn[corner_at[o] + j] {
+                        pos[at] = pts[j].map(|v| v as f32);
+                        pos[at + 1] = pts[(j + 1) % n].map(|v| v as f32);
+                        col[at] = ec;
+                        col[at + 1] = ec;
+                        at += 2;
+                    }
+                }
+            }
+        });
         (positions, colors)
     }
 }
@@ -1604,6 +1670,57 @@ mod tests {
                 .take(3)
                 .collect();
             assert!(bad.is_empty(), "{name}: {bad:?}");
+        }
+    }
+
+    /// Invariant: the buffers are the same however many threads fill
+    /// them (each fills a run of polygons in draw order at the place the
+    /// counts before it give; the edges are drawn once, in draw order,
+    /// beside them), for faces with edges, a cut, a section, lines only,
+    /// feature edges and a selection. Breaks when a run starts at the
+    /// wrong place or the edges are taken in another order.
+    #[test]
+    fn threads_give_the_same_surface() {
+        let m = murmel_mesh::synth::honeycomb(6);
+        let t = Tokens::builtin().unwrap();
+        let wire = Display {
+            render_mode: RenderMode::Wireframe,
+            ..Display::default()
+        };
+        let feature = Display {
+            render_mode: RenderMode::FeatureEdges,
+            ..Display::default()
+        };
+        let mut sel = Display::default();
+        sel.selection.extend([Item::Cell(7), Item::Cell(70)]);
+        let key = |s: &Surface| {
+            (
+                s.positions.clone(),
+                s.normals.clone(),
+                s.colors.clone(),
+                s.values.clone(),
+                s.indices.clone(),
+                s.tri_cell.clone(),
+                s.tri_face.clone(),
+                (s.edge_positions.clone(), s.edge_colors.clone()),
+                s.visible_bounds.map(|b| (b.min, b.max)),
+                s.field_range,
+            )
+        };
+        for (name, d) in [
+            ("all", Display::default()),
+            ("crinkle", clip_y(&m, ClipMode::Crinkle)),
+            ("flat", clip_y(&m, ClipMode::Flat)),
+            ("wireframe", wire),
+            ("feature edges", feature),
+            ("selection", sel),
+        ] {
+            let one = murmel_mesh::par::with_threads(1, || key(&Surface::build(&m, &t, &d)));
+            assert!(!one.0.is_empty(), "{name}");
+            for n in [2, 3, 7] {
+                let many = murmel_mesh::par::with_threads(n, || key(&Surface::build(&m, &t, &d)));
+                assert!(one == many, "{name}: {n} threads");
+            }
         }
     }
 
