@@ -17,7 +17,8 @@ use murmel_engine::{
     Clip, ClipMode, ColorBy, Item, RenderMode, ScreenAxis, Session, StandardView, Tokens,
     Visibility,
 };
-use murmel_render::{diff_share, read_png, render_session, write_png};
+use murmel_render::overlay::{self, Overlays};
+use murmel_render::{Shoot, diff_share, read_png, render_session, render_session_with, write_png};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -39,6 +40,10 @@ fn check(name: &str, view: StandardView) {
 
 fn check_session(name: &str, s: &Session) {
     let shot = render_session(s, 480, 320).unwrap();
+    check_shot(name, &shot);
+}
+
+fn check_shot(name: &str, shot: &murmel_render::Shot) {
     let reference =
         Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/reference/{name}.png"));
     let out = root().join(format!("target/render-test/{name}.png"));
@@ -282,4 +287,139 @@ fn openfoam_dual_polyhedra_clipped() {
     }];
     s.redraw();
     check_session("openfoam-dual-clip-flat", &s);
+}
+
+/// Export (the maintainer's cards of 2026-11-24, "same look as on
+/// screen"): the channel coloured by patch at 1.5 times a 320 x 213
+/// viewport, edges 1.5 pixels wide, with the patch legend top left and
+/// the axis triad bottom left drawn over it at 1.5 times the window's size.
+/// A change to the wide-line shader, the overlay layout, its font or its
+/// tokens moves pixels here and in no other test (the window paints its
+/// legend with egui).
+#[test]
+fn export_scaled_with_legend_and_triad() {
+    let mut s = session(StandardView::ISO);
+    s.display.color_by = ColorBy::Patch;
+    s.redraw();
+    let mut shot = render_session_with(
+        &s,
+        &Shoot {
+            width: 480,
+            height: 320,
+            transparent: false,
+            line_width: 1.5,
+        },
+    )
+    .unwrap();
+    let legend = murmel_engine::Legend::of(&s).unwrap();
+    let i18n = murmel_engine::i18n::I18n::english().unwrap();
+    overlay::draw(
+        &mut shot.rgba,
+        480,
+        320,
+        &Overlays {
+            legend: Some(&legend),
+            triad: Some(&s.camera),
+            i18n: &i18n,
+            tokens: &s.tokens,
+            dark: true,
+            scale: 1.5,
+        },
+    )
+    .unwrap();
+    check_shot("channel-export-scaled", &shot);
+}
+
+/// Invariant: a transparent export has alpha 0 where nothing is drawn,
+/// 255 on the faces, and its anti-aliased silhouette keeps the faces'
+/// colour (divided by alpha in linear light, not darkened towards the
+/// black it was cleared to). Breaks when the background is drawn anyway or
+/// the edge pixels stay premultiplied; the reference images are opaque.
+#[test]
+fn transparent_background() {
+    let mut s = session(StandardView::ISO);
+    s.display.render_mode = RenderMode::Shaded;
+    s.redraw();
+    let shot = render_session_with(
+        &s,
+        &Shoot {
+            width: 240,
+            height: 160,
+            transparent: true,
+            line_width: 1.0,
+        },
+    )
+    .unwrap();
+    let px = |x: u32, y: u32| {
+        let i = 4 * (y * 240 + x) as usize;
+        [
+            shot.rgba[i],
+            shot.rgba[i + 1],
+            shot.rgba[i + 2],
+            shot.rgba[i + 3],
+        ]
+    };
+    assert_eq!(px(0, 0)[3], 0);
+    assert_eq!(px(239, 159)[3], 0);
+    assert_eq!(px(120, 80)[3], 255);
+    let edge: Vec<[u8; 4]> = shot
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .copied()
+        .filter(|p| p[3] > 32 && p[3] < 224)
+        .collect();
+    assert!(!edge.is_empty(), "no anti-aliased silhouette");
+    let lum = |p: &[u8; 4]| p[0] as u32 + p[1] as u32 + p[2] as u32;
+    let darkest_face = shot
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] == 255)
+        .map(lum)
+        .min()
+        .unwrap();
+    let dark_edges = edge.iter().filter(|p| lum(p) + 24 < darkest_face).count();
+    assert!(
+        dark_edges * 10 < edge.len(),
+        "{dark_edges} of {} edge pixels darker than every face",
+        edge.len()
+    );
+}
+
+/// Invariant: lines two pixels wide cover clearly more of the picture
+/// (summed alpha) than one-pixel lines, and the feature edges are still
+/// drawn: the quads of
+/// `vs_wide` widen every segment. Breaks when the width uniform or the
+/// instance layout is wrong (lines vanish or stay thin).
+#[test]
+fn wide_lines_are_wider() {
+    let mut s = session(StandardView::ISO);
+    s.display.render_mode = RenderMode::FeatureEdges;
+    s.redraw();
+    let shoot = |w: f32| {
+        render_session_with(
+            &s,
+            &Shoot {
+                width: 240,
+                height: 160,
+                transparent: true,
+                line_width: w,
+            },
+        )
+        .unwrap()
+    };
+    let covered = |shot: &murmel_render::Shot| {
+        shot.rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] > 0)
+            .count()
+    };
+    let (thin, wide) = (covered(&shoot(1.0)), covered(&shoot(2.0)));
+    assert!(thin > 300, "the edges are missing: {thin}");
+    assert!(wide as f64 > 1.5 * thin as f64, "thin {thin}, wide {wide}");
 }

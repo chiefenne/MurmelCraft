@@ -366,3 +366,42 @@ fn rotation_plane_shows_on_hover() {
     h.run_steps(3);
     assert_eq!(h.state().rotation_plane, None, "pointer away");
 }
+
+/// Invariant (export, the maintainer's cards of 2026-11-24): Cmd/Ctrl +
+/// Shift + E opens the export window, its controls all have names, and
+/// Export… writes the picture through export.image at the chosen size
+/// (the viewport at 1x here) with the legend switched off, then says so
+/// in the window; the view does not move. Breaks if the key or the window
+/// stops calling the tool or a control loses its name; the tool tests do
+/// not click.
+#[test]
+fn export_window_writes_a_picture() {
+    let mut h = harness();
+    let out = std::env::temp_dir().join(format!("murmel-export-{}.png", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    h.state_mut().export.path = Some(out.clone());
+    h.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::E,
+    );
+    h.run_steps(3);
+    assert!(h.state().export.open, "the window is open");
+    assert!(named(&h, "Export image"), "the window has a title");
+    let issues = problems(&h);
+    assert!(issues.is_empty(), "{issues:#?}");
+    h.state_mut().export.size = crate::export_dialog::SizeChoice::Scale(1);
+    h.run_steps(2);
+    h.get_by_label("Colour legend").click();
+    h.run_steps(2);
+    assert!(!h.state().export.legend);
+    let camera = h.state().session.camera.clone();
+    h.get_by_label("Export…").click();
+    h.run_steps(3);
+    let (w, hh, _) = murmel_render::read_png(&out).unwrap();
+    let [vw, vh] = h.state().session.viewport;
+    assert_eq!((w, hh), (vw.round() as u32, vh.round() as u32));
+    let last = h.state().export.last.clone().unwrap_or_default();
+    assert!(last.starts_with("Saved murmel-export-"), "{last}");
+    assert_eq!(h.state().session.camera, camera);
+    let _ = std::fs::remove_file(&out);
+}

@@ -121,6 +121,14 @@ const OWN: &[Code] = &[
         fix: Some("Give each gesture, button and modifier combination one action."),
     },
     Code {
+        code: "EXPORT001",
+        severity: Severity::Error,
+        meaning: "An export setting is out of range (scale, line width, dpi).",
+        fix: Some(
+            "Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000.",
+        ),
+    },
+    Code {
         code: "SESS001",
         severity: Severity::Error,
         meaning: "A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values.",

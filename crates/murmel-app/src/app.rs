@@ -78,6 +78,8 @@ pub struct MurmelApp {
     pub(crate) rotation_plane: Option<crate::clip_handle::Handle>,
     /// The colour window of a tree item, while open.
     pub(crate) color_edit: Option<crate::color_edit::ColorEdit>,
+    /// The export window and its settings (File, "Export image…").
+    pub(crate) export: crate::export_dialog::ExportDialog,
     /// Keyboard focus: F6 regions, the focus ring, the arrow keys.
     pub(crate) focus: crate::focus::Focus,
     /// The width of the panel toggles at the right of the toolbar, as
@@ -154,6 +156,7 @@ impl MurmelApp {
             clip_spots: Vec::new(),
             rotation_plane: None,
             color_edit: None,
+            export: Default::default(),
             focus: crate::focus::Focus::default(),
             toggles_w: 90.0,
             title_buttons_w: 110.0,
@@ -1151,6 +1154,7 @@ impl eframe::App for MurmelApp {
         self.shortcuts_window(&ctx);
         self.palette_window(&ctx);
         self.color_window(&ctx);
+        self.export_window(&ctx);
         crate::focus::ring(&ctx, &self.focus, color(p.accent));
         self.focus.end(&ctx);
     }

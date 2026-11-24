@@ -2,6 +2,11 @@
 //! the same [`MeshRenderer`]: it draws into its own texture (4x MSAA,
 //! resolved to sRGB), which the window shows as an image and a screenshot
 //! copies to a PNG. So every view the window can show is testable headless.
+//! Exported pictures (`export.image`, `export.movie`) add a transparent
+//! background, lines wider than one pixel and the overlays of [`overlay`]
+//! (legend and axis triad), drawn on the CPU.
+
+pub mod overlay;
 
 use std::fmt;
 use std::path::Path;
@@ -60,6 +65,11 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "RENDER004",
         "The PNG could not be written.",
         "Check that the folder exists and is writable.",
+    ),
+    (
+        "RENDER005",
+        "The font of the overlays (Inter) could not be read.",
+        "Rebuild MurmelCraft; assets/fonts/Inter-Regular.ttf is part of the build.",
     ),
 ];
 
@@ -124,6 +134,12 @@ struct Globals {
 
 /// What to draw in one frame.
 pub struct View<'a> {
+    /// Width of edge and outline lines in pixels: 1 in the window, the
+    /// export scale in exported pictures (lines wider than one pixel are
+    /// drawn as screen-aligned quads).
+    pub line_width: f32,
+    /// Leave the background out (alpha 0) instead of the gradient.
+    pub transparent: bool,
     pub surface: Option<&'a Surface>,
     /// Changes whenever `surface` changes, so it is uploaded once.
     pub revision: u64,
@@ -166,6 +182,10 @@ pub struct MeshRenderer {
     face_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     outline_pipeline: wgpu::RenderPipeline,
+    /// Lines wider than one pixel: each segment an instance of two
+    /// triangles, widened on screen ([`View::line_width`]).
+    wide_pipeline: wgpu::RenderPipeline,
+    wide_outline_pipeline: wgpu::RenderPipeline,
     bg_pipeline: wgpu::RenderPipeline,
     geometry: Option<Geometry>,
     revision: Option<u64>,
@@ -313,6 +333,44 @@ impl MeshRenderer {
                 bias: Default::default(),
             },
         );
+        // A segment is two line vertices (position, colour) in a row: as an
+        // instance, the first vertex at offset 0, the second at 24.
+        let wide_attrs = wgpu::vertex_attr_array![
+            0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x3
+        ];
+        let wide_layout = wgpu::VertexBufferLayout {
+            array_stride: 48,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wide_attrs,
+        };
+        let wide_pipeline = pipeline(
+            "murmel-wide-edges",
+            "vs_wide",
+            "fs_line",
+            &[Some(wide_layout.clone())],
+            wgpu::PrimitiveTopology::TriangleList,
+            wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            },
+        );
+        let wide_outline_pipeline = pipeline(
+            "murmel-wide-outline",
+            "vs_wide",
+            "fs_line",
+            &[Some(wide_layout)],
+            wgpu::PrimitiveTopology::TriangleList,
+            wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            },
+        );
         let bg_pipeline = pipeline(
             "murmel-background",
             "vs_bg",
@@ -333,6 +391,8 @@ impl MeshRenderer {
             face_pipeline,
             line_pipeline,
             outline_pipeline,
+            wide_pipeline,
+            wide_outline_pipeline,
             bg_pipeline,
             geometry: None,
             revision: None,
@@ -473,7 +533,12 @@ impl MeshRenderer {
             view_proj: frame.view_proj.to_cols_array_2d(),
             eye: f32x3(frame.eye),
             to_eye: f32x3(frame.light),
-            params: [if frame.orthographic { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            params: [
+                if frame.orthographic { 1.0 } else { 0.0 },
+                view.line_width.max(1.0),
+                size[0] as f32,
+                size[1] as f32,
+            ],
             bg_top: f32x3(view.bg_top),
             bg_bottom: f32x3(view.bg_bottom),
         };
@@ -490,7 +555,11 @@ impl MeshRenderer {
                     depth_slice: None,
                     resolve_target: Some(&t.resolve_view),
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: wgpu::LoadOp::Clear(if view.transparent {
+                            wgpu::Color::TRANSPARENT
+                        } else {
+                            wgpu::Color::BLACK
+                        }),
                         store: wgpu::StoreOp::Discard,
                     },
                 })],
@@ -507,8 +576,13 @@ impl MeshRenderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_pipeline(&self.bg_pipeline);
-            pass.draw(0..3, 0..1);
+            if !view.transparent {
+                pass.set_pipeline(&self.bg_pipeline);
+                pass.draw(0..3, 0..1);
+            }
+            // One-pixel lines keep the line list, so the window and the
+            // render tests draw exactly as before.
+            let wide = view.line_width > 1.0;
             if let Some(geo) = &self.geometry {
                 if view.faces {
                     pass.set_pipeline(&self.face_pipeline);
@@ -519,14 +593,24 @@ impl MeshRenderer {
                 if view.edges
                     && let Some(edges) = &geo.edges
                 {
-                    pass.set_pipeline(&self.line_pipeline);
                     pass.set_vertex_buffer(0, edges.slice(..));
-                    pass.draw(0..geo.edge_count, 0..1);
+                    if wide {
+                        pass.set_pipeline(&self.wide_pipeline);
+                        pass.draw(0..6, 0..geo.edge_count / 2);
+                    } else {
+                        pass.set_pipeline(&self.line_pipeline);
+                        pass.draw(0..geo.edge_count, 0..1);
+                    }
                 }
                 if let Some(outline) = &geo.outline {
-                    pass.set_pipeline(&self.outline_pipeline);
                     pass.set_vertex_buffer(0, outline.slice(..));
-                    pass.draw(0..geo.outline_count, 0..1);
+                    if wide {
+                        pass.set_pipeline(&self.wide_outline_pipeline);
+                        pass.draw(0..6, 0..geo.outline_count / 2);
+                    } else {
+                        pass.set_pipeline(&self.outline_pipeline);
+                        pass.draw(0..geo.outline_count, 0..1);
+                    }
                 }
             }
         }
@@ -620,8 +704,97 @@ impl MeshRenderer {
 pub struct Shot {
     pub width: u32,
     pub height: u32,
+    /// RGBA8 rows, sRGB, straight (not premultiplied) alpha.
     pub rgba: Vec<u8>,
     pub adapter: String,
+}
+
+/// How an offscreen picture is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shoot {
+    pub width: u32,
+    pub height: u32,
+    /// Leave the background out: alpha 0 where no face or line is.
+    pub transparent: bool,
+    /// Width of edge lines in pixels (1 as in the window).
+    pub line_width: f32,
+}
+
+impl Shoot {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            transparent: false,
+            line_width: 1.0,
+        }
+    }
+}
+
+/// A renderer on the shared offscreen device, for one picture or the
+/// frames of a movie (the mesh is uploaded once per surface revision).
+pub struct Offscreen<'g> {
+    gpu: &'g Gpu,
+    renderer: MeshRenderer,
+}
+
+impl Offscreen<'_> {
+    /// Render `session` as `shoot` says and read the picture back.
+    pub fn shoot(
+        &mut self,
+        session: &murmel_engine::Session,
+        shoot: &Shoot,
+    ) -> Result<Shot, RenderError> {
+        let (width, height) = (shoot.width, shoot.height);
+        if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) {
+            return Err(RenderError::new(
+                "RENDER003",
+                format!("{width} x {height} is outside 1..{MAX_SIDE}"),
+            ));
+        }
+        let dark = session.theme.is_dark(None);
+        let p = session.tokens.palette(dark);
+        self.renderer.render(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &View {
+                surface: session.mesh.as_ref().map(|m| &m.surface),
+                revision: session.surface_revision,
+                camera: &session.camera,
+                size: [width, height],
+                bg_top: p.viewport_top.linear(),
+                bg_bottom: p.viewport_bottom.linear(),
+                faces: session.display.render_mode.faces(),
+                edges: session.display.render_mode.edges(),
+                line_width: shoot.line_width,
+                transparent: shoot.transparent,
+            },
+        );
+        let mut rgba = self.renderer.read_rgba(&self.gpu.device, &self.gpu.queue)?;
+        if shoot.transparent {
+            unpremultiply_linear(&mut rgba);
+        }
+        Ok(Shot {
+            width,
+            height,
+            rgba,
+            adapter: self.gpu.adapter.clone(),
+        })
+    }
+}
+
+/// Run `f` with a renderer on the shared offscreen device, which stays
+/// locked meanwhile (one offscreen job at a time).
+pub fn with_offscreen<R>(f: impl FnOnce(&mut Offscreen<'_>) -> R) -> Result<R, RenderError> {
+    let gpu = Gpu::shared()?;
+    let gpu = gpu
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut o = Offscreen {
+        renderer: MeshRenderer::new(&gpu.device),
+        gpu: &gpu,
+    };
+    Ok(f(&mut o))
 }
 
 /// Render `session` at `width` × `height` on a headless GPU.
@@ -630,51 +803,87 @@ pub fn render_session(
     width: u32,
     height: u32,
 ) -> Result<Shot, RenderError> {
-    if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) {
+    render_session_with(session, &Shoot::new(width, height))
+}
+
+/// Render `session` as `shoot` says on a headless GPU.
+pub fn render_session_with(
+    session: &murmel_engine::Session,
+    shoot: &Shoot,
+) -> Result<Shot, RenderError> {
+    if !(1..=MAX_SIDE).contains(&shoot.width) || !(1..=MAX_SIDE).contains(&shoot.height) {
         return Err(RenderError::new(
             "RENDER003",
-            format!("{width} x {height} is outside 1..{MAX_SIDE}"),
+            format!(
+                "{} x {} is outside 1..{MAX_SIDE}",
+                shoot.width, shoot.height
+            ),
         ));
     }
-    let gpu = Gpu::shared()?;
-    // One offscreen render at a time on the shared device.
-    let gpu = gpu
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut r = MeshRenderer::new(&gpu.device);
-    let dark = session.theme.is_dark(None);
-    let p = session.tokens.palette(dark);
-    r.render(
-        &gpu.device,
-        &gpu.queue,
-        &View {
-            surface: session.mesh.as_ref().map(|m| &m.surface),
-            revision: session.surface_revision,
-            camera: &session.camera,
-            size: [width, height],
-            bg_top: p.viewport_top.linear(),
-            bg_bottom: p.viewport_bottom.linear(),
-            faces: session.display.render_mode.faces(),
-            edges: session.display.render_mode.edges(),
-        },
-    );
-    let rgba = r.read_rgba(&gpu.device, &gpu.queue)?;
-    Ok(Shot {
-        width,
-        height,
-        rgba,
-        adapter: gpu.adapter.clone(),
-    })
+    with_offscreen(|o| o.shoot(session, shoot))?
+}
+
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// The GPU resolves multisampled edges of a transparent picture to
+/// colours premultiplied in linear light and stored as sRGB; PNG wants
+/// straight alpha. Divide by alpha in linear light where 0 < alpha < 1.
+pub fn unpremultiply_linear(rgba: &mut [u8]) {
+    for px in rgba.as_chunks_mut::<4>().0 {
+        let a = px[3];
+        if a == 0 || a == 255 {
+            continue;
+        }
+        let af = a as f32 / 255.0;
+        for c in &mut px[..3] {
+            let lin = srgb_to_linear(*c as f32 / 255.0) / af;
+            *c = (linear_to_srgb(lin.min(1.0)) * 255.0).round() as u8;
+        }
+    }
 }
 
 /// Encode RGBA8 rows as a PNG file.
 pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), RenderError> {
+    write_png_with(path, width, height, rgba, None)
+}
+
+/// Encode RGBA8 rows as a PNG file, with the resolution `dpi` stored in
+/// its pHYs chunk when given (print size = pixels / dpi).
+pub fn write_png_with(
+    path: &Path,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    dpi: Option<f64>,
+) -> Result<(), RenderError> {
     let file = std::fs::File::create(path)
         .map_err(|e| RenderError::new("RENDER004", format!("{}: {e}", path.display())))?;
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     enc.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    if let Some(d) = dpi.filter(|d| d.is_finite() && *d > 0.0) {
+        let ppm = (d / 0.0254).round() as u32;
+        enc.set_pixel_dims(Some(png::PixelDimensions {
+            xppu: ppm,
+            yppu: ppm,
+            unit: png::Unit::Meter,
+        }));
+    }
     let mut w = enc
         .write_header()
         .map_err(|e| RenderError::new("RENDER004", format!("{}: {e}", path.display())))?;

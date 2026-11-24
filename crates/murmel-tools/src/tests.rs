@@ -281,6 +281,100 @@ fn screenshot_writes_a_png() {
     assert_eq!(e.diagnostics[0].code, "RENDER003");
 }
 
+/// Invariant (export.image, the maintainer's cards of 2026-11-24): the
+/// picture is the viewport times the scale; the legend (top left) and the
+/// triad (bottom left) are drawn only when asked; a transparent picture
+/// has alpha 0 where no mesh is and 255 on the mesh; the dpi is stored in
+/// the PNG; the view is unchanged afterwards; bad settings and a missing
+/// mesh are refused with their codes. Breaks when an option is ignored or
+/// the overlays move; the render test checks how the overlays look.
+#[test]
+fn export_image_options() {
+    let mut s = session();
+    let dir = root().join("target/render-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = |n: &str| dir.join(format!("tool-export-{n}.png"));
+    let e = call("export.image", json!({"path": out("none")}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    assert!(call("display.color_by", json!({"by": "patch"}), &mut s).ok());
+    s.viewport = [320.0, 200.0];
+    let camera = s.camera.clone();
+
+    let e = call(
+        "export.image",
+        json!({"path": out("plain"), "scale": 2, "legend": false, "axes": false, "dpi": 300}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(
+        (e.result["width"].clone(), e.result["height"].clone()),
+        (json!(640), json!(400))
+    );
+    assert_eq!(e.result["line_width"], 2.0);
+    let (_, _, plain) = murmel_render::read_png(&out("plain")).unwrap();
+    let file = std::fs::File::open(out("plain")).unwrap();
+    let info = png::Decoder::new(std::io::BufReader::new(file))
+        .read_info()
+        .unwrap();
+    let dims = info.info().pixel_dims.unwrap();
+    assert_eq!((dims.xppu, dims.unit), (11811, png::Unit::Meter));
+
+    let e = call(
+        "export.image",
+        json!({"path": out("overlays"), "scale": 2}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let (w, _, over) = murmel_render::read_png(&out("overlays")).unwrap();
+    let px = |img: &[u8], x: u32, y: u32| {
+        let i = 4 * (y * w + x) as usize;
+        [img[i], img[i + 1], img[i + 2], img[i + 3]]
+    };
+    let differs = |x0: u32, y0: u32, x1: u32, y1: u32| {
+        (y0..y1).any(|y| (x0..x1).any(|x| px(&plain, x, y) != px(&over, x, y)))
+    };
+    // The legend panel at (16, 16) points, the triad 48 points in from
+    // the bottom left; the top right corner stays as it was.
+    assert!(differs(40, 40, 80, 60), "no legend");
+    assert!(differs(60, 400 - 140, 140, 400 - 60), "no triad");
+    assert!(!differs(560, 0, 640, 40), "the top right changed");
+
+    let e = call(
+        "export.image",
+        json!({"path": out("transparent"), "width": 400, "transparent": true, "legend": false}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["height"], 250);
+    let (tw, th, t) = murmel_render::read_png(&out("transparent")).unwrap();
+    assert_eq!((tw, th), (400, 250));
+    assert_eq!(t[3], 0, "corner not transparent");
+    let mid = 4 * ((th / 2) * tw + tw / 2) as usize;
+    assert_eq!(t[mid + 3], 255, "mesh not opaque");
+
+    assert_eq!(s.camera, camera, "the view moved");
+    let bad = call(
+        "export.image",
+        json!({"path": out("x"), "scale": 20}),
+        &mut s,
+    );
+    assert_eq!(bad.diagnostics[0].code, "EXPORT001");
+    let bad = call(
+        "export.image",
+        json!({"path": out("x"), "line_width": 0.5}),
+        &mut s,
+    );
+    assert_eq!(bad.diagnostics[0].code, "EXPORT001");
+    let bad = call(
+        "export.image",
+        json!({"path": out("x"), "width": 9000}),
+        &mut s,
+    );
+    assert_eq!(bad.diagnostics[0].code, "RENDER003");
+}
+
 /// Invariant (layering): the mesh and engine crates have no window and no
 /// GPU, so everything they do runs headless; only murmel-render touches
 /// wgpu and only murmel-app touches egui. The MCP server, like the CLI,
