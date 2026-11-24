@@ -1055,7 +1055,10 @@ impl MurmelApp {
                     .monospace()
                     .color(secondary),
                 );
-                if self.opening_status(ui, &mut said) || self.blocks_status(ui, &mut said) {
+                if self.opening_status(ui, &mut said)
+                    || self.blocks_status(ui, &mut said)
+                    || self.preview_status(ui, &mut said)
+                {
                 } else if let Some(e) = &self.error {
                     let text = self.i18n.tr_args(
                         "status-error",
@@ -1458,6 +1461,7 @@ impl eframe::App for MurmelApp {
         self.read_steps_range(&ctx);
         self.poll_opening(&ctx);
         self.poll_blocks(&ctx);
+        self.poll_preview(&ctx);
         self.poll_digest(&ctx);
         self.poll_surface(&ctx);
         self.movie_window(&ctx);

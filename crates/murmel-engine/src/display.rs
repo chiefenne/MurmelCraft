@@ -143,6 +143,9 @@ pub enum Item {
     Stream(u32),
     /// The spray parcels (`parcels`), when `Display::parcels` is set.
     Parcels,
+    /// The boxes of the blocks of a mesh open as an overview (`blocks`),
+    /// when `Display::block_boxes` is set.
+    Blocks,
 }
 
 impl Item {
@@ -172,6 +175,7 @@ impl Item {
             Item::Region(i) => format!("region:{}", i + 1),
             Item::Stream(i) => format!("stream:{}", i + 1),
             Item::Parcels => "parcels".into(),
+            Item::Blocks => "blocks".into(),
         }
     }
 
@@ -190,6 +194,9 @@ impl Item {
         }
         if id == "arrows" {
             return Some(Item::Arrows);
+        }
+        if id == "blocks" {
+            return Some(Item::Blocks);
         }
 
         let (area, name) = id.split_once(':')?;
@@ -373,6 +380,14 @@ pub struct Display {
     /// The parcels of its file, read once and shared by every copy of
     /// the display.
     pub parcel_data: Option<Arc<murmel_mesh::Parcels>>,
+    /// Whether the boxes of an overview's blocks show (the eye of
+    /// `blocks` in the model tree); kept from mesh to mesh, as the
+    /// render mode is.
+    pub show_blocks: bool,
+    /// The boxes of the open overview's blocks and which of them the
+    /// regions read ([`crate::block_boxes`], `Session::redraw`); `None`
+    /// unless the open mesh is an overview.
+    pub block_boxes: Option<Arc<crate::block_boxes::BlockBoxes>>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -480,6 +495,7 @@ impl Display {
                         p.enabled = on;
                     }
                 }
+                (Item::Blocks, Some(on)) => self.show_blocks = on,
                 (Item::Region(k), Some(on)) => {
                     if let Some(r) = self.regions.get_mut(k as usize) {
                         r.enabled = on;
@@ -524,6 +540,7 @@ impl Display {
                         | Item::Iso(_)
                         | Item::Arrows
                         | Item::Parcels
+                        | Item::Blocks
                         | Item::Region(_)
                         | Item::Stream(_)
                 )
@@ -767,6 +784,7 @@ impl Display {
             Item::Iso(k) => (k as usize) < self.isos.len(),
             Item::Arrows => self.arrows.is_some(),
             Item::Parcels => self.parcels.is_some(),
+            Item::Blocks => self.block_boxes.is_some(),
             Item::Region(k) => (k as usize) < self.regions.len(),
             Item::Stream(k) => (k as usize) < self.streams.len(),
             Item::Measure(n) => self.measurement(n).is_some(),
@@ -990,12 +1008,19 @@ impl Display {
             .or_else(|| self.isos.len().checked_sub(1))
     }
 
-    /// Whether a slice, an iso-surface or streamlines are drawn.
+    /// Whether a slice, an iso-surface, streamlines, spray parcels or the
+    /// boxes of an overview's blocks are drawn: what lies inside the mesh.
     pub fn extracts_shown(&self) -> bool {
         self.slices.iter().any(|s| s.enabled)
             || self.isos.iter().any(|i| i.enabled)
             || self.streams_shown()
             || self.parcels_shown()
+            || self.blocks_shown()
+    }
+
+    /// Whether the boxes of an overview's blocks are drawn.
+    pub fn blocks_shown(&self) -> bool {
+        self.show_blocks && self.block_boxes.is_some()
     }
 
     /// Whether spray parcels are drawn.
@@ -1087,6 +1112,12 @@ impl Display {
                 .streams
                 .get(k as usize)
                 .map(|_| set.unwrap_or(tokens.mesh.field.stream)),
+            // The colour of the blocks' boxes (those the regions read
+            // keep theirs), in every mode.
+            (_, Item::Blocks) => self
+                .block_boxes
+                .as_ref()
+                .map(|_| set.unwrap_or(tokens.mesh.field.block)),
             _ => None,
         }
     }
@@ -1160,6 +1191,7 @@ impl Display {
             | Item::Iso(_)
             | Item::Arrows
             | Item::Parcels
+            | Item::Blocks
             | Item::Region(_)
             | Item::Stream(_) => false,
         }

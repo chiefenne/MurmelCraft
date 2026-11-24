@@ -59,7 +59,7 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   `smooth`, `banded`), `bands` (2 to 64), `lines` and `line_count` (1 to
   64), `map` (a colour map id, or left out for automatic), `reverse` and
   `range` (`field`, `shown`, `symmetric`, `{"fixed": {"min": 0, "max": 2}}`
-  or, since format 1.16, `steps`: over every step of the open time
+  or, since format 1.17, `steps`: over every step of the open time
   series).
   A field the result does not have is skipped as `field:<name>` and the
   colour falls back to solid. The values themselves are read from the
@@ -145,6 +145,10 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   Loading compares the digest with the hash it names, so an older
   session still finds its mesh unchanged (its SHA-256 is taken once and
   remembered in `checked-files.json`).
+- **Block boxes** (format 1.16): `display.show_blocks` is `true` while
+  the boxes of an overview's blocks show (the eye of `blocks` in the
+  model tree); left out otherwise. Like the render mode, it is kept with
+  no mesh open and applies to the next overview.
 - **Colours and the view cube** (`colors`, `view_cube`) are the user's
   settings when the session was saved. Loading applies them to this
   session only; `settings.toml` is not written (decided 2026-11-24). A

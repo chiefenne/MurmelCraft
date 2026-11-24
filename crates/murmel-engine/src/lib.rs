@@ -5,6 +5,7 @@
 //! change this state only through the tools of `murmel-tools`.
 
 pub mod animation;
+pub mod block_boxes;
 pub mod blocks;
 pub mod calc;
 pub mod camera;
@@ -30,6 +31,7 @@ pub mod memory;
 pub mod navigation;
 pub mod parcel;
 pub mod pick;
+pub mod preview;
 pub mod quality;
 pub mod region;
 pub mod series;

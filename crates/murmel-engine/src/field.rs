@@ -448,6 +448,10 @@ pub struct FieldSet {
     /// file opened as an overview, whose fields hold only the boundary's
     /// values (a scalar's value, a vector's magnitude).
     volume_ranges: HashMap<String, (f64, f64)>,
+    /// The preview grid of an overview's volume, once read: its cells and
+    /// their fields, which slices, iso-surfaces and arrows draw on while
+    /// the mesh shown has no cells ([`crate::preview`]).
+    preview: OnceLock<Arc<crate::preview::Preview>>,
 }
 
 impl FieldSet {
@@ -459,7 +463,19 @@ impl FieldSet {
             cache: ValueCache::default(),
             derived: Vec::new(),
             volume_ranges: HashMap::new(),
+            preview: OnceLock::new(),
         }
+    }
+
+    /// The preview grid of the volume, once read.
+    pub fn preview(&self) -> Option<&Arc<crate::preview::Preview>> {
+        self.preview.get()
+    }
+
+    /// Keep `preview` as these fields' preview grid; a set that has one
+    /// keeps it.
+    pub(crate) fn set_preview(&self, preview: Arc<crate::preview::Preview>) {
+        let _ = self.preview.set(preview);
     }
 
     /// These fields with the ranges of some over the whole volume, which
