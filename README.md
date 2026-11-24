@@ -17,6 +17,10 @@ KoflCraft's Manifold mesh, 229,615 polyhedra and prisms. The slides are
 also [full-size stills](assets/readme/tour); how they were made is in
 [tools/readme-tour](tools/readme-tour/README.md).</sub>
 
+[![CI](https://github.com/chiefenne/MurmelCraft/actions/workflows/ci.yml/badge.svg)](https://github.com/chiefenne/MurmelCraft/actions/workflows/ci.yml)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 ## What works today
 
 Not released yet (version 0.1.0): the V0.2 to V0.6 milestones of the UI
