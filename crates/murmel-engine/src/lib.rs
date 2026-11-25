@@ -39,6 +39,7 @@ pub mod preview;
 pub mod preview_cache;
 pub mod probe_blocks;
 pub mod quality;
+pub mod recent;
 pub mod region;
 pub mod series;
 pub mod session;

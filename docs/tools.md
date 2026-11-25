@@ -79,6 +79,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `journal.redo` | 1 | read | Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none. |
 | `journal.group` | 1 | read | Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps). |
 | `journal.list` | 1 | read | The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept. |
+| `recent.list` | 1 | read | The files opened lately in the window (File > Open recent), the latest first: path, kind (mesh, session, series, parcels, charts; the tool that opens it again is mesh.open, session.load, series.open, parcels.open or charts.open) and whether it still exists. Empty without a config folder, and over the agent bridge. |
+| `recent.clear` | 1 | write-files | Forget the files opened lately: writes an empty recent.toml in the config folder. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets, your defaults for new items (and which values of each kind can be defaults), your formulas and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
 | `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
@@ -2606,6 +2608,28 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 ```
 
 ### `journal.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `recent.list`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
+### `recent.clear`
 
 ```json
 {

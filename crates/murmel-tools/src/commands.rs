@@ -209,6 +209,13 @@ pub fn commands() -> Vec<Command> {
             Tool("mesh.close", json!({})),
         ),
         cmd(
+            "recent.clear",
+            "cmd-recent-clear",
+            "file",
+            &[],
+            Tool("recent.clear", json!({})),
+        ),
+        cmd(
             "window.session_save",
             "cmd-session-save",
             "file",
@@ -1759,6 +1766,7 @@ fn new_stream(s: &Session, kind: &str) -> Option<Value> {
 /// Tools no command calls, and why: they answer questions whose answers
 /// the window already shows, or need an input only a panel can give.
 pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
+    ("recent.list", "File ▸ Open recent shows it"),
     (
         "series.range",
         "the window reads it by itself while range mode steps colours a series",

@@ -16,6 +16,13 @@ use crate::style::color;
 /// The repository, for the Help menu's pages.
 pub const REPO: &str = "https://github.com/chiefenne/MurmelCraft";
 
+/// What a click in a menu asks for.
+pub(crate) enum Picked {
+    Command(Command),
+    /// A file of File ▸ Open recent.
+    Recent(murmel_engine::recent::Entry),
+}
+
 /// Whether a command needs an open mesh: every tool but the settings,
 /// the journal, the charts and those that open something; of the window
 /// actions only the clipboard copy of the view.
@@ -25,6 +32,7 @@ pub(crate) fn needs_mesh(c: &Command) -> bool {
             !(t.starts_with("settings.")
                 || t.starts_with("journal.")
                 || t.starts_with("charts.")
+                || t.starts_with("recent.")
                 || matches!(t, "mesh.open" | "session.load" | "series.open"))
         }
         None => c.id == "window.copy_image",
@@ -68,7 +76,7 @@ impl MurmelApp {
     /// The menu bar: one button per menu; a click on an item runs its
     /// command after the bar is drawn.
     pub(crate) fn menu_bar(&mut self, ui: &mut Ui) {
-        let mut run: Option<Command> = None;
+        let mut run: Option<Picked> = None;
         let name = self.i18n.tr("menu-bar");
         let bar = egui::MenuBar::new().ui(ui, |ui| {
             for (n, m) in menus().iter().enumerate() {
@@ -83,18 +91,78 @@ impl MurmelApp {
         });
         bar.response
             .widget_info(|| WidgetInfo::labeled(Role::MenuBar, true, name.clone()));
-        if let Some(c) = run {
-            let ctx = ui.ctx().clone();
-            self.run_command(&ctx, &c);
+        match run {
+            Some(Picked::Command(c)) => {
+                let ctx = ui.ctx().clone();
+                self.run_command(&ctx, &c);
+            }
+            Some(Picked::Recent(e)) => self.open_recent(e),
+            None => {}
         }
     }
 
-    fn menu_entries(&self, ui: &mut Ui, entries: &[Entry], run: &mut Option<Command>) {
+    /// Open a file of File ▸ Open recent again, as it was opened.
+    pub(crate) fn open_recent(&mut self, e: murmel_engine::recent::Entry) {
+        use murmel_engine::recent::Kind;
+        match e.kind {
+            Kind::Mesh | Kind::Session => self.open_path(e.path),
+            k => {
+                self.call(k.tool(), json!({ "path": e.path }));
+            }
+        }
+    }
+
+    /// The files opened lately, each a button named by its file and
+    /// folder; a file gone since is greyed out.
+    fn recent_entries(&self, ui: &mut Ui, run: &mut Option<Picked>) {
+        let files = self
+            .session
+            .recent_dir()
+            .map(murmel_engine::recent::load)
+            .unwrap_or_default();
+        if files.is_empty() {
+            ui.add_enabled(false, Button::new(self.i18n.tr("recent-empty")));
+        }
+        for e in files {
+            let name = e
+                .path
+                .file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_else(|| e.path.display().to_string());
+            let dir = e
+                .path
+                .parent()
+                .and_then(|d| d.file_name())
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let there = e.path.exists();
+            let label = if there {
+                name
+            } else {
+                self.i18n
+                    .tr_args("recent-missing", &[("name", name.into())])
+            };
+            let secondary = color(self.palette(ui.ctx()).text_secondary);
+            let b = ui
+                .add_enabled(
+                    there,
+                    Button::new(label).shortcut_text(RichText::new(dir).color(secondary)),
+                )
+                .on_hover_text(e.path.display().to_string())
+                .on_disabled_hover_text(e.path.display().to_string());
+            if b.clicked() {
+                *run = Some(Picked::Recent(e));
+            }
+        }
+    }
+
+    fn menu_entries(&self, ui: &mut Ui, entries: &[Entry], run: &mut Option<Picked>) {
         for e in entries {
             match e {
                 Entry::Separator => {
                     ui.separator();
                 }
+                Entry::Recent => self.recent_entries(ui, run),
                 Entry::Sub(key, sub) => {
                     ui.menu_button(self.i18n.tr(key), |ui| {
                         ui.set_min_width(220.0);
@@ -110,7 +178,7 @@ impl MurmelApp {
         }
     }
 
-    fn menu_item(&self, ui: &mut Ui, c: &Command, run: &mut Option<Command>) {
+    fn menu_item(&self, ui: &mut Ui, c: &Command, run: &mut Option<Picked>) {
         let label = self.item_label(c);
         let keys = c.keys.first().map(|k| key_text(k)).unwrap_or_default();
         let secondary = color(self.palette(ui.ctx()).text_secondary);
@@ -124,7 +192,7 @@ impl MurmelApp {
             None => b,
         };
         if b.clicked() {
-            *run = Some(c.clone());
+            *run = Some(Picked::Command(c.clone()));
         }
     }
 

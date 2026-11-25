@@ -1229,6 +1229,10 @@ pub struct Session {
     /// it from there for a file unchanged since ([`crate::checked`]; the
     /// window and the command line).
     pub remember_checked: bool,
+    /// Add each file opened to File ▸ Open recent (`recent.toml` in
+    /// `config_dir`; the window). Off, opening leaves the list as it is,
+    /// as scripts and agents expect.
+    pub remember_recent: bool,
     /// Build the cut of a moving clip plane on a thread of its own (the
     /// window, the user's choice for the clip drag): a change of `display`
     /// that only moves or turns clip planes leaves the surface as it is
@@ -1331,6 +1335,7 @@ impl Session {
             hash_after_open: false,
             hashing: None,
             remember_checked: false,
+            remember_recent: false,
             defer_clips: false,
             preview: None,
             built_from: None,
@@ -1439,6 +1444,21 @@ impl Session {
     /// Where the files checked are remembered, if anywhere.
     pub fn checked_dir(&self) -> Option<&Path> {
         self.config_dir.as_deref().filter(|_| self.remember_checked)
+    }
+
+    /// Where the files opened lately are kept, if anywhere.
+    pub fn recent_dir(&self) -> Option<&Path> {
+        self.config_dir.as_deref().filter(|_| self.remember_recent)
+    }
+
+    /// Put a file just opened first in File ▸ Open recent. A list that
+    /// cannot be written is left as it was: it is a convenience.
+    pub fn note_recent(&self, path: &Path, kind: crate::recent::Kind) {
+        if let Some(dir) = self.recent_dir() {
+            let mut files = crate::recent::load(dir);
+            crate::recent::add(&mut files, path, kind);
+            let _ = crate::recent::save(dir, &files);
+        }
     }
 
     pub fn aspect(&self) -> f64 {

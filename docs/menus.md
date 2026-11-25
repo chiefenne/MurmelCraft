@@ -10,6 +10,9 @@ in the command palette (Ctrl + K) and keeps its keys ([keys.md](keys.md)). On ma
 
 - Open mesh… `Ctrl + O` → `mesh.open`
 - Open OpenFOAM case folder… `Ctrl + Shift + O` → `mesh.open`
+- **Open recent** ▸
+  - *the files opened lately* → `recent.list`
+  - Clear the list of recent files → `recent.clear`
 - Load session… → `session.load`
 - Open time series… → `series.open`
 - Open spray parcels… → `parcels.open`
