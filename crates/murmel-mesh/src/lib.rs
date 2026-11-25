@@ -190,8 +190,8 @@ pub const CODES: &[(&str, &str, &str)] = &[
     ),
     (
         "BLOCK006",
-        "The regions drawn on a mesh open as an overview touch blocks whose cells need more memory than the budget.",
-        "Make the regions smaller or fewer (each reads the blocks its box, sphere or slab touches), or raise the memory budget (settings.set_memory).",
+        "The regions drawn on a mesh open as an overview touch blocks whose cells need more memory than the budget, or a probe's block or the blocks its streamlines reach do (streamlines: more than a quarter of it).",
+        "Make the regions smaller or fewer (each reads the blocks its box, sphere or slab touches), use fewer or shorter streamlines, or raise the memory budget (settings.set_memory).",
     ),
     (
         "MESH015",

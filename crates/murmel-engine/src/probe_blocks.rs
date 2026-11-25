@@ -63,7 +63,7 @@ pub struct Kept {
 impl Kept {
     /// This block with the fields of `made` made on it (itself when they
     /// are the ones made).
-    fn with_made(self: &Arc<Kept>, made: &[Made]) -> Arc<Kept> {
+    pub(crate) fn with_made(self: &Arc<Kept>, made: &[Made]) -> Arc<Kept> {
         if self.made == made {
             return self.clone();
         }
@@ -179,7 +179,7 @@ fn keep_for(o: &Overview, budget: u64) -> usize {
 /// The blocks whose bounds hold `p`, those in `kept` first, then the one
 /// `p` lies deepest inside first (its distance to the box's nearest face,
 /// over the box's size along that axis).
-fn candidates(o: &Overview, p: [f64; 3], kept: &[usize]) -> Vec<usize> {
+pub(crate) fn candidates(o: &Overview, p: [f64; 3], kept: &[usize]) -> Vec<usize> {
     let span = o
         .blocks
         .iter()
@@ -232,28 +232,10 @@ pub fn find(
     if !point.iter().all(|v| v.is_finite()) {
         return Ok((found, used));
     }
-    let ranges = crate::blocks::volume_ranges(o);
     let ids: Vec<usize> = kept.iter().map(|x| x.block).collect();
     for k in candidates(o, point, &ids) {
         profile::check()?;
-        let block = match kept.iter().find(|x| x.block == k) {
-            Some(x) => x.with_made(&src.made),
-            None => {
-                crate::blocks::fits(o, &[k], src.budget)?;
-                let r =
-                    crate::blocks::read(&src.path, &[k], src.evidence.as_ref(), ranges.clone())?;
-                let base = Arc::new(r.fields);
-                Arc::new(Kept {
-                    block: k,
-                    mesh: Arc::new(r.mesh),
-                    fields: base.clone(),
-                    base,
-                    made: Vec::new(),
-                    subset: Arc::new(r.subset),
-                })
-                .with_made(&src.made)
-            }
-        };
+        let block = load(src, k, kept)?;
         let halo = &block.subset.halo;
         let hit = crate::measure::locate_where(&block.mesh, point, |c| {
             !halo.get(c).copied().unwrap_or(true)
@@ -278,6 +260,28 @@ pub fn find(
     Ok((found, used))
 }
 
+/// Block `k` of `src` with the fields of `src.made` made on it: from
+/// `kept`, else read with its halo, BLOCK006 beyond the memory budget.
+pub(crate) fn load(src: &Source, k: usize, kept: &[Arc<Kept>]) -> Result<Arc<Kept>, MeshError> {
+    if let Some(x) = kept.iter().find(|x| x.block == k) {
+        return Ok(x.with_made(&src.made));
+    }
+    let o = &*src.overview;
+    crate::blocks::fits(o, &[k], src.budget)?;
+    let ranges = crate::blocks::volume_ranges(o);
+    let r = crate::blocks::read(&src.path, &[k], src.evidence.as_ref(), ranges)?;
+    let base = Arc::new(r.fields);
+    Ok(Arc::new(Kept {
+        block: k,
+        mesh: Arc::new(r.mesh),
+        fields: base.clone(),
+        base,
+        made: Vec::new(),
+        subset: Arc::new(r.subset),
+    })
+    .with_made(&src.made))
+}
+
 /// The blocks read for probes and the probe being found.
 #[derive(Clone, Debug, Default)]
 pub struct Cache {
@@ -285,6 +289,17 @@ pub struct Cache {
     pub kept: Vec<Arc<Kept>>,
     /// A probe's point being found on a thread of its own.
     pub job: Option<ProbeJob>,
+    /// The blocks the streamlines last went through
+    /// ([`crate::stream_blocks`]).
+    pub stream_kept: Vec<Arc<Kept>>,
+    /// Streamlines being traced through the blocks on a thread of their
+    /// own.
+    pub stream_job: Option<crate::stream_blocks::StreamJob>,
+    /// A trace stopped because its sets changed, ending: the blocks it
+    /// read are kept once it ends.
+    pub stream_ending: Option<crate::stream_blocks::StreamJob>,
+    /// Why a block could not be read for the streamlines last traced.
+    pub stream_problem: Option<MeshError>,
 }
 
 impl Cache {
@@ -303,7 +318,15 @@ impl Cache {
         if let Some(j) = self.job.take() {
             j.stop();
         }
+        for j in [self.stream_job.take(), self.stream_ending.take()]
+            .into_iter()
+            .flatten()
+        {
+            j.stop();
+        }
         self.kept.clear();
+        self.stream_kept.clear();
+        self.stream_problem = None;
     }
 }
 

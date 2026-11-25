@@ -17,8 +17,9 @@
 //! overview, and in the cache folder ([`crate::preview_cache`]), so the
 //! file opened again unchanged does not sample its volume again.
 //!
-//! Fields made on the overview (derived and calculated) and the
-//! streamlines do not draw on the grid; they need a region's cells.
+//! Fields made on the overview (derived and calculated) do not draw on
+//! the grid; they need a region's cells. Streamlines are not traced on
+//! the grid but through the blocks of the file ([`crate::stream_blocks`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};

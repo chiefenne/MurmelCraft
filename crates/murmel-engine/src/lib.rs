@@ -44,6 +44,7 @@ pub mod settings;
 pub mod slice_preview;
 pub mod steps_range;
 pub mod stream;
+pub mod stream_blocks;
 pub mod surface;
 mod tets;
 pub mod theme;

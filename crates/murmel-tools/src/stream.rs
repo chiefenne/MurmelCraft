@@ -36,7 +36,13 @@ pub(crate) fn stream_json(s: &Session, k: usize) -> Value {
             "range": color_range(&s.display, &m.mesh, Some(&m.fields), k),
         })
     });
-    json!({
+    // (on an overview, traced through its blocks on a thread of their own)
+    let tracing = traced.is_none()
+        && s.probe_blocks
+            .stream_job
+            .as_ref()
+            .is_some_and(|j| j.sets.iter().any(|(i, _)| *i == k));
+    let mut v = json!({
         "id": Item::Stream(k as u32).id(&m.mesh),
         "stream": k + 1,
         "enabled": st.enabled,
@@ -58,8 +64,18 @@ pub(crate) fn stream_json(s: &Session, k: usize) -> Value {
             "points": t.points,
             "ended": t.ends,
             "problem": t.problem,
+            "blocks": t.blocks,
         })),
-    })
+    });
+    if v["traced"]["blocks"].is_null()
+        && let Some(t) = v["traced"].as_object_mut()
+    {
+        t.remove("blocks");
+    }
+    if tracing {
+        v["tracing"] = json!(true);
+    }
+    v
 }
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]

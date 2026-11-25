@@ -1186,7 +1186,8 @@ the colour range is the volume's, as on the boundary.
   iso-surface or the arrows show; opening the mesh again forgets it.
 - The triangles name no cell, so a click on them picks nothing of the
   overview's mesh. Fields made on the overview (derived, calculated)
-  and streamlines do not draw on the grid; they need a region's cells.
+  do not draw on the grid; they need a region's cells. Streamlines are
+  traced through the blocks instead (see "Streamlines on an overview").
 - `mesh.info` tells the grid under `overview.preview`.
 
 1 M blocked file with three cell fields, 4 threads, file in the page
@@ -1441,3 +1442,48 @@ Cam and Foran 1994; Engel et al., "Real-Time Volume Graphics", 2006).
 
 Near a curved or concave boundary a grid cell inside a cell's box but
 outside the mesh may show that cell until the exact slice is in place.
+
+## Streamlines on an overview (2026-11-25)
+
+An overview shows no volume cells, so its streamlines are traced through
+the blocks of the file (the engine's `stream_blocks.rs`, card 8: a block
+cache for streamlines). A seed is looked for in the blocks whose boxes
+hold it, as a probe is; a line reads a block, with its halo, the first
+time it reaches it. When a walk enters a halo cell it goes on from the
+same cell in the block that owns it, so the field is always read in an
+owned cell, whose neighbours the halo holds. The tracer itself is the
+one the whole mesh uses, over "parts" (the whole mesh is one part, each
+block another).
+
+1 M cells with three cell fields, 16 blocks of 65,536, 4 threads,
+`murmel run` (the envelope's seconds), in brackets the same file read
+whole:
+
+| stream.set, field U | blocks | first trace | blocks kept |
+|---|---:|---:|---:|
+| line, 50 seeds both ways | 11 | 2.8 s (2.5 s) | 0.10 s (0.09 s) |
+| sphere, 100 seeds | 12 | 3.6 s | 0.20 s (0.20 s) |
+| plane, 81 seeds, after the line and sphere | 15 | 0.85 s (0.17 s) | |
+
+- A block takes 0.25 to 0.3 s to read and make its values; once read it
+  traces as fast as the whole mesh. On the mesh read whole the first
+  trace pays for the whole mesh's node values instead.
+- The lines are the whole mesh's where the field is: with a velocity
+  linear in space (exact gradients in every cell) the points and colour
+  values agree to rounding, across blocks of 100 cells. Otherwise node
+  values on a block's border take the halo cells' gradients, so lines
+  there differ a little (here 8 points of 46,500 on the sphere set; a
+  magnitude's node values in the sixth digit).
+- A trace reads at most as many blocks as a quarter of the memory
+  budget holds (on the iMac, 16 GB, about 33 blocks); a line that needs
+  another ends there (`ended.unread`, BLOCK006), and the set is traced
+  again once the budget changes. The blocks gone through stay for the
+  next trace, so moving or changing a set reads only new blocks.
+- On 100 M cells (about 1,500 blocks) a set of lines sweeping across the
+  whole volume can reach more blocks than that; dropping blocks during a
+  trace and reading them again as lines come back is the next step if
+  it bites.
+- In the window the lines are traced on a thread of their own; the
+  status bar counts the blocks read, with Cancel or Esc (the lines then
+  end at the blocks read so far). Properties says how many blocks the
+  lines read; a set being traced says so.

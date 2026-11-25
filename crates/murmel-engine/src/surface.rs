@@ -1034,11 +1034,10 @@ impl Surface {
             .filter(|_| mesh.cell_count() == 0)
         {
             Some(p) => crate::preview::append(self, p, tokens, display),
-            None => {
-                crate::extract::append(self, mesh, fields, tokens, display, shown);
-                crate::stream::append(self, mesh, fields, tokens, display);
-            }
+            None => crate::extract::append(self, mesh, fields, tokens, display, shown),
         }
+        // (an overview's lines are traced through its blocks)
+        crate::stream::append(self, mesh, fields, tokens, display);
         crate::parcel::append(self, mesh, tokens, display);
         crate::block_boxes::append(self, tokens, display);
     }
