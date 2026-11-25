@@ -43,6 +43,7 @@ VTKHDF file with two cell fields, written without the mesh in memory; see
 | `tree.frame` | what the model tree and the legend ask of the mesh on each frame (counts, items), median of 5 |
 | `clip.step` | one step of a clip drag as the window does it (the plane moves, the GPU cuts), median of 5 |
 | `clip.exact` | from the last step until the exact crinkle cut is in place (built on its own thread once the plane rests) |
+| `clip.layer.first`, `clip.layer`, `clip.layer.flat` | the thin layer a drag step draws (`Surface::clip_layer`): the first one, which also bins the cells; then a crinkle step (median of 5, phases `layer.cells`, `layer.crossed`, `layer.polygons`, then `surface.points` and `surface.buffers` of the layer); then a flat one |
 | `clip.step.built` | one step that builds the exact cut before it returns (the command line, agents; every step before the preview) |
 | `pick.9` | nine picks over the iso view (the hover tooltip, a click, snapping) |
 | `render.first`, `render.next` | an offscreen frame with the upload, and a later one |
@@ -1713,3 +1714,66 @@ cells, 1,528 blocks), estimated from these numbers:
   the faces from the block ranges first would save that time.
 - The preview grid reads the points and point lists of every block once
   (about 28 GB at 100 M with 32-bit ids) and is then kept.
+
+## Clip drag: a live cut in a thin layer (2026-11-25)
+
+The maintainer's report: at about 2 M polyhedral cells the clip drag was
+slow and awkward. While dragging, the GPU only cut the surface built
+without the moving plane, so the cut looked hollow (the inside of the far
+walls). Once the plane rested for 120 ms, two whole surfaces were built
+on threads, the one without the plane and the exact cut, and the cells
+appeared in one go about half a second later. The maintainer's cards
+asked for the exact cut to follow the pointer ("live exact cut, thin
+layer") and, when a step is slow, for the cut to lag a little and stay
+exact rather than switch to a simpler picture.
+
+- A plane cuts away whole cells (crinkle) or slices them (flat). The
+  cells it leaves wholly on one side are cut exactly by the shader: their
+  faces lie wholly on one side too. Only the cells the plane crosses
+  need faces of their own: the faces a crinkle plane keeps whole, or the
+  sections a flat plane cuts. `Surface::clip_layer` builds just those.
+  It finds the cells near the plane in the cell bins (`crate::bins`),
+  works out the distances for their nodes alone (a lazy `Cutter`), and
+  walks only their faces through the same face rules as the whole build
+  (`face_polys`, `sections`). A step costs what the layer holds (about
+  N^(2/3) cells), not what the mesh holds.
+- In the window, each step of a drag starts a layer build on a thread
+  of its own. One runs at a time and the latest display wins. The
+  renderer draws the surface without the moving planes, cut at the
+  layer's planes, and the layer over it uncut (drawn as instance 1, which
+  the shader's `uncut` flag exempts from the cut). The planes are those
+  the layer was built for, so the two always fit: on a slow step the cut
+  lags a step behind the pointer and is never wrong.
+- The exact surface is still built once the plane rests (picking, counts,
+  feature edges); it shows the same picture, so nothing pops.
+- Hovering a clip handle bins the cells and builds the surface without
+  that plane ahead of the drag (`Session::warm_clip`). After a drag, that
+  surface is kept for the next drag of the same plane.
+- Tested: the layer holds exactly the triangles of the whole build
+  that belong to the crossed cells (crinkle), or exactly its sections
+  (flat), with a second plane and a hidden zone, and every other
+  triangle lies on the right side of the plane
+  (`clip_layer_completes_the_cut_surface`). A render test checks that
+  the live picture matches the exact cut and that the hollow one does not.
+
+Honeycomb of 2.09 M cells (14 faces per cell, heavier than a KoflCraft
+mesh of the same size), polyMesh binary, Linux container, 4 threads,
+`murmel bench run --repeat 3 --no-fields --no-render`:
+
+| Stage | ms |
+|---|---:|
+| clip.exact (the whole cut, after a 120 ms rest; as before) | 474 |
+| clip.step.built (one whole cut) | 213 |
+| clip.layer.first (bins the cells once per mesh; done on hover) | 1,427 |
+| clip.layer (crinkle, 340,236 triangles) | 45 |
+| — layer.cells, layer.crossed | 3.5, 4.9 |
+| — layer.polygons | 12.6 |
+| — surface.points, surface.buffers | 6.8, 10.6 |
+| clip.layer.flat (123,224 triangles) | 84 |
+
+The cut now follows the pointer at about 20 crinkle steps a second on
+four threads (the iMac's sixteen should do better), against one whole
+cut after the pointer stops before. Left: the cut points of a flat
+layer are numbered on one thread (about 60 ms of its 84). A flat layer
+draws only sections, so each cell could name its own points on any
+thread.

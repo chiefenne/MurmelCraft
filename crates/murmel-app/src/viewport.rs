@@ -468,12 +468,14 @@ impl MurmelApp {
         // draws again without a new surface.
         let field = self.session.field_paint();
         // During a clip drag: the surface without the moving planes, cut
-        // by them on the GPU, until the exact cut is in place.
+        // by them on the GPU, and the thin layer of the cells they cross
+        // over it, until the exact cut is in place.
         let drawn = self.session.drawn();
-        let (surface, revision, planes) = match &drawn {
-            Some((s, r, p)) => (Some(*s), *r, p.as_slice()),
-            None => (None, self.session.surface_revision, &[][..]),
+        let (surface, revision, planes, layer) = match &drawn {
+            Some(d) => (Some(d.surface), d.revision, d.planes.as_slice(), d.layer),
+            None => (None, self.session.surface_revision, &[][..], None),
         };
+        let layer_key = layer.map(|(_, r)| r);
         // During a slice drag: the moving slices drawn from the field's
         // grid until their exact faces are in place.
         let slice = self.session.slice_drawn();
@@ -515,7 +517,7 @@ impl MurmelApp {
         }
         let edges = display.draw_edges() && !moving.hide;
         let key = format!(
-            "{cam:?}|{revision}|{planes:?}|{slice_key:?}|{iso_key:?}|{px:?}|{dark}|{:?}|{edges}|{field:?}",
+            "{cam:?}|{revision}|{planes:?}|{layer_key:?}|{slice_key:?}|{iso_key:?}|{px:?}|{dark}|{:?}|{edges}|{field:?}",
             display.render_mode
         );
         if g.last.as_deref() != Some(key.as_str()) {
@@ -536,6 +538,7 @@ impl MurmelApp {
                     field: field.as_ref(),
                     scale: ppp,
                     clip_planes: planes,
+                    layer,
                     slice: slice.as_ref(),
                     iso: iso.as_ref(),
                 },

@@ -414,6 +414,37 @@ pub struct ClipPreview {
     /// of the exact cut (started once the planes rest).
     base_job: Option<SurfaceJob>,
     exact_job: Option<SurfaceJob>,
+    /// The thin layer of the cells the moving planes cross
+    /// ([`Surface::clip_layer`]), the display it was built for and its
+    /// revision, drawn over `base` uncut; and its build. One build runs
+    /// at a time and the latest display wins, so on a slow step the cut
+    /// follows a little behind the pointer and stays exact (the
+    /// maintainer's card of 2026-11-25).
+    layer: Option<(Display, Arc<Surface>, u64)>,
+    layer_job: Option<SurfaceJob>,
+}
+
+/// What the renderer draws ([`Session::drawn`]).
+pub struct Drawn<'a> {
+    /// The surface (during a clip drag, the one without the moving
+    /// planes once built) and its revision.
+    pub surface: &'a Surface,
+    pub revision: u64,
+    /// The planes the renderer cuts `surface` with (`[n, d]`: a point
+    /// `p` relative to the surface's origin is cut away where
+    /// `n · p + d > 0`); empty without a clip drag.
+    pub planes: Vec<[f32; 4]>,
+    /// The thin layer of a clip drag and its revision, drawn uncut.
+    pub layer: Option<(&'a Surface, u64)>,
+}
+
+/// A surface built without one clip plane: the display, and the build
+/// or the surface once built.
+#[derive(Clone, Debug)]
+struct ClipBase {
+    display: Display,
+    job: Option<SurfaceJob>,
+    surface: Option<Arc<Surface>>,
 }
 
 impl ClipPreview {
@@ -665,6 +696,20 @@ impl SurfaceJob {
         })
     }
 
+    /// The thin layer of the clip planes `moving` of `display` on the
+    /// mesh of `m` ([`Surface::clip_layer`]).
+    fn layer(m: &OpenMesh, tokens: &Tokens, display: Display, moving: Vec<usize>) -> SurfaceJob {
+        let (mesh, fields, tokens, d) = (
+            m.mesh.clone(),
+            m.fields.clone(),
+            tokens.clone(),
+            display.clone(),
+        );
+        Self::spawn(display, 0, move || {
+            Surface::clip_layer(&mesh, &fields, &tokens, &d, &moving)
+        })
+    }
+
     /// The extras of `display` for the surface of `m`.
     fn extras(m: &OpenMesh, tokens: &Tokens, display: Display) -> SurfaceJob {
         let (mesh, fields, tokens, d, header) = (
@@ -691,6 +736,12 @@ impl SurfaceJob {
             }
         });
         SurfaceJob { display, key, done }
+    }
+
+    /// Whether the surface is built (and not taken yet).
+    #[cfg(test)]
+    fn ready(&self) -> bool {
+        self.done.0.lock().is_ok_and(|v| v.is_some())
     }
 
     /// The surface once built (waiting for it with `wait`).
@@ -1252,6 +1303,10 @@ pub struct Session {
     pub defer_clips: bool,
     /// The clip planes moving while their exact cut is built.
     pub preview: Option<ClipPreview>,
+    /// The surface without one clip plane, built ahead of a drag of that
+    /// plane ([`Session::warm_clip`]) or kept from the last drag, so the
+    /// next drag starts from it.
+    clip_base: Option<ClipBase>,
     /// What the mesh's own faces of the surface were last built from in
     /// [`Session::redraw`], so a change of the extras alone can keep them.
     built_from: Option<BuiltFrom>,
@@ -1350,6 +1405,7 @@ impl Session {
             remember_recent: false,
             defer_clips: false,
             preview: None,
+            clip_base: None,
             built_from: None,
             extras_preview: None,
             slice_grid: None,
@@ -1557,6 +1613,7 @@ impl Session {
         self.display = display;
         self.surface_revision += 1;
         self.preview = None;
+        self.clip_base = None;
         self.mesh = Some(OpenMesh {
             path: l.path,
             built_for: self.display.clone(),
@@ -1630,6 +1687,7 @@ impl Session {
         }
         self.surface_revision += 1;
         self.preview = None;
+        self.clip_base = None;
         self.mesh.insert(OpenMesh {
             path: l.path,
             built_for: self.display.clone(),
@@ -1650,6 +1708,7 @@ impl Session {
     pub fn close(&mut self) {
         self.mesh = None;
         self.preview = None;
+        self.clip_base = None;
         self.stop_blocks();
         if let Some(h) = self.hashing.take() {
             h.stop();
@@ -2295,6 +2354,7 @@ impl Session {
         m.fields = Arc::new(fields);
         m.blocks = blocks;
         self.preview = None;
+        self.clip_base = None;
         true
     }
 
@@ -2606,6 +2666,16 @@ impl Session {
         if let Some(surface) = p.exact_job.as_ref().and_then(|j| j.take(false)) {
             let job = p.exact_job.take();
             if let Some(job) = job.filter(|j| same_display(&j.display, &self.display)) {
+                // The surface without the moving planes is kept for the
+                // next drag of them (a plane switched off cuts nothing,
+                // so it stands for any place of the plane).
+                if let Some((_, base, _)) = p.base.take() {
+                    self.clip_base = Some(ClipBase {
+                        display: p.base_display(&job.display, &job.display),
+                        job: None,
+                        surface: Some(base),
+                    });
+                }
                 m.surface = surface;
                 m.built_for = job.display;
                 self.surface_revision += 1;
@@ -2624,13 +2694,90 @@ impl Session {
             p.base = Some((job.display, Arc::new(surface), self.surface_revision));
         }
         if p.base_job.is_none() && p.base.as_ref().is_none_or(|b| !same_display(&b.0, &base)) {
-            p.base_job = Some(SurfaceJob::start(m, &self.tokens, base));
+            // One built ahead of the drag, or kept from the last.
+            match self.clip_base.take() {
+                Some(ClipBase {
+                    display,
+                    job,
+                    surface,
+                }) if same_display(&display, &base) => {
+                    if let Some(surface) = surface {
+                        self.surface_revision += 1;
+                        p.base = Some((display, surface, self.surface_revision));
+                    } else {
+                        p.base_job = job;
+                    }
+                }
+                other => self.clip_base = other,
+            }
+            if p.base_job.is_none() && p.base.as_ref().is_none_or(|b| !same_display(&b.0, &base)) {
+                p.base_job = Some(SurfaceJob::start(m, &self.tokens, base));
+            }
+        }
+        // The thin layer: one build at a time, of the latest display.
+        if let Some(surface) = p.layer_job.as_ref().and_then(|j| j.take(false))
+            && let Some(job) = p.layer_job.take()
+        {
+            self.surface_revision += 1;
+            p.layer = Some((job.display, Arc::new(surface), self.surface_revision));
+        }
+        if p.layer_job.is_none()
+            && m.mesh.cell_count() > 0
+            && p.layer
+                .as_ref()
+                .is_none_or(|l| !same_display(&l.0, &self.display))
+        {
+            p.layer_job = Some(SurfaceJob::layer(
+                m,
+                &self.tokens,
+                self.display.clone(),
+                p.moving.clone(),
+            ));
         }
         let rested = p.changed.is_none_or(|t| t.elapsed() >= ClipPreview::REST);
         if rested && p.exact_job.is_none() {
             p.exact_job = Some(SurfaceJob::start(m, &self.tokens, self.display.clone()));
         }
         true
+    }
+
+    /// Get ready for a drag of clip plane `k` in the window (its handle
+    /// is under the pointer): bin the cells for the thin layer and build
+    /// the surface without the plane on threads of their own, so the drag
+    /// draws the cut from its first steps. Nothing when one is built or
+    /// building already, or without `defer_clips`.
+    pub fn warm_clip(&mut self, k: usize) {
+        if !self.defer_clips || self.preview.is_some() {
+            return;
+        }
+        let Some(m) = &self.mesh else { return };
+        if m.mesh.cell_count() == 0 || !same_display(&m.built_for, &self.display) {
+            return;
+        }
+        let Some(&clip) = self.display.clips.get(k).filter(|c| c.enabled) else {
+            return;
+        };
+        let mut d = self.display.clone();
+        d.clips[k] = Clip {
+            enabled: false,
+            ..clip
+        };
+        if self
+            .clip_base
+            .as_ref()
+            .is_some_and(|b| same_display(&b.display, &d))
+        {
+            return;
+        }
+        let (mesh, fields) = (m.mesh.clone(), m.fields.clone());
+        std::thread::spawn(move || {
+            fields.bins(&mesh);
+        });
+        self.clip_base = Some(ClipBase {
+            job: Some(SurfaceJob::start(m, &self.tokens, d.clone())),
+            display: d,
+            surface: None,
+        });
     }
 
     /// Follow the slice preview: put the moving slices' exact faces in
@@ -2813,13 +2960,21 @@ impl Session {
         self.surface_revision += 1;
     }
 
-    /// The surface to draw, its revision and the clip planes the renderer
-    /// cuts it with (`[n, d]`: a point `p` relative to the surface's
-    /// origin is cut away where `n · p + d > 0`; empty without a preview).
-    pub fn drawn(&self) -> Option<(&Surface, u64, Vec<[f32; 4]>)> {
+    /// What the renderer draws ([`Drawn`]): the surface, and during a
+    /// clip drag the surface without the moving planes, the planes that
+    /// cut it on the GPU and the thin layer drawn over it uncut. The
+    /// planes are those the layer was built for, so the two fit while the
+    /// layer follows a step behind the pointer; before the first layer,
+    /// those of the display.
+    pub fn drawn(&self) -> Option<Drawn<'_>> {
         let m = self.mesh.as_ref()?;
         let Some(p) = &self.preview else {
-            return Some((&m.surface, self.surface_revision, Vec::new()));
+            return Some(Drawn {
+                surface: &m.surface,
+                revision: self.surface_revision,
+                planes: Vec::new(),
+                layer: None,
+            });
         };
         let base = p.base_display(&m.built_for, &self.display);
         let (surface, revision) = match &p.base {
@@ -2827,10 +2982,11 @@ impl Session {
             _ => (&m.surface, self.surface_revision),
         };
         let o = surface.origin;
+        let at = p.layer.as_ref().map_or(&self.display, |l| &l.0);
         let planes = p
             .moving
             .iter()
-            .filter_map(|&k| self.display.clips.get(k))
+            .filter_map(|&k| at.clips.get(k))
             .filter(|c| c.enabled)
             .map(|c| {
                 let n = c.normal;
@@ -2838,7 +2994,12 @@ impl Session {
                 [n[0] as f32, n[1] as f32, n[2] as f32, d as f32]
             })
             .collect();
-        Some((surface, revision, planes))
+        Some(Drawn {
+            surface,
+            revision,
+            planes,
+            layer: p.layer.as_ref().map(|(_, s, r)| (s.as_ref(), *r)),
+        })
     }
 
     /// Frame the faces shown (or the whole mesh when everything is
@@ -3274,7 +3435,7 @@ mod tests {
         s.redraw();
         assert!(s.preview.is_some());
         assert_eq!(s.mesh.as_ref().unwrap().surface, before);
-        let (_, _, planes) = s.drawn().unwrap();
+        let planes = s.drawn().unwrap().planes;
         assert_eq!(planes.len(), 1);
         assert_eq!(planes[0][..3], [1.0, 0.0, 0.0]);
         // Polling ends it with the exact cut.
@@ -3288,7 +3449,7 @@ mod tests {
         }
         assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
         assert_eq!(s.mesh.as_ref().unwrap().built_for, s.display);
-        assert!(s.drawn().unwrap().2.is_empty());
+        assert!(s.drawn().unwrap().planes.is_empty());
         // settle ends it at once, with the same cut.
         s.display.clips = vec![at(0.6)];
         s.redraw();
@@ -3322,6 +3483,86 @@ mod tests {
         s.redraw();
         assert!(s.preview.is_none());
         assert_eq!(s.mesh.as_ref().unwrap().surface, exact(&s));
+    }
+
+    /// Invariant (the maintainer's cards of 2026-11-25, live cut in a thin
+    /// layer, a slow step lags and stays exact): during a clip drag the
+    /// window draws the thin layer of the latest display it was built
+    /// for, the very one `Surface::clip_layer` gives, with the preview
+    /// planes at that layer's place (so the two fit); a surface without
+    /// the plane built ahead of the drag (`warm_clip`) is the drag's base
+    /// at once, and the drag's base is kept for the next drag of the same
+    /// plane. Breaks when the layer is not drawn, is drawn for another
+    /// place than the planes, or the warm base is built again.
+    #[test]
+    fn clip_drag_draws_the_thin_layer() {
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        s.open(&fixture("channel/foehncraft.vtu")).unwrap();
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        let at = |f: f64| Clip {
+            origin: [b.min[0] + f * (b.max[0] - b.min[0]), 0.0, 0.0],
+            normal: [1.0, 0.0, 0.0],
+            mode: crate::ClipMode::Crinkle,
+            enabled: true,
+        };
+        s.defer_clips = true;
+        s.display.clips = vec![at(0.6)];
+        s.redraw();
+        // Built ahead: the base of the drag without a build of its own.
+        s.warm_clip(0);
+        let warm = s.clip_base.clone().unwrap().job.unwrap();
+        while !warm.ready() {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        s.display.clips = vec![at(0.4)];
+        s.redraw();
+        s.poll_surface();
+        let p = s.preview.as_ref().unwrap();
+        let job = p
+            .base_job
+            .as_ref()
+            .expect("the warm build is the drag's base");
+        assert!(Arc::ptr_eq(&job.done, &warm.done));
+        s.poll_surface();
+        assert!(s.preview.as_ref().unwrap().base.is_some());
+        // The layer comes in for the display it was asked for.
+        let start = Instant::now();
+        while s.preview.as_ref().is_some_and(|p| p.layer.is_none()) {
+            assert!(start.elapsed() < Duration::from_secs(60));
+            s.poll_surface();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        if let Some(p) = &s.preview {
+            let (d, layer, r) = p.layer.clone().unwrap();
+            let m = s.mesh.as_ref().unwrap();
+            let want = Surface::clip_layer(&m.mesh, &m.fields, &s.tokens, &d, &[0]);
+            assert_eq!(*layer, want);
+            assert!(layer.triangles() > 0);
+            let drawn = s.drawn().unwrap();
+            assert_eq!(drawn.layer.map(|l| l.1), Some(r));
+            let c = d.clips[0];
+            let o = drawn.surface.origin;
+            let off: f64 = (0..3).map(|k| c.normal[k] * (o[k] - c.origin[k])).sum();
+            assert_eq!(drawn.planes, vec![[1.0, 0.0, 0.0, off as f32]]);
+        }
+        // Once exact, the base stays for the next drag of the plane.
+        while s.poll_surface() {
+            assert!(start.elapsed() < Duration::from_secs(60));
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(s.clip_base.as_ref().is_some_and(|b| b.surface.is_some()));
+        s.display.clips = vec![at(0.3)];
+        s.redraw();
+        s.poll_surface();
+        let p = s.preview.as_ref().unwrap();
+        assert!(p.base.is_some() && p.base_job.is_none(), "kept base reused");
+        s.settle();
+        let m = s.mesh.as_ref().unwrap();
+        assert_eq!(
+            m.surface,
+            Surface::build_with(&m.mesh, Some(&m.fields), &s.tokens, &s.display)
+        );
     }
 
     /// Invariant: with `hash_after_open` a mesh opens before its files are
