@@ -2237,7 +2237,7 @@ fn arrow_tools() {
     // Alt + V hides and shows them.
     let toggle = crate::commands::commands()
         .into_iter()
-        .find(|c| c.keys.contains(&"Alt+V"))
+        .find(|c| c.keys.iter().any(|k| k == "Alt+V"))
         .unwrap();
     assert_eq!(toggle.id, "arrows.set:toggle");
     let crate::commands::Run::Dynamic(tool, input) = toggle.run else {
@@ -4088,4 +4088,115 @@ fn zoom_box_zooms_at_the_mesh() {
     assert!(e.ok());
     assert!(e.result["surface_point"].is_null());
     assert!((s.camera.distance - 0.01 * d0).abs() < 1e-9 * d0);
+}
+
+/// Invariant (configurable shortcuts, the maintainer's cards of
+/// 2026-11-25): settings.set_keys gives a command its keys in one form, a
+/// key another command has is refused with SET004 naming it and changes
+/// nothing, replace moves it (the other command loses it), Tab is
+/// refused, only commands that differ from the built-in keys are written
+/// to [keys] in settings.toml and load back, a reset puts the built-in
+/// keys back except one another command holds, and reset alone clears
+/// [keys] while the theme in the same file stays. Breaks if a clash slips
+/// through, the file keeps unchanged commands (then new built-in keys of
+/// later versions would not arrive), or a key save drops other settings.
+/// No other test calls the tool.
+#[test]
+fn keys_are_configurable_and_saved() {
+    use crate::commands::{clashes, key_problems, with_keys};
+    let dir = std::env::temp_dir().join(format!("murmel-keys-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut s = session();
+    s.config_dir = Some(dir.clone());
+    assert!(call("settings.set_theme", json!({"theme": "light"}), &mut s).ok());
+    let keys_of = |s: &Session, id: &str| {
+        with_keys(&s.keys)
+            .into_iter()
+            .find(|c| c.id == id)
+            .map(|c| c.keys)
+            .unwrap()
+    };
+    // A free key, typed loosely.
+    let e = call(
+        "settings.set_keys",
+        json!({"command": "view.fit", "keys": ["f", "shift+ctrl+f"]}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(keys_of(&s, "view.fit"), ["F", "Ctrl+Shift+F"]);
+    // W is zoom to box: refused, nothing changes.
+    let before = s.keys.clone();
+    let e = call(
+        "settings.set_keys",
+        json!({"command": "view.fit", "keys": ["W"]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "SET004");
+    assert!(
+        e.diagnostics[0].message.contains("window.zoom_box"),
+        "{}",
+        e.diagnostics[0].message
+    );
+    assert_eq!(s.keys, before);
+    // Replace moves it.
+    let e = call(
+        "settings.set_keys",
+        json!({"command": "view.fit", "keys": ["W"], "replace": true}),
+        &mut s,
+    );
+    assert!(e.ok());
+    assert_eq!(e.result["moved_from"], json!(["window.zoom_box"]));
+    assert_eq!(keys_of(&s, "view.fit"), ["W"]);
+    assert!(keys_of(&s, "window.zoom_box").is_empty());
+    assert!(clashes(&with_keys(&s.keys)).is_empty());
+    // Tab is refused; a macOS key is allowed with a note.
+    let e = call(
+        "settings.set_keys",
+        json!({"command": "view.fit", "keys": ["Shift+Tab"]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "SET004");
+    let e = call(
+        "settings.set_keys",
+        json!({"command": "window.palette", "keys": ["Ctrl+K", "Ctrl+Q"]}),
+        &mut s,
+    );
+    assert!(e.ok());
+    assert_eq!(e.result["notes"][0]["macos"], "quit");
+    let e = call(
+        "settings.set_keys",
+        json!({"command": "view.spin", "keys": ["Q"]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    // The file holds the changed commands only, and loads back.
+    let (st, _, problems) = murmel_engine::settings::load(&dir, false);
+    assert!(problems.is_empty(), "{problems:?}");
+    assert_eq!(st.keys, s.keys);
+    assert_eq!(st.theme, murmel_engine::Theme::Light);
+    let ids: Vec<&String> = st.keys.keys().collect();
+    assert_eq!(ids, ["view.fit", "window.palette", "window.zoom_box"]);
+    assert!(key_problems(&st.keys).is_empty());
+    // Zoom to box back: W stays with view.fit, so it comes back empty.
+    let e = call(
+        "settings.set_keys",
+        json!({"command": "window.zoom_box", "reset": true}),
+        &mut s,
+    );
+    assert!(e.ok());
+    assert!(keys_of(&s, "window.zoom_box").is_empty());
+    assert_eq!(e.result["notes"][0]["kept_by_others"], json!(["W"]));
+    // Reset all: the built-in table, the theme stays.
+    assert!(call("settings.set_keys", json!({"reset": true}), &mut s).ok());
+    assert!(s.keys.is_empty());
+    assert_eq!(keys_of(&s, "window.zoom_box"), ["W"]);
+    let text = std::fs::read_to_string(dir.join("settings.toml")).unwrap();
+    assert!(!text.contains("[keys]") && text.contains("light"), "{text}");
+    // A hand-edited clash and a bad key are reported at start.
+    let mut bad = murmel_engine::keys::KeyMap::new();
+    bad.insert("view.fit".into(), vec!["W".into(), "shift+x".into()]);
+    bad.insert("view.nope".into(), vec![]);
+    let p = key_problems(&bad);
+    assert_eq!(p.len(), 3, "{p:?}");
+    let _ = std::fs::remove_dir_all(dir);
 }

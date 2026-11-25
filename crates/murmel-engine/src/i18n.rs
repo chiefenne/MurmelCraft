@@ -2,12 +2,26 @@
 //! a Fluent file. V0.1 ships English (`assets/i18n/en/murmel.ftl`). The
 //! window and the tools (exported legends) share it.
 
+use std::collections::HashMap;
+
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource, FluentValue};
 
 const EN: &str = include_str!("../../../assets/i18n/en/murmel.ftl");
 
 pub struct I18n {
     bundle: FluentBundle<FluentResource>,
+    /// The messages that name a command's keys (`{ $key-view-fit }`),
+    /// with the variables each names, so only they get those arguments.
+    keyed: HashMap<String, Vec<String>>,
+    /// The key arguments: `key-<command id, . and : as ->` to the keys
+    /// as shown (your keys, set by the window).
+    keys: HashMap<String, String>,
+}
+
+/// The Fluent variable that holds the keys of command `id`
+/// (`view.fit` → `key-view-fit`, `clip.set:new` → `key-clip-set-new`).
+pub fn key_variable(id: &str) -> String {
+    format!("key-{}", id.replace(['.', ':'], "-"))
 }
 
 impl I18n {
@@ -21,7 +35,34 @@ impl I18n {
         bundle
             .add_resource(res)
             .map_err(|errs| format!("murmel.ftl: {errs:?}"))?;
-        Ok(Self { bundle })
+        // Messages (and their continuation lines) that use a key variable.
+        let mut keyed: HashMap<String, Vec<String>> = HashMap::new();
+        let mut current = "";
+        for line in EN.lines() {
+            if let Some((id, _)) = line.split_once(" = ")
+                && !line.starts_with(char::is_whitespace)
+            {
+                current = id.trim();
+            }
+            for part in line.split("{ $key-").skip(1) {
+                let var = format!("key-{}", part.split(' ').next().unwrap_or(""));
+                keyed.entry(current.to_string()).or_default().push(var);
+            }
+        }
+        Ok(Self {
+            bundle,
+            keyed,
+            keys: HashMap::new(),
+        })
+    }
+
+    /// The keys of the commands as shown (the window passes your keys),
+    /// by command id; a string names them as `{ $key-<id> }`.
+    pub fn set_keys(&mut self, keys: impl IntoIterator<Item = (String, String)>) {
+        self.keys = keys
+            .into_iter()
+            .map(|(id, shown)| (key_variable(&id), shown))
+            .collect();
     }
 
     /// The string of `key`; the key itself when it is missing, so a gap
@@ -43,6 +84,11 @@ impl I18n {
         let (ctrl, alt) = modifier_names();
         fa.set("ctrl", ctrl);
         fa.set("alt", alt);
+        for var in self.keyed.get(key).into_iter().flatten() {
+            if let Some(shown) = self.keys.get(var) {
+                fa.set(var.clone(), shown.clone());
+            }
+        }
         for (k, v) in args {
             fa.set(*k, v.clone());
         }

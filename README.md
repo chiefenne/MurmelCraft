@@ -177,8 +177,12 @@ every change.
   streamlines are traced through the blocks they reach. A large `.vtu` or OpenFOAM mesh is offered for conversion
   once to a blocked copy beside it
   ([docs/blocked-vtkhdf.md](docs/blocked-vtkhdf.md)).
-- Mouse presets (three-button, Apple, Fusion, ParaView), every binding
-  editable through `settings.set_bindings` and saved in `navigation.toml`.
+- Mouse presets (three-button, Apple, Fusion, ParaView). Every mouse
+  binding and every keyboard shortcut can be changed in the Shortcuts
+  window (record a key by pressing it; a key that is taken warns with
+  Replace or Cancel), through `settings.set_keys` and
+  `settings.set_bindings`, or by hand in settings.toml (`[keys]`) and
+  `navigation.toml`.
 - Title bar, toolbar, viewport with view note and axis triad, status bar.
 - Headless screenshots with `murmel call view.screenshot`, checked by
   render tests in CI.

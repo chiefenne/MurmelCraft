@@ -1210,6 +1210,9 @@ pub struct Session {
     pub defaults: crate::defaults::Defaults,
     /// Your formulas (`settings.keep_formula`, settings.toml).
     pub formulas: Vec<crate::calc::Formula>,
+    /// Your keyboard shortcuts (`settings.set_keys`, `[keys]` in
+    /// settings.toml): the keys of the commands you changed.
+    pub keys: crate::keys::KeyMap,
     /// The undo and redo steps of the open mesh.
     pub journal: Journal,
     /// A mesh read in advance (the window reads a large one on a thread
@@ -1322,6 +1325,7 @@ impl Session {
             config_dir: crate::settings::config_dir(),
             defaults: crate::defaults::Defaults::default(),
             formulas: Vec::new(),
+            keys: crate::keys::KeyMap::new(),
             journal: Journal::default(),
             preloaded: None,
             hash_after_open: false,

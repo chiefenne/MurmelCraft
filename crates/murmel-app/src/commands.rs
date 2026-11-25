@@ -130,6 +130,7 @@ impl MurmelApp {
                 "window.settings" => self.settings_open = true,
                 "window.save_view" => self.save_view(),
                 "window.zoom_box" => self.arm_zoom_box(!self.zoom_armed),
+                "window.edit_shortcuts" => self.open_bindings(crate::shortcuts::Tab::Keys),
                 "window.measure_distance" => self.toggle_measuring(crate::measure::Mode::Distance),
                 "window.measure_angle" => self.toggle_measuring(crate::measure::Mode::Angle),
                 "window.probe" => self.toggle_measuring(crate::measure::Mode::Probe),
@@ -177,6 +178,16 @@ impl MurmelApp {
             .unwrap_or_default()
     }
 
+    /// A command's keys as shown, or "no key".
+    pub(crate) fn key_or_none(&self, id: &str) -> String {
+        let k = self.key_of(id);
+        if k.is_empty() {
+            self.i18n.tr("bindings-no-key")
+        } else {
+            k
+        }
+    }
+
     pub(crate) fn open_palette(&mut self, query: String) {
         self.palette = Some(Palette {
             query,
@@ -189,6 +200,10 @@ impl MurmelApp {
     /// modifiers logically, so a plain H would also take Alt + H
     /// (docs/pitfalls.md).
     pub(crate) fn keys(&mut self, ctx: &egui::Context) {
+        // A key being recorded in the shortcut editor takes the keyboard.
+        if self.record_key(ctx) {
+            return;
+        }
         let mut keyed: Vec<(KeyboardShortcut, Command)> = Vec::new();
         for c in &self.commands {
             for k in &c.keys {
@@ -419,6 +434,7 @@ impl MurmelApp {
         }
         let p = self.palette(ctx).clone();
         let mut open = true;
+        let mut edit = false;
         egui::Window::new(self.i18n.tr("shortcuts-title"))
             .open(&mut open)
             .collapsible(false)
@@ -469,7 +485,13 @@ impl MurmelApp {
                         .small()
                         .color(color(p.text_secondary)),
                 );
+                if ui.button(self.i18n.tr("shortcuts-edit")).clicked() {
+                    edit = true;
+                }
             });
+        if edit {
+            self.open_bindings(crate::shortcuts::Tab::Keys);
+        }
         self.shortcuts_open &= open;
     }
 

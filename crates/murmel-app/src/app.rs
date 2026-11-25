@@ -42,6 +42,10 @@ pub struct MurmelApp {
     pub(crate) props: Option<crate::panels::PropsCache>,
     /// The command table (keys, palette, shortcut sheet).
     pub(crate) commands: Vec<murmel_tools::commands::Command>,
+    /// The `[keys]` the command table was built with.
+    pub(crate) keys_built: murmel_engine::keys::KeyMap,
+    /// The shortcut editor, while it is open.
+    pub(crate) bindings: Option<crate::shortcuts::Editor>,
     pub(crate) palette: Option<crate::commands::Palette>,
     pub(crate) shortcuts_open: bool,
     /// The 250 ms flight to a new view: the camera it started from and
@@ -183,6 +187,7 @@ impl MurmelApp {
             session.agents = st.agents.enabled;
             session.defaults = st.defaults;
             session.formulas = st.formulas;
+            session.keys = st.keys;
             session.memory_budget = st.memory.budget_gib;
             session.convert_large = st.memory.convert_large;
             murmel_engine::defaults::start_view(&mut session);
@@ -190,10 +195,12 @@ impl MurmelApp {
             if let Err(e) = session.set_colors(st.colors) {
                 problems.push(format!("settings.toml colors: {e}"));
             }
+            problems.extend(murmel_tools::commands::key_problems(&session.keys));
             if let Some(p) = problems.into_iter().next() {
                 error = Some(Diagnostic::new("SET001", p));
             }
         }
+        let keys = session.keys.clone();
         let gpu = cc.wgpu_render_state.as_ref().map(GpuView::new);
         let mut app = Self {
             session,
@@ -212,7 +219,9 @@ impl MurmelApp {
             view_edit: None,
             focus_filter: false,
             props: None,
-            commands: murmel_tools::commands::commands(),
+            commands: murmel_tools::commands::with_keys(&keys),
+            keys_built: keys,
+            bindings: None,
             palette: None,
             shortcuts_open: false,
             flight: None,
@@ -273,6 +282,7 @@ impl MurmelApp {
                 )
             }),
         };
+        app.share_keys();
         if let Some(p) = open {
             app.open_path(p);
         }
@@ -720,10 +730,7 @@ impl MurmelApp {
             self.call("view.standard", json!({"view": "home"}));
         }
         let zoom = self.i18n.tr("toolbar-zoom-box");
-        let key = self.key_of("window.zoom_box");
-        let tip = self
-            .i18n
-            .tr_args("toolbar-zoom-box-tip", &[("key", key.into())]);
+        let tip = self.i18n.tr("toolbar-zoom-box-tip");
         let armed = self.zoom_armed;
         let b = icon_button(ui, icon::SCAN_SEARCH, &zoom, &tip, armed);
         b.widget_info(|| WidgetInfo::selected(Role::Button, true, armed, zoom.clone()));
@@ -1208,7 +1215,14 @@ impl MurmelApp {
                     }
                 }
                 ui.add_space(8.0);
-                ui.heading(self.i18n.tr("settings-navigation"));
+                // The heading and the editor of every key and mouse binding
+                // on one line, so the window grows no taller.
+                ui.horizontal(|ui| {
+                    ui.heading(self.i18n.tr("settings-navigation"));
+                    if ui.small_button(self.i18n.tr("shortcuts-edit")).clicked() {
+                        self.open_bindings(crate::shortcuts::Tab::Mouse);
+                    }
+                });
                 let current = self.session.navigation.preset.clone();
                 for p in murmel_engine::navigation::PRESETS {
                     let label = self.i18n.tr(&format!("preset-{p}"));
@@ -1394,6 +1408,7 @@ impl eframe::App for MurmelApp {
         self.apply_theme(&ctx);
         self.group_steps(&ctx);
         self.serve_agents(&ctx);
+        self.rebuild_commands();
         self.keys(&ctx);
         let dropped: Option<PathBuf> = ctx.input(|i| {
             i.raw
@@ -1495,6 +1510,7 @@ impl eframe::App for MurmelApp {
             });
         self.settings_window(&ctx);
         self.shortcuts_window(&ctx);
+        self.bindings_window(&ctx);
         self.palette_window(&ctx);
         self.color_window(&ctx);
         self.export_window(&ctx);

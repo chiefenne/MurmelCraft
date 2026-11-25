@@ -33,6 +33,7 @@ mod player;
 mod probe_history;
 mod quality;
 mod regions;
+mod shortcuts;
 mod stream_handle;
 mod streams;
 mod style;

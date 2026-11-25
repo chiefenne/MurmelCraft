@@ -1362,6 +1362,7 @@ pub(crate) fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> 
                 budget_gib: s.memory_budget,
                 convert_large: s.convert_large,
             },
+            keys: s.keys.clone(),
             ..Settings::default()
         },
     )
@@ -1460,6 +1461,148 @@ struct SetBindings {
     zoom_speed: Option<f64>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetKeys {
+    command: Option<String>,
+    keys: Option<Vec<String>>,
+    #[serde(default)]
+    replace: bool,
+    #[serde(default)]
+    reset: bool,
+}
+
+/// Your keyboard shortcuts: give a command its keys (all of them; `[]`
+/// for none), put one back to its built-in keys (`reset` with the
+/// command), or all of them (`reset` alone). A key another command has
+/// is refused (SET004, naming it) unless `replace` moves it (the
+/// maintainer's card of 2026-11-25: warn, then Replace or Cancel).
+/// Only the commands that differ from the built-in table are written to
+/// `[keys]` in settings.toml.
+fn settings_set_keys(input: Value, s: &mut Session) -> Run {
+    use crate::commands::{commands, holders, with_keys};
+    let i: SetKeys = parse(input)?;
+    let builtin = commands();
+    let mut moved: Vec<String> = Vec::new();
+    let mut notes: Vec<Value> = Vec::new();
+    let mut map = s.keys.clone();
+    match (&i.command, i.keys, i.reset) {
+        (None, None, true) => map.clear(),
+        (Some(id), None, true) => {
+            if !builtin.iter().any(|c| &c.id == id) {
+                return Err(no_command(id));
+            }
+            map.remove(id);
+            // Its built-in keys come back only where no other command
+            // took them meanwhile.
+            let now = with_keys(&map);
+            let taken: Vec<String> = builtin
+                .iter()
+                .find(|c| &c.id == id)
+                .map(|c| c.keys.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|k| !holders(&now, k, id).is_empty())
+                .collect();
+            if !taken.is_empty() {
+                let keep: Vec<String> = now
+                    .iter()
+                    .find(|c| &c.id == id)
+                    .map(|c| {
+                        c.keys
+                            .iter()
+                            .filter(|k| !taken.contains(k))
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                map.insert(id.clone(), keep);
+                notes.push(json!({"kept_by_others": taken}));
+            }
+        }
+        (Some(id), Some(keys), false) => {
+            if !builtin.iter().any(|c| &c.id == id) {
+                return Err(no_command(id));
+            }
+            let mut want: Vec<String> = Vec::new();
+            for k in &keys {
+                let c =
+                    murmel_engine::keys::canonical(k).map_err(|e| Diagnostic::new("TOOL002", e))?;
+                if murmel_engine::keys::reserved(&c) {
+                    return Err(Diagnostic::new(
+                        "SET004",
+                        format!("{c} moves the keyboard focus and cannot run a command"),
+                    ));
+                }
+                if !want.contains(&c) {
+                    want.push(c);
+                }
+            }
+            let now = with_keys(&map);
+            for k in &want {
+                let others = holders(&now, k, id);
+                if others.is_empty() {
+                    continue;
+                }
+                if !i.replace {
+                    let names: Vec<String> = others
+                        .iter()
+                        .map(|c| format!("{} ({})", c.id, crate::commands::english(&c.label_key)))
+                        .collect();
+                    return Err(Diagnostic::new(
+                        "SET004",
+                        format!(
+                            "{k} is already the key of {}; pass replace: true to move it to {id}",
+                            names.join(" and ")
+                        ),
+                    ));
+                }
+                for o in others {
+                    let rest: Vec<String> = o.keys.iter().filter(|x| *x != k).cloned().collect();
+                    map.insert(o.id.clone(), rest);
+                    moved.push(o.id.clone());
+                }
+            }
+            for k in &want {
+                if let Some(why) = murmel_engine::keys::macos_note(k) {
+                    notes.push(json!({"key": k, "macos": why}));
+                }
+            }
+            map.insert(id.clone(), want);
+        }
+        _ => {
+            return Err(Diagnostic::new(
+                "TOOL002",
+                "give command and keys, command and reset, or reset alone",
+            ));
+        }
+    }
+    // Keep only what differs from the built-in table.
+    map.retain(|id, keys| builtin.iter().any(|c| &c.id == id && &c.keys != keys));
+    s.keys = map;
+    let path = save_session_settings(s)?;
+    let keys = i
+        .command
+        .as_ref()
+        .and_then(|id| with_keys(&s.keys).into_iter().find(|c| &c.id == id))
+        .map(|c| c.keys);
+    Ok(json!({
+        "command": i.command,
+        "keys": keys,
+        "moved_from": moved,
+        "notes": notes,
+        "changed": s.keys,
+        "files": [path],
+    }))
+}
+
+fn no_command(id: &str) -> Diagnostic {
+    Diagnostic::new(
+        "TOOL002",
+        format!("{id} is no command; `murmel keys` lists them"),
+    )
+}
+
 fn settings_set_bindings(input: Value, s: &mut Session) -> Run {
     let i: SetBindings = parse(input)?;
     let mut nav = match (&i.preset, i.bindings) {
@@ -1525,6 +1668,7 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
         "defaultable": crate::defaults::defaultable(),
         "formulas": s.formulas,
         "memory": memory_json(s),
+        "keys": s.keys,
         "config_dir": s.config_dir,
     }))
 }
@@ -2464,6 +2608,7 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("settings.set_agents", "settings are files, not undone"),
     ("settings.set_memory", "settings are files, not undone"),
     ("settings.set_bindings", "settings are files, not undone"),
+    ("settings.set_keys", "settings are files, not undone"),
     ("settings.set_default", "settings are files, not undone"),
     ("settings.reset_default", "settings are files, not undone"),
     ("settings.keep_formula", "settings are files, not undone"),
@@ -3718,6 +3863,27 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::derive::forget_formula_schema,
         run: crate::derive::settings_forget_formula,
+    },
+    Tool {
+        id: "settings.set_keys",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-set-keys",
+        summary: "Set the keyboard shortcuts of a command (command id as `murmel keys` lists them, keys like Ctrl+Shift+S, W or Alt+7, all of them, [] for none), put one command back to its built-in keys (command and reset), or all (reset alone). A key another command has is refused (SET004) unless replace is true, which moves it. Writes the commands that differ from the built-in keys to [keys] in settings.toml.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "command": {"type": "string"},
+                    "keys": {"type": "array", "items": {"type": "string"}},
+                    "replace": {"type": "boolean"},
+                    "reset": {"type": "boolean"}
+                }),
+                &[],
+            )
+        },
+        run: settings_set_keys,
     },
     Tool {
         id: "settings.set_bindings",

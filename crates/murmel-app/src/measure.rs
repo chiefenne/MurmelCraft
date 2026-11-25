@@ -577,13 +577,20 @@ impl MurmelApp {
                 }
                 ui.horizontal(|ui| {
                     ui.add_space(24.0);
-                    let (key, tip) = if mode == Mode::Probe {
-                        ("tree-probe-new", "tree-probe-new-tip")
+                    let (key, tip, cmd) = if mode == Mode::Probe {
+                        ("tree-probe-new", "tree-probe-new-tip", "window.probe")
                     } else {
-                        ("tree-measure-new", "tree-measure-new-tip")
+                        (
+                            "tree-measure-new",
+                            "tree-measure-new-tip",
+                            "window.measure_distance",
+                        )
                     };
                     let b = ui
-                        .add(egui::Button::new(RichText::new(self.i18n.tr(key)).small()))
+                        .add(
+                            egui::Button::new(RichText::new(self.i18n.tr(key)).small())
+                                .shortcut_text(RichText::new(self.key_of(cmd)).small()),
+                        )
                         .on_hover_text(self.i18n.tr(tip));
                     if b.clicked() {
                         start = Some(mode);

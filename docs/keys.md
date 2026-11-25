@@ -89,6 +89,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Load session… | window, then `session.load` |
 | palette | Save a screenshot… | window, then `view.screenshot` |
 | palette | Settings | window |
+| palette | Edit keyboard and mouse shortcuts… | window, then `settings.set_keys` |
 | palette | Front right | `view.standard` `{"view":"front_right"}` |
 | palette | Front left | `view.standard` `{"view":"front_left"}` |
 | palette | Back right | `view.standard` `{"view":"back_right"}` |

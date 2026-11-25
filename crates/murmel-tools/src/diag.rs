@@ -311,6 +311,14 @@ const OWN: &[Code] = &[
         fix: Some("settings.get lists the values each kind can keep as a default (defaultable)."),
     },
     Code {
+        code: "SET004",
+        severity: Severity::Error,
+        meaning: "A keyboard shortcut is taken by another command, or is Tab, which moves the keyboard focus.",
+        fix: Some(
+            "Pass replace: true to move the key, or choose another; settings.get lists your keys.",
+        ),
+    },
+    Code {
         code: "EXPORT001",
         severity: Severity::Error,
         meaning: "An export setting is out of range (scale, line width, dpi).",
