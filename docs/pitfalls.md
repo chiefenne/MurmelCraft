@@ -21,6 +21,13 @@ problem took more than a few minutes to understand.
 - **Headless Linux has no GPU.** wgpu then finds no adapter (`RENDER001`).
   Install Mesa lavapipe (`mesa-vulkan-drivers`); CI does. The window under
   Xvfb also needs `libxkbcommon-x11-0`.
+- **A GPU buffer holds at most 256 MiB.** wgpu's default limit, which the
+  window's device (eframe) and the headless one ask for. The boundary of a
+  10 M cell overview takes 349 MB of face vertices, a 100 M one 1.6 GB, and
+  a larger `create_buffer` failed validation, which wgpu's default handler
+  turns into a panic that ends the window. The renderer draws each part of
+  the surface in pieces under the limit (`face_pieces`, `line_pieces`);
+  the device's other errors go to the status bar (`GpuErrors`, RENDER006).
 - **Render tests across drivers.** Rasterisers differ in a few edge pixels,
   so the comparison allows 1 % of pixels to differ by more than 24 levels.
   Bless an intended change with `MURMEL_BLESS=1`; do not raise the tolerance.
