@@ -69,6 +69,22 @@ impl OpenMesh {
     pub fn domain(&self) -> &Mesh {
         self.blocks.as_ref().map_or(&self.mesh, |b| &b.overview.0)
     }
+
+    /// The cell of the mesh shown holding `p` ([`crate::measure::locate`]),
+    /// not one of the halo of the blocks read for the regions: a halo cell
+    /// lacks some of its neighbours, so a probe there reads its own block
+    /// ([`crate::probe_blocks`]).
+    pub fn locate(&self, p: [f64; 3]) -> Option<u32> {
+        let halo = self.blocks.as_ref().map(|b| b.subset.halo.as_slice());
+        locate_shown(&self.mesh, p, halo)
+    }
+}
+
+/// The cell of `mesh` holding `p`, not one of `halo`.
+fn locate_shown(mesh: &Mesh, p: [f64; 3], halo: Option<&[bool]>) -> Option<u32> {
+    crate::measure::locate_where(mesh, p, |c| {
+        halo.is_none_or(|h| !h.get(c).copied().unwrap_or(false))
+    })
 }
 
 /// The volume cells of `mesh`, or of the file `overview` is of.
@@ -472,7 +488,7 @@ fn find_regions(display: &mut Display, m: &OpenMesh) {
 /// isolated and coloured cells and faces, the quality, the values and
 /// streamlines found on them, the regions' cells; probes and measurements
 /// are pointed at `mesh` ([`anchor_to`]).
-fn forget_cells(d: &mut Display, mesh: &Mesh) {
+fn forget_cells(d: &mut Display, mesh: &Mesh, halo: Option<&[bool]>) {
     let names_cells = |i: &Item| matches!(i, Item::Cell(_) | Item::Face(_));
     d.selection.retain(|i| !names_cells(i));
     d.isolated.retain(|i| !names_cells(i));
@@ -482,14 +498,17 @@ fn forget_cells(d: &mut Display, mesh: &Mesh) {
     d.field_values = None;
     d.stream_traces = None;
     d.region_cells = None;
-    anchor_to(d, mesh);
+    anchor_to(d, mesh, halo);
 }
 
 /// Point the probes and measurements of `display` at the cells of `mesh`
 /// (another set of an overview's blocks): each probe's cell is found
-/// again from its point, and the node, edge and face numbers, which were
-/// the other cells', are dropped.
-pub(crate) fn anchor_to(display: &mut Display, mesh: &Mesh) {
+/// again from its point, among the cells not of the `halo` (a halo cell
+/// lacks some of its neighbours, so its values would not be the whole
+/// mesh's; such a probe reads its own block, [`crate::probe_blocks`]),
+/// and the node, edge and face numbers, which were the other cells', are
+/// dropped.
+pub(crate) fn anchor_to(display: &mut Display, mesh: &Mesh, halo: Option<&[bool]>) {
     let clear = |a: &mut crate::measure::Anchor| {
         a.node = None;
         a.edge = None;
@@ -503,7 +522,7 @@ pub(crate) fn anchor_to(display: &mut Display, mesh: &Mesh) {
     }
     for p in &mut display.probes {
         clear(&mut p.at);
-        p.at.cell = crate::measure::locate(mesh, p.at.point);
+        p.at.cell = locate_shown(mesh, p.at.point, halo);
     }
 }
 
@@ -542,6 +561,7 @@ fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
     d.field_values = None;
     d.regions.clear();
     d.region_cells = None;
+    d.probe_findings = None;
     keep_field(&mut d, fields);
     d
 }
@@ -680,8 +700,10 @@ fn step_base(display: &Display, blocks: bool, mesh: &Mesh, fields: &FieldSet) ->
     base.stream_traces = None;
     base.quality = None;
     base.region_cells = None;
+    // The values of the probes read in blocks were the step before's.
+    base.probe_findings = None;
     if blocks {
-        forget_cells(&mut base, mesh);
+        forget_cells(&mut base, mesh, None);
     }
     keep_field(&mut base, fields);
     base
@@ -995,6 +1017,9 @@ pub struct Session {
     /// command line and the MCP server set it to
     /// [`crate::settings::cache_dir`].
     pub cache_dir: Option<PathBuf>,
+    /// The blocks of the open overview read for probes outside the cells
+    /// shown, and the probe being found ([`crate::probe_blocks`]).
+    pub probe_blocks: crate::probe_blocks::Cache,
 }
 
 impl Session {
@@ -1033,6 +1058,7 @@ impl Session {
             preview_problem: None,
             preview_cells: murmel_mesh::vtkhdf::PREVIEW_CELLS,
             cache_dir: None,
+            probe_blocks: crate::probe_blocks::Cache::default(),
         }
     }
 
@@ -1316,6 +1342,7 @@ impl Session {
         self.display.regions.clear();
         self.display.region_cells = None;
         self.display.block_boxes = None;
+        self.display.probe_findings = None;
         self.display.parcels = None;
         self.display.parcel_data = None;
         self.series = None;
@@ -1337,6 +1364,7 @@ impl Session {
     /// planes starts a [`ClipPreview`] instead and returns at once.
     pub fn redraw(&mut self) {
         let swapped = self.sync_blocks() | self.sync_preview();
+        self.sync_probes();
         let Some(m) = &mut self.mesh else {
             self.preview = None;
             self.surface_revision += 1;
@@ -1360,6 +1388,96 @@ impl Session {
         m.surface = Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
         m.built_for = self.display.clone();
         self.surface_revision += 1;
+    }
+
+    /// Find the probes the cells shown do not hold in the blocks of the
+    /// open overview's file ([`crate::probe_blocks`]), each probe's point
+    /// once, again when it moved or a field was made: with
+    /// `defer_blocks`, one point at a time on a thread of its own, put in
+    /// place by a later call; otherwise all of them now. True when a
+    /// finding was put in place.
+    pub fn sync_probes(&mut self) -> bool {
+        use crate::probe_blocks::{Findings, ProbeJob, is_current};
+        let budget = self.budget_bytes();
+        let Some(src) = self
+            .mesh
+            .as_ref()
+            .and_then(|m| crate::probe_blocks::source(m, budget))
+        else {
+            return false;
+        };
+        let wanted = crate::probe_blocks::wanted(&self.display.probes);
+        let old = self.display.probe_findings.clone();
+        let same = |a: [f64; 3], b: [f64; 3]| (0..3).all(|k| a[k].to_bits() == b[k].to_bits());
+        // Nothing to do: every point found for the fields made, no other.
+        if self.probe_blocks.job.is_none()
+            && let Some(f) = &old
+            && f.0.len() == wanted.len()
+            && wanted.iter().all(|&p| {
+                f.get(p)
+                    .is_some_and(|f| is_current(f, &src.made, src.budget))
+            })
+        {
+            return false;
+        }
+        let mut found = old.as_deref().map(|f| f.0.clone()).unwrap_or_default();
+        found.retain(|f| wanted.iter().any(|&p| same(p, f.point)));
+        let keep = crate::probe_blocks::keep_count(&src);
+        let mut changed = false;
+        loop {
+            if let Some(job) = self.probe_blocks.job.take() {
+                if !wanted.iter().any(|&p| same(p, job.point)) {
+                    // No probe is there any more.
+                    job.stop();
+                } else {
+                    match job.take(!self.defer_blocks) {
+                        None => {
+                            self.probe_blocks.job = Some(job);
+                            break;
+                        }
+                        Some(r) => {
+                            let f = match r {
+                                Ok((f, used)) => {
+                                    self.probe_blocks.keep(used, keep);
+                                    f
+                                }
+                                Err(e) => crate::probe_blocks::Found {
+                                    point: job.point,
+                                    made: job.made.clone(),
+                                    budget: job.budget,
+                                    cell: None,
+                                    problem: Some(e),
+                                },
+                            };
+                            found.retain(|g| !same(g.point, f.point));
+                            found.push(f);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            let next = wanted.iter().copied().find(|&p| {
+                !found
+                    .iter()
+                    .any(|f| same(f.point, p) && is_current(f, &src.made, src.budget))
+            });
+            let Some(p) = next else {
+                break;
+            };
+            self.probe_blocks.job = Some(ProbeJob::start(
+                src.clone(),
+                p,
+                self.probe_blocks.kept.clone(),
+            ));
+            if self.defer_blocks {
+                break;
+            }
+        }
+        let new = Some(Arc::new(Findings(found)));
+        if new != old {
+            self.display.probe_findings = new;
+        }
+        changed
     }
 
     /// The blocks the enabled box, sphere and slab regions of the open
@@ -1468,7 +1586,8 @@ impl Session {
             }
         }
         let d = &mut self.display;
-        forget_cells(d, &mesh);
+        let halo = blocks.as_ref().map(|b| b.subset.halo.as_slice());
+        forget_cells(d, &mesh, halo);
         keep_field(d, &fields);
         m.mesh = mesh;
         m.fields = Arc::new(fields);
@@ -1504,6 +1623,7 @@ impl Session {
         if let Some(j) = self.block_job.take() {
             j.stop();
         }
+        self.probe_blocks.clear();
         self.blocks_problem = None;
         if let Some(j) = self.preview_job.take() {
             j.stop();
@@ -2577,6 +2697,221 @@ mod tests {
         s.redraw();
         assert!(s.mesh.as_ref().unwrap().blocks.is_some());
         assert!(s.blocks_problem.is_none());
+        s.close();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The values a probe at `point` in `cell` of the whole mesh reads,
+    /// by name.
+    fn whole_values(
+        whole: &Mesh,
+        full: &FieldSet,
+        cell: u32,
+        point: [f64; 3],
+    ) -> Vec<(String, Vec<f64>)> {
+        full.probe_values(whole, cell as usize, point, None)
+            .into_iter()
+            .map(|v| (v.name, v.value))
+            .collect()
+    }
+
+    /// Whether two lists of values are the same up to rounding.
+    fn same_values(a: &[(String, Vec<f64>)], b: &[(String, Vec<f64>)]) -> bool {
+        a.len() == b.len()
+            && a.iter().zip(b).all(|((n, x), (m, y))| {
+                n == m
+                    && x.len() == y.len()
+                    && x.iter()
+                        .zip(y)
+                        .all(|(p, q)| (p - q).abs() <= 1e-9 * (1.0 + p.abs().max(q.abs())))
+            })
+    }
+
+    /// Invariant (the maintainer's card 8 of 2026-11-24, a block cache
+    /// for probes): a probe on an overview reads the block of the file
+    /// holding its point and shows what the whole mesh shows there: the
+    /// same cell (its number in the file), type and zone, the same field
+    /// values (the cell's value plus its gradient towards the point) and
+    /// the same value of the field colouring the mesh, for points all
+    /// over the mesh (with blocks of 100 cells, most cells touch another
+    /// block's). A point outside the volume is outside; drawing again
+    /// reads nothing; at most `KEEP` blocks stay; a probe moved is found
+    /// again; beyond the memory budget its block is not read (BLOCK006)
+    /// until the budget changes. Breaks when the halo is not read (a border cell's gradient
+    /// misses neighbours), when a halo cell is taken for the point, when
+    /// the block holding it is not among those read, or when findings
+    /// are not kept. No other test reads probe values on an overview.
+    #[test]
+    fn a_probe_on_an_overview_reads_the_block_holding_it() {
+        use crate::probe_blocks::KEEP;
+        let (dir, path, whole, mut s) = overview_session("probe-blocks");
+        let full = FieldSet::new(murmel_mesh::read_results(&path).unwrap().1);
+        let name = full.fields().first().unwrap().name.clone();
+        s.display.color_by = ColorBy::Field;
+        s.display.field = Some(crate::field::FieldChoice {
+            name: name.clone(),
+            component: Component::Magnitude,
+        });
+        // Off each cell's centroid, towards its first node, so the
+        // gradient counts.
+        let cells: Vec<u32> = (0..whole.cell_count() as u32).step_by(7).collect();
+        let points: Vec<[f64; 3]> = cells
+            .iter()
+            .map(|&c| {
+                let m = crate::inspect::cell_centroid(&whole, c as usize);
+                let n = whole.cell_points(c as usize).next().unwrap() as usize;
+                let q = whole.points[n];
+                std::array::from_fn(|k| 0.7 * m[k] + 0.3 * q[k])
+            })
+            .collect();
+        let b = whole.bounds();
+        let outside = [b.max[0] + 1.0, b.max[1], b.max[2]];
+        for (k, &p) in points.iter().chain([&outside]).enumerate() {
+            s.display.probes.push(crate::measure::Probe {
+                n: k as u32 + 1,
+                name: None,
+                at: crate::measure::Anchor::typed(p),
+                visible: true,
+            });
+        }
+        s.redraw();
+        assert!(s.probe_blocks.job.is_none());
+        assert!(!s.probe_blocks.kept.is_empty() && s.probe_blocks.kept.len() <= KEEP);
+        let m = s.mesh.as_ref().unwrap();
+        assert_eq!(m.mesh.cell_count(), 0, "the overview shows");
+        let d = &s.display;
+        for (j, (&c, &p)) in cells.iter().zip(&points).enumerate() {
+            let at_whole = crate::measure::locate(&whole, p).unwrap();
+            assert_eq!(at_whole, c);
+            let probe = &d.probes[j];
+            let found = d.probe_found(&probe.at).expect("found");
+            let cell = found.cell.as_ref().expect("inside");
+            assert_eq!(cell.file_cell, c as u64, "point {j}");
+            let got: Vec<(String, Vec<f64>)> = crate::inspect::probe_values(m, d, &probe.at)
+                .into_iter()
+                .map(|v| (v.name, v.value))
+                .collect();
+            let want = whole_values(&whole, &full, c, p);
+            assert!(!want.is_empty());
+            assert!(same_values(&got, &want), "point {j}: {got:?} vs {want:?}");
+            let shown = crate::inspect::probe_shown(m, d, probe).unwrap();
+            let exact = full
+                .probe_value(&whole, &name, Component::Magnitude, c as usize, p)
+                .unwrap();
+            assert!((shown.value - exact).abs() <= 1e-9 * (1.0 + exact.abs()));
+            // the cell's rows, as the whole mesh gives them
+            let rows = crate::inspect::probe_rows(&m.mesh, d, &probe.at);
+            let on_whole = crate::inspect::probe_rows(
+                &whole,
+                &Display::default(),
+                &crate::measure::Anchor {
+                    cell: Some(c),
+                    ..probe.at.clone()
+                },
+            );
+            for key in ["inside", "type", "zone"] {
+                let of = |r: &[crate::inspect::Row]| {
+                    r.iter().find(|r| r.key == key).map(|r| r.value.clone())
+                };
+                assert_eq!(of(&rows), of(&on_whole), "{key}");
+            }
+            assert!(rows.iter().any(|r| r.key == "file_cell"));
+        }
+        let last = d.probes.last().unwrap();
+        let f = d.probe_found(&last.at).unwrap();
+        assert!(f.cell.is_none() && f.problem.is_none(), "outside");
+        assert!(crate::inspect::probe_values(m, d, &last.at).is_empty());
+
+        // Drawing again reads nothing.
+        let before = s.display.probe_findings.clone().unwrap();
+        s.redraw();
+        assert!(s.probe_blocks.job.is_none());
+        assert!(Arc::ptr_eq(
+            &before,
+            s.display.probe_findings.as_ref().unwrap()
+        ));
+
+        // Moved: found again, the old point forgotten.
+        let (c, p) = (cells[1], points[1]);
+        s.display.probes.truncate(1);
+        s.display.probes[0].at = crate::measure::Anchor::typed(p);
+        s.redraw();
+        let d = &s.display;
+        assert_eq!(d.probe_findings.as_ref().unwrap().0.len(), 1);
+        let cell = d
+            .probe_found(&d.probes[0].at)
+            .unwrap()
+            .cell
+            .clone()
+            .unwrap();
+        assert_eq!(cell.file_cell, c as u64);
+
+        // Beyond the memory budget: not read, and why; not tried again
+        // until the budget changes.
+        s.memory_budget = Some(1e-9);
+        s.probe_blocks.kept.clear();
+        s.display.probes[0].at = crate::measure::Anchor::typed(points[2]);
+        s.redraw();
+        let f = s.display.probe_found(&s.display.probes[0].at).unwrap();
+        assert!(f.cell.is_none());
+        assert_eq!(f.problem.as_ref().unwrap().code, "BLOCK006");
+        assert!(!s.sync_probes(), "a refusal is not tried again");
+        s.memory_budget = None;
+        assert!(s.sync_probes());
+        let f = s.display.probe_found(&s.display.probes[0].at).unwrap();
+        assert_eq!(f.cell.as_ref().unwrap().file_cell, cells[2] as u64);
+        s.close();
+        assert!(s.display.probe_findings.is_none() && s.probe_blocks.kept.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant: a probe in a halo cell of the blocks read for a region
+    /// is not taken as in that cell (its neighbours are partly missing,
+    /// so its gradient is not the whole mesh's) but reads the block that
+    /// owns it, and shows the whole mesh's values; typed coordinates
+    /// there find no cell of the mesh shown either. Breaks when the halo
+    /// is left in the search when the blocks show ([`anchor_to`],
+    /// `OpenMesh::locate`). The test above finds probes on the overview
+    /// alone.
+    #[test]
+    fn a_probe_in_the_halo_reads_its_own_block() {
+        let (dir, path, whole, mut s) = overview_session("probe-halo");
+        let full = FieldSet::new(murmel_mesh::read_results(&path).unwrap().1);
+        s.display.regions.push(corner_box(&whole));
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        let b = m.blocks.as_ref().expect("the box's blocks");
+        let h = (0..m.mesh.cell_count())
+            .find(|&c| b.subset.halo[c])
+            .expect("a halo cell");
+        let p = crate::inspect::cell_centroid(&m.mesh, h);
+        let file_cell = b.subset.file_cells[h];
+        assert_eq!(m.locate(p), None, "typed coordinates in the halo");
+        assert_eq!(crate::measure::locate(&m.mesh, p), Some(h as u32));
+        s.display.probes.push(crate::measure::Probe {
+            n: 1,
+            name: None,
+            at: crate::measure::Anchor::typed(p),
+            visible: true,
+        });
+        // The overview again, then the blocks: the probe is pointed at
+        // their cells.
+        s.display.regions[0].enabled = false;
+        s.redraw();
+        s.display.regions[0].enabled = true;
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.blocks.is_some());
+        let at = &s.display.probes[0].at;
+        assert_eq!(at.cell, None, "not the halo cell");
+        let found = s.display.probe_found(at).unwrap().cell.clone().unwrap();
+        assert_eq!(found.file_cell, file_cell);
+        let got: Vec<(String, Vec<f64>)> = crate::inspect::probe_values(m, &s.display, at)
+            .into_iter()
+            .map(|v| (v.name, v.value))
+            .collect();
+        let want = whole_values(&whole, &full, file_cell as u32, p);
+        assert!(same_values(&got, &want), "{got:?} vs {want:?}");
         s.close();
         std::fs::remove_dir_all(&dir).unwrap();
     }

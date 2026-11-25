@@ -470,12 +470,19 @@ fn solid_angle(a: DVec3, b: DVec3, c: DVec3) -> f64 {
 /// between two cells, the first). Every cell is tested once (no search
 /// structure yet), which is fast enough for a click or a typed point.
 pub fn locate(mesh: &Mesh, p: [f64; 3]) -> Option<u32> {
+    locate_where(mesh, p, |_| true)
+}
+
+/// The cell holding `p` among the cells of `mesh` that `keep` takes, as
+/// [`locate`] finds it (the owned cells of blocks read with their halo:
+/// a halo cell lacks some of its neighbours).
+pub fn locate_where(mesh: &Mesh, p: [f64; 3], keep: impl Fn(usize) -> bool) -> Option<u32> {
     if !p.iter().all(|v| v.is_finite()) {
         return None;
     }
     let tol = 1e-9 * mesh.bounds().radius().max(f64::MIN_POSITIVE);
     let mut best: Option<(f64, u32)> = None;
-    for c in 0..mesh.cell_count() {
+    for c in (0..mesh.cell_count()).filter(|&c| keep(c)) {
         let mut lo = [f64::INFINITY; 3];
         let mut hi = [f64::NEG_INFINITY; 3];
         for i in mesh.cell_points(c) {

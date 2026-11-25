@@ -424,6 +424,12 @@ fn combine(comps: &[Vec<f64>], i: usize, c: Component) -> f64 {
     }
 }
 
+/// Scalar `c` of one entity's components (one value for a scalar), as
+/// the colouring and the probes pick it.
+pub fn pick_component(v: &[f64], c: Component) -> f64 {
+    pick(v, c)
+}
+
 /// The components scalar `c` of a field of `k` components reads: all of
 /// a scalar's or a vector's magnitude, else the one asked for.
 fn needed(k: usize, c: Component) -> Vec<usize> {
