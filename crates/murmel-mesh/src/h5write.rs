@@ -99,6 +99,7 @@ pub fn lookup3(data: &[u8], init: u32) -> u32 {
 pub enum Ty {
     U8,
     U32,
+    I32,
     I64,
     F64,
     /// A UTF-8 string of this many bytes, null-padded.
@@ -109,7 +110,7 @@ impl Ty {
     pub fn size(self) -> usize {
         match self {
             Ty::U8 => 1,
-            Ty::U32 => 4,
+            Ty::U32 | Ty::I32 => 4,
             Ty::I64 | Ty::F64 => 8,
             Ty::Str(n) => n.max(1),
         }
@@ -128,6 +129,7 @@ impl Ty {
         match self {
             Ty::U8 => fixed(&mut m, false, 1),
             Ty::U32 => fixed(&mut m, false, 4),
+            Ty::I32 => fixed(&mut m, true, 4),
             Ty::I64 => fixed(&mut m, true, 8),
             Ty::F64 => {
                 m.push(0x11);
@@ -208,6 +210,13 @@ impl Element for u32 {
     }
 }
 
+impl Element for i32 {
+    const TY: Ty = Ty::I32;
+    fn put(self, out: &mut Vec<u8>) {
+        out.extend(self.to_le_bytes());
+    }
+}
+
 impl Element for i64 {
     const TY: Ty = Ty::I64;
     fn put(self, out: &mut Vec<u8>) {
@@ -227,6 +236,49 @@ pub struct H5Writer {
     out: BufWriter<File>,
     pos: u64,
     buf: Vec<u8>,
+    /// The file's position was moved by [`Rows`]: the next write goes
+    /// back to `pos` first.
+    moved: bool,
+}
+
+/// The raw data of a contiguous dataset set aside by
+/// [`H5Writer::reserve`], to be filled through [`Rows`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reserved {
+    pub start: u64,
+    pub ty: Ty,
+    pub dims: Vec<u64>,
+}
+
+impl Reserved {
+    /// The address of row `row` (a row is the product of the dims after
+    /// the first).
+    pub fn at(&self, row: u64) -> u64 {
+        let width: u64 = self.dims.iter().skip(1).product();
+        self.start + row * width * self.ty.size() as u64
+    }
+}
+
+/// Writes into reserved space at any address, from any thread (one at a
+/// time); while it lives the writer itself writes nothing.
+pub struct Rows<'a> {
+    file: std::sync::Mutex<&'a File>,
+}
+
+impl Rows<'_> {
+    /// Write `values` from address `addr`.
+    pub fn put<T: Element>(&self, addr: u64, values: &[T]) -> io::Result<()> {
+        let mut buf = Vec::with_capacity(values.len() * T::TY.size());
+        for &v in values {
+            v.put(&mut buf);
+        }
+        let mut f = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::other("a writing thread failed"))?;
+        f.seek(SeekFrom::Start(addr))?;
+        f.write_all(&buf)
+    }
 }
 
 impl H5Writer {
@@ -236,6 +288,7 @@ impl H5Writer {
             out: BufWriter::with_capacity(1 << 20, File::create(path)?),
             pos: 0,
             buf: Vec::new(),
+            moved: false,
         };
         w.raw(&[0; SUPERBLOCK as usize])?;
         Ok(w)
@@ -248,6 +301,10 @@ impl H5Writer {
 
     /// Write bytes as they are.
     pub fn raw(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.moved {
+            self.out.seek(SeekFrom::Start(self.pos))?;
+            self.moved = false;
+        }
         self.out.write_all(bytes)?;
         self.pos += bytes.len() as u64;
         Ok(())
@@ -281,6 +338,10 @@ impl H5Writer {
                 ty.size()
             )));
         }
+        self.contiguous(ty, dims, start, bytes)
+    }
+
+    fn contiguous(&mut self, ty: Ty, dims: &[u64], start: u64, bytes: u64) -> io::Result<u64> {
         let mut layout = vec![3, 1];
         layout.extend(if bytes == 0 { UNDEF } else { start }.to_le_bytes());
         layout.extend(bytes.to_le_bytes());
@@ -292,6 +353,37 @@ impl H5Writer {
             (5, fill),
             (8, layout),
         ])
+    }
+
+    /// Set aside the raw data of a contiguous dataset of `ty` and `dims`
+    /// from the current position, for [`Rows`] to fill in any order; its
+    /// header follows with [`H5Writer::reserved_header`]. Nothing is
+    /// written: the file has a hole there until the rows come.
+    pub fn reserve(&mut self, ty: Ty, dims: &[u64]) -> io::Result<Reserved> {
+        let start = self.pos;
+        let bytes = dims.iter().product::<u64>() * ty.size() as u64;
+        self.pos += bytes;
+        self.out.seek(SeekFrom::Start(self.pos))?;
+        Ok(Reserved {
+            start,
+            ty,
+            dims: dims.to_vec(),
+        })
+    }
+
+    /// Writes into the reserved datasets.
+    pub fn rows(&mut self) -> io::Result<Rows<'_>> {
+        self.out.flush()?;
+        self.moved = true;
+        Ok(Rows {
+            file: std::sync::Mutex::new(self.out.get_ref()),
+        })
+    }
+
+    /// The object header of a reserved dataset; returns its address.
+    pub fn reserved_header(&mut self, r: &Reserved) -> io::Result<u64> {
+        let bytes: u64 = r.dims.iter().product::<u64>() * r.ty.size() as u64;
+        self.contiguous(r.ty, &r.dims, r.start, bytes)
     }
 
     /// A whole dataset of numbers; returns its header's address.
@@ -417,8 +509,15 @@ impl H5Writer {
         s.extend(root.to_le_bytes());
         let sum = lookup3(&s, 0);
         s.extend(sum.to_le_bytes());
+        if self.moved {
+            self.out.seek(SeekFrom::Start(self.pos))?;
+        }
         self.out.flush()?;
         let mut f = self.out.into_inner().map_err(|e| e.into_error())?;
+        // a reserved dataset at the very end is a hole the file must hold
+        if f.metadata()?.len() < end {
+            f.set_len(end)?;
+        }
         f.seek(SeekFrom::Start(0))?;
         f.write_all(&s)?;
         f.flush()?;
@@ -473,6 +572,62 @@ mod tests {
         let s = b"Four score and seven years ago";
         assert_eq!(lookup3(s, 0), 0x1777_0551);
         assert_eq!(lookup3(s, 1), 0xcd62_8161);
+    }
+
+    /// Invariant: a reserved dataset reads back as the rows written into
+    /// it, whatever their order and thread, with ordinary datasets
+    /// written between the reservation and the rows, and a reservation
+    /// last in the file (a hole the file must still hold). 32-bit signed
+    /// integers keep their sign. Breaks when the writer's position and
+    /// the file's part ways after the positioned writes.
+    #[test]
+    fn reserved_datasets_take_their_rows_in_any_order() {
+        let dir = std::env::temp_dir().join(format!("murmel-h5reserve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r.h5");
+        let mut w = H5Writer::create(&path).unwrap();
+        let ids = w.reserve(Ty::I32, &[6]).unwrap();
+        let before = w.dataset(&[2], &[5i64, 6]).unwrap();
+        let xyz = w.reserve(Ty::F64, &[4, 3]).unwrap();
+        assert_eq!(xyz.at(2), xyz.start + 2 * 24);
+        {
+            let rows = w.rows().unwrap();
+            std::thread::scope(|s| {
+                s.spawn(|| rows.put(xyz.at(2), &[7.0f64, 8.0, 9.0, 10.0, 11.0, 12.0]));
+                s.spawn(|| rows.put(ids.at(3), &[-4i32, 5, -6]));
+            });
+            rows.put(ids.at(0), &[1i32, -2, 3]).unwrap();
+            rows.put(xyz.at(0), &[1.0f64, 2.0, 3.0, 4.0, 5.0, 6.0])
+                .unwrap();
+        }
+        let ids_at = w.reserved_header(&ids).unwrap();
+        let xyz_at = w.reserved_header(&xyz).unwrap();
+        let root = w
+            .group(
+                &[
+                    Link::Hard("ids".into(), ids_at),
+                    Link::Hard("before".into(), before),
+                    Link::Hard("xyz".into(), xyz_at),
+                ],
+                &[],
+            )
+            .unwrap();
+        // a reservation nothing follows
+        let tail = w.reserve(Ty::U8, &[3]).unwrap();
+        w.rows().unwrap().put(tail.at(0), &[1u8, 2]).unwrap();
+        w.finish(root).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), tail.start + 3);
+
+        let h = H5::open(&path).unwrap();
+        let g = h.path("/").unwrap();
+        let read = |name: &str| h.dataset(&h.child(&g, name).unwrap().unwrap()).unwrap();
+        assert_eq!(h.read_i64(&read("ids")).unwrap(), [1, -2, 3, -4, 5, -6]);
+        assert_eq!(h.read_i64(&read("before")).unwrap(), [5, 6]);
+        let x = read("xyz");
+        assert_eq!(x.dims, [4, 3]);
+        let want: Vec<f64> = (1..=12).map(f64::from).collect();
+        assert_eq!(h.read_f64(&x).unwrap(), want);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Invariant: what the writer writes, MurmelCraft's own reader reads

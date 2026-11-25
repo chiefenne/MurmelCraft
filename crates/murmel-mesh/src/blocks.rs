@@ -774,14 +774,14 @@ fn write(
     )?;
 
     // boundary patches
-    let mut top: Vec<Link> = vec![Link::Hard("internal".into(), internal)];
-    let mut names: Vec<String> = Vec::new();
     let mut by_patch: Vec<Vec<u32>> = vec![Vec::new(); mesh.patches.len()];
     for (i, &p) in mesh.boundary_patch.iter().enumerate() {
         if let Some(v) = by_patch.get_mut(p as usize) {
             v.push(i as u32);
         }
     }
+    let mut patches: Vec<(String, u64)> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
     for (pi, (patch, faces)) in mesh.patches.iter().zip(&by_patch).enumerate() {
         let polygon = |i: u32| -> &[u32] {
             match mesh.boundary_face_id.get(i as usize) {
@@ -791,53 +791,12 @@ fn write(
                 _ => mesh.boundary.get(i as usize),
             }
         };
-        let mut pts: Vec<u32> = faces
-            .iter()
-            .flat_map(|&i| polygon(i).iter().copied())
-            .collect();
-        pts.sort_unstable();
-        pts.dedup();
-        let local = |p: u32| pts.binary_search(&p).map_or(-1, |i| i as i64);
-        let mut g: Vec<Member> = Vec::new();
-        g.push((
-            "NumberOfPoints".into(),
-            w.dataset(&[1], &[pts.len() as i64])?,
-        ));
-        let xyz: Vec<f64> = pts.iter().flat_map(|&p| mesh.points[p as usize]).collect();
-        g.push(("Points".into(), w.dataset(&[pts.len() as u64, 3], &xyz)?));
-        let mut subs: Vec<Member> = Vec::new();
-        for sub in ["Vertices", "Lines", "Strips"] {
-            let m = vec![
-                ("NumberOfCells".into(), w.dataset(&[1], &[0i64])?),
-                ("NumberOfConnectivityIds".into(), w.dataset(&[1], &[0i64])?),
-                ("Offsets".into(), w.dataset(&[1], &[0i64])?),
-                ("Connectivity".into(), w.dataset::<i64>(&[0], &[])?),
-            ];
-            subs.push((sub.into(), w.group(&links(m), &[])?));
-        }
-        let mut offs = vec![0i64];
-        let mut conn = Vec::new();
+        let mut start = vec![0usize];
+        let mut nodes = Vec::new();
         for &i in faces {
-            conn.extend(polygon(i).iter().map(|&p| local(p)));
-            offs.push(conn.len() as i64);
+            nodes.extend_from_slice(polygon(i));
+            start.push(nodes.len());
         }
-        let m = vec![
-            (
-                "NumberOfCells".into(),
-                w.dataset(&[1], &[faces.len() as i64])?,
-            ),
-            (
-                "NumberOfConnectivityIds".into(),
-                w.dataset(&[1], &[conn.len() as i64])?,
-            ),
-            ("Offsets".into(), w.dataset(&[offs.len() as u64], &offs)?),
-            (
-                "Connectivity".into(),
-                w.dataset(&[conn.len() as u64], &conn)?,
-            ),
-        ];
-        subs.push(("Polygons".into(), w.group(&links(m), &[])?));
-        g.extend(subs);
         // cell data: the owner of each face and the boundary fields
         let owner: Vec<i64> = faces
             .iter()
@@ -846,43 +805,29 @@ fn write(
                 _ => -1,
             })
             .collect();
-        let mut pcd: Vec<Member> = vec![(
-            "OwnerCell".into(),
-            w.dataset(&[faces.len() as u64], &owner)?,
-        )];
+        let mut values: Vec<(&str, usize, Vec<f64>)> = Vec::new();
         for f in &results.fields {
             if f.location != Location::Boundary || RESERVED.contains(&f.name.as_str()) {
                 continue;
             }
             let mut v = Vec::new();
             rows_of(f, faces.iter().copied(), &mut v);
-            let dims: Vec<u64> = if f.components > 1 {
-                vec![faces.len() as u64, f.components as u64]
-            } else {
-                vec![faces.len() as u64]
-            };
-            pcd.push((f.name.clone(), w.dataset(&dims, &v)?));
+            values.push((f.name.as_str(), f.components, v));
         }
-        let ids: Vec<i64> = pts.iter().map(|&p| i64::from(p)).collect();
-        let ppd = vec![(
-            "GlobalPointIds".into(),
-            w.dataset(&[pts.len() as u64], &ids)?,
-        )];
-        g.push(("CellData".into(), w.group(&links(pcd), &[])?));
-        g.push(("PointData".into(), w.group(&links(ppd), &[])?));
-        g.push(("FieldData".into(), w.group(&[], &[])?));
-        let mut attrs = vec![
-            ("Index", AttrValue::Int(pi as i64 + 1)),
-            ("Type", AttrValue::Text("PolyData".into())),
-            ("Version", AttrValue::Ints(vec![2, 4])),
-        ];
-        if patch.role != crate::PatchRole::Unspecified {
-            attrs.push(("role", AttrValue::Text(patch.role.name().into())));
-        }
+        let xyz = |p: u32| mesh.points[p as usize];
+        let addr = patch_block(
+            &mut w,
+            &start,
+            &nodes,
+            &xyz,
+            &owner,
+            &values,
+            pi + 1,
+            patch.role,
+        )?;
         let name = group_name(&patch.name, &names);
-        let addr = w.group(&links(g), &attrs)?;
-        top.push(Link::Hard(name.clone(), addr));
-        names.push(name);
+        names.push(name.clone());
+        patches.push((name, addr));
     }
     written.fields += results
         .fields
@@ -894,11 +839,124 @@ fn write(
             written.skipped_fields.push(f.name.clone());
         }
     }
-
-    // the assembly: the cells, and the patches under `boundary`
-    let boundary: Vec<Link> = names
+    // the file's root: the attributes of the run, the units of the fields
+    let units: Vec<String> = results
+        .fields
         .iter()
-        .map(|n| Link::Soft(n.clone(), format!("/VTKHDF/{n}")))
+        .filter_map(|f| f.unit.as_ref().map(|u| format!("{} {u}", f.name)))
+        .collect();
+    let mut root_attrs: Vec<(&str, AttrValue)> = results
+        .attrs
+        .iter()
+        .filter(|(k, _)| k.as_str() != "units")
+        .map(|(k, v)| (k.as_str(), AttrValue::Text(v.clone())))
+        .collect();
+    let units = units.join("; ");
+    if !units.is_empty() {
+        root_attrs.push(("units", AttrValue::Text(units)));
+    }
+    written.bytes = close(w, internal, &patches, &mesh.metadata, &root_attrs)?;
+    Ok(written)
+}
+
+/// A boundary patch as a PolyData block of one partition (§ 7): polygon
+/// `i` is `nodes[start[i]..start[i + 1]]` in global point numbers (`xyz`
+/// gives their coordinates), `owner` the file cell id behind each face
+/// and `fields` the patch's own values (name, components, values); the
+/// patch is block `index` of the collection. Returns the group's address.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn patch_block(
+    w: &mut H5Writer,
+    start: &[usize],
+    nodes: &[u32],
+    xyz: &dyn Fn(u32) -> [f64; 3],
+    owner: &[i64],
+    fields: &[(&str, usize, Vec<f64>)],
+    index: usize,
+    role: crate::PatchRole,
+) -> io::Result<u64> {
+    let faces = start.len().saturating_sub(1);
+    let mut pts: Vec<u32> = nodes.to_vec();
+    pts.sort_unstable();
+    pts.dedup();
+    let local = |p: u32| pts.binary_search(&p).map_or(-1, |i| i as i64);
+    let mut g: Vec<Member> = Vec::new();
+    g.push((
+        "NumberOfPoints".into(),
+        w.dataset(&[1], &[pts.len() as i64])?,
+    ));
+    let coords: Vec<f64> = pts.iter().flat_map(|&p| xyz(p)).collect();
+    g.push(("Points".into(), w.dataset(&[pts.len() as u64, 3], &coords)?));
+    drop(coords);
+    for sub in ["Vertices", "Lines", "Strips"] {
+        let m = vec![
+            ("NumberOfCells".into(), w.dataset(&[1], &[0i64])?),
+            ("NumberOfConnectivityIds".into(), w.dataset(&[1], &[0i64])?),
+            ("Offsets".into(), w.dataset(&[1], &[0i64])?),
+            ("Connectivity".into(), w.dataset::<i64>(&[0], &[])?),
+        ];
+        g.push((sub.into(), w.group(&links(m), &[])?));
+    }
+    let offs: Vec<i64> = start.iter().map(|&s| s as i64).collect();
+    let conn: Vec<i64> = nodes.iter().map(|&p| local(p)).collect();
+    let m = vec![
+        ("NumberOfCells".into(), w.dataset(&[1], &[faces as i64])?),
+        (
+            "NumberOfConnectivityIds".into(),
+            w.dataset(&[1], &[conn.len() as i64])?,
+        ),
+        ("Offsets".into(), w.dataset(&[offs.len() as u64], &offs)?),
+        (
+            "Connectivity".into(),
+            w.dataset(&[conn.len() as u64], &conn)?,
+        ),
+    ];
+    g.push(("Polygons".into(), w.group(&links(m), &[])?));
+    let mut pcd: Vec<Member> = vec![("OwnerCell".into(), w.dataset(&[faces as u64], owner)?)];
+    for (name, k, v) in fields {
+        let dims: Vec<u64> = if *k > 1 {
+            vec![faces as u64, *k as u64]
+        } else {
+            vec![faces as u64]
+        };
+        pcd.push((name.to_string(), w.dataset(&dims, v)?));
+    }
+    let ids: Vec<i64> = pts.iter().map(|&p| i64::from(p)).collect();
+    let ppd = vec![(
+        "GlobalPointIds".into(),
+        w.dataset(&[pts.len() as u64], &ids)?,
+    )];
+    g.push(("CellData".into(), w.group(&links(pcd), &[])?));
+    g.push(("PointData".into(), w.group(&links(ppd), &[])?));
+    g.push(("FieldData".into(), w.group(&[], &[])?));
+    let mut attrs = vec![
+        ("Index", AttrValue::Int(index as i64)),
+        ("Type", AttrValue::Text("PolyData".into())),
+        ("Version", AttrValue::Ints(vec![2, 4])),
+    ];
+    if role != crate::PatchRole::Unspecified {
+        attrs.push(("role", AttrValue::Text(role.name().into())));
+    }
+    w.group(&links(g), &attrs)
+}
+
+/// Close a blocked file: the assembly of `internal` and the `patches`
+/// (group names and addresses), `/VTKHDF` with the layout's attributes
+/// and the mesh's `metadata`, and the root group with `root_attrs`.
+/// Returns the bytes written before the superblock.
+pub(crate) fn close(
+    mut w: H5Writer,
+    internal: u64,
+    patches: &[(String, u64)],
+    metadata: &std::collections::BTreeMap<String, String>,
+    root_attrs: &[(&str, AttrValue)],
+) -> io::Result<u64> {
+    let mut top: Vec<Link> = vec![Link::Hard("internal".into(), internal)];
+    top.extend(patches.iter().map(|(n, a)| Link::Hard(n.clone(), *a)));
+    // the assembly: the cells, and the patches under `boundary`
+    let boundary: Vec<Link> = patches
+        .iter()
+        .map(|(n, _)| Link::Soft(n.clone(), format!("/VTKHDF/{n}")))
         .collect();
     let boundary = w.group(&boundary, &[])?;
     let assembly = w.group(
@@ -918,7 +976,7 @@ fn write(
         ("murmelcraft_blocks", AttrValue::Int(LAYOUT)),
         ("block_order", AttrValue::Text("hilbert".into())),
     ];
-    for (k, v) in &mesh.metadata {
+    for (k, v) in metadata {
         if matches!(
             k.as_str(),
             "vtkhdf" | "Version" | "Type" | "murmelcraft_blocks" | "block_order"
@@ -928,26 +986,10 @@ fn write(
         attrs.push((k.as_str(), AttrValue::Text(v.clone())));
     }
     let vtk = w.group(&top, &attrs)?;
-    // the file's root: the attributes of the run, the units of the fields
-    let units: Vec<String> = results
-        .fields
-        .iter()
-        .filter_map(|f| f.unit.as_ref().map(|u| format!("{} {u}", f.name)))
-        .collect();
-    let mut root_attrs: Vec<(&str, AttrValue)> = results
-        .attrs
-        .iter()
-        .filter(|(k, _)| k.as_str() != "units")
-        .map(|(k, v)| (k.as_str(), AttrValue::Text(v.clone())))
-        .collect();
-    let units = units.join("; ");
-    if !units.is_empty() {
-        root_attrs.push(("units", AttrValue::Text(units)));
-    }
-    let root = w.group(&[Link::Hard("VTKHDF".into(), vtk)], &root_attrs)?;
-    written.bytes = w.pos();
+    let root = w.group(&[Link::Hard("VTKHDF".into(), vtk)], root_attrs)?;
+    let bytes = w.pos();
     w.finish(root)?;
-    Ok(written)
+    Ok(bytes)
 }
 
 #[cfg(test)]

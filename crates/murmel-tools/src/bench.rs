@@ -16,32 +16,87 @@ use murmel_engine::{
     Surface, Tokens,
 };
 use murmel_mesh::Mesh;
+use murmel_mesh::synth::blocked::{self, LocalIds, Progress};
 use murmel_mesh::synth::{self, Encoding};
 use serde_json::{Value, json};
 
 pub const BENCH_FORMAT: &str = "murmelcraft.bench";
 
-/// The file formats `make` writes.
-pub const FORMATS: [&str; 4] = ["vtu", "vtu-binary", "polymesh", "polymesh-binary"];
+/// The file formats `make` writes. `blocked` is a blocked VTKHDF file
+/// with 32-bit block ids and two cell fields, written block by block
+/// without the mesh in memory (`murmel_mesh::synth::blocked`), so it is
+/// the one format for meshes beyond memory.
+pub const FORMATS: [&str; 5] = [
+    "vtu",
+    "vtu-binary",
+    "polymesh",
+    "polymesh-binary",
+    "blocked",
+];
 
 /// Write the honeycomb of at least `cells` cells into `out` in each of
-/// `formats` (names from [`FORMATS`]).
-pub fn make(cells: usize, out: &Path, formats: &[String]) -> Result<Value, String> {
+/// `formats` (names from [`FORMATS`]); the blocked writer reports its
+/// steps to `progress`.
+pub fn make(
+    cells: usize,
+    out: &Path,
+    formats: &[String],
+    progress: Progress<'_>,
+) -> Result<Value, String> {
     for f in formats {
         if !FORMATS.contains(&f.as_str()) {
             return Err(format!("unknown format {f}; one of {}", FORMATS.join(", ")));
         }
     }
-    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let t = Instant::now();
     let n = synth::n_for_cells(cells);
-    let mesh = synth::honeycomb(n);
+    if n > blocked::MAX_N {
+        return Err(format!(
+            "at most {} cells (n = {})",
+            synth::cells_of(blocked::MAX_N),
+            blocked::MAX_N
+        ));
+    }
+    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    // the mesh in memory only for the formats written from it
+    let t = Instant::now();
+    let mesh = formats
+        .iter()
+        .any(|f| f != "blocked")
+        .then(|| synth::honeycomb(n));
     let built = ms(t);
     let mut written = Vec::new();
+    let mut points = mesh.as_ref().map(|m| m.points.len());
     for f in formats {
         let t = Instant::now();
-        let (path, result) = match f.as_str() {
-            "vtu" | "vtu-binary" => {
+        let mut blocks = Value::Null;
+        let (path, result) = match (f.as_str(), &mesh) {
+            ("blocked", _) => {
+                let p = out.join("blocked/honeycomb.vtkhdf");
+                let r = std::fs::create_dir_all(out.join(f))
+                    .map_err(|e| e.to_string())
+                    .and_then(|_| {
+                        blocked::write_blocked(
+                            &p,
+                            n,
+                            murmel_mesh::blocks::DEFAULT_BLOCK_CELLS,
+                            LocalIds::I32,
+                            progress,
+                        )
+                        .map_err(|e| e.message)
+                    });
+                if let Ok(w) = &r {
+                    points = Some(w.points);
+                    blocks = json!({
+                        "blocks": w.blocks,
+                        "block_cells": w.block_cells,
+                        "ghost_cells": w.ghost_cells,
+                        "block_points": w.block_points,
+                    });
+                }
+                (p, r.map(|_| ()))
+            }
+            (_, None) => continue,
+            ("vtu" | "vtu-binary", Some(mesh)) => {
                 let enc = if f == "vtu" {
                     Encoding::Ascii
                 } else {
@@ -49,17 +104,18 @@ pub fn make(cells: usize, out: &Path, formats: &[String]) -> Result<Value, Strin
                 };
                 let p = out.join(format!("{f}/foehncraft.vtu"));
                 let r = std::fs::create_dir_all(out.join(f))
-                    .and_then(|_| synth::write_vtu(&mesh, &p, enc));
+                    .and_then(|_| synth::write_vtu(mesh, &p, enc))
+                    .map_err(|e| e.to_string());
                 (p, r)
             }
-            _ => {
+            (_, Some(mesh)) => {
                 let enc = if f == "polymesh" {
                     Encoding::Ascii
                 } else {
                     Encoding::Binary
                 };
                 let p = out.join(format!("{f}/constant/polyMesh"));
-                let r = synth::write_polymesh(&mesh, &p, enc);
+                let r = synth::write_polymesh(mesh, &p, enc).map_err(|e| e.to_string());
                 (p, r)
             }
         };
@@ -69,6 +125,7 @@ pub fn make(cells: usize, out: &Path, formats: &[String]) -> Result<Value, Strin
             "path": path.display().to_string(),
             "bytes": bytes_of(&path),
             "write_ms": ms(t),
+            "blocks": blocks,
         }));
     }
     Ok(json!({
@@ -76,10 +133,10 @@ pub fn make(cells: usize, out: &Path, formats: &[String]) -> Result<Value, Strin
         "format_version": "1.0",
         "kind": "make",
         "generator": format!("honeycomb n={n}"),
-        "cells": mesh.cell_count(),
-        "points": mesh.points.len(),
-        "faces": mesh.unique_faces,
-        "boundary_faces": mesh.boundary.len(),
+        "cells": synth::cells_of(n),
+        "points": points,
+        "faces": mesh.as_ref().map(|m| m.unique_faces),
+        "boundary_faces": mesh.as_ref().map(|m| m.boundary.len()),
         "build_ms": built,
         "files": written,
     }))
@@ -666,7 +723,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("murmel-bench-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let formats: Vec<String> = FORMATS.iter().map(|s| s.to_string()).collect();
-        let made = make(500, &dir, &formats).unwrap();
+        let made = make(500, &dir, &formats, &|_, _, _| {}).unwrap();
         let cells = made["cells"].as_u64().unwrap();
         assert!(cells >= 500);
         for f in made["files"].as_array().unwrap() {

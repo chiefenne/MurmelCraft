@@ -36,7 +36,10 @@ const USAGE: &str = "Usage: murmel COMMAND
   murmel bench make --cells N --out DIR [--formats LIST]
                                         write a synthetic polyhedral mesh of N cells
                                         (formats vtu, vtu-binary, polymesh,
-                                        polymesh-binary; default all)
+                                        polymesh-binary, blocked; default all);
+                                        blocked is a blocked VTKHDF file written
+                                        without the mesh in memory, any size up
+                                        to 684 M cells
   murmel bench run MESH [--repeat N] [--no-render] [--no-fields] [--size WxH] [--json]
                                         time reading, the surface, picking and
                                         drawing of a mesh (docs/performance.md)
@@ -219,7 +222,27 @@ fn bench(args: &[&str]) -> Result<ExitCode, String> {
                     .map(|s| s.to_string())
                     .collect(),
             };
-            let report = murmel_tools::bench::make(cells, std::path::Path::new(out), &formats)?;
+            // the blocked writer's steps, each time one moves on by 1 %
+            let start = std::time::Instant::now();
+            let shown = std::sync::Mutex::new((String::new(), usize::MAX));
+            let report_step = |step: &str, done: usize, total: usize| {
+                let pct = done * 100 / total.max(1);
+                if let Ok(mut s) = shown.lock()
+                    && (s.0 != step || s.1 != pct)
+                {
+                    *s = (step.to_string(), pct);
+                    eprintln!(
+                        "{:>7.1} s  {step} {done}/{total} ({pct} %)",
+                        start.elapsed().as_secs_f64()
+                    );
+                }
+            };
+            let report = murmel_tools::bench::make(
+                cells,
+                std::path::Path::new(out),
+                &formats,
+                &report_step,
+            )?;
             print(&report);
             Ok(ExitCode::SUCCESS)
         }

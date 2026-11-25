@@ -6,7 +6,10 @@ blocks under a region of interest are read (decided by the maintainer on
 2026-11-24: overview plus regions beyond the memory budget, 100 M cells
 on the iMac, blocked VTKHDF everywhere). KoflCraft's binary hand-off and
 FoehnCraft's `fields.vtkhdf` are written this way; `murmel blocks make`
-converts a `.vtu` or a `polyMesh` once.
+converts a `.vtu` or a `polyMesh` once, and `murmel bench make --formats
+blocked` writes a synthetic mesh of polyhedra of any size up to 684 M
+cells straight into one, without the mesh in memory (the 100 M cell
+test file).
 
 A blocked file is an ordinary VTKHDF 2.4 file. ParaView 5.13 (VTK 9.4)
 and later open it as a partitioned data set; nothing below needs a
@@ -93,6 +96,16 @@ version 2.4) and the HDF5 File Format Specification 3.0.
 ## 5. Cells and polyhedra
 
 All integers are 64-bit signed little-endian unless stated otherwise.
+Writers have one choice: the ids that count within a partition
+(`Offsets`, `Connectivity`, `FaceOffsets`, `FaceConnectivity`,
+`PolyhedronOffsets` and `PolyhedronToFaces`) may be 32-bit signed
+instead, all six alike, as a partition of at most 1,048,576 owned cells
+and their ghosts stays far below 2³¹ of them (decided by the maintainer
+on 2026-11-25 for the 100 M cell test file: a file of polyhedra takes
+about 940 bytes a cell instead of 1,500). Readers take either, VTK's
+`vtkHDFReader` too. The counts (`NumberOf…`) and the ids of the whole
+mesh (`GlobalPointIds`, `GlobalCellIds`, `OriginalCellIds`, `OwnerCell`)
+stay 64-bit.
 
 - The `internal` block holds the standard UnstructuredGrid datasets.
   Each partition's rows follow the previous one's.
