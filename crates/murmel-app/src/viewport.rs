@@ -419,6 +419,18 @@ impl MurmelApp {
             Some((s, r, p)) => (Some(*s), *r, p.as_slice()),
             None => (None, self.session.surface_revision, &[][..]),
         };
+        // During a slice drag: the moving slices drawn from the field's
+        // grid until their exact faces are in place.
+        let slice = self.session.slice_drawn();
+        let slice_key = slice.as_ref().map(|d| {
+            (
+                &d.polygons,
+                d.grid.as_ref().map(|g| g.id),
+                &d.hide_faces,
+                &d.hide_edges,
+                &d.clips,
+            )
+        });
         // While the view moves the edges are left out if frames with
         // them are slow (the maintainer's card: over 33 ms).
         let display = &self.session.display;
@@ -436,7 +448,7 @@ impl MurmelApp {
         }
         let edges = display.draw_edges() && !moving.hide;
         let key = format!(
-            "{cam:?}|{revision}|{planes:?}|{px:?}|{dark}|{:?}|{edges}|{field:?}",
+            "{cam:?}|{revision}|{planes:?}|{slice_key:?}|{px:?}|{dark}|{:?}|{edges}|{field:?}",
             display.render_mode
         );
         if g.last.as_deref() != Some(key.as_str()) {
@@ -457,6 +469,7 @@ impl MurmelApp {
                     field: field.as_ref(),
                     scale: ppp,
                     clip_planes: planes,
+                    slice: slice.as_ref(),
                 },
             );
             if let Some(view) = g.renderer.egui_view() {

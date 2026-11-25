@@ -558,6 +558,19 @@ fn fields(session: &mut Session, st: &mut Stages, r: usize) -> Result<(), String
         let f = 0.5 + 0.01 * (k + 1) as f64;
         vec![("slice.set", json!({"origin": at(f)}))]
     })?;
+    // The same steps in the window: the slice drawn from the field's
+    // grid at once (its grid made on the first), the exact faces later
+    // (crate::call settles the next other tool).
+    session.defer_clips = true;
+    stage(st, session, "slice.preview", 1, &mut |_| {
+        vec![("slice.set", json!({"origin": at(0.4)}))]
+    })?;
+    stage(st, session, "slice.preview.step", r.max(5), &mut |k| {
+        let f = 0.4 + 0.01 * (k + 1) as f64;
+        vec![("slice.set", json!({"origin": at(f)}))]
+    })?;
+    session.defer_clips = false;
+    session.settle();
     stage(st, session, "iso.set", 1, &mut |_| {
         vec![("iso.set", json!({"new": true, "field": "p", "value": 0.25}))]
     })?;

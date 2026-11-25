@@ -829,3 +829,63 @@ fn clip_preview_cuts_on_the_gpu() {
     let left = render_session(&moving, 480, 320).unwrap();
     assert!(diff_share(&left.rgba, &want.rgba, 24) > 0.05);
 }
+
+/// The slice preview (the window's slice drag) draws the moving slice
+/// from the field's grid on the GPU: a slice through the channel moved
+/// from near one end to the middle, before its exact faces are built,
+/// looks like the exact slice at the middle (the speed, wall to core) in
+/// flat and in smooth colours, and unlike the surface with the slice where it was. Breaks
+/// when the shader reads the wrong grid cell or value, leaves the old
+/// slice in, or draws the plane outside the mesh.
+#[test]
+fn slice_preview_draws_from_the_grid() {
+    for mode in [
+        murmel_engine::FieldMode::Flat,
+        murmel_engine::FieldMode::Smooth,
+    ] {
+        let make = |f: f64| {
+            let mut s = field_session("velocity", murmel_mesh::Component::Magnitude);
+            s.display.render_mode = RenderMode::Shaded;
+            s.display.field_styles.insert(
+                "velocity".into(),
+                murmel_engine::FieldStyle {
+                    mode,
+                    ..Default::default()
+                },
+            );
+            let b = s.mesh.as_ref().unwrap().mesh.bounds();
+            let c = b.center();
+            let at = [b.min[0] + f * (b.max[0] - b.min[0]), c[1], c[2]];
+            s.display
+                .slices
+                .push(murmel_engine::Slice::new(at, [1.0, 0.0, 0.0]));
+            s.redraw();
+            s
+        };
+        let exact = make(0.5);
+        let mut moving = make(0.9);
+        moving.defer_clips = true;
+        let b = moving.mesh.as_ref().unwrap().mesh.bounds();
+        moving.display.slices[0].origin[0] = b.min[0] + 0.5 * (b.max[0] - b.min[0]);
+        moving.redraw();
+        assert!(moving.slice_preview.is_some());
+        let want = render_session(&exact, 480, 320).unwrap();
+        let preview = render_session(&moving, 480, 320).unwrap();
+        let out = root().join("target/render-test");
+        std::fs::create_dir_all(&out).unwrap();
+        let name = format!("slice-preview-{mode:?}").to_lowercase();
+        write_png(&out.join(format!("{name}.png")), 480, 320, &preview.rgba).unwrap();
+        write_png(&out.join(format!("{name}-exact.png")), 480, 320, &want.rgba).unwrap();
+        let share = diff_share(&preview.rgba, &want.rgba, 24);
+        // Smooth colours mix the cells' and nodes' values otherwise than
+        // the exact slice's tetrahedra do.
+        assert!(
+            share < 0.04,
+            "{mode:?}: {:.2} % of pixels differ",
+            100.0 * share
+        );
+        moving.slice_preview = None;
+        let left = render_session(&moving, 480, 320).unwrap();
+        assert!(diff_share(&left.rgba, &want.rgba, 24) > 0.02);
+    }
+}
