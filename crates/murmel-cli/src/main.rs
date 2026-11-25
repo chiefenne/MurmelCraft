@@ -82,6 +82,7 @@ fn session() -> Result<Session, String> {
         s.formulas = st.formulas;
         s.keys = st.keys;
         s.help = st.help;
+        s.page = st.page;
         s.memory_budget = st.memory.budget_gib;
         s.convert_large = st.memory.convert_large;
         murmel_engine::defaults::start_view(&mut s);

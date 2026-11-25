@@ -2886,3 +2886,27 @@ fn f1_enters_the_manual() {
     h.run_steps(2);
     assert_eq!(page(&h), Some(Some("fit-zoom")), "F1 on the Fit tip");
 }
+
+/// Invariant: File ▸ Page setup opens a window whose controls all have
+/// names, and a choice there changes the page of Print and Export PDF at
+/// once. Breaks if the window's choices did not reach settings.set_page.
+#[test]
+fn page_setup_from_the_file_menu() {
+    let mut h = harness();
+    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("File"))
+        .click();
+    h.run_steps(3);
+    h.get_by(|n| {
+        n.role() == Role::Button && n.label().is_some_and(|l| l.starts_with("Page setup"))
+    })
+    .click();
+    h.run_steps(3);
+    assert!(named(&h, "Paper"), "the paper box");
+    assert_eq!(problems(&h), Vec::<String>::new());
+    h.get_by_label("Portrait").click();
+    h.run_steps(2);
+    assert_eq!(
+        h.state().session.page.orientation,
+        murmel_engine::settings::Orientation::Portrait
+    );
+}

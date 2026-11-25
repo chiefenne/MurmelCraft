@@ -35,7 +35,7 @@ pub(crate) fn needs_mesh(c: &Command) -> bool {
                 || t.starts_with("recent.")
                 || matches!(t, "mesh.open" | "session.load" | "series.open"))
         }
-        None => c.id == "window.copy_image",
+        None => matches!(c.id.as_str(), "window.copy_image" | "window.print"),
     }
 }
 
@@ -346,6 +346,7 @@ mod tests {
             "window.session_load",
             "window.series_open",
             "window.settings",
+            "window.page_setup",
             "window.quit",
             "window.about",
             "settings.set_theme:dark",
@@ -358,6 +359,8 @@ mod tests {
             "mesh.close",
             "window.export_image",
             "window.copy_image",
+            "window.print",
+            "window.export_pdf",
             "clip.set:x",
             "window.measure_distance",
         ] {

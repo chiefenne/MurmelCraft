@@ -1737,6 +1737,28 @@ pub fn commands() -> Vec<Command> {
     ));
     // Help: the manual in its panel, pages of the repository opened in
     // the browser, and About.
+    // Print and PDF (the maintainer's card of 2026-11-25).
+    v.push(cmd(
+        "window.export_pdf",
+        "cmd-export-pdf",
+        "file",
+        &[],
+        Window(Some("export.pdf")),
+    ));
+    v.push(cmd(
+        "window.print",
+        "cmd-print",
+        "file",
+        &["Ctrl+P"],
+        Window(None),
+    ));
+    v.push(cmd(
+        "window.page_setup",
+        "cmd-page-setup",
+        "file",
+        &[],
+        Window(Some("settings.set_page")),
+    ));
     v.push(cmd(
         "window.manual",
         "cmd-manual",

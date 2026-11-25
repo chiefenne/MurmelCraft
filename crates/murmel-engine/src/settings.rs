@@ -92,6 +92,9 @@ pub struct Settings {
     /// When tips appear (`[help]`).
     #[serde(default, skip_serializing_if = "Help::is_default")]
     pub help: Help,
+    /// The printed page and the PDF page (`[page]`).
+    #[serde(default, skip_serializing_if = "PageSetup::is_default")]
+    pub page: PageSetup,
 }
 
 /// `[help]` in settings.toml: how long the pointer rests on a control
@@ -105,6 +108,119 @@ pub struct Help {
     pub tip_ms: u32,
     #[serde(default = "rich_ms")]
     pub rich_ms: u32,
+}
+
+/// A paper size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Paper {
+    #[default]
+    A4,
+    A3,
+    Letter,
+}
+
+impl Paper {
+    pub const ALL: [Paper; 3] = [Paper::A4, Paper::A3, Paper::Letter];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Paper::A4 => "a4",
+            Paper::A3 => "a3",
+            Paper::Letter => "letter",
+        }
+    }
+
+    /// Width and height in points (1/72 inch), portrait.
+    pub fn points(self) -> (f64, f64) {
+        let mm = 72.0 / 25.4;
+        match self {
+            Paper::A4 => (210.0 * mm, 297.0 * mm),
+            Paper::A3 => (297.0 * mm, 420.0 * mm),
+            Paper::Letter => (612.0, 792.0),
+        }
+    }
+}
+
+/// How the page lies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Orientation {
+    /// Wide, as the window is (the default).
+    #[default]
+    Landscape,
+    Portrait,
+}
+
+/// `[page]` in settings.toml: the page of export.pdf and of Print (File ▸
+/// Page setup; the maintainer's card of 2026-11-25).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageSetup {
+    #[serde(default)]
+    pub paper: Paper,
+    #[serde(default)]
+    pub orientation: Orientation,
+    /// The margin on every side, in millimetres.
+    #[serde(default = "margin_mm")]
+    pub margin_mm: u32,
+    /// The title and a line naming the file and the date above the view.
+    #[serde(default = "yes")]
+    pub header: bool,
+    /// The picture's resolution.
+    #[serde(default = "dpi")]
+    pub dpi: u32,
+    /// Light by default: dark backgrounds print badly.
+    #[serde(default = "light")]
+    pub theme: Theme,
+}
+
+/// The widest margin and the resolutions a page can have.
+pub const MAX_MARGIN_MM: u32 = 50;
+pub const DPI: (u32, u32) = (72, 600);
+
+fn margin_mm() -> u32 {
+    12
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn dpi() -> u32 {
+    200
+}
+
+fn light() -> Theme {
+    Theme::Light
+}
+
+impl Default for PageSetup {
+    fn default() -> Self {
+        Self {
+            paper: Paper::default(),
+            orientation: Orientation::default(),
+            margin_mm: margin_mm(),
+            header: yes(),
+            dpi: dpi(),
+            theme: light(),
+        }
+    }
+}
+
+impl PageSetup {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The page's width and height in points.
+    pub fn size(&self) -> (f64, f64) {
+        let (w, h) = self.paper.points();
+        match self.orientation {
+            Orientation::Portrait => (w, h),
+            Orientation::Landscape => (h, w),
+        }
+    }
 }
 
 /// The longest delay either can have.
@@ -142,10 +258,6 @@ pub struct Agents {
     pub enabled: bool,
 }
 
-fn yes() -> bool {
-    true
-}
-
 impl Default for Agents {
     fn default() -> Self {
         Self { enabled: true }
@@ -165,6 +277,7 @@ impl Default for Settings {
             memory: Memory::default(),
             keys: KeyMap::new(),
             help: Help::default(),
+            page: PageSetup::default(),
         }
     }
 }

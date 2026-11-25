@@ -2077,6 +2077,7 @@ name = "murmel-tools"
 version = "0.1.0"
 dependencies = [
  "gif",
+ "miniz_oxide 0.8.9",
  "murmel-engine",
  "murmel-mesh",
  "murmel-render",

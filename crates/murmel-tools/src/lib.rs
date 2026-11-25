@@ -27,6 +27,7 @@ mod markdown;
 pub mod menus;
 pub mod movie;
 mod parcel;
+pub mod pdf;
 pub mod probe;
 mod region;
 pub mod series;

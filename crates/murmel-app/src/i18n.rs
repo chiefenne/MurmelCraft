@@ -67,6 +67,7 @@ mod tests {
             include_str!("menus.rs"),
             include_str!("tips.rs"),
             include_str!("help_panel.rs"),
+            include_str!("print.rs"),
         ];
         for s in src {
             for part in s

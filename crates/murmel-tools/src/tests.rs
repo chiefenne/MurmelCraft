@@ -4234,3 +4234,64 @@ fn recent_files_follow_the_window_only() {
     assert_eq!(list(&mut s), json!([]));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Invariant: export.pdf writes one page of the size [page] asks for,
+/// with the view filling it under the header, a call's values winning
+/// over [page], and settings.set_page refusing values out of range and
+/// keeping the rest. Breaks when the page ignores Page setup, or the
+/// view is drawn at the window's size instead of the page's.
+#[test]
+fn pdf_page_and_page_setup() {
+    let mut s = session();
+    let dir = root().join("target/render-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("tool-export-page.pdf");
+    let config = dir.join("pdf-config");
+    let _ = std::fs::remove_dir_all(&config);
+    s.config_dir = Some(config.clone());
+    let e = call("export.pdf", json!({"path": out}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    let e = call("export.pdf", json!({"path": out, "dpi": 100}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let pdf = std::fs::read(&out).unwrap();
+    assert!(pdf.starts_with(b"%PDF-1.4"));
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(
+        text.contains("/MediaBox [0 0 841.89 595.28]"),
+        "A4 landscape"
+    );
+    let title = String::from_utf8(crate::pdf::text_string("foehncraft.vtu")).unwrap();
+    assert!(text.contains(&title), "the title");
+    let [w, h] = [&e.result["pixels"][0], &e.result["pixels"][1]];
+    assert_eq!((w.as_u64().unwrap(), h.as_u64().unwrap()), (1075, 685));
+    // [page] gives what a call leaves out; the call wins.
+    let e = call(
+        "settings.set_page",
+        json!({"orientation": "portrait", "paper": "letter"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let e = call(
+        "export.pdf",
+        json!({"path": out, "dpi": 72, "header": false}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["page_points"], json!([612.0, 792.0]));
+    let text = String::from_utf8_lossy(&std::fs::read(&out).unwrap()).into_owned();
+    assert!(!text.contains(&title), "no header");
+    for bad in [json!({"dpi": 20}), json!({"margin_mm": 60})] {
+        let e = call("settings.set_page", bad, &mut s);
+        assert_eq!(e.diagnostics[0].code, "EXPORT001");
+    }
+    assert_eq!(s.page.paper, murmel_engine::settings::Paper::Letter, "kept");
+    let saved = std::fs::read_to_string(config.join("settings.toml")).unwrap();
+    assert!(
+        saved.contains("[page]") && saved.contains("paper = \"letter\""),
+        "{saved}"
+    );
+    assert!(call("settings.set_page", json!({"reset": true}), &mut s).ok());
+    assert!(s.page.is_default());
+}
