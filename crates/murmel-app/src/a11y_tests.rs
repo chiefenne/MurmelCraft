@@ -2013,6 +2013,85 @@ fn streamlines_on_an_overview_in_the_window() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Invariant (the maintainer's card 8 of 2026-11-24, stream slices and
+/// iso-surfaces): on an overview a slice shows on the preview grid at
+/// once, its Properties saying it is being cut, and once it has rested
+/// the window cuts it through the blocks on a thread of its own and
+/// draws its exact faces, Properties then telling the blocks; the
+/// controls keep clean names meanwhile and after. Breaks when the window
+/// never polls the cut (the grid's faces stay), or when the call waits
+/// for it. The engine and tool tests cut at once or poll by hand.
+#[test]
+fn slices_on_an_overview_are_cut_in_the_window() {
+    let dir = std::env::temp_dir().join(format!("murmel-cut-win-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let (open, config) = (path.clone(), dir.clone());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .build_eframe(move |cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = Some(config);
+            app.bridge_path = None;
+            app.session.memory_budget = Some(1e-9);
+            app.session.cache_dir = None;
+            app.open_path(open);
+            app
+        });
+    h.run_steps(3);
+    opened(&mut h);
+    assert!(h.state().session.mesh.as_ref().unwrap().overview.is_some());
+    // (opened as an overview; the blocks the slice cuts fit the budget)
+    h.state_mut().session.memory_budget = None;
+    assert!(
+        h.state_mut()
+            .call("slice.set", serde_json::json!({"axis": "x"}))
+            .is_some()
+    );
+    let rows = |h: &Harness<'_, MurmelApp>| -> Vec<String> {
+        let s = &h.state().session;
+        let m = s.mesh.as_ref().unwrap();
+        murmel_engine::inspect::rows(m, &s.display, murmel_engine::display::Item::Slice(0))
+            .into_iter()
+            .map(|r| r.key.to_string())
+            .collect()
+    };
+    assert!(
+        h.state().session.display.block_cuts.is_none(),
+        "not cut yet"
+    );
+    assert!(rows(&h).contains(&"cutting".to_string()), "{:?}", rows(&h));
+    let start = std::time::Instant::now();
+    let cut = |h: &Harness<'_, MurmelApp>| {
+        h.state()
+            .session
+            .display
+            .block_cuts
+            .as_ref()
+            .is_some_and(|c| c.0.iter().any(|c| c.faces.is_some()))
+    };
+    while !cut(&h) {
+        assert!(start.elapsed().as_secs() < 60, "the cut never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(
+        rows(&h).contains(&"cut_blocks".to_string()),
+        "{:?}",
+        rows(&h)
+    );
+    assert!(h.state().session.probe_blocks.cut_job.is_none());
+    let m = h.state().session.mesh.as_ref().unwrap();
+    assert!(m.surface.triangles() > 0, "the slice draws");
+    assert_eq!(problems(&h), Vec::<String>::new(), "slices on an overview");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Invariant (the maintainer's card 4 of 2026-11-24, a large legacy
 /// file): opening a mesh that is not blocked and needs more than the
 /// memory budget asks first: "Convert and open" converts it on a thread

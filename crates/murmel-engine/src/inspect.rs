@@ -467,6 +467,31 @@ fn stream_rows(open: &OpenMesh, display: &Display, k: usize) -> Vec<Row> {
     v
 }
 
+/// The rows of an overview's enabled slice or iso-surface `item` about
+/// its exact faces ([`crate::cut_blocks`]): the blocks they were cut
+/// through, or that they are being cut, or that the item shows on the
+/// preview grid and why.
+fn cut_rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
+    if open.overview.is_none() || open.blocks.is_some() {
+        return Vec::new();
+    }
+    if crate::cut_blocks::alone(display, item).is_none() {
+        return Vec::new();
+    }
+    let s = &open.surface;
+    match crate::cut_blocks::of(display, item, s.origin, s.value_origin) {
+        Some(c) if c.faces.is_some() => vec![row("cut_blocks", c.blocks)],
+        Some(c) => {
+            let mut v = vec![row("on_preview", true)];
+            if let Some(p) = &c.problem {
+                v.push(row("problem", p.message.clone()));
+            }
+            v
+        }
+        None => vec![row("cutting", true)],
+    }
+}
+
 /// The rows of `item` in the open mesh.
 pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
     let m = &open.mesh;
@@ -628,6 +653,7 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 "current_slice",
                 display.current_slice() == Some(k as usize),
             ));
+            v.extend(cut_rows(open, display, item));
             v
         }
         Item::Region(k) => region_rows(display, k as usize),
@@ -648,6 +674,7 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 row("color", c.color.key()),
                 row("current_iso", display.current_iso() == Some(k as usize)),
             ]);
+            v.extend(cut_rows(open, display, item));
             v
         }
         Item::Blocks => {

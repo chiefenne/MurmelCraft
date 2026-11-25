@@ -352,6 +352,7 @@ pub(crate) fn same_display(a: &Display, b: &Display) -> bool {
         region_cells: None,
         stream_traces: None,
         parcel_data: None,
+        block_cuts: None,
         ..d.clone()
     };
     same(&a.quality, &b.quality)
@@ -359,6 +360,7 @@ pub(crate) fn same_display(a: &Display, b: &Display) -> bool {
         && same(&a.region_cells, &b.region_cells)
         && same(&a.stream_traces, &b.stream_traces)
         && same(&a.parcel_data, &b.parcel_data)
+        && same(&a.block_cuts, &b.block_cuts)
         && bare(a) == bare(b)
 }
 
@@ -1738,6 +1740,7 @@ impl Session {
         let swapped = self.sync_blocks() | self.sync_preview();
         self.sync_probes();
         self.sync_streams();
+        self.sync_cuts();
         let Some(m) = &mut self.mesh else {
             self.preview = None;
             self.extras_preview = None;
@@ -1977,6 +1980,140 @@ impl Session {
             }
         }
         changed
+    }
+
+    /// Cut the enabled slices and iso-surfaces of the open overview
+    /// through the blocks of its file ([`crate::cut_blocks`]): forget the
+    /// cuts no longer wanted, put those cut in place, and cut those not
+    /// yet cut (with `defer_blocks`, on a thread of their own once they
+    /// have rested [`crate::cut_blocks::REST`], put in place by a later
+    /// call). True when the cuts shown changed.
+    fn sync_cuts(&mut self) -> bool {
+        use crate::cut_blocks::{Cut, CutJob, Cuts, REST, STOPPED, Want, wanted};
+        let budget = self.budget_bytes();
+        let open = self
+            .mesh
+            .as_ref()
+            .filter(|m| m.blocks.is_none() && m.overview.is_some());
+        let c = &mut self.probe_blocks;
+        let Some((m, src)) = open.and_then(|m| Some((m, crate::probe_blocks::source(m, budget)?)))
+        else {
+            if let Some(j) = c.cut_job.take() {
+                j.stop();
+            }
+            c.cut_rest = None;
+            let had = self.display.block_cuts.take().is_some();
+            return had;
+        };
+        crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
+        let origin = m.mesh.bounds().center();
+        let value_origin = self.display.field_values().map_or(0.0, |f| f.origin);
+        let want = wanted(&self.display, origin, value_origin, &src.made, &self.tokens);
+        // The cuts no longer wanted go at once: their items show on the
+        // preview grid until cut again.
+        let mut have: Vec<Arc<Cut>> = self
+            .display
+            .block_cuts
+            .as_deref()
+            .map(|c| c.0.clone())
+            .unwrap_or_default();
+        let before = have.len();
+        have.retain(|c| want.iter().any(|w| c.serves(w, budget)));
+        let mut changed = have.len() != before;
+        loop {
+            let todo: Vec<Want> = want
+                .iter()
+                .filter(|w| !have.iter().any(|c| c.serves(w, budget)))
+                .cloned()
+                .collect();
+            if let Some(job) = c.cut_job.take() {
+                let alike = job.budget == budget && job.todo == todo;
+                match job.take(alike && !self.defer_blocks) {
+                    Some(out) => {
+                        c.cut_kept = out.kept;
+                        c.cut_problem = out
+                            .cuts
+                            .iter()
+                            .filter_map(|x| x.problem.clone())
+                            .find(|p| p.message != STOPPED);
+                        for cut in out.cuts {
+                            let fresh = !have.iter().any(|h| h.want == cut.want);
+                            if fresh && want.iter().any(|w| cut.serves(w, budget)) {
+                                have.push(Arc::new(cut));
+                                changed = true;
+                            }
+                        }
+                        continue;
+                    }
+                    None if alike => {
+                        c.cut_job = Some(job);
+                        break;
+                    }
+                    // Other cuts wanted now: this one is dropped.
+                    None => job.stop(),
+                }
+            }
+            if todo.is_empty() {
+                c.cut_rest = None;
+                break;
+            }
+            if self.defer_blocks {
+                // In the window: once the items have rested.
+                match &c.cut_rest {
+                    Some((w, t)) if *w == todo && t.elapsed() >= REST => c.cut_rest = None,
+                    Some((w, _)) if *w == todo => break,
+                    _ => {
+                        c.cut_rest = Some((todo, Instant::now()));
+                        break;
+                    }
+                }
+            }
+            let mut kept = c.kept.clone();
+            for b in c.stream_kept.iter().chain(&c.cut_kept) {
+                if !kept.iter().any(|x| x.block == b.block) {
+                    kept.push(b.clone());
+                }
+            }
+            c.cut_job = Some(CutJob::start(src.clone(), todo, kept));
+            if self.defer_blocks {
+                break;
+            }
+        }
+        if changed {
+            self.display.block_cuts = (!have.is_empty()).then(|| Arc::new(Cuts(have)));
+        }
+        changed
+    }
+
+    /// Follow the cut of the open overview's slices and iso-surfaces
+    /// through its blocks (`defer_blocks`): start it once they have
+    /// rested, and put it in place and draw again once cut. True while
+    /// it waits or runs (the window asks again).
+    pub fn poll_cuts(&mut self) -> bool {
+        let c = &self.probe_blocks;
+        match (&c.cut_job, &c.cut_rest) {
+            (Some(j), _) if j.is_done() => {
+                self.redraw();
+                true
+            }
+            (Some(_), _) => true,
+            (None, Some((_, t))) => {
+                if t.elapsed() >= crate::cut_blocks::REST {
+                    self.redraw();
+                }
+                true
+            }
+            (None, None) => false,
+        }
+    }
+
+    /// Stop cutting the slices and iso-surfaces through the blocks: they
+    /// stay on the preview grid and are not cut again until they or the
+    /// memory budget change.
+    pub fn cancel_cuts(&mut self) {
+        if let Some(j) = &self.probe_blocks.cut_job {
+            j.stop();
+        }
     }
 
     /// Put the streamlines traced through the open overview's blocks in
@@ -4676,6 +4813,394 @@ mod tests {
         assert!(s.preview_job.is_some());
         s.close();
         assert!(s.preview_job.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The triangles the extras of `s` draw, each by its corners sorted:
+    /// position and value (absolute, NaN without one), linear colour and
+    /// selection share.
+    fn extra_tris(s: &Surface) -> Vec<[[f64; 8]; 3]> {
+        let at = s.extras_at.indices;
+        let corner = |k: u32| -> [f64; 8] {
+            let k = k as usize;
+            let (p, v, c) = (s.positions[k], s.values[k], s.colors[k]);
+            let value = if v[3] > 0.0 {
+                v[1] as f64 + s.value_origin
+            } else {
+                f64::NAN
+            };
+            [
+                p[0] as f64 + s.origin[0],
+                p[1] as f64 + s.origin[1],
+                p[2] as f64 + s.origin[2],
+                value,
+                c[0] as f64,
+                c[1] as f64,
+                c[2] as f64,
+                v[2] as f64,
+            ]
+        };
+        let order =
+            |a: &[f64; 8], b: &[f64; 8]| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal);
+        let mut v: Vec<[[f64; 8]; 3]> = s.indices[at..]
+            .chunks(3)
+            .map(|t| {
+                let mut c = [corner(t[0]), corner(t[1]), corner(t[2])];
+                c.sort_by(order);
+                c
+            })
+            .collect();
+        v.sort_by(|a, b| {
+            (0..3)
+                .map(|i| order(&a[i], &b[i]))
+                .find(|o| o.is_ne())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        v
+    }
+
+    /// Whether triangles `a` and `b` ([`extra_tris`]) are the same, their
+    /// positions to `tol`, values to `vtol`, colours exactly.
+    fn same_tris(
+        a: &[[[f64; 8]; 3]],
+        b: &[[[f64; 8]; 3]],
+        tol: f64,
+        vtol: f64,
+    ) -> Result<(), String> {
+        if a.len() != b.len() {
+            return Err(format!("{} vs {} triangles", a.len(), b.len()));
+        }
+        for (j, (x, y)) in a.iter().zip(b).enumerate() {
+            for i in 0..3 {
+                let (p, q) = (x[i], y[i]);
+                let near = (0..3).all(|k| (p[k] - q[k]).abs() <= tol)
+                    && ((p[3].is_nan() && q[3].is_nan()) || (p[3] - q[3]).abs() <= vtol)
+                    && (4..8).all(|k| p[k] == q[k]);
+                if !near {
+                    return Err(format!("triangle {j} corner {i}: {p:?} vs {q:?}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The display `d` of an overview as drawn on the whole mesh `whole`
+    /// with `full`: its surface.
+    fn whole_surface(s: &Session, whole: &Mesh, full: &FieldSet) -> Surface {
+        let mut d = s.display.clone();
+        d.block_cuts = None;
+        d.block_boxes = None;
+        d.probe_findings = None;
+        d.field_values = None;
+        crate::field::ensure_field(&mut d, whole, full);
+        Surface::build_with(whole, Some(full), &s.tokens, &d)
+    }
+
+    /// Invariant (the maintainer's card 8 of 2026-11-24, "stream slices
+    /// and iso-surfaces"): on an overview a slice (a series of two
+    /// oblique planes) and an iso-surface are cut through the blocks of
+    /// the file (blocks of 100 cells) and draw the triangles the whole
+    /// mesh draws: the same corners, values (a field linear in space, so
+    /// every block's are exact) and colours, coloured by the field or by
+    /// the mesh's colour, in place of the preview grid's. A slice cuts
+    /// only the blocks its planes cross, an iso-surface only those its
+    /// value can lie in (never one the whole mesh's iso-surface lies in).
+    /// Selecting the slice colours it as the whole mesh does without
+    /// cutting again; moving it cuts again, through the blocks the last
+    /// cut kept without reading them, and the old faces go at once.
+    /// Breaks when a halo cell is cut too (faces twice), when a block a
+    /// plane crosses is skipped, when the span-space test skips a block
+    /// the iso-surface passes through, when the faces are put in the
+    /// wrong frame or colours, when the preview's faces stay as well,
+    /// when a selection cuts again, or when kept blocks are read again. The extract tests cut whole meshes
+    /// only.
+    #[test]
+    fn slices_and_iso_surfaces_on_an_overview_are_cut_through_the_blocks() {
+        let (dir, whole, full, mut s) = linear_overview("cuts");
+        let o = s.mesh.as_ref().unwrap().overview.clone().unwrap();
+        let b = whole.bounds();
+        let mid = b.center();
+        let mut slice = crate::extract::Slice::new(mid, [0.3, 1.0, 0.2]);
+        slice.count = 2;
+        slice.spacing = 0.2 * (b.max[1] - b.min[1]);
+        let x = crate::field::FieldChoice {
+            name: "velocity".into(),
+            component: Component::X,
+        };
+        // velocity x is 1 + 0.3 y (y from 0 to 1 across the box): near
+        // its middle, apart from the mesh's planes of nodes (a level
+        // through nodes makes faces either cell beside them may draw)
+        let iso = crate::extract::Iso {
+            field: x.clone(),
+            value: 1.1537,
+            enabled: true,
+            color: crate::extract::IsoColor::Field,
+        };
+        for by in [ColorBy::Field, ColorBy::Solid] {
+            s.display.color_by = by;
+            s.display.field = Some(x.clone());
+            s.display.slices = vec![slice];
+            s.display.isos = vec![iso.clone()];
+            s.redraw();
+            let cuts = s.display.block_cuts.clone().expect("cut");
+            assert_eq!(cuts.0.len(), 2, "{by:?}");
+            assert!(
+                cuts.0.iter().all(|c| c.problem.is_none()
+                    && c.faces.as_ref().is_some_and(|f| !f.indices.is_empty()))
+            );
+            let want = extra_tris(&whole_surface(&s, &whole, &full));
+            let got = extra_tris(&s.mesh.as_ref().unwrap().surface);
+            assert!(!want.is_empty());
+            let size = b.radius();
+            same_tris(&want, &got, 1e-6 * size, 1e-9).unwrap_or_else(|e| panic!("{by:?}: {e}"));
+        }
+
+        // Only the blocks a plane crosses; an iso-surface only where its
+        // value can be (velocity's magnitude: the file has its ranges).
+        let key = |d: &Display, item| crate::cut_blocks::key_of(d, item, mid, 0.0).unwrap();
+        let speed = crate::field::FieldChoice {
+            name: "velocity".into(),
+            component: Component::Magnitude,
+        };
+        let starts: Vec<u64> = o
+            .blocks
+            .iter()
+            .scan(0, |at, b| {
+                let s = *at;
+                *at += b.cells;
+                Some(s)
+            })
+            .collect();
+        let block_of = |c: u32| starts.partition_point(|&s| s <= c as u64) - 1;
+        let full_speed = full.values_cached(&whole, &speed).unwrap();
+        let (lo, hi) = full_speed.range.unwrap();
+        // Blocks of 20 cells, so that some lie apart.
+        let fine = dir.join("fine.vtkhdf");
+        let (m, r) = murmel_mesh::read_results(&dir.join("blocked.vtkhdf")).unwrap();
+        murmel_mesh::blocks::write_blocked(&fine, &m, &r, 20).unwrap();
+        let mut f = Session::new(Tokens::builtin().unwrap());
+        f.config_dir = None;
+        f.open_as(&fine, Fit::Overview).unwrap();
+        let fo = f.mesh.as_ref().unwrap().overview.clone().unwrap();
+        let fine_starts: Vec<u64> = fo
+            .blocks
+            .iter()
+            .scan(0, |at, b| {
+                let s = *at;
+                *at += b.cells;
+                Some(s)
+            })
+            .collect();
+        let fine_of = |c: u32| fine_starts.partition_point(|&s| s <= c as u64) - 1;
+        let (fm, fr) = murmel_mesh::read_results(&fine).unwrap();
+        let ff = FieldSet::new(fr);
+        let mut skipped = false;
+        for t in [0.1, 0.5, 0.9] {
+            let v = lo + t * (hi - lo);
+            let mut d = Display {
+                isos: vec![crate::extract::Iso {
+                    field: speed.clone(),
+                    value: v,
+                    enabled: true,
+                    color: crate::extract::IsoColor::Solid,
+                }],
+                ..Display::default()
+            };
+            let picked = crate::cut_blocks::crossed(&o, &key(&d, Item::Iso(0)));
+            let fine_picked = crate::cut_blocks::crossed(&fo, &key(&d, Item::Iso(0)));
+            skipped |= fine_picked.len() < fo.blocks.len();
+            d.field = Some(speed.clone());
+            let w = Surface::build_with(&whole, Some(&full), &s.tokens, &d);
+            let at = w.extras_at.indices / 3;
+            assert!(w.tri_cell.len() > at, "{v}: an iso-surface");
+            for &c in &w.tri_cell[at..] {
+                assert!(picked.contains(&block_of(c)), "{v}: cell {c} in {picked:?}");
+            }
+            let w = Surface::build_with(&fm, Some(&ff), &s.tokens, &d);
+            for &c in &w.tri_cell[w.extras_at.indices / 3..] {
+                assert!(
+                    fine_picked.contains(&fine_of(c)),
+                    "{v}: cell {c} in {fine_picked:?}"
+                );
+            }
+        }
+        assert!(skipped, "the ranges skip blocks");
+        // A plane near the end of the longest side crosses few blocks, and
+        // every block the whole mesh's slice cuts cells of.
+        let e: [f64; 3] = std::array::from_fn(|k| b.max[k] - b.min[k]);
+        let long = (0..3).max_by(|&i, &j| e[i].total_cmp(&e[j])).unwrap();
+        let mut at = mid;
+        at[long] = b.min[long] + 0.07 * e[long];
+        let mut normal = [0.0; 3];
+        normal[long] = 1.0;
+        let d = Display {
+            slices: vec![crate::extract::Slice::new(at, normal)],
+            ..Display::default()
+        };
+        let sliced = crate::cut_blocks::crossed(&o, &key(&d, Item::Slice(0)));
+        assert!(
+            !sliced.is_empty() && sliced.len() < o.blocks.len(),
+            "{sliced:?}"
+        );
+        let w = Surface::build_with(&whole, Some(&full), &s.tokens, &d);
+        for &c in &w.tri_cell[w.extras_at.indices / 3..] {
+            assert!(sliced.contains(&block_of(c)), "cell {c} in {sliced:?}");
+        }
+        let beyond = Display {
+            isos: vec![crate::extract::Iso {
+                field: speed.clone(),
+                value: hi + 1.0,
+                enabled: true,
+                color: crate::extract::IsoColor::Solid,
+            }],
+            ..Display::default()
+        };
+        assert!(crate::cut_blocks::crossed(&o, &key(&beyond, Item::Iso(0))).is_empty());
+
+        // Selected: coloured again, not cut again.
+        let before = s.display.block_cuts.clone().unwrap();
+        s.display.selection = vec![Item::Slice(0)];
+        s.redraw();
+        let after = s.display.block_cuts.clone().unwrap();
+        assert!(
+            before
+                .0
+                .iter()
+                .zip(&after.0)
+                .all(|(a, b)| Arc::ptr_eq(a, b))
+        );
+        let want = extra_tris(&whole_surface(&s, &whole, &full));
+        let got = extra_tris(&s.mesh.as_ref().unwrap().surface);
+        same_tris(&want, &got, 1e-6 * b.radius(), 1e-9).unwrap();
+
+        // Moved: cut again, through the blocks kept; the iso-surface's
+        // cut stays.
+        let kept = s.probe_blocks.cut_kept.clone();
+        assert!(!kept.is_empty());
+        s.display.slices[0].origin[1] += 0.1 * (b.max[1] - b.min[1]);
+        s.redraw();
+        let again = &s.probe_blocks.cut_kept;
+        assert!(
+            again
+                .iter()
+                .any(|x| kept.iter().any(|y| Arc::ptr_eq(&x.mesh, &y.mesh)))
+        );
+        for x in again {
+            if let Some(y) = kept.iter().find(|y| y.block == x.block) {
+                assert!(
+                    Arc::ptr_eq(&x.mesh, &y.mesh),
+                    "block {} read again",
+                    x.block
+                );
+            }
+        }
+        let moved = s.display.block_cuts.clone().unwrap();
+        assert!(moved.0.iter().any(|c| Arc::ptr_eq(c, &before.0[1])));
+        assert!(!moved.0.iter().any(|c| Arc::ptr_eq(c, &before.0[0])));
+        let want = extra_tris(&whole_surface(&s, &whole, &full));
+        let got = extra_tris(&s.mesh.as_ref().unwrap().surface);
+        same_tris(&want, &got, 1e-6 * b.radius(), 1e-9).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant (card 8 of 2026-11-24, in the window): an overview's
+    /// slice is cut through the blocks on a thread of its own once it has
+    /// rested [`crate::cut_blocks::REST`], showing on the preview grid
+    /// until then, and then draws the whole mesh's triangles; moved, its
+    /// old faces go at once and the place it rests at last is cut;
+    /// stopped, it stays on the grid and is not cut again until it
+    /// changes; beyond the memory budget it says BLOCK006 and is cut again
+    /// once the budget changes; closing the mesh stops a cut. Breaks when
+    /// the window cuts while a slice still moves, when old faces stay at
+    /// a new place, when a stopped or failed cut is made again and again,
+    /// or when a budget change is ignored. The other cut test runs without
+    /// a thread.
+    #[test]
+    fn slices_on_an_overview_are_cut_on_their_own_thread() {
+        let (dir, whole, full, mut s) = linear_overview("cut-thread");
+        s.defer_blocks = true;
+        // The window's polls, until nothing is read or cut.
+        let settle = |s: &mut Session| {
+            let t = Instant::now();
+            while s.poll_preview() | s.poll_cuts() {
+                assert!(t.elapsed().as_secs() < 60, "cut in a minute");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let same = |s: &Session| {
+            let want = extra_tris(&whole_surface(s, &whole, &full));
+            let got = extra_tris(&s.mesh.as_ref().unwrap().surface);
+            same_tris(&want, &got, 1e-6 * whole.bounds().radius(), 1e-9)
+        };
+        let b = whole.bounds();
+        let side = b.max[1] - b.min[1];
+        s.display
+            .slices
+            .push(crate::extract::Slice::new(b.center(), [0.0, 1.0, 0.0]));
+        s.redraw();
+        assert!(s.probe_blocks.cut_job.is_none() && s.probe_blocks.cut_rest.is_some());
+        assert!(s.display.block_cuts.is_none(), "resting");
+        settle(&mut s);
+        let cut = s.display.block_cuts.clone().expect("cut");
+        assert!(cut.0[0].faces.is_some());
+        same(&s).unwrap();
+
+        // Moved twice: the old faces go at once, the last place is cut.
+        s.display.slices[0].origin[1] += 0.1 * side;
+        s.redraw();
+        assert!(s.display.block_cuts.is_none(), "the old faces go at once");
+        assert!(same(&s).is_err(), "on the preview grid meanwhile");
+        s.display.slices[0].origin[1] += 0.1 * side;
+        s.redraw();
+        settle(&mut s);
+        same(&s).unwrap();
+
+        // Stopped: on the grid, not cut again until it changes.
+        s.display.slices[0].origin[1] -= 0.05 * side;
+        s.redraw();
+        std::thread::sleep(crate::cut_blocks::REST);
+        assert!(s.poll_cuts());
+        assert!(s.probe_blocks.cut_job.is_some(), "cut once rested");
+        s.cancel_cuts();
+        settle(&mut s);
+        let c = s.display.block_cuts.clone().unwrap().0[0].clone();
+        if c.faces.is_none() {
+            assert_eq!(
+                c.problem.as_ref().map(|p| p.message.as_str()),
+                Some(crate::cut_blocks::STOPPED)
+            );
+            assert!(s.probe_blocks.cut_problem.is_none(), "stopping is no error");
+            s.redraw();
+            assert!(s.probe_blocks.cut_job.is_none() && s.probe_blocks.cut_rest.is_none());
+            assert!(!extra_tris(&s.mesh.as_ref().unwrap().surface).is_empty());
+        }
+
+        // Beyond the budget: BLOCK006 until the budget changes.
+        s.display.slices[0].origin[1] += 0.02 * side;
+        s.memory_budget = Some(1e-9);
+        s.redraw();
+        settle(&mut s);
+        let c = s.display.block_cuts.clone().unwrap().0[0].clone();
+        assert!(c.faces.is_none());
+        assert_eq!(c.problem.as_ref().map(|p| p.code), Some("BLOCK006"));
+        assert_eq!(
+            s.probe_blocks.cut_problem.as_ref().map(|p| p.code),
+            Some("BLOCK006")
+        );
+        s.redraw();
+        assert!(s.probe_blocks.cut_job.is_none() && s.probe_blocks.cut_rest.is_none());
+        s.memory_budget = None;
+        s.redraw();
+        settle(&mut s);
+        same(&s).unwrap();
+
+        // Closing stops a cut.
+        s.display.slices[0].origin[1] += 0.02 * side;
+        s.redraw();
+        std::thread::sleep(crate::cut_blocks::REST);
+        s.poll_cuts();
+        s.close();
+        assert!(s.probe_blocks.cut_job.is_none() && s.display.block_cuts.is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

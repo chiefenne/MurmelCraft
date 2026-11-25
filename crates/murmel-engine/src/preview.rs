@@ -18,9 +18,12 @@
 //! file opened again unchanged does not sample its volume again.
 //!
 //! Fields made on the overview (derived and calculated) do not draw on
-//! the grid; they need a region's cells. Streamlines are not traced on
-//! the grid but through the blocks of the file ([`crate::stream_blocks`]).
+//! the grid; they need a region's cells, or the exact faces cut through
+//! the blocks of the file ([`crate::cut_blocks`]), which take the grid's
+//! place once cut. Streamlines are not traced on the grid but through
+//! the blocks of the file ([`crate::stream_blocks`]).
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
@@ -31,9 +34,9 @@ use murmel_mesh::vtkhdf::PREVIEW_CELLS;
 use murmel_mesh::vtkhdf::PreviewGrid;
 use murmel_mesh::{Mesh, MeshError, NO_CELL};
 
-use crate::display::Display;
+use crate::display::{Display, Item};
 use crate::field::FieldSet;
-use crate::surface::Surface;
+use crate::surface::{SlicePart, Surface};
 use crate::theme::Tokens;
 
 /// The preview grid of an overview's volume.
@@ -83,26 +86,106 @@ pub fn read(
 /// grid `p` into `s`: the field shown takes the grid's values, the cells
 /// shown are those that no crinkle clip plane takes away and no hidden
 /// zone holds. Their triangles name no cell, as the cells they come from
-/// are the grid's.
+/// are the grid's. A slice or an iso-surface whose exact faces are cut
+/// through the blocks ([`crate::cut_blocks`]) draws those instead (the
+/// arrows on a slice stay the grid's).
 pub(crate) fn append(s: &mut Surface, p: &Preview, tokens: &Tokens, display: &Display) {
+    let mut d = display.clone();
+    let arrows = d.arrows_shown();
+    // Slices with arrows are cut on the grid for their arrows; their
+    // faces are taken out again after.
+    let mut exact = Vec::new();
+    for (k, sl) in d.slices.iter_mut().enumerate() {
+        if sl.enabled && crate::cut_blocks::covers(display, Item::Slice(k as u32), s) {
+            if arrows {
+                exact.push(k as u32);
+            } else {
+                sl.enabled = false;
+            }
+        }
+    }
+    for (k, iso) in d.isos.iter_mut().enumerate() {
+        if iso.enabled && crate::cut_blocks::covers(display, Item::Iso(k as u32), s) {
+            iso.enabled = false;
+        }
+    }
     // The block boxes alone draw nothing on the grid.
-    let cuts = display.slices.iter().any(|s| s.enabled) || display.isos.iter().any(|i| i.enabled);
-    if !cuts && !display.arrows_shown() {
+    let cuts = d.slices.iter().any(|s| s.enabled) || d.isos.iter().any(|i| i.enabled);
+    if !cuts && !arrows {
         return;
     }
-    let mut d = display.clone();
     d.field_values = None;
     crate::field::ensure_field(&mut d, &p.mesh, &p.fields);
     d.quality = None;
     d.regions.clear();
     d.region_cells = None;
     d.stream_traces = None;
-    d.isolated
-        .retain(|i| !matches!(i, crate::display::Item::Cell(_)));
+    d.isolated.retain(|i| !matches!(i, Item::Cell(_)));
     let shown = d.shown_cells(&p.mesh);
     let before = s.tri_cell.len();
+    let parts = s.slice_parts.len();
     crate::extract::append(s, &p.mesh, Some(&p.fields), tokens, &d, &shown);
     s.tri_cell[before..].fill(NO_CELL);
+    if !exact.is_empty() {
+        drop_slices(s, parts, &exact);
+    }
+}
+
+/// `v` without the entries in `gone` (ascending, apart).
+fn without<T: Copy>(v: &mut Vec<T>, gone: &[Range<usize>]) {
+    let mut out = Vec::with_capacity(v.len());
+    let mut at = 0;
+    for r in gone {
+        let start = r.start.clamp(at, v.len());
+        out.extend_from_slice(&v[at..start]);
+        at = r.end.clamp(start, v.len());
+    }
+    out.extend_from_slice(&v[at..]);
+    *v = out;
+}
+
+/// Take the faces and outlines of the slices `gone` out of `s` again,
+/// as drawn by the call that added `s.slice_parts[from..]` (their arrows
+/// stay); the vertices stay, unused.
+fn drop_slices(s: &mut Surface, from: usize, gone: &[u32]) {
+    let parts = s.slice_parts.split_off(from.min(s.slice_parts.len()));
+    let (out, keep): (Vec<SlicePart>, Vec<SlicePart>) =
+        parts.into_iter().partition(|p| gone.contains(&p.slice));
+    let faces: Vec<Range<usize>> = out
+        .iter()
+        .map(|p| p.faces.start as usize..p.faces.end as usize)
+        .collect();
+    let tris: Vec<Range<usize>> = faces.iter().map(|r| r.start / 3..r.end / 3).collect();
+    let edges: Vec<Range<usize>> = out
+        .iter()
+        .map(|p| p.edges.start as usize..p.edges.end as usize)
+        .collect();
+    without(&mut s.indices, &faces);
+    without(&mut s.tri_cell, &tris);
+    without(&mut s.tri_face, &tris);
+    without(&mut s.edge_positions, &edges);
+    without(&mut s.edge_colors, &edges);
+    // Where an entry after them is now.
+    let moved = |x: u32, gone: &[Range<usize>]| -> u32 {
+        let before: usize = gone
+            .iter()
+            .filter(|r| r.end <= x as usize)
+            .map(|r| r.end - r.start)
+            .sum();
+        x - before as u32
+    };
+    s.slice_parts.extend(keep.into_iter().map(|p| SlicePart {
+        slice: p.slice,
+        faces: moved(p.faces.start, &faces)..moved(p.faces.end, &faces),
+        edges: moved(p.edges.start, &edges)..moved(p.edges.end, &edges),
+    }));
+    for p in &mut s.iso_parts {
+        p.faces = moved(p.faces.start, &faces)..moved(p.faces.end, &faces);
+    }
+    let a = s.arrow_faces.clone();
+    if !a.is_empty() {
+        s.arrow_faces = moved(a.start, &faces)..moved(a.end, &faces);
+    }
 }
 
 /// What a preview read on a thread of its own gives.

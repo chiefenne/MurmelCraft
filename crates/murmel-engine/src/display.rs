@@ -393,6 +393,11 @@ pub struct Display {
     /// `Session::sync_probes`); `None` unless the open mesh is an
     /// overview.
     pub probe_findings: Option<Arc<crate::probe_blocks::Findings>>,
+    /// The exact faces of the slices and iso-surfaces of the open
+    /// overview, cut through the blocks of its file
+    /// ([`crate::cut_blocks`], `Session::sync_cuts`); `None` unless the
+    /// open mesh is an overview.
+    pub block_cuts: Option<Arc<crate::cut_blocks::Cuts>>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport

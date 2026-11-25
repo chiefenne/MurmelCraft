@@ -300,6 +300,16 @@ pub struct Cache {
     pub stream_ending: Option<crate::stream_blocks::StreamJob>,
     /// Why a block could not be read for the streamlines last traced.
     pub stream_problem: Option<MeshError>,
+    /// Slices and iso-surfaces being cut through the blocks on a thread
+    /// of their own ([`crate::cut_blocks`]).
+    pub cut_job: Option<crate::cut_blocks::CutJob>,
+    /// The cuts wanted in the window and since when, until they have
+    /// rested [`crate::cut_blocks::REST`].
+    pub cut_rest: Option<(Vec<crate::cut_blocks::Want>, std::time::Instant)>,
+    /// Why the cut ended last without faces (not when stopped).
+    pub cut_problem: Option<MeshError>,
+    /// The blocks the last cut went through last.
+    pub cut_kept: Vec<Arc<Kept>>,
 }
 
 impl Cache {
@@ -324,6 +334,12 @@ impl Cache {
         {
             j.stop();
         }
+        if let Some(j) = self.cut_job.take() {
+            j.stop();
+        }
+        self.cut_rest = None;
+        self.cut_problem = None;
+        self.cut_kept.clear();
         self.kept.clear();
         self.stream_kept.clear();
         self.stream_problem = None;

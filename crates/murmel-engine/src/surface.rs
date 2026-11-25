@@ -1039,13 +1039,15 @@ impl Surface {
         shown: &[bool],
     ) {
         // An overview has no cells: what cuts through the volume draws
-        // on its preview grid.
-        match fields
-            .and_then(FieldSet::preview)
-            .filter(|_| mesh.cell_count() == 0)
-        {
+        // on its preview grid, until its exact faces are cut through the
+        // blocks of the file.
+        let overview = mesh.cell_count() == 0;
+        match fields.and_then(FieldSet::preview).filter(|_| overview) {
             Some(p) => crate::preview::append(self, p, tokens, display),
             None => crate::extract::append(self, mesh, fields, tokens, display, shown),
+        }
+        if overview {
+            crate::cut_blocks::append(self, tokens, display);
         }
         // (an overview's lines are traced through its blocks)
         crate::stream::append(self, mesh, fields, tokens, display);
@@ -1217,6 +1219,7 @@ pub fn extras_only(old: &Display, new: &Display) -> bool {
         parcel_data: new.parcel_data.clone(),
         show_blocks: new.show_blocks,
         block_boxes: new.block_boxes.clone(),
+        block_cuts: new.block_cuts.clone(),
         selection: new.selection.clone(),
         ..old.clone()
     };

@@ -103,7 +103,7 @@ fn overview_json(s: &Session, o: &murmel_mesh::vtkhdf::Overview) -> Value {
         "budget_gib": gib(s.budget_bytes()),
         "fields_on_boundary": on.iter().map(|f| &f.name).collect::<Vec<_>>(),
         "fields_not_shown": off.iter().map(|f| &f.name).collect::<Vec<_>>(),
-        "note": "the volume cells are not read: the mesh is its boundary, and each cell field shows on it as the value of the cell behind each face; slices, iso-surfaces and arrows draw on a preview grid of the cell fields (preview) until a box, sphere or slab region (region.set) reads the cells of the blocks it touches; open it with mode \"whole\" or raise the memory budget (settings.set_memory) to read all cells",
+        "note": "the volume cells are not read: the mesh is its boundary, and each cell field shows on it as the value of the cell behind each face; slices, iso-surfaces and arrows draw on a preview grid of the cell fields (preview), and the exact faces of the slices and iso-surfaces, cut through the blocks of the file before the tool returns, take its place (the arrows stay on the grid), until a box, sphere or slab region (region.set) reads the cells of the blocks it touches; open it with mode \"whole\" or raise the memory budget (settings.set_memory) to read all cells",
         "regions": crate::region::blocks_json(s),
         "preview": preview_json(s),
         "block_boxes": block_boxes_json(s),
