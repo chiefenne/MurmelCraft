@@ -23,6 +23,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `F6` | Next region (title bar, toolbar, tree, viewport, properties, status) | window |
 | `Shift + F6` | Previous region | window |
 | `F` | Fit view | `view.fit` `{}` |
+| `W` | Zoom to box (rubber band) | window, then `view.zoom_box` |
 | `Home` | Home view | `view.standard` `{"view":"home"}` |
 | `Alt + 1` | Front | `view.standard` `{"view":"front"}` |
 | `Ctrl + Alt + 1` | Back | `view.standard` `{"view":"back"}` |

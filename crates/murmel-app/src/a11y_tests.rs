@@ -2586,3 +2586,57 @@ fn quality_legend_and_threshold() {
     assert_eq!(h.state().session.display.threshold, None);
     assert_eq!(cells(&h), all);
 }
+
+/// Invariant (zoom to box, the maintainer's card of 2026-11-25): W arms
+/// the rubber band, the next left drag in the viewport zooms into the box
+/// instead of orbiting, and the mouse navigates again afterwards (one box
+/// per press); Esc drops an armed band; the toolbar button has a name.
+/// Breaks if the viewport's navigation takes the drag first, the band
+/// stays armed after one box, or W is not bound; the tool test runs the
+/// tool, not the pointer and the key.
+#[test]
+fn zoom_box_by_key_and_drag() {
+    let mut h = harness();
+    assert!(named(&h, "Zoom to box"), "toolbar button");
+    let centre = h.state().viewport_rect.center();
+    let cam = h.state().session.camera.clone();
+    h.input_mut().events.push(egui::Event::PointerMoved(centre));
+    h.run_steps(2);
+    h.key_press(egui::Key::W);
+    h.run_steps(2);
+    assert!(h.state().zoom_armed, "W arms the band");
+    drag(
+        &mut h,
+        centre - egui::vec2(60.0, 40.0),
+        egui::vec2(120.0, 80.0),
+        6,
+    );
+    let now = h.state().session.camera.clone();
+    assert!(!h.state().zoom_armed, "one box per press");
+    assert!(h.state().band.is_none());
+    assert!(
+        now.distance < 0.5 * cam.distance,
+        "zoomed in: {} -> {}",
+        cam.distance,
+        now.distance
+    );
+    assert_eq!(
+        (now.yaw_deg, now.pitch_deg),
+        (cam.yaw_deg, cam.pitch_deg),
+        "no orbit"
+    );
+    // The next drag orbits again.
+    drag(&mut h, centre, egui::vec2(40.0, 0.0), 4);
+    assert_ne!(
+        h.state().session.camera.yaw_deg,
+        now.yaw_deg,
+        "the drag orbits"
+    );
+    // Esc drops an armed band.
+    h.key_press(egui::Key::W);
+    h.run_steps(2);
+    assert!(h.state().zoom_armed);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!h.state().zoom_armed, "Esc cancels");
+}

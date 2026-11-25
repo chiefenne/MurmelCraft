@@ -17,6 +17,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `view.orbit` | 2 | read | Turn the camera about the up axis (yaw) and tilt it (pitch), in degrees, about the target or about a world point pivot (the window passes the point under the cursor, or the centre of the shown faces over empty space). |
 | `view.pan` | 1 | read | Move the view by a drag in pixels (x right, y down); the scene follows the pointer. |
 | `view.zoom` | 1 | read | Scale the camera distance by factor (below 1 zooms in), keeping the point under cursor_ndc (-1..1, y up) in place. |
+| `view.zoom_box` | 1 | read | Rubber-band zoom: the box between the corners from_ndc and to_ndc (-1..1, y up, in either order) moves to the centre and fills the view, kept whole. In perspective it zooms at the depth of the mesh inside the box (returned as surface_point), else at the target's depth. Returns the camera and the distance factor. |
 | `view.fit` | 1 | read | Frame the faces shown, or the shown faces of one item (mesh, zone:<name>, kind:<cell type>, patch:<name>), from the current direction. |
 | `view.standard` | 1 | read | Go to one of the 26 view-cube views (faces like front, edges like front_top, corners like front_right_top; parts in any order), iso or home, and fit; the roll is reset, and face views snap to orthographic in perspective_ortho_faces. |
 | `view.rotate` | 1 | read | Rotate the scene by deg degrees about a screen axis (x right, y up, z towards the viewer; right-hand rule, so +90 about z turns it counter-clockwise on screen). The view cube's roll arrows send z ±90. |
@@ -317,6 +318,37 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   },
   "required": [
     "factor"
+  ],
+  "type": "object"
+}
+```
+
+### `view.zoom_box`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "from_ndc": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "to_ndc": {
+      "items": {
+        "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    }
+  },
+  "required": [
+    "from_ndc",
+    "to_ndc"
   ],
   "type": "object"
 }

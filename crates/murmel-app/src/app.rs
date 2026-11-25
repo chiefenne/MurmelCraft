@@ -65,6 +65,12 @@ pub struct MurmelApp {
     pub(crate) histogram: Option<crate::quality::HistogramCache>,
     /// The world point the current viewport orbit turns about.
     pub(crate) orbit_pivot: Option<[f64; 3]>,
+    /// Zoom to box is armed (W or the toolbar): the next primary drag
+    /// draws the rubber band.
+    pub(crate) zoom_armed: bool,
+    /// The rubber band being dragged: where it started and where the
+    /// pointer is now.
+    pub(crate) band: Option<(egui::Pos2, egui::Pos2)>,
     /// The toolbar leaves out group names when the full one does not fit;
     /// the width the full one needs, as last measured.
     pub(crate) toolbar_compact: bool,
@@ -219,6 +225,8 @@ impl MurmelApp {
             threshold_edit: None,
             histogram: None,
             orbit_pivot: None,
+            zoom_armed: false,
+            band: None,
             toolbar_compact: false,
             toolbar_full: 0.0,
             cube_move: None,
@@ -711,6 +719,17 @@ impl MurmelApp {
         {
             self.call("view.standard", json!({"view": "home"}));
         }
+        let zoom = self.i18n.tr("toolbar-zoom-box");
+        let key = self.key_of("window.zoom_box");
+        let tip = self
+            .i18n
+            .tr_args("toolbar-zoom-box-tip", &[("key", key.into())]);
+        let armed = self.zoom_armed;
+        let b = icon_button(ui, icon::SCAN_SEARCH, &zoom, &tip, armed);
+        b.widget_info(|| WidgetInfo::selected(Role::Button, true, armed, zoom.clone()));
+        if b.clicked() {
+            self.arm_zoom_box(!armed);
+        }
         let proj = self.session.camera.projection;
         let glyph = if self.session.camera.is_orthographic() {
             icon::SQUARE
@@ -983,6 +1002,9 @@ impl MurmelApp {
 
     fn hint(&self) -> String {
         use murmel_engine::navigation::{Action, Button, Gesture};
+        if self.zoom_armed || self.band.is_some() {
+            return self.i18n.tr("zoom-box-hint");
+        }
         if let Some(h) = self.measure_hint() {
             return h;
         }

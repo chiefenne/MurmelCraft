@@ -129,6 +129,7 @@ impl MurmelApp {
                 }
                 "window.settings" => self.settings_open = true,
                 "window.save_view" => self.save_view(),
+                "window.zoom_box" => self.arm_zoom_box(!self.zoom_armed),
                 "window.measure_distance" => self.toggle_measuring(crate::measure::Mode::Distance),
                 "window.measure_angle" => self.toggle_measuring(crate::measure::Mode::Angle),
                 "window.probe" => self.toggle_measuring(crate::measure::Mode::Probe),
@@ -146,6 +147,34 @@ impl MurmelApp {
         if let Some((tool, input)) = c.input(&self.session) {
             self.call(tool, input);
         }
+    }
+
+    /// Arm or drop zoom to box; dropping it also drops a band being
+    /// dragged.
+    pub(crate) fn arm_zoom_box(&mut self, on: bool) {
+        self.zoom_armed = on;
+        if !on {
+            self.band = None;
+            if self.drag == Some(murmel_engine::navigation::Action::ZoomBox) {
+                self.drag = None;
+            }
+        }
+    }
+
+    /// The keys of a command as shown (`W`, `Cmd + K`), joined; empty
+    /// when it has none.
+    pub(crate) fn key_of(&self, id: &str) -> String {
+        self.commands
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| {
+                c.keys
+                    .iter()
+                    .map(|k| key_text(k))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn open_palette(&mut self, query: String) {
@@ -225,6 +254,14 @@ impl MurmelApp {
             && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
         {
             self.session.cancel_cuts();
+        }
+        // Esc drops an armed zoom to box (or the band being dragged).
+        if (self.zoom_armed || self.band.is_some())
+            && !typing
+            && self.palette.is_none()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            self.arm_zoom_box(false);
         }
         // Esc stops measuring before it clears the selection.
         if self.measuring.is_some()

@@ -142,8 +142,8 @@ every change.
   eye, a context menu and double click to fit; H hides, I isolates.
 - Picking of cells and faces and a Properties panel (P) for the mesh,
   any item, a cell, a face or a probe, with the field values of results.
-- Orbit about the point under the cursor, pan, zoom to the cursor, fit,
-  home, the three projection modes (default: perspective with orthographic
+- Orbit about the point under the cursor, pan, zoom to the cursor, zoom
+  to box (rubber band: W or the toolbar, then drag), fit, home, the three projection modes (default: perspective with orthographic
   faces), cursor coordinates, and a view cube with all 26 views and roll
   arrows, placed in any corner, floating, hidden or shown on approach.
 - Up to 8 clip planes, crinkle (whole cells) or flat (cut cells), moved

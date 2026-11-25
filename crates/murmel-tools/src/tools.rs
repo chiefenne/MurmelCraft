@@ -370,6 +370,53 @@ fn view_zoom(input: Value, s: &mut Session) -> Run {
     Ok(camera_json(s))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ZoomBox {
+    from_ndc: [f64; 2],
+    to_ndc: [f64; 2],
+}
+
+/// The rubber-band zoom: the box between two corners fills the view. In
+/// perspective it zooms at the depth of the mesh in the box: the point
+/// under the box centre, else under the first of four points halfway to
+/// its corners that hits (at most five picks, each a walk of the
+/// surface); without a hit, at the target's depth.
+fn view_zoom_box(input: Value, s: &mut Session) -> Run {
+    let i: ZoomBox = parse(input)?;
+    for v in i.from_ndc.iter().chain(&i.to_ndc) {
+        finite(*v, "from_ndc and to_ndc")?;
+    }
+    let (a, b) = (i.from_ndc, i.to_ndc);
+    if (a[0] - b[0]).abs() < 1e-6 || (a[1] - b[1]).abs() < 1e-6 {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "the box has no area: from_ndc and to_ndc must differ in x and in y",
+        ));
+    }
+    let aspect = s.aspect();
+    let c = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
+    let (hw, hh) = (0.25 * (b[0] - a[0]), 0.25 * (b[1] - a[1]));
+    let probes = [
+        c,
+        [c[0] - hw, c[1] - hh],
+        [c[0] + hw, c[1] - hh],
+        [c[0] - hw, c[1] + hh],
+        [c[0] + hw, c[1] + hh],
+    ];
+    let surface = s.mesh.as_ref().and_then(|m| {
+        probes
+            .iter()
+            .find_map(|&p| murmel_engine::pick::pick(&m.surface, &s.camera, p, aspect))
+            .map(|h| h.point)
+    });
+    let factor = s.camera.zoom_box(a, b, aspect, surface);
+    let mut out = camera_json(s);
+    out["factor"] = json!(factor);
+    out["surface_point"] = json!(surface);
+    Ok(out)
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct Fit {
@@ -2324,6 +2371,7 @@ pub const JOURNALED: &[&str] = &[
     "view.orbit",
     "view.pan",
     "view.zoom",
+    "view.zoom_box",
     "view.fit",
     "view.standard",
     "view.rotate",
@@ -2682,6 +2730,24 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: view_zoom,
+    },
+    Tool {
+        id: "view.zoom_box",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-view-zoom-box",
+        summary: "Rubber-band zoom: the box between the corners from_ndc and to_ndc (-1..1, y up, in either order) moves to the centre and fills the view, kept whole. In perspective it zooms at the depth of the mesh inside the box (returned as surface_point), else at the target's depth. Returns the camera and the distance factor.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            let corner =
+                json!({"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2});
+            object(
+                json!({ "from_ndc": corner.clone(), "to_ndc": corner }),
+                &["from_ndc", "to_ndc"],
+            )
+        },
+        run: view_zoom_box,
     },
     Tool {
         id: "view.fit",
