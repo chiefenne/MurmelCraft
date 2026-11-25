@@ -48,7 +48,7 @@ use crate::display::{Display, Item};
 use crate::field::{FieldChoice, FieldSet, FieldValues};
 use crate::glyph::ArrowColor;
 use crate::region::Bound;
-use crate::surface::Surface;
+use crate::surface::{SlicePart, Surface};
 use crate::theme::{Rgb, Tokens};
 
 /// Most slices (a series counts once) and iso-surfaces one display holds.
@@ -652,6 +652,10 @@ pub fn append(
             let vector = arrows.as_ref().map(|a| &a.1);
             let mut pieces: Vec<(u32, Vec<Vx>)> = Vec::new();
             let phase = murmel_mesh::profile::span("extract.slice");
+            let (f0, e0) = (
+                out.s.indices.len() as u32,
+                out.s.edge_positions.len() as u32,
+            );
             for t in level_set(mesh, fields, Level::Plane(&plane), field, vector, shown) {
                 let verts: Vec<Vx> = t.verts.iter().map(|v| Vx { n: normal, ..*v }).collect();
                 let verts = clip_flat(verts, &flat, borders(t.cell));
@@ -667,6 +671,11 @@ pub fn append(
                 }
             }
             drop(phase);
+            out.s.slice_parts.push(SlicePart {
+                slice: k as u32,
+                faces: f0..out.s.indices.len() as u32,
+                edges: e0..e0,
+            });
             if let Some((a, _, _, _)) = &arrows {
                 let h = a.plane_spacing(mesh, &plane);
                 crate::glyph::on_plane(&mut samples, &plane, anchor, h, a.in_plane, &pieces);
@@ -720,6 +729,9 @@ pub fn append(
                         .collect();
                     out.outline(&clip_flat(verts, &flat, borders(c as u32)), ec);
                 }
+            }
+            if let Some(p) = out.s.slice_parts.last_mut() {
+                p.edges.end = out.s.edge_positions.len() as u32;
             }
         }
     }
@@ -831,6 +843,7 @@ pub fn append(
         // field's style over its range.
         let own = crate::glyph::color_range(display, mesh, fields, range)
             .and_then(|r| crate::glyph::OwnColors::new(display, a, r));
+        let a0 = out.s.indices.len() as u32;
         for &(x, m, len) in &drawn {
             let dir = x.w.map(|c| c / m);
             let (verts, tris) = crate::glyph::arrow(x.centre(dir, len, x.h), dir, len, x.h);
@@ -846,6 +859,7 @@ pub fn append(
             out.mesh(&verts, &tris, x.v, &paint);
         }
         out.s.arrows = drawn.len();
+        out.s.arrow_faces = a0..out.s.indices.len() as u32;
     }
     let span = out.span.0;
     if let Some((lo, hi)) = span {

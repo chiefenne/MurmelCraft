@@ -49,6 +49,25 @@ fn cut_away(p: vec3<f32>) -> bool {
 @group(0) @binding(1) var lut: texture_2d<f32>;
 @group(0) @binding(2) var lut_sampler: sampler;
 
+// The preview of a slice dragged in the window (murmel_engine's
+// slice_preview): the field on a regular grid, per grid cell the cell
+// value (x) and the value the cell's gradient predicts at the grid
+// cell's centre (y), relative to the value origin; x above 1e38 outside
+// the mesh, below -1e38 for a cell without a value.
+struct SliceGrid {
+    // xyz where grid cell (0, 0, 0) starts, relative to the surface's
+    // origin; w 1 when the planes are coloured from the grid
+    lo: vec4<f32>,
+    side: vec4<f32>,
+    // xyz the grid cells along each axis; w the clip planes in use
+    dims: vec4<f32>,
+    // The clip planes that cut the slices, as clip_planes.
+    clips: array<vec4<f32>, 8>,
+};
+
+@group(0) @binding(3) var grid: texture_3d<f32>;
+@group(0) @binding(4) var<uniform> sg: SliceGrid;
+
 struct FaceIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -95,28 +114,99 @@ fn fs_face(f: FaceOut) -> @location(0) vec4<f32> {
     }
     var color = f.color;
     if (g.field_mode.x > 0.5 && f.value.w > 0.5) {
-        var t = tn;
-        if (g.field_mode.x < 1.5) {
-            t = (f.value.x - g.field.x) / span;
+        color = field_color(f.value.x, tn, x, w, f.value.z);
+    }
+    return vec4<f32>(color * shade, 1.0);
+}
+
+// The colour of a field value: the cell value `cell` (colour mode flat)
+// or the node value in steps of the range `tn` (smooth and banded), with
+// the contour lines (`x` the node value in steps of the lines, `w` its
+// rate of change on screen) and `sel` of the selection colour mixed in.
+fn field_color(cell: f32, tn: f32, x: f32, w: f32, sel: f32) -> vec3<f32> {
+    let span = max(g.field.y - g.field.x, 1e-30);
+    let lines = g.field.w;
+    var t = tn;
+    if (g.field_mode.x < 1.5) {
+        t = (cell - g.field.x) / span;
+    }
+    t = clamp(t, 0.0, 1.0);
+    if (g.field_mode.x > 2.5) {
+        let n = max(g.field.z, 1.0);
+        t = (min(floor(t * n), n - 1.0) + 0.5) / n;
+    }
+    let u = (t * 255.0 + 0.5) / 256.0;
+    var c = textureSampleLevel(lut, lut_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
+    c = mix(c, g.selection.xyz, sel);
+    if (lines > 0.5) {
+        let k = round(x);
+        let px = abs(x - k) / max(w, 1e-6);
+        let half = 0.5 * g.field_mode.z;
+        let a = 1.0 - smoothstep(half - 0.5, half + 0.5, px);
+        if (k >= 1.0 && k <= lines) {
+            c = mix(c, g.contour.xyz, a * g.field_mode.y);
         }
-        t = clamp(t, 0.0, 1.0);
-        if (g.field_mode.x > 2.5) {
-            let n = max(g.field.z, 1.0);
-            t = (min(floor(t * n), n - 1.0) + 0.5) / n;
+    }
+    return c;
+}
+
+fn grid_at(i: vec3<i32>) -> vec2<f32> {
+    return textureLoad(grid, i, 0).xy;
+}
+
+// A plane of a slice being dragged, coloured from the field's grid: the
+// cell value of the grid cell the fragment is in (colour mode flat), or
+// the predicted values mixed between the eight nearest grid cell centres
+// (smooth and banded); nothing outside the mesh. Without the grid, the
+// slice's own colour.
+@fragment
+fn fs_slice(f: FaceOut) -> @location(0) vec4<f32> {
+    let l = g.to_eye.xyz;
+    let d = abs(dot(normalize(f.normal), l));
+    let shade = 0.32 + 0.68 * d;
+    let dims = max(vec3<i32>(sg.dims.xyz), vec3<i32>(1));
+    let top = dims - vec3<i32>(1);
+    let q = (f.world - sg.lo.xyz) / max(sg.side.xyz, vec3<f32>(1e-30));
+    let here = grid_at(clamp(vec3<i32>(floor(q)), vec3<i32>(0), top));
+    let t0 = q - vec3<f32>(0.5);
+    let b = vec3<i32>(floor(t0));
+    let fr = t0 - floor(t0);
+    var sum = 0.0;
+    var wsum = 0.0;
+    for (var k = 0; k < 8; k = k + 1) {
+        let o = vec3<i32>(k & 1, (k >> 1u) & 1, (k >> 2u) & 1);
+        let t = grid_at(clamp(b + o, vec3<i32>(0), top));
+        let wk = select(1.0 - fr.x, fr.x, o.x == 1)
+            * select(1.0 - fr.y, fr.y, o.y == 1)
+            * select(1.0 - fr.z, fr.z, o.z == 1);
+        if (abs(t.x) < 1e38) {
+            sum = sum + wk * t.y;
+            wsum = wsum + wk;
         }
-        let u = (t * 255.0 + 0.5) / 256.0;
-        var c = textureSampleLevel(lut, lut_sampler, vec2<f32>(u, 0.5), 0.0).rgb;
-        c = mix(c, g.selection.xyz, f.value.z);
-        if (lines > 0.5) {
-            let k = round(x);
-            let px = abs(x - k) / max(w, 1e-6);
-            let half = 0.5 * g.field_mode.z;
-            let a = 1.0 - smoothstep(half - 0.5, half + 0.5, px);
-            if (k >= 1.0 && k <= lines) {
-                c = mix(c, g.contour.xyz, a * g.field_mode.y);
-            }
+    }
+    var v = here.y;
+    if (wsum > 1e-6) {
+        v = sum / wsum;
+    }
+    let span = max(g.field.y - g.field.x, 1e-30);
+    let tn = (v - g.field.x) / span;
+    let x = tn * (g.field.w + 1.0);
+    let w = fwidth(x);
+    let colored = sg.lo.w > 0.5;
+    let inside = all(q >= vec3<f32>(0.0)) && all(q < vec3<f32>(dims));
+    if (colored && (!inside || here.x > 1e38)) {
+        discard;
+    }
+    let n = u32(sg.dims.w);
+    for (var i = 0u; i < n; i = i + 1u) {
+        let c = sg.clips[i];
+        if (dot(c.xyz, f.world) + c.w > 0.0) {
+            discard;
         }
-        color = c;
+    }
+    var color = f.color;
+    if (colored && g.field_mode.x > 0.5 && here.x > -1e38) {
+        color = field_color(here.x, tn, x, w, f.value.z);
     }
     return vec4<f32>(color * shade, 1.0);
 }

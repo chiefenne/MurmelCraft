@@ -491,6 +491,8 @@ pub struct FieldSet {
     grid: OnceLock<Arc<crate::stream::CellGrid>>,
     /// The cells in bins, for slices and iso-surfaces ([`crate::bins`]).
     bins: OnceLock<Arc<crate::bins::CellBins>>,
+    /// The cells on the grid of a slice's preview ([`crate::slice_preview`]).
+    voxels: OnceLock<Arc<crate::slice_preview::Voxels>>,
     /// Values made once per field and component (colour mode field and
     /// every iso-surface ask for them again on each redraw).
     cache: ValueCache,
@@ -516,6 +518,7 @@ impl FieldSet {
             topology: OnceLock::new(),
             grid: OnceLock::new(),
             bins: OnceLock::new(),
+            voxels: OnceLock::new(),
             cache: ValueCache::default(),
             derived: Vec::new(),
             volume_ranges: HashMap::new(),
@@ -677,6 +680,9 @@ impl FieldSet {
         }
         if let Some(b) = from.bins.get() {
             let _ = self.bins.set(b.clone());
+        }
+        if let Some(v) = from.voxels.get() {
+            let _ = self.voxels.set(v.clone());
         }
     }
 
@@ -963,6 +969,21 @@ impl FieldSet {
             let _phase = murmel_mesh::profile::span("field.bins");
             let t = self.topology(mesh);
             Arc::new(crate::bins::CellBins::build(mesh, |c| t.nodes_of(c)))
+        })
+    }
+
+    /// The cells of `mesh` on the grid of a slice's preview
+    /// ([`crate::slice_preview`]), made once.
+    pub(crate) fn voxels(&self, mesh: &Mesh) -> &crate::slice_preview::Voxels {
+        self.voxels.get_or_init(|| {
+            let _phase = murmel_mesh::profile::span("field.voxels");
+            let t = self.topology(mesh);
+            Arc::new(crate::slice_preview::Voxels::build(
+                mesh,
+                crate::slice_preview::VOXELS,
+                |c| t.nodes_of(c),
+                |c| t.centre.get(c).copied().unwrap_or([f64::NAN; 3]),
+            ))
         })
     }
 

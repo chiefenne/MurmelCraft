@@ -175,6 +175,19 @@ pub struct View<'a> {
     /// the window's clip preview while the exact cut is built
     /// ([`murmel_engine::Session::drawn`]); empty otherwise.
     pub clip_planes: &'a [[f32; 4]],
+    /// The slices dragged in the window, drawn from the field's grid
+    /// while their exact faces are built ([`murmel_engine::Session::slice_drawn`]).
+    pub slice: Option<&'a murmel_engine::slice_preview::SliceDraw>,
+}
+
+/// The slice preview's uniform (`SliceGrid` in the shader).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct SliceUniform {
+    lo: [f32; 4],
+    side: [f32; 4],
+    dims: [f32; 4],
+    clips: [[f32; 4]; MAX_PREVIEW_PLANES],
 }
 
 struct Targets {
@@ -217,6 +230,17 @@ pub struct MeshRenderer {
     wide_pipeline: wgpu::RenderPipeline,
     wide_outline_pipeline: wgpu::RenderPipeline,
     bg_pipeline: wgpu::RenderPipeline,
+    /// The planes of slices being dragged, coloured from the field's grid.
+    slice_pipeline: wgpu::RenderPipeline,
+    /// What the bind group is made from: its layout, the colour table's
+    /// view and sampler, the slice preview's uniform and grid (a 1 × 1 × 1
+    /// texture until a grid is uploaded) and that grid's id.
+    layout: wgpu::BindGroupLayout,
+    lut_view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+    slice_uniform: wgpu::Buffer,
+    grid: wgpu::Texture,
+    grid_id: Option<u64>,
     /// The mesh's own faces and the extras (slices, iso-surfaces, arrows
     /// and the like), uploaded apart so a change of the extras leaves the
     /// mesh's buffers as they are.
@@ -349,7 +373,158 @@ fn f32x3(v: [f32; 3]) -> [f32; 4] {
     [v[0], v[1], v[2], 0.0]
 }
 
+/// A grid texture of `dims` cells, two values each.
+fn grid_texture(device: &wgpu::Device, dims: [u32; 3]) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("murmel-slice-grid"),
+        size: wgpu::Extent3d {
+            width: dims[0].max(1),
+            height: dims[1].max(1),
+            depth_or_array_layers: dims[2].max(1),
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::Rg32Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+fn bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    globals: &wgpu::Buffer,
+    lut_view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    grid: &wgpu::Texture,
+    slice_uniform: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    let grid_view = grid.create_view(&Default::default());
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("murmel-globals"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(lut_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&grid_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: slice_uniform.as_entire_binding(),
+            },
+        ],
+    })
+}
+
+/// The triangles of the slice preview's planes (each convex polygon a
+/// fan), as face vertices: the slice's colour, and the selection mix.
+fn slice_vertices(d: &murmel_engine::slice_preview::SliceDraw) -> Vec<f32> {
+    let mut out = Vec::new();
+    for (poly, n) in &d.polygons {
+        for i in 1..poly.len().saturating_sub(1) {
+            for p in [poly[0], poly[i], poly[i + 1]] {
+                out.extend_from_slice(&p);
+                out.extend_from_slice(n);
+                out.extend_from_slice(&d.color);
+                out.extend_from_slice(&[0.0, 0.0, d.selection_mix, 0.0]);
+            }
+        }
+    }
+    out
+}
+
 impl MeshRenderer {
+    /// Put the slice preview's grid on the GPU (once per grid) and its
+    /// uniform; the vertices of its planes, if any.
+    fn prepare_slice(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        d: Option<&murmel_engine::slice_preview::SliceDraw>,
+    ) -> Option<(wgpu::Buffer, u32)> {
+        use wgpu::util::DeviceExt;
+        let d = d?;
+        let grid = d.grid.as_deref();
+        if let Some(g) = grid
+            && self.grid_id != Some(g.id)
+        {
+            let size = wgpu::Extent3d {
+                width: g.dims[0].max(1),
+                height: g.dims[1].max(1),
+                depth_or_array_layers: g.dims[2].max(1),
+            };
+            let n = (size.width * size.height * size.depth_or_array_layers) as usize;
+            if g.texels.len() == n {
+                self.grid = grid_texture(device, g.dims);
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.grid,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    bytemuck::cast_slice(&g.texels),
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(size.width * 8),
+                        rows_per_image: Some(size.height),
+                    },
+                    size,
+                );
+                self.bind_group = bind_group(
+                    device,
+                    &self.layout,
+                    &self.globals,
+                    &self.lut_view,
+                    &self.sampler,
+                    &self.grid,
+                    &self.slice_uniform,
+                );
+                self.grid_id = Some(g.id);
+            }
+        }
+        let colored = grid.is_some_and(|g| self.grid_id == Some(g.id));
+        let u = SliceUniform {
+            lo: grid.map_or([0.0; 4], |g| {
+                [g.lo[0], g.lo[1], g.lo[2], if colored { 1.0 } else { 0.0 }]
+            }),
+            side: grid.map_or([1.0; 4], |g| [g.side[0], g.side[1], g.side[2], 0.0]),
+            dims: {
+                let dims = grid.map_or([1; 3], |g| g.dims);
+                [
+                    dims[0] as f32,
+                    dims[1] as f32,
+                    dims[2] as f32,
+                    d.clips.len().min(MAX_PREVIEW_PLANES) as f32,
+                ]
+            },
+            clips: std::array::from_fn(|i| d.clips.get(i).copied().unwrap_or([0.0; 4])),
+        };
+        queue.write_buffer(&self.slice_uniform, 0, bytemuck::bytes_of(&u));
+        let verts = slice_vertices(d);
+        (!verts.is_empty()).then(|| {
+            let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("murmel-slice-planes"),
+                contents: bytemuck::cast_slice(&verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            (buf, (verts.len() / 13) as u32)
+        })
+    }
+
     pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("murmel-mesh"),
@@ -390,6 +565,26 @@ impl MeshRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
         // The colour table: LUT_SIZE sRGB texels in one row, mixed
@@ -417,24 +612,22 @@ impl MeshRenderer {
             ..Default::default()
         });
         let lut_view = lut.create_view(&Default::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("murmel-globals"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&lut_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
+        let slice_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("murmel-slice-grid"),
+            size: std::mem::size_of::<SliceUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+        let grid = grid_texture(device, [1, 1, 1]);
+        let bind_group = bind_group(
+            device,
+            &layout,
+            &globals,
+            &lut_view,
+            &sampler,
+            &grid,
+            &slice_uniform,
+        );
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("murmel"),
             bind_group_layouts: &[Some(&layout)],
@@ -596,11 +789,40 @@ impl MeshRenderer {
                 bias: Default::default(),
             },
         );
+        let slice_pipeline = pipeline(
+            "murmel-slice-preview",
+            "vs_face",
+            "fs_slice",
+            &[Some(wgpu::VertexBufferLayout {
+                array_stride: FACE_STRIDE,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &face_attrs,
+            })],
+            wgpu::PrimitiveTopology::TriangleList,
+            wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2,
+                    slope_scale: 1.5,
+                    clamp: 0.0,
+                },
+            },
+        );
         Self {
             globals,
             lut,
             lut_key: None,
             bind_group,
+            slice_pipeline,
+            layout,
+            lut_view,
+            sampler,
+            slice_uniform,
+            grid,
+            grid_id: None,
             face_pipeline,
             line_pipeline,
             outline_pipeline,
@@ -744,6 +966,19 @@ impl MeshRenderer {
             ],
         };
         queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&g));
+        let planes = self.prepare_slice(device, queue, view.slice);
+        // What the slice preview leaves out of the extras, as ranges of
+        // their own buffers: the moving slices where they were built.
+        let at = view.surface.map(|s| s.extras_at);
+        let shown = |hide: &[std::ops::Range<u32>], base: usize, len: u32| {
+            let base = base as u32;
+            let hide: Vec<std::ops::Range<u32>> = hide
+                .iter()
+                .filter(|r| r.end > base)
+                .map(|r| r.start.max(base) - base..r.end - base)
+                .collect();
+            murmel_engine::slice_preview::shown_ranges(len, &hide)
+        };
         let Some(t) = &self.targets else { return };
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("murmel-frame"),
@@ -788,46 +1023,66 @@ impl MeshRenderer {
             // the mesh's first and then the extras', as one buffer drew
             // them.
             let parts = || self.geometry.iter().flatten();
+            // The ranges of each part drawn: all of the mesh's; of the
+            // extras, what a slice preview does not leave out.
+            let ranges = |k: usize, len: u32, faces: bool| match (k, view.slice, at) {
+                (1, Some(d), Some(at)) if faces => shown(&d.hide_faces, at.indices, len),
+                (1, Some(d), Some(at)) => shown(&d.hide_edges, at.edges, len),
+                _ => std::iter::once(0..len).collect(),
+            };
             if view.faces {
-                for geo in parts().filter(|g| g.index_count > 0) {
+                for (k, geo) in self.geometry.iter().enumerate() {
+                    let Some(geo) = geo.as_ref().filter(|g| g.index_count > 0) else {
+                        continue;
+                    };
                     pass.set_pipeline(&self.face_pipeline);
                     pass.set_vertex_buffer(0, geo.faces.slice(..));
                     pass.set_index_buffer(geo.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..geo.index_count, 0, 0..1);
+                    for r in ranges(k, geo.index_count, true) {
+                        pass.draw_indexed(r, 0, 0..1);
+                    }
+                }
+                if let Some((buf, count)) = &planes {
+                    pass.set_pipeline(&self.slice_pipeline);
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..*count, 0..1);
                 }
             }
             let lines = |pass: &mut wgpu::RenderPass<'_>,
                          buf: &wgpu::Buffer,
-                         count: u32,
+                         count: std::ops::Range<u32>,
                          narrow: &wgpu::RenderPipeline,
                          widened: &wgpu::RenderPipeline| {
                 pass.set_vertex_buffer(0, buf.slice(..));
                 if wide {
                     pass.set_pipeline(widened);
-                    pass.draw(0..6, 0..count / 2);
+                    pass.draw(0..6, count.start / 2..count.end / 2);
                 } else {
                     pass.set_pipeline(narrow);
-                    pass.draw(0..count, 0..1);
+                    pass.draw(count, 0..1);
                 }
             };
             if view.edges {
-                for geo in parts() {
+                for (k, geo) in self.geometry.iter().enumerate() {
+                    let Some(geo) = geo else { continue };
                     if let Some(edges) = &geo.edges {
-                        let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
-                        lines(&mut pass, edges, geo.edge_count, n, w);
+                        for r in ranges(k, geo.edge_count, false) {
+                            let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
+                            lines(&mut pass, edges, r, n, w);
+                        }
                     }
                 }
             }
             for geo in parts() {
                 if let Some(streams) = &geo.streams {
                     let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
-                    lines(&mut pass, streams, geo.stream_count, n, w);
+                    lines(&mut pass, streams, 0..geo.stream_count, n, w);
                 }
             }
             for geo in parts() {
                 if let Some(outline) = &geo.outline {
                     let (n, w) = (&self.outline_pipeline, &self.wide_outline_pipeline);
-                    lines(&mut pass, outline, geo.outline_count, n, w);
+                    lines(&mut pass, outline, 0..geo.outline_count, n, w);
                 }
             }
         }
@@ -1008,6 +1263,7 @@ impl Offscreen<'_> {
             Some((s, r, p)) => (Some(*s), *r, p.as_slice()),
             None => (None, session.surface_revision, &[][..]),
         };
+        let slice = session.slice_drawn();
         self.renderer.render(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1026,6 +1282,7 @@ impl Offscreen<'_> {
                 // Contour lines widen with the edges of a scaled export.
                 scale: shoot.line_width,
                 clip_planes: planes,
+                slice: slice.as_ref(),
             },
         );
         let mut rgba = self.renderer.read_rgba(&self.gpu.device, &self.gpu.queue)?;
