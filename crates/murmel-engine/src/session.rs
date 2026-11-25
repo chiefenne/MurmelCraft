@@ -17,6 +17,7 @@ use crate::field::{Component, FieldSet};
 use crate::journal::Journal;
 use crate::navigation::Navigation;
 use crate::quality::Quality;
+use crate::slice_preview::{SliceDraw, SliceGrid};
 use crate::surface::Surface;
 use crate::theme::{MeshColors, Theme, Tokens};
 
@@ -429,32 +430,103 @@ impl ClipPreview {
     }
 }
 
-/// A surface built on a thread of its own for `display`.
+/// The slices that move in `new` against `old` (their origin or normal
+/// changed, nothing else in the display), or `None` when the change is
+/// not only such a move.
+fn slice_moves(old: &Display, new: &Display) -> Option<Vec<usize>> {
+    if old.slices.len() != new.slices.len() {
+        return None;
+    }
+    let mut moving = Vec::new();
+    for (k, (a, b)) in old.slices.iter().zip(&new.slices).enumerate() {
+        if a == b {
+            continue;
+        }
+        let only_moved = crate::Slice {
+            origin: b.origin,
+            normal: b.normal,
+            ..*a
+        } == *b;
+        if !only_moved || !b.enabled {
+            return None;
+        }
+        moving.push(k);
+    }
+    let same_otherwise = same_display(
+        &Display {
+            slices: new.slices.clone(),
+            ..old.clone()
+        },
+        new,
+    );
+    (same_otherwise && !moving.is_empty()).then_some(moving)
+}
+
+/// A slice drag in the window: the slices `moving` have left the place
+/// the surface has them at. Until their exact faces are built (on a
+/// thread of its own, once they rest), the renderer leaves them out and
+/// draws their planes from the field's grid ([`Session::slice_drawn`]).
+#[derive(Clone, Debug, Default)]
+pub struct SlicePreview {
+    /// The slices (indices into `Display::slices`) that moved.
+    pub moving: Vec<usize>,
+    /// When a slice last moved.
+    changed: Option<Instant>,
+    /// The field's grid the planes are coloured from.
+    grid: Option<Arc<SliceGrid>>,
+    /// The build of the extras running (the latest display winning).
+    job: Option<SurfaceJob>,
+}
+
+/// A surface built on a thread of its own for `display`: a whole one, or
+/// the extras of one ([`Surface::extras_part`]) whose own faces are build
+/// `key`.
 #[derive(Clone, Debug)]
 struct SurfaceJob {
     display: Display,
+    key: u64,
     done: Arc<(Mutex<Option<Surface>>, Condvar)>,
 }
 
 impl SurfaceJob {
     fn start(m: &OpenMesh, tokens: &Tokens, display: Display) -> SurfaceJob {
-        let done = Arc::new((Mutex::new(None), Condvar::new()));
-        let (mesh, fields, tokens, d, out) = (
+        let (mesh, fields, tokens, d) = (
             m.mesh.clone(),
             m.fields.clone(),
             tokens.clone(),
             display.clone(),
-            done.clone(),
         );
+        Self::spawn(display, 0, move || {
+            Surface::build_with(&mesh, Some(&fields), &tokens, &d)
+        })
+    }
+
+    /// The extras of `display` for the surface of `m`.
+    fn extras(m: &OpenMesh, tokens: &Tokens, display: Display) -> SurfaceJob {
+        let (mesh, fields, tokens, d, header) = (
+            m.mesh.clone(),
+            m.fields.clone(),
+            tokens.clone(),
+            display.clone(),
+            m.surface.header(),
+        );
+        Self::spawn(display, m.surface.key.0, move || {
+            Surface::extras_part(header, &mesh, Some(&fields), &tokens, &d)
+        })
+    }
+
+    fn spawn(display: Display, key: u64, build: impl FnOnce() -> Surface + Send + 'static) -> Self {
+        let done = Arc::new((Mutex::new(None), Condvar::new()));
+        let out = done.clone();
         std::thread::spawn(move || {
-            let s = Surface::build_with(&mesh, Some(&fields), &tokens, &d);
+            let s = build();
             let (lock, ready) = &*out;
             if let Ok(mut v) = lock.lock() {
                 *v = Some(s);
                 ready.notify_all();
             }
         });
-        SurfaceJob { display, done }
+        SurfaceJob { display, key, done }
     }
 
     /// The surface once built (waiting for it with `wait`).
@@ -1008,6 +1080,11 @@ pub struct Session {
     /// What the mesh's own faces of the surface were last built from in
     /// [`Session::redraw`], so a change of the extras alone can keep them.
     built_from: Option<BuiltFrom>,
+    /// The slices moving in the window while their exact faces are built
+    /// ([`crate::slice_preview`]; with `defer_clips`).
+    pub slice_preview: Option<SlicePreview>,
+    /// The preview grid of the field shown, kept for the next drag.
+    slice_grid: Option<(std::sync::Weak<crate::field::FieldValues>, Arc<SliceGrid>)>,
     /// The time series being walked (`series.open`), whose current entry
     /// is the open mesh and parcels; ended by opening another mesh.
     pub series: Option<crate::series::Series>,
@@ -1084,6 +1161,8 @@ impl Session {
             defer_clips: false,
             preview: None,
             built_from: None,
+            slice_preview: None,
+            slice_grid: None,
             series: None,
             probe_history: crate::history::Cache::default(),
             steps_ranges: crate::steps_range::Cache::default(),
@@ -1406,6 +1485,7 @@ impl Session {
         self.sync_streams();
         let Some(m) = &mut self.mesh else {
             self.preview = None;
+            self.slice_preview = None;
             self.surface_revision += 1;
             return;
         };
@@ -1426,16 +1506,55 @@ impl Session {
             p.changed = Some(Instant::now());
             return;
         }
-        // Only the slices, iso-surfaces, arrows and the like changed: the
-        // mesh's own faces stay (and a renderer keeps them uploaded).
-        if self.preview.is_none()
+        let faces_kept = self.preview.is_none()
             && !swapped
             && self
                 .built_from
                 .as_ref()
-                .is_some_and(|b| b.is(m, &self.tokens))
-            && crate::surface::extras_only(&m.built_for, &self.display)
+                .is_some_and(|b| b.is(m, &self.tokens));
+        // Only slices moved, in the window: drawn from the field's grid
+        // until their exact faces are built ([`crate::slice_preview`]).
+        if self.defer_clips
+            && faces_kept
+            && m.mesh.cell_count() > 0
+            && let Some(moving) = slice_moves(&m.built_for, &self.display)
         {
+            let grid = self
+                .display
+                .field_values
+                .as_ref()
+                .map(|v| match &self.slice_grid {
+                    Some((w, g))
+                        if std::ptr::eq(w.as_ptr(), Arc::as_ptr(v)) && g.fits(&m.surface) =>
+                    {
+                        g.clone()
+                    }
+                    _ => {
+                        let _phase = murmel_mesh::profile::span("slice.grid");
+                        let (mesh, fields) = (&m.mesh, &m.fields);
+                        let g = Arc::new(SliceGrid::of(
+                            fields.voxels(mesh),
+                            v,
+                            mesh,
+                            |c| fields.nodes_of_cell(mesh, c),
+                            |c| fields.centroid(mesh, c),
+                            m.surface.origin,
+                            m.surface.value_origin,
+                        ));
+                        self.slice_grid = Some((Arc::downgrade(v), g.clone()));
+                        g
+                    }
+                });
+            let p = self.slice_preview.get_or_insert_with(SlicePreview::default);
+            p.moving = moving;
+            p.changed = Some(Instant::now());
+            p.grid = grid;
+            return;
+        }
+        self.slice_preview = None;
+        // Only the slices, iso-surfaces, arrows and the like changed: the
+        // mesh's own faces stay (and a renderer keeps them uploaded).
+        if faces_kept && crate::surface::extras_only(&m.built_for, &self.display) {
             m.surface
                 .rebuild_extras(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
             m.built_for = self.display.clone();
@@ -2021,6 +2140,9 @@ impl Session {
     /// cut; one of each at a time, the latest display winning). True
     /// while the preview goes on; the window asks every frame.
     pub fn poll_surface(&mut self) -> bool {
+        if self.slice_preview.is_some() {
+            return self.poll_slices();
+        }
         let (Some(p), Some(m)) = (&mut self.preview, &mut self.mesh) else {
             self.preview = None;
             return false;
@@ -2055,11 +2177,131 @@ impl Session {
         true
     }
 
+    /// Follow the slice preview: put the moving slices' exact faces in
+    /// place once built for the display now, and start their build once
+    /// they have rested for [`ClipPreview::REST`]. True while the preview
+    /// goes on.
+    fn poll_slices(&mut self) -> bool {
+        let (Some(p), Some(m)) = (&mut self.slice_preview, &mut self.mesh) else {
+            self.slice_preview = None;
+            return false;
+        };
+        let kept = self
+            .built_from
+            .as_ref()
+            .is_some_and(|b| b.is(m, &self.tokens));
+        if let Some(part) = p.job.as_ref().and_then(|j| j.take(false)) {
+            let job = p.job.take();
+            if let Some(job) = job.filter(|j| {
+                kept && j.key == m.surface.key.0 && same_display(&j.display, &self.display)
+            }) {
+                m.surface.splice(part);
+                m.built_for = job.display;
+                self.surface_revision += 1;
+                self.slice_preview = None;
+                return false;
+            }
+        }
+        let rested = p.changed.is_none_or(|t| t.elapsed() >= ClipPreview::REST);
+        if rested && p.job.is_none() {
+            p.job = Some(SurfaceJob::extras(m, &self.tokens, self.display.clone()));
+        }
+        true
+    }
+
+    /// What the renderer draws for the slices moving in the window
+    /// ([`crate::slice_preview::SliceDraw`]); `None` without a slice
+    /// preview.
+    pub fn slice_drawn(&self) -> Option<SliceDraw> {
+        let p = self.slice_preview.as_ref()?;
+        let m = self.mesh.as_ref()?;
+        let s = &m.surface;
+        let d = &self.display;
+        let o = s.origin;
+        let b = m.mesh.bounds();
+        let mut polygons = Vec::new();
+        let mut picked = false;
+        for &k in &p.moving {
+            let Some(slice) = d.slices.get(k).filter(|x| x.enabled) else {
+                continue;
+            };
+            picked |= d.selection.contains(&Item::Slice(k as u32));
+            let n = slice.normal;
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let unit = n.map(|x| (x / len) as f32);
+            for origin in slice.plane_origins() {
+                let poly = crate::slice_preview::plane_in_box(origin, n, &b);
+                if !poly.is_empty() {
+                    let rel = poly
+                        .iter()
+                        .map(|q| [0, 1, 2].map(|i| (q[i] - o[i]) as f32))
+                        .collect();
+                    polygons.push((rel, unit));
+                }
+            }
+        }
+        let parts: Vec<&crate::surface::SlicePart> = s
+            .slice_parts
+            .iter()
+            .filter(|x| p.moving.contains(&(x.slice as usize)))
+            .collect();
+        let mut hide_faces: Vec<std::ops::Range<u32>> =
+            parts.iter().map(|x| x.faces.clone()).collect();
+        // Arrows on the slices stay where the slices were: left out too.
+        hide_faces.push(s.arrow_faces.clone());
+        let hide_edges = parts.iter().map(|x| x.edges.clone()).collect();
+        let color = parts
+            .iter()
+            .find(|x| !x.faces.is_empty())
+            .and_then(|x| s.indices.get(x.faces.start as usize))
+            .and_then(|&i| s.colors.get(i as usize).copied())
+            .unwrap_or_else(|| self.tokens.mesh.field.none.linear());
+        Some(SliceDraw {
+            polygons,
+            grid: d.field_values().and(p.grid.clone()),
+            color,
+            selection_mix: if picked {
+                self.tokens.mesh.selection_mix.clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+            hide_faces: crate::slice_preview::merged(hide_faces),
+            hide_edges: crate::slice_preview::merged(hide_edges),
+            clips: d
+                .active_clips()
+                .map(|c| {
+                    let n = c.normal;
+                    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                    let n = n.map(|x| x / len);
+                    let dd: f64 = (0..3).map(|k| n[k] * (o[k] - c.origin[k])).sum();
+                    [n[0] as f32, n[1] as f32, n[2] as f32, dd as f32]
+                })
+                .collect(),
+        })
+    }
+
     /// Put the exact surface of `display` in place now, waiting for the
     /// build of it already running or building it here; nothing to do
     /// without a preview. Tools call this first, so what they read or
     /// draw is the exact cut.
     pub fn settle(&mut self) {
+        if let Some(p) = self.slice_preview.take()
+            && let Some(m) = &mut self.mesh
+        {
+            let done = p
+                .job
+                .filter(|j| j.key == m.surface.key.0 && same_display(&j.display, &self.display))
+                .and_then(|j| j.take(true));
+            match done {
+                Some(part) => m.surface.splice(part),
+                None => {
+                    m.surface
+                        .rebuild_extras(&m.mesh, Some(&m.fields), &self.tokens, &self.display)
+                }
+            }
+            m.built_for = self.display.clone();
+            self.surface_revision += 1;
+        }
         let Some(p) = self.preview.take() else {
             return;
         };
@@ -2255,6 +2497,104 @@ mod tests {
         s.display.slices.clear();
         s.display.streams.clear();
         check(&mut s, false, "nothing extra left");
+    }
+
+    /// Invariant: with `defer_clips`, moving a slice leaves the surface as
+    /// it was and starts a slice preview: the planes to draw from the
+    /// field's grid, and the moving slice's triangles and outline to leave
+    /// out; polling ends it with exactly the surface a whole build gives
+    /// (the mesh's faces kept), and so does `settle`; any other change
+    /// ends it at once. Breaks when the preview hides the wrong
+    /// triangles, ends with a slice built for an older position, or
+    /// outlives a change that is not a move.
+    #[test]
+    fn slice_moves_are_previewed_then_built_exactly() {
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        s.open(&fixture("vtkhdf/channel_fields.vtkhdf")).unwrap();
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        let c = b.center();
+        let dx = b.max[0] - b.min[0];
+        s.display.color_by = ColorBy::Field;
+        s.display.field = Some(crate::field::FieldChoice {
+            name: "pressure".into(),
+            component: Component::Magnitude,
+        });
+        s.display.slices.push(crate::Slice::new(c, [1.0, 0.0, 0.0]));
+        s.redraw();
+        let whole = |s: &Session| {
+            let m = s.mesh.as_ref().unwrap();
+            Surface::build_with(&m.mesh, Some(&m.fields), &s.tokens, &s.display)
+        };
+        let surface = |s: &Session| s.mesh.as_ref().unwrap().surface.clone();
+        let key = surface(&s).key.0;
+        s.defer_clips = true;
+        let before = surface(&s);
+        let part = before.slice_parts[0].clone();
+        assert!(!part.faces.is_empty() && !part.edges.is_empty());
+        s.display.slices[0].origin[0] += 0.2 * dx;
+        s.redraw();
+        assert!(s.slice_preview.is_some());
+        assert_eq!(surface(&s), before);
+        let d = s.slice_drawn().unwrap();
+        assert_eq!(d.polygons.len(), 1);
+        assert!(d.polygons[0].0.len() >= 4);
+        assert_eq!(d.hide_faces, vec![part.faces.clone()]);
+        assert_eq!(d.hide_edges, vec![part.edges.clone()]);
+        let g = d.grid.expect("a field's grid");
+        let shown = g
+            .texels
+            .iter()
+            .filter(|t| t[0] != crate::slice_preview::OUTSIDE)
+            .count();
+        assert!(shown * 2 > g.texels.len(), "{shown} of {}", g.texels.len());
+        assert_eq!(
+            g.texels.len(),
+            g.dims.iter().map(|&n| n as usize).product::<usize>()
+        );
+        // Polling ends it with the exact slice, the mesh's faces kept.
+        let start = Instant::now();
+        while s.poll_surface() {
+            assert!(
+                start.elapsed() < Duration::from_secs(60),
+                "the preview never ended"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(s.slice_preview.is_none());
+        assert_eq!(surface(&s), whole(&s));
+        assert_eq!(surface(&s).tri_boxes, whole(&s).tri_boxes);
+        assert_eq!(surface(&s).key.0, key);
+        assert_eq!(s.mesh.as_ref().unwrap().built_for, s.display);
+        // settle ends it at once, with the same slice.
+        s.display.slices[0].normal = [1.0, 0.2, 0.0];
+        s.redraw();
+        assert!(s.slice_preview.is_some());
+        s.settle();
+        assert!(s.slice_preview.is_none());
+        assert_eq!(surface(&s), whole(&s));
+        // Another change ends it and builds at once.
+        s.display.slices[0].origin[0] -= 0.1 * dx;
+        s.redraw();
+        assert!(s.slice_preview.is_some());
+        s.display.isos.push(crate::Iso {
+            field: s.display.field.clone().unwrap(),
+            value: 0.0,
+            enabled: true,
+            color: crate::IsoColor::Field,
+        });
+        s.redraw();
+        assert!(s.slice_preview.is_none());
+        assert_eq!(surface(&s), whole(&s));
+        // Without colour by a field, the planes take the slice's colour.
+        s.display.color_by = ColorBy::Patch;
+        s.redraw();
+        s.display.slices[0].origin[0] += 0.05 * dx;
+        s.redraw();
+        let d = s.slice_drawn().unwrap();
+        assert!(d.grid.is_none());
+        s.settle();
+        assert_eq!(surface(&s), whole(&s));
     }
 
     /// Invariant: with `defer_clips`, moving a clip plane leaves the

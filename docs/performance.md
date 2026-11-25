@@ -1400,6 +1400,49 @@ before this:
 
 The slice itself is now most of a step (extract.slice, about 170 ms).
 
+## A slice dragged: drawn from the field's grid at once (2026-11-25)
+
+Building a slice through a large mesh takes a while (about 0.25 s at
+1 M cells, more at 10 M), too long for each step of a drag. So in the
+window a slice that only moves is drawn at once from a regular grid of
+the field on the GPU, and its exact faces follow on a thread of their
+own once it rests for 120 ms (the maintainer's card of 2026-11-24:
+"grid preview, exact slice follows"; texture-based slicing, Cabral,
+Cam and Foran 1994; Engel et al., "Real-Time Volume Graphics", 2006).
+
+- **The grid** (`slice_preview.rs`): about 2 M cells over the mesh's
+  box (16 MB on the GPU, an `Rg32Float` 3D texture). Each grid cell
+  shows the mesh cell whose centroid is nearest its centre among the
+  cells whose box holds that centre (made once per mesh, on all
+  threads, an atomic minimum per grid cell, so the same on any number
+  of threads); grid cells outside every cell's box show nothing. It
+  holds the cell's value (flat colours) and a value between the cell's
+  and its nodes' (smooth and banded), made once per field shown.
+- **The drag** (`Session::redraw` with `defer_clips`): a change that
+  only moves slices keeps the surface and starts a `SlicePreview`.
+  `Session::slice_drawn` gives the renderer the planes inside the
+  mesh's box, the grid, and which of the surface's triangles and
+  outline vertices to leave out (the moving slices where they were,
+  `Surface.slice_parts`, and the arrows); the renderer draws the
+  extras in the ranges left and the planes with `fs_slice`, which reads
+  the grid cell (flat) or mixes the eight nearest (smooth), cuts them
+  with the clip planes, and colours them as the faces are.
+- **The exact slice** is built on a thread from the surface's header
+  (`Surface::header`, `Surface::extras_part`) and put in place with
+  `Surface::splice`, the mesh's faces kept; any other change, or a
+  tool (`crate::call` settles), ends the preview with the exact slice.
+
+1 M honeycomb, polyMesh binary, 4 threads, `--no-render`:
+
+| Stage (ms) | now |
+|---|---:|
+| slice.preview (first: the grid's cells 49, its values 62) | 111 |
+| slice.preview.step | 0.0 |
+| slice.step (the exact slice, as the tools build it) | 230 to 275 |
+
+Near a curved or concave boundary a grid cell inside a cell's box but
+outside the mesh may show that cell until the exact slice is in place.
+
 ## Streamlines on an overview (2026-11-25)
 
 An overview shows no volume cells, so its streamlines are traced through

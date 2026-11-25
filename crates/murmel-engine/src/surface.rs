@@ -148,6 +148,23 @@ pub struct Surface {
     pub parcels_capped: bool,
     /// The smallest and largest colour value of the parcels drawn.
     pub parcel_range: Option<(f64, f64)>,
+    /// Where each plane of each slice is in `indices` and in
+    /// `edge_positions`, so a renderer can leave a moving slice out
+    /// while it draws its preview ([`crate::slice_preview`]).
+    pub slice_parts: Vec<SlicePart>,
+    /// Where the arrows are in `indices`.
+    pub arrow_faces: std::ops::Range<u32>,
+}
+
+/// One plane of a slice (a series has several) in a surface's buffers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SlicePart {
+    /// The slice (its index in `Display::slices`).
+    pub slice: u32,
+    /// Its triangles' entries in `indices`.
+    pub faces: std::ops::Range<u32>,
+    /// Its outline's vertices in `edge_positions`.
+    pub edges: std::ops::Range<u32>,
 }
 
 /// A corner of a drawn polygon: a mesh node, or a point where a clip
@@ -1038,6 +1055,53 @@ impl Surface {
         tokens: &Tokens,
         display: &Display,
     ) {
+        let part = Surface::extras_part(self.header(), mesh, fields, tokens, display);
+        self.splice(part);
+    }
+
+    /// A surface with this one's place, scale and value origin, and the
+    /// bounds and field range of its own faces, but no geometry: what
+    /// [`Surface::extras_part`] appends the extras to (on a thread of its
+    /// own, without copying this surface's buffers).
+    pub(crate) fn header(&self) -> Surface {
+        let at = self.extras_at;
+        Surface {
+            key: self.key,
+            extras_at: at,
+            origin: self.origin,
+            radius: self.radius,
+            bounds: self.bounds,
+            visible_bounds: at.visible_bounds,
+            faces: self.faces,
+            open_faces: self.open_faces,
+            cells: self.cells,
+            value_origin: self.value_origin,
+            field_range: at.field_range,
+            outline_color: self.outline_color,
+            ..Surface::default()
+        }
+    }
+
+    /// The extras of `display` appended to `header` ([`Surface::header`]),
+    /// to put in place with [`Surface::splice`].
+    pub(crate) fn extras_part(
+        mut header: Surface,
+        mesh: &Mesh,
+        fields: Option<&FieldSet>,
+        tokens: &Tokens,
+        display: &Display,
+    ) -> Surface {
+        let _phase = murmel_mesh::profile::span("surface.extras");
+        if display.extracts_shown() || display.arrows_shown() {
+            let shown = display.shown_cells(mesh);
+            header.append_extras(mesh, fields, tokens, display, &shown);
+        }
+        header
+    }
+
+    /// Put the extras of `part` ([`Surface::extras_part`] of this
+    /// surface's header) in place of this surface's.
+    pub(crate) fn splice(&mut self, part: Surface) {
         let at = self.extras_at;
         self.positions.truncate(at.vertices);
         self.normals.truncate(at.vertices);
@@ -1048,24 +1112,44 @@ impl Surface {
         self.tri_face.truncate(at.indices / 3);
         self.edge_positions.truncate(at.edges);
         self.edge_colors.truncate(at.edges);
-        self.stream_positions.clear();
-        self.stream_colors.clear();
-        self.visible_bounds = at.visible_bounds;
-        self.field_range = at.field_range;
-        self.arrows = 0;
-        self.arrows_capped = false;
-        self.arrow_longest = 0.0;
-        self.arrow_range = None;
-        self.block_boxes = 0;
-        self.parcels = 0;
-        self.parcels_capped = false;
-        self.parcel_range = None;
-        let _phase = murmel_mesh::profile::span("surface.extras");
-        if display.extracts_shown() || display.arrows_shown() {
-            let shown = display.shown_cells(mesh);
-            self.append_extras(mesh, fields, tokens, display, &shown);
-        }
-        drop(_phase);
+        let base = at.vertices as u32;
+        let (i0, e0) = (at.indices as u32, at.edges as u32);
+        self.positions.extend(part.positions);
+        self.normals.extend(part.normals);
+        self.colors.extend(part.colors);
+        self.values.extend(part.values);
+        self.indices.extend(part.indices.iter().map(|&i| i + base));
+        self.tri_cell.extend(part.tri_cell);
+        self.tri_face.extend(part.tri_face);
+        self.edge_positions.extend(part.edge_positions);
+        self.edge_colors.extend(part.edge_colors);
+        self.stream_positions = part.stream_positions;
+        self.stream_colors = part.stream_colors;
+        self.visible_bounds = part.visible_bounds;
+        self.field_range = part.field_range;
+        self.arrows = part.arrows;
+        self.arrows_capped = part.arrows_capped;
+        self.arrow_longest = part.arrow_longest;
+        self.arrow_range = part.arrow_range;
+        self.block_boxes = part.block_boxes;
+        self.parcels = part.parcels;
+        self.parcels_capped = part.parcels_capped;
+        self.parcel_range = part.parcel_range;
+        self.slice_parts = part
+            .slice_parts
+            .into_iter()
+            .map(|p| SlicePart {
+                slice: p.slice,
+                faces: p.faces.start + i0..p.faces.end + i0,
+                edges: p.edges.start + e0..p.edges.end + e0,
+            })
+            .collect();
+        let a = part.arrow_faces;
+        self.arrow_faces = if a.is_empty() {
+            0..0
+        } else {
+            a.start + i0..a.end + i0
+        };
         let _phase = murmel_mesh::profile::span("surface.boxes");
         // The pick boxes of the runs from the first the extras touch.
         let first = at.indices / 3 / PICK_RUN;
