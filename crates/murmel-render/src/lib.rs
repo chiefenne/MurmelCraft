@@ -71,7 +71,48 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "The font of the overlays (Inter) could not be read.",
         "Rebuild MurmelCraft; assets/fonts/Inter-Regular.ttf is part of the build.",
     ),
+    (
+        "RENDER006",
+        "The GPU refused a step of drawing the view (a wgpu validation error, or out of GPU memory); the window goes on, but the view may lack what that step drew.",
+        "Report it with the message; hiding parts of the mesh or a region of it draws less.",
+    ),
 ];
+
+/// The errors of a device that no error scope takes, kept for the window
+/// to show (RENDER006) instead of wgpu's default, which ends the program
+/// and loses the session. The first since the last [`GpuErrors::take`] is
+/// kept: the errors after it mostly follow from it.
+#[derive(Clone, Default)]
+pub struct GpuErrors(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+
+impl GpuErrors {
+    /// Catch the errors of `device` from now on.
+    pub fn catch(device: &wgpu::Device) -> GpuErrors {
+        let errors = GpuErrors::default();
+        let keep = errors.clone();
+        device.on_uncaptured_error(std::sync::Arc::new(move |e: wgpu::Error| keep.keep(&e)));
+        errors
+    }
+
+    fn keep(&self, e: &wgpu::Error) {
+        let mut first = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if first.is_none() {
+            *first = Some(e.to_string());
+        }
+    }
+
+    /// The first error caught since the last call, if any.
+    pub fn take(&self) -> Option<RenderError> {
+        let mut first = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        first.take().map(|m| RenderError::new("RENDER006", m))
+    }
+}
 
 /// A GPU device for offscreen work.
 pub struct Gpu {
@@ -220,18 +261,49 @@ struct Targets {
     gamma_view: wgpu::TextureView,
 }
 
+/// A surface's part as GPU buffers, each at most [`MeshRenderer`]'s
+/// piece size: one piece for most meshes, several for a surface larger
+/// than a GPU buffer may be (the boundary of a 100 M cell overview takes
+/// 1.6 GB of face vertices, a device gives 256 MiB per buffer).
 struct Geometry {
-    faces: wgpu::Buffer,
-    indices: wgpu::Buffer,
+    faces: Vec<FacePiece>,
     index_count: u32,
-    edges: Option<wgpu::Buffer>,
+    edges: Vec<LinePiece>,
     edge_count: u32,
     /// The outline of the picked cells and faces, drawn over everything.
-    outline: Option<wgpu::Buffer>,
+    outline: Vec<LinePiece>,
     outline_count: u32,
     /// Streamlines drawn as lines: in every render mode, behind faces.
-    streams: Option<wgpu::Buffer>,
+    streams: Vec<LinePiece>,
     stream_count: u32,
+}
+
+/// Triangles of a part and the vertices they use: the indices `at` of
+/// the part's index list, numbered from the first vertex of the piece.
+struct FacePiece {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    at: std::ops::Range<u32>,
+}
+
+/// The vertices `at` of a part's line list (an even count, so no segment
+/// is split).
+struct LinePiece {
+    vertices: wgpu::Buffer,
+    at: std::ops::Range<u32>,
+}
+
+/// The pieces holding the elements `r`, each with the elements within it.
+fn within<'a, P>(
+    pieces: &'a [P],
+    at: impl Fn(&P) -> std::ops::Range<u32> + 'a,
+    r: std::ops::Range<u32>,
+) -> impl Iterator<Item = (&'a P, std::ops::Range<u32>)> + 'a {
+    pieces.iter().filter_map(move |p| {
+        let a = at(p);
+        let (start, end) = (r.start.max(a.start), r.end.min(a.end));
+        (start < end).then(|| (p, start - a.start..end - a.start))
+    })
 }
 
 pub struct MeshRenderer {
@@ -277,6 +349,9 @@ pub struct MeshRenderer {
     layer: Option<Geometry>,
     layer_revision: Option<u64>,
     targets: Option<Targets>,
+    /// The most bytes one buffer of the surface takes: [`PIECE_BYTES`],
+    /// or less where the device allows less.
+    piece: u64,
 }
 
 /// Which part of a surface a [`Geometry`] holds.
@@ -289,9 +364,14 @@ enum Part {
     Extras,
 }
 
-/// The buffers of part `part` of `s`; `None` when it has nothing to draw.
-fn geometry(device: &wgpu::Device, s: &Surface, part: Part) -> Option<Geometry> {
-    use wgpu::util::DeviceExt;
+/// The most bytes one buffer of a [`Geometry`] takes: wgpu's default
+/// limit, which every device gives without asking (the window's device
+/// asks for no more).
+const PIECE_BYTES: u64 = 1 << 28;
+
+/// The buffers of part `part` of `s`, none over `piece` bytes; `None`
+/// when it has nothing to draw.
+fn geometry(device: &wgpu::Device, s: &Surface, part: Part, piece: u64) -> Option<Geometry> {
     let at = s.extras_at;
     // A surface built before the extras were marked holds them all in
     // the mesh's part.
@@ -311,91 +391,193 @@ fn geometry(device: &wgpu::Device, s: &Surface, part: Part) -> Option<Geometry> 
         i1.min(s.indices.len()),
         e1.min(s.edge_positions.len()),
     );
-    let mut faces = Vec::with_capacity((v1 - v0.min(v1)) * 13);
-    for i in v0..v1 {
-        faces.extend_from_slice(&s.positions[i]);
-        faces.extend_from_slice(&s.normals[i]);
-        faces.extend_from_slice(&s.colors[i]);
-        faces.extend_from_slice(s.values.get(i).unwrap_or(&[0.0; 4]));
-    }
-    let base = v0 as u32;
-    let indices: Vec<u32> = s.indices[i0.min(i1)..i1]
-        .iter()
-        .map(|&k| k - base)
-        .collect();
-    let mut lines = Vec::with_capacity((e1 - e0.min(e1)) * 6);
-    for i in e0..e1 {
-        lines.extend_from_slice(&s.edge_positions[i]);
-        lines.extend_from_slice(&s.edge_colors[i]);
-    }
-    let mut outline = Vec::new();
-    let mut streams = Vec::new();
-    match part {
-        Part::Mesh => {
-            outline.reserve(s.outline.len() * 6);
-            for p in &s.outline {
-                outline.extend_from_slice(p);
-                outline.extend_from_slice(&s.outline_color);
-            }
-        }
-        Part::Extras => {
-            streams.reserve(s.stream_positions.len() * 6);
-            for (p, c) in s.stream_positions.iter().zip(&s.stream_colors) {
-                streams.extend_from_slice(p);
-                streams.extend_from_slice(c);
-            }
-        }
-    }
-    if indices.is_empty() && lines.is_empty() && outline.is_empty() && streams.is_empty() {
-        return None;
-    }
-    let buf = |label: &str, data: &[u8], usage| {
+    let (v0, i0, e0) = (v0.min(v1), i0.min(i1), e0.min(e1));
+    let faces = face_pieces(device, s, v0..v1, i0..i1, piece);
+    let edges = line_pieces(
+        device,
+        "murmel-edges",
+        &s.edge_positions[e0..e1],
+        &s.edge_colors[e0.min(s.edge_colors.len())..e1.min(s.edge_colors.len())],
+        None,
+        piece,
+    );
+    let (outline, streams) = match part {
+        Part::Mesh => (
+            line_pieces(
+                device,
+                "murmel-outline",
+                &s.outline,
+                &[],
+                Some(s.outline_color),
+                piece,
+            ),
+            Vec::new(),
+        ),
+        Part::Extras => (
+            Vec::new(),
+            line_pieces(
+                device,
+                "murmel-streams",
+                &s.stream_positions,
+                &s.stream_colors,
+                None,
+                piece,
+            ),
+        ),
+    };
+    // What the pieces hold, counted as the part's elements (a piece left
+    // out leaves a gap).
+    let count = |at: Option<&std::ops::Range<u32>>| at.map_or(0, |r| r.end);
+    let g = Geometry {
+        index_count: count(faces.last().map(|p| &p.at)),
+        edge_count: count(edges.last().map(|p| &p.at)),
+        outline_count: count(outline.last().map(|p| &p.at)),
+        stream_count: count(streams.last().map(|p| &p.at)),
+        faces,
+        edges,
+        outline,
+        streams,
+    };
+    (g.index_count > 0 || g.edge_count > 0 || g.outline_count > 0 || g.stream_count > 0)
+        .then_some(g)
+}
+
+/// A vertex buffer holding `data`, or `None` beyond `piece` bytes (a
+/// piece of one polygon wider than that: never made by the surface
+/// builders, and left out rather than failing the device).
+fn vertex_buffer(
+    device: &wgpu::Device,
+    label: &str,
+    data: &[u8],
+    usage: wgpu::BufferUsages,
+    piece: u64,
+) -> Option<wgpu::Buffer> {
+    use wgpu::util::DeviceExt;
+    (!data.is_empty() && data.len() as u64 <= piece).then(|| {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label),
             contents: data,
             usage,
         })
-    };
-    let some = |label: &str, data: &[f32]| {
-        (!data.is_empty()).then(|| {
-            buf(
-                label,
-                bytemuck::cast_slice(data),
-                wgpu::BufferUsages::VERTEX,
-            )
-        })
-    };
-    Some(Geometry {
-        faces: buf(
-            "murmel-faces",
-            bytemuck::cast_slice(if faces.is_empty() {
-                &[0.0f32; 13][..]
-            } else {
-                &faces
-            }),
-            wgpu::BufferUsages::VERTEX,
-        ),
-        indices: buf(
-            "murmel-indices",
-            bytemuck::cast_slice(if indices.is_empty() {
-                &[0u32; 3][..]
-            } else {
-                &indices
-            }),
-            wgpu::BufferUsages::INDEX,
-        ),
-        index_count: indices.len() as u32,
-        edge_count: (lines.len() / 6) as u32,
-        edges: some("murmel-edges", &lines),
-        outline_count: (outline.len() / 6) as u32,
-        outline: some("murmel-outline", &outline),
-        stream_count: (streams.len() / 6) as u32,
-        streams: some("murmel-streams", &streams),
     })
+}
+
+/// The triangles `tris` (positions in `s.indices`) of the vertices
+/// `verts` as pieces of at most `piece` bytes each. A piece takes the
+/// triangles in order while the vertices they span and their indices
+/// fit; the builders add each polygon's vertices and triangles together,
+/// so the pieces hold every vertex once.
+fn face_pieces(
+    device: &wgpu::Device,
+    s: &Surface,
+    verts: std::ops::Range<usize>,
+    tris: std::ops::Range<usize>,
+    piece: u64,
+) -> Vec<FacePiece> {
+    let indices = &s.indices[tris.start..tris.start + (tris.len() / 3) * 3];
+    let (lo_ok, hi_ok) = (verts.start as u32, verts.end as u32);
+    let mut pieces = Vec::new();
+    let mut t = 0;
+    while t < indices.len() {
+        let start = t;
+        let (mut lo, mut hi) = (u32::MAX, 0u32);
+        while t < indices.len() {
+            let tri = &indices[t..t + 3];
+            let (a, b) = (
+                lo.min(tri[0].min(tri[1]).min(tri[2])),
+                hi.max(tri[0].max(tri[1]).max(tri[2])),
+            );
+            let span = u64::from(b - a.min(b)) + 1;
+            let fits = span * FACE_STRIDE <= piece && (t + 3 - start) as u64 * 4 <= piece;
+            if t > start && !fits {
+                break;
+            }
+            (lo, hi) = (a, b);
+            t += 3;
+        }
+        // Vertices outside the part's (a broken surface) are left out.
+        let (lo, hi) = (lo.max(lo_ok), hi.min(hi_ok.saturating_sub(1)));
+        let mut data: Vec<f32> = Vec::with_capacity((hi + 1).saturating_sub(lo) as usize * 13);
+        for i in lo as usize..=hi as usize {
+            if i >= hi_ok as usize {
+                break;
+            }
+            data.extend_from_slice(&s.positions[i]);
+            data.extend_from_slice(s.normals.get(i).unwrap_or(&[0.0; 3]));
+            data.extend_from_slice(s.colors.get(i).unwrap_or(&[0.0; 3]));
+            data.extend_from_slice(s.values.get(i).unwrap_or(&[0.0; 4]));
+        }
+        let local: Vec<u32> = indices[start..t]
+            .iter()
+            .map(|&k| k.saturating_sub(lo))
+            .collect();
+        let at = (start as u32)..(t as u32);
+        let v = vertex_buffer(
+            device,
+            "murmel-faces",
+            bytemuck::cast_slice(&data),
+            wgpu::BufferUsages::VERTEX,
+            piece,
+        );
+        let i = vertex_buffer(
+            device,
+            "murmel-indices",
+            bytemuck::cast_slice(&local),
+            wgpu::BufferUsages::INDEX,
+            piece,
+        );
+        if let (Some(vertices), Some(indices)) = (v, i) {
+            pieces.push(FacePiece {
+                vertices,
+                indices,
+                at,
+            });
+        }
+    }
+    pieces
+}
+
+/// The line list `points` (each with its colour from `colors`, or
+/// `color`) as pieces of at most `piece` bytes, an even number of
+/// vertices each.
+fn line_pieces(
+    device: &wgpu::Device,
+    label: &str,
+    points: &[[f32; 3]],
+    colors: &[[f32; 3]],
+    color: Option<[f32; 3]>,
+    piece: u64,
+) -> Vec<LinePiece> {
+    let per = ((piece / LINE_STRIDE) as usize / 2 * 2).max(2);
+    let mut pieces = Vec::new();
+    for (k, chunk) in points.chunks(per).enumerate() {
+        let first = k * per;
+        let mut data: Vec<f32> = Vec::with_capacity(chunk.len() * 6);
+        for (j, p) in chunk.iter().enumerate() {
+            data.extend_from_slice(p);
+            let c = color.or_else(|| colors.get(first + j).copied());
+            data.extend_from_slice(&c.unwrap_or([0.0; 3]));
+        }
+        if let Some(vertices) = vertex_buffer(
+            device,
+            label,
+            bytemuck::cast_slice(&data),
+            wgpu::BufferUsages::VERTEX,
+            piece,
+        ) {
+            pieces.push(LinePiece {
+                vertices,
+                at: first as u32..(first + chunk.len()) as u32,
+            });
+        }
+    }
+    pieces
 }
 
 /// Bytes per face vertex: position, normal, colour, field values.
 const FACE_STRIDE: u64 = 4 * (3 + 3 + 3 + 4);
+/// Bytes per line vertex: position, colour.
+const LINE_STRIDE: u64 = 4 * (3 + 3);
 
 fn f32x3(v: [f32; 3]) -> [f32; 4] {
     [v[0], v[1], v[2], 0.0]
@@ -1066,6 +1248,7 @@ impl MeshRenderer {
             layer_revision: None,
             revision: None,
             targets: None,
+            piece: PIECE_BYTES.min(device.limits().max_buffer_size),
         }
     }
 
@@ -1079,10 +1262,10 @@ impl MeshRenderer {
             return;
         };
         if self.mesh_key != Some(s.key.0) {
-            self.geometry[0] = geometry(device, s, Part::Mesh);
+            self.geometry[0] = geometry(device, s, Part::Mesh, self.piece);
             self.mesh_key = Some(s.key.0);
         }
-        self.geometry[1] = geometry(device, s, Part::Extras);
+        self.geometry[1] = geometry(device, s, Part::Extras, self.piece);
     }
 
     fn ensure_targets(&mut self, device: &wgpu::Device, size: [u32; 2]) {
@@ -1151,7 +1334,7 @@ impl MeshRenderer {
         }
         match view.layer {
             Some((s, r)) if self.layer_revision != Some(r) => {
-                self.layer = geometry(device, s, Part::Mesh);
+                self.layer = geometry(device, s, Part::Mesh, self.piece);
                 self.layer_revision = Some(r);
             }
             None => {
@@ -1287,19 +1470,23 @@ impl MeshRenderer {
                         continue;
                     };
                     pass.set_pipeline(&self.face_pipeline);
-                    pass.set_vertex_buffer(0, geo.faces.slice(..));
-                    pass.set_index_buffer(geo.indices.slice(..), wgpu::IndexFormat::Uint32);
                     for r in ranges(k, geo.index_count, true) {
-                        pass.draw_indexed(r, 0, 0..1);
+                        for (p, r) in within(&geo.faces, |p| p.at.clone(), r) {
+                            pass.set_vertex_buffer(0, p.vertices.slice(..));
+                            pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
+                            pass.draw_indexed(r, 0, 0..1);
+                        }
                     }
                 }
                 // The thin layer as instance 1, which the preview planes
                 // leave uncut.
                 if let Some(geo) = self.layer.as_ref().filter(|g| g.index_count > 0) {
                     pass.set_pipeline(&self.face_pipeline);
-                    pass.set_vertex_buffer(0, geo.faces.slice(..));
-                    pass.set_index_buffer(geo.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..geo.index_count, 0, 1..2);
+                    for p in &geo.faces {
+                        pass.set_vertex_buffer(0, p.vertices.slice(..));
+                        pass.set_index_buffer(p.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..p.at.len() as u32, 0, 1..2);
+                    }
                 }
                 if let Some((buf, count)) = &planes {
                     pass.set_pipeline(&self.slice_pipeline);
@@ -1313,51 +1500,47 @@ impl MeshRenderer {
                 }
             }
             let lines = |pass: &mut wgpu::RenderPass<'_>,
-                         buf: &wgpu::Buffer,
+                         pieces: &[LinePiece],
                          count: std::ops::Range<u32>,
                          narrow: &wgpu::RenderPipeline,
                          widened: &wgpu::RenderPipeline| {
-                pass.set_vertex_buffer(0, buf.slice(..));
-                if wide {
-                    pass.set_pipeline(widened);
-                    pass.draw(0..6, count.start / 2..count.end / 2);
-                } else {
-                    pass.set_pipeline(narrow);
-                    pass.draw(count, 0..1);
+                for (p, count) in within(pieces, |p| p.at.clone(), count) {
+                    pass.set_vertex_buffer(0, p.vertices.slice(..));
+                    if wide {
+                        pass.set_pipeline(widened);
+                        pass.draw(0..6, count.start / 2..count.end / 2);
+                    } else {
+                        pass.set_pipeline(narrow);
+                        pass.draw(count, 0..1);
+                    }
                 }
             };
             if view.edges {
                 for (k, geo) in self.geometry.iter().enumerate() {
                     let Some(geo) = geo else { continue };
-                    if let Some(edges) = &geo.edges {
-                        for r in ranges(k, geo.edge_count, false) {
-                            let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
-                            lines(&mut pass, edges, r, n, w);
-                        }
+                    for r in ranges(k, geo.edge_count, false) {
+                        let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
+                        lines(&mut pass, &geo.edges, r, n, w);
                     }
                 }
                 // The layer's edges as instance 1 of one-pixel lines (a
                 // clip drag is only drawn in the window; pictures settle
                 // the exact cut first).
-                if let Some(geo) = &self.layer
-                    && let Some(edges) = &geo.edges
-                {
+                if let Some(geo) = &self.layer {
                     pass.set_pipeline(&self.line_pipeline);
-                    pass.set_vertex_buffer(0, edges.slice(..));
-                    pass.draw(0..geo.edge_count, 1..2);
+                    for p in &geo.edges {
+                        pass.set_vertex_buffer(0, p.vertices.slice(..));
+                        pass.draw(0..p.at.len() as u32, 1..2);
+                    }
                 }
             }
             for geo in parts() {
-                if let Some(streams) = &geo.streams {
-                    let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
-                    lines(&mut pass, streams, 0..geo.stream_count, n, w);
-                }
+                let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
+                lines(&mut pass, &geo.streams, 0..geo.stream_count, n, w);
             }
             for geo in parts() {
-                if let Some(outline) = &geo.outline {
-                    let (n, w) = (&self.outline_pipeline, &self.wide_outline_pipeline);
-                    lines(&mut pass, outline, 0..geo.outline_count, n, w);
-                }
+                let (n, w) = (&self.outline_pipeline, &self.wide_outline_pipeline);
+                lines(&mut pass, &geo.outline, 0..geo.outline_count, n, w);
             }
         }
         queue.submit([encoder.finish()]);
@@ -1716,4 +1899,92 @@ pub fn diff_share(a: &[u8], b: &[u8], tol: u8) -> f64 {
         .filter(|(p, q)| p.iter().zip(q.iter()).any(|(x, y)| x.abs_diff(*y) > tol))
         .count();
     bad as f64 / (a.len() / 4) as f64
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    /// Keep rule: a surface drawn in pieces draws the picture of the same
+    /// surface in one buffer each, with one-pixel and widened lines. A
+    /// piece that drops or doubles a triangle, numbers its vertices from
+    /// the wrong first one, or splits an edge between two pieces moves
+    /// pixels here. The render tests draw every fixture in one piece (far
+    /// below a GPU buffer), and only a mesh of tens of millions of cells
+    /// needs several, so no other test draws pieces.
+    /// Keep rule: of the GPU errors before the window shows one, the
+    /// first is shown (the cause; those after it mostly follow from it),
+    /// once. Keeping the last instead, or showing one again on every
+    /// frame, fails here; the window has no GPU in its tests.
+    #[test]
+    fn the_first_gpu_error_is_shown_once() {
+        let errors = GpuErrors::default();
+        let e = |what: &str| wgpu::Error::Validation {
+            source: Box::new(std::io::Error::other(what.to_string())),
+            description: what.to_string(),
+        };
+        assert_eq!(errors.take(), None);
+        errors.keep(&e("buffer too large"));
+        errors.keep(&e("buffer is invalid"));
+        let first = errors.take().unwrap();
+        assert_eq!(first.code, "RENDER006");
+        assert!(first.message.contains("buffer too large"), "{first:?}");
+        assert_eq!(errors.take(), None);
+    }
+
+    #[test]
+    fn a_surface_in_pieces_draws_the_same_picture() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut s = murmel_engine::Session::new(murmel_engine::Tokens::builtin().unwrap());
+        s.viewport = [320.0, 240.0];
+        s.open(&root.join("test-fixtures/vtkhdf/channel_fields.vtkhdf"))
+            .unwrap();
+        s.camera.set_standard(murmel_engine::StandardView::ISO);
+        s.fit();
+        // A slice, so the extras are drawn in pieces too; the mesh shows
+        // its outline meanwhile.
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        s.display.slices = vec![murmel_engine::Slice::new(b.center(), [1.0, 0.0, 0.0])];
+        s.redraw();
+        let gpu = Gpu::shared().unwrap();
+        let gpu = gpu
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pieces = |r: &MeshRenderer| -> Vec<(usize, usize)> {
+            r.geometry
+                .iter()
+                .flatten()
+                .map(|g| (g.faces.len(), g.edges.len()))
+                .collect()
+        };
+        for line_width in [1.0, 2.0] {
+            let shoot = Shoot {
+                line_width,
+                ..Shoot::new(320, 240)
+            };
+            let mut one = Offscreen {
+                renderer: MeshRenderer::new(&gpu.device),
+                gpu: &gpu,
+            };
+            let a = one.shoot(&s, &shoot).unwrap();
+            let mut split = Offscreen {
+                renderer: MeshRenderer::new(&gpu.device),
+                gpu: &gpu,
+            };
+            split.renderer.piece = 4096;
+            let b = split.shoot(&s, &shoot).unwrap();
+            // The mesh as its faint outline (lines only) and the slice
+            // (faces and edges): one piece each, or many.
+            assert_eq!(pieces(&one.renderer), [(0, 1), (1, 1)]);
+            let p = pieces(&split.renderer);
+            assert!(
+                p[0].0 == 0 && p[0].1 > 1 && p[1].0 > 1 && p[1].1 > 1,
+                "{p:?}"
+            );
+            let differ = a.rgba.iter().zip(&b.rgba).filter(|(x, y)| x != y).count();
+            assert_eq!(differ, 0, "line width {line_width}");
+        }
+    }
 }

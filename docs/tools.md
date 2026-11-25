@@ -3987,3 +3987,4 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `RENDER003` | error | The screenshot size is outside 1 to 8192 pixels per side. | Pass width and height between 1 and 8192. |
 | `RENDER004` | error | The PNG could not be written. | Check that the folder exists and is writable. |
 | `RENDER005` | error | The font of the overlays (Inter) could not be read. | Rebuild MurmelCraft; assets/fonts/Inter-Regular.ttf is part of the build. |
+| `RENDER006` | error | The GPU refused a step of drawing the view (a wgpu validation error, or out of GPU memory); the window goes on, but the view may lack what that step drew. | Report it with the message; hiding parts of the mesh or a region of it draws less. |

@@ -30,6 +30,9 @@ pub struct GpuView {
     texture: Option<(egui::TextureId, [u32; 2])>,
     last: Option<String>,
     pub adapter: String,
+    /// The device's errors, shown in the status bar instead of ending
+    /// the window.
+    errors: murmel_render::GpuErrors,
 }
 
 impl GpuView {
@@ -40,6 +43,7 @@ impl GpuView {
             texture: None,
             last: None,
             adapter: format!("{:?} · {}", info.backend, info.name),
+            errors: murmel_render::GpuErrors::catch(&rs.device),
         }
     }
 }
@@ -579,6 +583,10 @@ impl MurmelApp {
                 Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
                 Color32::WHITE,
             );
+        }
+        if let Some(e) = g.errors.take() {
+            self.error = Some(murmel_tools::Diagnostic::new(e.code, e.message));
+            self.error_since = None;
         }
     }
 
