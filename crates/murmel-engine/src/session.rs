@@ -1654,7 +1654,8 @@ impl Session {
         if !self.defer_clips || self.preview_grids_wait {
             return;
         }
-        let Some(m) = &self.mesh else {
+        // An overview's volume cells are not read: no grids to make.
+        let Some(m) = self.mesh.as_ref().filter(|m| m.mesh.cell_count() > 0) else {
             return;
         };
         let d = &self.display;
