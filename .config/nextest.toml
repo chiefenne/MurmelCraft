@@ -1,0 +1,12 @@
+# cargo-nextest (CI's test runner): every test in its own process, all the
+# test binaries at once, so the slowest test sets the time rather than the
+# sum of the crates.
+[profile.default]
+# Report a test still running after 60 s, as cargo test does.
+slow-timeout = "60s"
+
+[profile.ci]
+# Run every test and list all failures at the end.
+fail-fast = false
+failure-output = "immediate-final"
+slow-timeout = "60s"
