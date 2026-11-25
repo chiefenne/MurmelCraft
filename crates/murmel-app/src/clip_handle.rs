@@ -570,7 +570,15 @@ impl MurmelApp {
         let gizmo = self.session.tokens.gizmo.clone();
         let accent = color(palette.accent);
         let colors = *gizmo.colors(dark);
-        let (slide_c, tilt_c) = (color(colors.slide), color(colors.tilt));
+        // Each handle its own colour, and a tilt arc's rotation plane its arc's.
+        let own = |h: Handle| {
+            color(match h {
+                Handle::Slide => colors.slide,
+                Handle::TiltU => colors.tilt,
+                Handle::TiltV => colors.tilt2,
+            })
+        };
+        let slide_c = own(Handle::Slide);
         let (origin, sradius) = (m.surface.origin, m.surface.radius);
         let aspect = (rect.width() / rect.height().max(1.0)) as f64;
         let to_screen = move |p: V3| {
@@ -840,13 +848,12 @@ impl MurmelApp {
                 start,
                 radius: ARC_R * s,
             };
-            plane.paint(&painter, &to_screen, tilt_c, color(gizmo.shade));
+            plane.paint(&painter, &to_screen, own(sh.handle), color(gizmo.shade));
             self.rotation_plane = Some(sh.handle);
         }
 
         // Draw: halo first, then the shaded handles.
         let lift = |c: Color32| lerp(c, color(gizmo.shine), 0.22);
-        let own = |h: Handle| if h == Handle::Slide { slide_c } else { tilt_c };
         let base = |h: Handle| {
             if hot == Some(h) { lift(own(h)) } else { own(h) }
         };

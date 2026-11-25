@@ -218,9 +218,12 @@ impl GizmoTokens {
 pub struct GizmoColors {
     /// The slide arrow.
     pub slide: Rgb,
-    /// The tilt arcs and the rotation plane shown while one is hovered
-    /// or dragged.
+    /// The first tilt arc (about the plane's first in-plane axis) and
+    /// the rotation plane shown while it is hovered or dragged.
     pub tilt: Rgb,
+    /// The second tilt arc and its rotation plane: a colour of its own,
+    /// so the person sees which arc turned the plane.
+    pub tilt2: Rgb,
 }
 
 impl Tokens {
@@ -318,7 +321,7 @@ pub struct MeshColors {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quality: Vec<Rgb>,
     /// The clip handles' colours per theme (`dark`, `light`), each a map
-    /// of `slide` and `tilt` to a colour.
+    /// of `slide`, `tilt` and `tilt2` to a colour.
     #[serde(default, skip_serializing_if = "UserGizmo::is_empty")]
     pub gizmo: UserGizmo,
     /// The measurement colours per theme (`dark`, `light`), each a map of
@@ -429,6 +432,7 @@ impl Tokens {
                 *match name.as_str() {
                     "slide" => &mut g.slide,
                     "tilt" => &mut g.tilt,
+                    "tilt2" => &mut g.tilt2,
                     _ => return Err(format!("unknown handle {name} (gizmo.{theme})")),
                 } = rgb;
             }
@@ -531,19 +535,33 @@ mod tests {
         assert_eq!(toml::from_str::<MeshColors>(&text).unwrap(), c);
     }
 
-    /// Invariant: the tilt arcs differ from the slide arrow in both
-    /// themes (the maintainer's Mac test asked for it), the arrow keeps
-    /// the accent, and the user's handle colours replace exactly the one
-    /// they name in the one theme they name; an unknown handle is
-    /// refused. Breaks if the tokens or `with_colors` lose the gizmo
-    /// colours; the window draws them but no window test reads colours.
+    /// Invariant (the maintainer's cards of 2026-11-24 and 2026-11-25):
+    /// the slide arrow and the two tilt arcs differ from each other in
+    /// both themes, at least 0.1 apart in OKLab in normal vision and
+    /// under simulated protanopia, deuteranopia and tritanopia, and each
+    /// reaches 3:1 against the far end of its theme's viewport gradient
+    /// (the end it contrasts least with is the one it sits on least);
+    /// the user's handle colours replace exactly the one they name in
+    /// the one theme they name; an unknown handle is refused. Breaks if
+    /// the tokens or `with_colors` lose a gizmo colour or two handles
+    /// drift together; the window draws them but no window test reads
+    /// colours.
     #[test]
     fn gizmo_colours() {
         let t = Tokens::builtin().unwrap();
         for dark in [true, false] {
             let g = t.gizmo.colors(dark);
-            assert_eq!(g.slide, t.palette(dark).accent);
-            assert_ne!(g.tilt, g.slide);
+            let p = t.palette(dark);
+            let three = [g.slide, g.tilt, g.tilt2];
+            assert!(min_distance(&three, &VISION) >= 0.1, "dark {dark}");
+            let bg = if dark {
+                p.viewport_top
+            } else {
+                p.viewport_bottom
+            };
+            for c in three {
+                assert!(contrast(c, bg) >= 3.0, "{} on {}", c.hex(), bg.hex());
+            }
         }
         let red = Rgb([255, 0, 0]);
         let c = MeshColors {
@@ -556,6 +574,7 @@ mod tests {
         let u = t.with_colors(&c).unwrap();
         assert_eq!(u.gizmo.light.tilt, red);
         assert_eq!(u.gizmo.light.slide, t.gizmo.light.slide);
+        assert_eq!(u.gizmo.light.tilt2, t.gizmo.light.tilt2);
         assert_eq!(u.gizmo.dark, t.gizmo.dark);
         let text = toml::to_string(&c).unwrap();
         assert_eq!(toml::from_str::<MeshColors>(&text).unwrap(), c);
@@ -579,14 +598,7 @@ mod tests {
     /// no other test reads the palettes' contrast.
     #[test]
     fn contrast_is_aa() {
-        fn lum(c: Rgb) -> f32 {
-            let [r, g, b] = c.linear();
-            0.2126 * r + 0.7152 * g + 0.0722 * b
-        }
-        fn ratio(a: Rgb, b: Rgb) -> f32 {
-            let (x, y) = (lum(a), lum(b));
-            (x.max(y) + 0.05) / (x.min(y) + 0.05)
-        }
+        let ratio = contrast;
         let t = Tokens::builtin().unwrap();
         for (theme, p) in [("dark", &t.dark), ("light", &t.light)] {
             let check = |what: &str, fg: Rgb, bg: (&str, Rgb), min: f32| {
@@ -623,6 +635,16 @@ mod tests {
                 check(what, c, ("bg_panel", p.bg_panel), 3.0);
             }
         }
+    }
+
+    /// The WCAG contrast ratio of two colours.
+    fn contrast(a: Rgb, b: Rgb) -> f32 {
+        let lum = |c: Rgb| {
+            let [r, g, b] = c.linear();
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
     }
 
     /// OKLab of a linear colour (Ottosson 2020).

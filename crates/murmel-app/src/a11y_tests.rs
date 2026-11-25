@@ -367,6 +367,39 @@ fn rotation_plane_shows_on_hover() {
     assert_eq!(h.state().rotation_plane, None, "pointer away");
 }
 
+/// Invariant (the maintainer's card of 2026-11-25, "neutral arrow,
+/// orange + blue"): Settings has a named colour well for the slide arrow
+/// and for each tilt arc, and a colour set for the second arc (the tool
+/// the well calls) changes that arc in the one theme named. Breaks when
+/// a well loses its name or the second arc falls back to the first's
+/// colour; the theme test checks the built-in colours.
+#[test]
+fn handle_colours_in_settings() {
+    let mut h = harness();
+    h.state_mut().settings_open = true;
+    h.run_steps(3);
+    for name in [
+        "Clip slide arrow",
+        "Clip tilt arc, first",
+        "Clip tilt arc, second",
+    ] {
+        assert!(named(&h, name), "{name}");
+    }
+    let before = h.state().session.tokens.gizmo.clone();
+    // No config folder: applied for the session, not saved (SET001).
+    let _ = h.state_mut().call_envelope(
+        "settings.set_colors",
+        serde_json::json!({"gizmo": {"dark": {"tilt2": "#123456"}}}),
+    );
+    let after = h.state().session.tokens.gizmo.clone();
+    assert_eq!(after.dark.tilt2, murmel_engine::Rgb([0x12, 0x34, 0x56]));
+    assert_eq!(
+        (after.dark.slide, after.dark.tilt),
+        (before.dark.slide, before.dark.tilt)
+    );
+    assert_eq!(after.light, before.light);
+}
+
 /// Invariant (export, the maintainer's cards of 2026-11-24): Cmd/Ctrl +
 /// Shift + E opens the export window, its controls all have names, and
 /// Export… writes the picture through export.image at the chosen size

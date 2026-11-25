@@ -87,7 +87,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `recent.clear` | 1 | write-files | Forget the files opened lately: writes an empty recent.toml in the config folder. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets, your defaults for new items (and which values of each kind can be defaults), your formulas and the config folder. |
 | `settings.set_theme` | 1 | write-files | Switch the theme live (dark, light, system) and write settings.toml in the config folder. |
-| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
+| `settings.set_colors` | 1 | write-files | Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow, first and second tilt arc), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder. |
 | `settings.set_view_cube` | 1 | write-files | Place the view cube: a corner of the viewport (top_right, top_left, bottom_left, bottom_right), a floating panel dragged anywhere over it (position: top left in pixels from the viewport's top left), or hidden; auto_hide hides it while the pointer is farther than distance_px (0 to 2000) from it. Applied live; writes settings.toml in the config folder. |
 | `settings.set_agents` | 1 | write-files | Let agents drive the open window (murmel mcp --live) or stop them: off closes the window's socket and every agent's connection. Applied live; writes settings.toml in the config folder. |
 | `settings.set_memory` | 1 | write-files | Set the memory budget: a mesh whose whole read needs more (estimated from the file before reading) opens as an overview when it is a blocked VTKHDF file; others open whole, and the window offers to convert them once to a blocked copy beside them (NAME.blocked.vtkhdf, as blocks.make writes) that opens as an overview. budget_gib (0.25 to 4096), or automatic: true for half the computer's memory (the default); convert_large true converts without asking (alone or with either). Applies to the next mesh opened; writes settings.toml in the config folder. |
@@ -2855,7 +2855,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
           "propertyNames": {
             "enum": [
               "slide",
-              "tilt"
+              "tilt",
+              "tilt2"
             ]
           },
           "type": "object"
@@ -2868,7 +2869,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
           "propertyNames": {
             "enum": [
               "slide",
-              "tilt"
+              "tilt",
+              "tilt2"
             ]
           },
           "type": "object"

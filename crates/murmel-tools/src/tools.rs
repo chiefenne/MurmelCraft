@@ -3914,7 +3914,7 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-settings-set-colors",
-        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow and tilt arcs), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
+        summary: "Set the user's mesh colours (#RRGGBB) that replace the built-in ones for every mesh: solid (the default mesh colour), the patch palette, role and cell-type colours, edge darkening, the quality ramp (good to bad), the clip handles per theme (gizmo.dark and gizmo.light: slide arrow, first and second tilt arc), the measurements per theme (measure.dark and measure.light: line, probe, halo); reset goes back to the built-in colours first. Writes settings.toml in the config folder.",
         outputs: &[],
         reads: &[],
         input_schema: || {
@@ -3927,8 +3927,8 @@ pub static TOOLS: &[Tool] = &[
                     "edge_darken": {"type": "number", "minimum": 0, "maximum": 1},
                     "quality": {"type": "array", "items": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}, "minItems": 2},
                     "gizmo": {"type": "object", "additionalProperties": false, "properties": {
-                        "dark": {"type": "object", "propertyNames": {"enum": ["slide", "tilt"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
-                        "light": {"type": "object", "propertyNames": {"enum": ["slide", "tilt"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}}
+                        "dark": {"type": "object", "propertyNames": {"enum": ["slide", "tilt", "tilt2"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},
+                        "light": {"type": "object", "propertyNames": {"enum": ["slide", "tilt", "tilt2"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}}
                     }},
                     "measure": {"type": "object", "additionalProperties": false, "properties": {
                         "dark": {"type": "object", "propertyNames": {"enum": ["line", "probe", "halo"]}, "additionalProperties": {"type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}},

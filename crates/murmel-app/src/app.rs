@@ -1341,6 +1341,31 @@ impl MurmelApp {
                                 self.call("settings.set_colors", json!({ "solid": hex }));
                             }
                         });
+                        // The clip handles in the theme shown (the other
+                        // theme's are set when it shows, or by the tool).
+                        let dark = self.dark(ui.ctx());
+                        let theme = if dark { "dark" } else { "light" };
+                        let g = *self.session.tokens.gizmo.colors(dark);
+                        for (key, current) in
+                            [("slide", g.slide), ("tilt", g.tilt), ("tilt2", g.tilt2)]
+                        {
+                            ui.horizontal(|ui| {
+                                let mut rgb = current.0;
+                                let name = self.i18n.tr(&format!("settings-gizmo-{key}"));
+                                let r = egui::color_picker::color_edit_button_srgb(ui, &mut rgb);
+                                r.widget_info(|| {
+                                    WidgetInfo::labeled(Role::ColorWell, true, name.clone())
+                                });
+                                ui.label(&name);
+                                if rgb != current.0 {
+                                    let hex = murmel_engine::Rgb(rgb).hex();
+                                    self.call(
+                                        "settings.set_colors",
+                                        json!({ "gizmo": { theme: { key: hex } } }),
+                                    );
+                                }
+                            });
+                        }
                         if self.session.colors != murmel_engine::MeshColors::default()
                             && ui.button(self.i18n.tr("settings-reset-colors")).clicked()
                         {
