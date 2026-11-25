@@ -135,6 +135,25 @@ impl MurmelApp {
         })
     }
 
+    /// The cell probe `p` is in: of the mesh shown, else, on an overview,
+    /// the cell of the file a block read for it holds (the number the
+    /// whole mesh gives it).
+    pub(crate) fn probe_cell(&self, p: &murmel_engine::measure::Probe) -> ProbeCell {
+        let d = &self.session.display;
+        if let Some(c) = p.at.cell {
+            return ProbeCell::In(c as u64);
+        }
+        match d.probe_found(&p.at) {
+            Some(f) => match (&f.cell, &f.problem) {
+                (Some(c), _) => ProbeCell::In(c.file_cell),
+                (None, Some(_)) => ProbeCell::Unread,
+                (None, None) => ProbeCell::Outside,
+            },
+            None if d.probe_findings.is_some() => ProbeCell::Reading,
+            None => ProbeCell::Outside,
+        }
+    }
+
     /// The status bar's hint while measuring.
     pub(crate) fn measure_hint(&self) -> Option<String> {
         let m = self.measuring.as_ref()?;
@@ -287,16 +306,22 @@ impl MurmelApp {
                 style.probe
             };
             let name = self.measure_name(item);
-            let text = match (p.at.cell, self.probe_shown(p)) {
-                (Some(_), Some(value)) => self.i18n.tr_args(
+            let text = match (self.probe_cell(p), self.probe_shown(p)) {
+                (ProbeCell::In(_), Some(value)) => self.i18n.tr_args(
                     "measure-label-probe-value",
                     &[("name", name.into()), ("value", value.into())],
                 ),
-                (Some(cell), None) => self.i18n.tr_args(
+                (ProbeCell::In(cell), None) => self.i18n.tr_args(
                     "measure-label-probe",
                     &[("name", name.into()), ("cell", cell.to_string().into())],
                 ),
-                (None, _) => self
+                (ProbeCell::Reading, _) => self
+                    .i18n
+                    .tr_args("measure-label-probe-reading", &[("name", name.into())]),
+                (ProbeCell::Unread, _) => self
+                    .i18n
+                    .tr_args("measure-label-probe-unread", &[("name", name.into())]),
+                (ProbeCell::Outside, _) => self
                     .i18n
                     .tr_args("measure-label-probe-outside", &[("name", name.into())]),
             };
@@ -409,10 +434,12 @@ impl MurmelApp {
                 for pr in &d.probes {
                     let item = Item::Probe(pr.n);
                     // The field colouring the mesh, else the cell.
-                    let value = match (pr.at.cell, self.probe_shown(pr)) {
-                        (Some(_), Some(v)) => v,
-                        (Some(c), None) => format!("cell:{c}"),
-                        (None, _) => "–".to_string(),
+                    let value = match (self.probe_cell(pr), self.probe_shown(pr)) {
+                        (ProbeCell::In(_), Some(v)) => v,
+                        (ProbeCell::In(c), None) => format!("cell:{c}"),
+                        (ProbeCell::Reading, _) => "…".to_string(),
+                        (ProbeCell::Unread, _) => "!".to_string(),
+                        (ProbeCell::Outside, _) => "–".to_string(),
                     };
                     v.push((
                         item,
@@ -878,4 +905,17 @@ fn draw_measure(
         return None;
     }
     Some(label(painter, style, c, at, text, false, true))
+}
+
+/// Where a probe is ([`MurmelApp::probe_cell`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProbeCell {
+    /// In this cell (of the file, on an overview).
+    In(u64),
+    /// On an overview, while the block that holds it is read.
+    Reading,
+    /// On an overview, when a block that may hold it could not be read
+    /// (its Properties say why).
+    Unread,
+    Outside,
 }

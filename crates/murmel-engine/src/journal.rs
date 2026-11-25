@@ -70,7 +70,8 @@ impl Snapshot {
         // Probes and measurements of a step name the cells of the mesh
         // shown then; an overview's regions may show other blocks now.
         if let Some(m) = s.mesh.as_ref().filter(|m| m.blocks.is_some()) {
-            crate::session::anchor_to(&mut d, &m.mesh);
+            let halo = m.blocks.as_ref().map(|b| b.subset.halo.as_slice());
+            crate::session::anchor_to(&mut d, &m.mesh, halo);
         }
         s.display = d;
         if redraw {

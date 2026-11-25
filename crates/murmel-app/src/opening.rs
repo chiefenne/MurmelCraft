@@ -223,6 +223,26 @@ impl MurmelApp {
         ctx.request_repaint();
     }
 
+    /// Find the probes of an overview that the cells shown do not hold in
+    /// the blocks of its file ([`murmel_engine::probe_blocks`]), one at a
+    /// time in the background; keep looking while one is read.
+    pub(crate) fn poll_probes(&mut self, ctx: &egui::Context) {
+        if self
+            .session
+            .mesh
+            .as_ref()
+            .is_none_or(|m| m.overview.is_none())
+        {
+            return;
+        }
+        if self.session.sync_probes() {
+            ctx.request_repaint();
+        }
+        if self.session.probe_blocks.job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
     /// What the window says while the preview grid of an overview is
     /// read: the phase and the seconds so far.
     pub(crate) fn preview_text(&self) -> Option<String> {

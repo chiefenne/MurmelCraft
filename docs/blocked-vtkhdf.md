@@ -238,6 +238,11 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   `read_blocks`, the blocks whose `BlockBounds` it touches, with their
   halo (the engine's `blocks.rs`); beyond the memory budget it is
   refused with BLOCK006.
+- A probe outside the cells shown reads the block that holds its point,
+  with its halo: the blocks whose `BlockBounds` hold the point, until one
+  of their owned cells holds it (the engine's `probe_blocks.rs`). The
+  last four blocks read stay for the next probes (docs/performance.md,
+  "Probes on an overview").
 
 ## Writers
 
