@@ -3734,7 +3734,7 @@ pub static TOOLS: &[Tool] = &[
                     "bindings": {"type": "array", "items": {
                         "type": "object",
                         "properties": {
-                            "action": {"enum": ["orbit", "pan", "zoom", "roll", "pick", "context_menu", "fit"]},
+                            "action": {"enum": ["orbit", "pan", "zoom", "roll", "pick", "context_menu", "fit", "zoom_box"]},
                             "gesture": {"enum": ["drag", "click", "double_click", "scroll", "pinch"]},
                             "button": {"enum": ["primary", "secondary", "middle"]},
                             "mods": {"type": "object", "properties": {

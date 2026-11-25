@@ -3000,7 +3000,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
               "roll",
               "pick",
               "context_menu",
-              "fit"
+              "fit",
+              "zoom_box"
             ]
           },
           "button": {
