@@ -82,7 +82,7 @@ pub const CODES: &[(&str, &str, &str)] = &[
     (
         "MESH002",
         "The file is not a VTK XML UnstructuredGrid.",
-        "Open a .vtu file such as KoflCraft's foehncraft.vtu.",
+        "Open a KoflCraft mesh or a FoehnCraft result (.vtu, .vtkhdf); other tools' meshes come in through File, Import (OpenFOAM polyMesh, VTK file).",
     ),
     (
         "MESH003",

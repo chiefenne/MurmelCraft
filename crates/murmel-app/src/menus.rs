@@ -143,10 +143,27 @@ impl MurmelApp {
                     .tr_args("recent-missing", &[("name", name.into())])
             };
             let secondary = color(self.palette(ui.ctx()).text_secondary);
+            // Where it comes from, beside its folder (the maintainer's
+            // card of 2026-11-25: one list, a tag per entry).
+            use murmel_engine::origin::Origin;
+            use murmel_engine::recent::Kind;
+            let tag = match (e.kind, e.origin) {
+                (Kind::Mesh, Some(o)) => Some(self.origin_tag(o, e.imported)),
+                (Kind::Mesh, None) => None,
+                (Kind::Session, _) => Some(self.i18n.tr("origin-session")),
+                (Kind::Series | Kind::Parcels | Kind::Charts, _) => {
+                    Some(self.origin_tag(Origin::Foehncraft, false))
+                }
+            };
+            let side = match tag {
+                Some(t) if dir.is_empty() => t,
+                Some(t) => format!("{dir} · {t}"),
+                None => dir,
+            };
             let b = ui
                 .add_enabled(
                     there,
-                    Button::new(label).shortcut_text(RichText::new(dir).color(secondary)),
+                    Button::new(label).shortcut_text(RichText::new(side).color(secondary)),
                 )
                 .on_hover_text(e.path.display().to_string())
                 .on_disabled_hover_text(e.path.display().to_string());
@@ -342,7 +359,8 @@ mod tests {
         let by = |id: &str| all.iter().find(|c| c.id == id).unwrap();
         for id in [
             "window.open",
-            "window.open_folder",
+            "window.import_openfoam",
+            "window.import_vtk",
             "window.session_load",
             "window.series_open",
             "window.settings",

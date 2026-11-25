@@ -2910,3 +2910,28 @@ fn page_setup_from_the_file_menu() {
         murmel_engine::settings::Orientation::Portrait
     );
 }
+
+/// Invariant: the title bar names the tool that wrote the open file, an
+/// OpenFOAM case opened by a drop (or Open recent) is tagged imported and
+/// the status bar says so, and our own files get no such note. Breaks if
+/// an import could slip in looking like one of our files (the
+/// maintainer's cards of 2026-11-25).
+#[test]
+fn imported_files_are_tagged() {
+    let mut h = harness();
+    assert!(h.query_by_label("· KoflCraft").is_some(), "the channel");
+    assert!(h.state().notice.is_none(), "ours: no note");
+    let case = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/openfoam/channel_binary");
+    h.state_mut().open_path(case);
+    h.run_steps(3);
+    assert!(h.query_by_label("· OpenFOAM, imported").is_some());
+    assert_eq!(
+        h.state().notice.as_deref(),
+        Some("Imported channel_binary (OpenFOAM)")
+    );
+    assert!(
+        h.query_by_label("Imported channel_binary (OpenFOAM)")
+            .is_some()
+    );
+}

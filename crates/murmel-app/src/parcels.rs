@@ -47,8 +47,7 @@ impl MurmelApp {
     pub(crate) fn parcels_open_dialog(&mut self) {
         let mut d = rfd::FileDialog::new()
             .set_title(self.i18n.tr("cmd-parcels-open"))
-            .add_filter(self.i18n.tr("open-filter-vtkhdf"), &["vtkhdf", "hdf", "h5"])
-            .add_filter(self.i18n.tr("open-filter-all"), &["*"]);
+            .add_filter(self.i18n.tr("open-filter-vtkhdf"), &["vtkhdf", "hdf", "h5"]);
         // FoehnCraft writes them to the spray folder beside the result.
         if let Some(dir) = self
             .session

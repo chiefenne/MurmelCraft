@@ -22,6 +22,10 @@ pub struct MurmelApp {
     /// When the status bar first showed `error`; it goes away
     /// `ERROR_SECONDS` later, or sooner when a journalled call works.
     pub(crate) error_since: Option<f64>,
+    /// A note in the status bar that is not a problem ("Imported …"),
+    /// shown while there is no error, for as long as an error is.
+    pub(crate) notice: Option<String>,
+    pub(crate) notice_since: Option<f64>,
     /// The session file last saved or loaded, where Ctrl + S saves.
     pub(crate) session_path: Option<PathBuf>,
     pub(crate) drag: Option<murmel_engine::navigation::Action>,
@@ -220,6 +224,8 @@ impl MurmelApp {
             gpu,
             error,
             error_since: None,
+            notice: None,
+            notice_since: None,
             session_path: None,
             drag: None,
             hover: None,
@@ -379,6 +385,17 @@ impl MurmelApp {
     /// Drop the status bar's message `ERROR_SECONDS` after it was first
     /// shown, and wake the window then if nothing else does.
     fn expire_error(&mut self, ctx: &egui::Context) {
+        if let Some(n) = self.notice_since
+            && self.now - n > ERROR_SECONDS
+        {
+            self.notice = None;
+            self.notice_since = None;
+        } else if self.notice.is_some() {
+            let since = *self.notice_since.get_or_insert(self.now);
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                (since + ERROR_SECONDS - self.now).max(0.05),
+            ));
+        }
         if self.error.is_none() {
             return;
         }
@@ -484,36 +501,73 @@ impl MurmelApp {
         }
     }
 
+    /// File ▸ Open: only the files of our three tools are listed, with
+    /// no "All files" filter, so the system dialog greys out the rest
+    /// (macOS; Linux and Windows hide them). Other tools' formats come in
+    /// through File ▸ Import (the maintainer's cards of 2026-11-25).
     pub(crate) fn open_dialog(&mut self) {
-        let picked = rfd::FileDialog::new()
-            .set_title(self.i18n.tr("toolbar-open-tip"))
+        let session = murmel_engine::session_file::EXTENSION;
+        let picked = self
+            .file_dialog(self.i18n.tr("cmd-open"))
             .add_filter(
-                self.i18n.tr("open-filter-meshes"),
-                &[
-                    "vtu",
-                    "vtkhdf",
-                    "foam",
-                    "OpenFOAM",
-                    murmel_engine::session_file::EXTENSION,
-                ],
+                self.i18n.tr("open-filter-ours"),
+                &[session, "vtu", "vtkhdf"],
             )
-            .add_filter(self.i18n.tr("open-filter-vtu"), &["vtu"])
-            .add_filter(self.i18n.tr("open-filter-vtkhdf"), &["vtkhdf"])
-            .add_filter(self.i18n.tr("open-filter-foam"), &["foam", "OpenFOAM"])
-            .add_filter(self.i18n.tr("open-filter-all"), &["*"])
+            .add_filter(self.i18n.tr("open-filter-session"), &[session])
+            .add_filter(self.i18n.tr("open-filter-meshes"), &["vtu", "vtkhdf"])
             .pick_file();
         if let Some(p) = picked {
             self.open_path(p);
         }
     }
 
-    /// Pick an OpenFOAM case, `constant` or `polyMesh` folder.
-    pub(crate) fn open_folder_dialog(&mut self) {
-        let picked = rfd::FileDialog::new()
-            .set_title(self.i18n.tr("cmd-open-folder"))
+    /// File ▸ Import ▸ OpenFOAM polyMesh: a case, `constant` or
+    /// `polyMesh` folder.
+    pub(crate) fn import_openfoam_dialog(&mut self) {
+        let picked = self
+            .file_dialog(self.i18n.tr("import-openfoam-title"))
             .pick_folder();
         if let Some(p) = picked {
             self.open_path(p);
+        }
+    }
+
+    /// File ▸ Import ▸ VTK file: a .vtu or VTKHDF file of another tool.
+    pub(crate) fn import_vtk_dialog(&mut self) {
+        let picked = self
+            .file_dialog(self.i18n.tr("import-vtk-title"))
+            .add_filter(
+                self.i18n.tr("import-filter-vtk"),
+                &["vtu", "vtkhdf", "hdf", "h5"],
+            )
+            .pick_file();
+        if let Some(p) = picked {
+            self.open_path(p);
+        }
+    }
+
+    /// A file dialog titled `title`, in the folder of the open mesh.
+    fn file_dialog(&self, title: String) -> rfd::FileDialog {
+        let d = rfd::FileDialog::new().set_title(title);
+        match self.session.mesh.as_ref().and_then(|m| m.path.parent()) {
+            Some(dir) => d.set_directory(dir),
+            None => d,
+        }
+    }
+
+    /// The tag of where the open mesh comes from: "KoflCraft",
+    /// "OpenFOAM, imported".
+    pub(crate) fn origin_tag(
+        &self,
+        origin: murmel_engine::origin::Origin,
+        imported: bool,
+    ) -> String {
+        let name = self.i18n.tr(&format!("origin-{}", origin.key()));
+        if imported {
+            self.i18n
+                .tr_args("origin-imported", &[("origin", name.into())])
+        } else {
+            name
         }
     }
 
@@ -580,6 +634,15 @@ impl MurmelApp {
                 })
                 .unwrap_or_else(|| self.i18n.tr("app-no-file"));
             ui.add(egui::Label::new(RichText::new(file).color(color(p.text_secondary))).truncate());
+            if let Some(m) = &self.session.mesh {
+                let src = m.source();
+                let tag = self.origin_tag(src.origin, src.imported());
+                ui.label(
+                    RichText::new(format!("· {tag}"))
+                        .small()
+                        .color(color(p.text_secondary)),
+                );
+            }
             // The buttons at the right, drawn left to right so that Tab
             // visits them in the order they show.
             let w = self.title_buttons_w;
@@ -1102,6 +1165,11 @@ impl MurmelApp {
                     || self.streams_status(ui, &mut said)
                     || self.cuts_status(ui, &mut said)
                 {
+                } else if self.error.is_none()
+                    && let Some(n) = &self.notice
+                {
+                    ui.label(RichText::new(n).small().color(secondary));
+                    said.push(n.clone());
                 } else if let Some(e) = &self.error {
                     let text = self.i18n.tr_args(
                         "status-error",

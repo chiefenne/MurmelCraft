@@ -106,7 +106,8 @@ impl MurmelApp {
         if let Run::Window(_) = c.run {
             match c.id.as_str() {
                 "window.open" => self.open_dialog(),
-                "window.open_folder" => self.open_folder_dialog(),
+                "window.import_openfoam" => self.import_openfoam_dialog(),
+                "window.import_vtk" => self.import_vtk_dialog(),
                 "window.parcels_open" => self.parcels_open_dialog(),
                 "window.series_open" => self.series_open_dialog(),
                 "window.charts_open" => self.charts_open_dialog(),

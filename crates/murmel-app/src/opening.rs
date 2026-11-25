@@ -428,6 +428,7 @@ impl MurmelApp {
                 {
                     // Ctrl + S no longer writes the last session over it.
                     self.session_path = None;
+                    self.note_import();
                 }
             }
             Then::Session(file) => {
@@ -439,6 +440,27 @@ impl MurmelApp {
                 }
             }
         }
+    }
+
+    /// Say in the status bar that the mesh just opened came in through
+    /// a format of another tool (an OpenFOAM polyMesh, a VTK file), as a
+    /// drop or Open recent may bring one in without File ▸ Import.
+    fn note_import(&mut self) {
+        let Some(m) = &self.session.mesh else { return };
+        let src = m.source();
+        if !src.imported() {
+            return;
+        }
+        let file = m
+            .path
+            .file_name()
+            .map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        let origin = self.origin_tag(src.origin, false);
+        self.notice = Some(self.i18n.tr_args(
+            "status-imported",
+            &[("file", file.into()), ("origin", origin.into())],
+        ));
+        self.notice_since = None;
     }
 
     /// What the window says while a mesh is read: its name, the phase and

@@ -9,8 +9,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 
 | Keys | Command | Calls |
 |---|---|---|
-| `Ctrl + O` | Open mesh… | window, then `mesh.open` |
-| `Ctrl + Shift + O` | Open OpenFOAM case folder… | window, then `mesh.open` |
+| `Ctrl + O` | Open… | window, then `mesh.open` |
 | `Ctrl + W` | Close mesh | `mesh.close` `{}` |
 | `Ctrl + S` | Save session | window, then `session.save` |
 | `Ctrl + Shift + S` | Save session as… | window, then `session.save` |
@@ -92,6 +91,8 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Ctrl + Shift + C` | Copy the view as an image | window |
 | `Ctrl + P` | Print… | window |
 | `F1` | Manual | window |
+| palette | OpenFOAM polyMesh… | window, then `mesh.open` |
+| palette | VTK file… | window, then `mesh.open` |
 | palette | Clear the list of recent files | `recent.clear` `{}` |
 | palette | Load session… | window, then `session.load` |
 | palette | Save a screenshot… | window, then `view.screenshot` |
