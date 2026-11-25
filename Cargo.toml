@@ -61,3 +61,13 @@ opt-level = 2
 
 [profile.test.package."*"]
 opt-level = 2
+
+# The tests run the mesh and the engine's numerics (preview grids, cuts,
+# streamlines) on real meshes; unoptimised they take minutes, at opt-level 1
+# seconds. Debug assertions and overflow checks stay on. The other crates
+# stay at 0: they build faster and run little.
+[profile.test.package.murmel-mesh]
+opt-level = 1
+
+[profile.test.package.murmel-engine]
+opt-level = 1

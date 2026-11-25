@@ -114,9 +114,10 @@ impl Focus {
 
     /// Offer `resp` as the widget F6 focuses in `region`; the first one
     /// offered in a frame wins, so offer them in the order Tab visits.
+    /// A disabled widget cannot take the focus and is passed over.
     pub fn offer(&mut self, region: Region, resp: &Response) {
         let seen = &mut self.drawing[region.index()];
-        if seen.first.is_none() && resp.sense.is_focusable() {
+        if seen.first.is_none() && resp.enabled() && resp.sense.is_focusable() {
             seen.first = Some(resp.id);
         }
     }

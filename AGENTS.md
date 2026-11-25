@@ -130,7 +130,13 @@ machine install Mesa lavapipe (`mesa-vulkan-drivers`).
 
 CI (`.github/workflows/ci.yml`) makes the fast run on every pull request and
 push to main: format, clippy and the tests, with the Rust cache and
-cancel-in-progress. The full run adds tests marked
+cancel-in-progress. It runs the tests with cargo-nextest (every test binary
+at once, each test in its own process, settings in `.config/nextest.toml`),
+builds without debug info, and takes Mesa from a cache. `cargo test` builds
+murmel-mesh and murmel-engine with `opt-level = 1` (Cargo.toml), here as in
+CI; `cargo nextest run --workspace --all-targets` runs them faster still if
+nextest is installed.
+A test must not depend on another test running in the same process. The full run adds tests marked
 `#[ignore = "full run: …"]`; it starts by hand (`workflow_dispatch`) or with
 the label `full-ci`, only after asking the maintainer. Mark a test as a
 full-run test when it takes more than about a minute; keep a fast test of

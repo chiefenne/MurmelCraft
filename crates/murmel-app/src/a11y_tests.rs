@@ -1415,7 +1415,15 @@ fn player_bar_steps_and_plays() {
     h.key_press(egui::Key::Period);
     h.run_steps(2);
     assert_ne!(step(&h), before);
-    // F6 from the viewport reaches the player next.
+    // F6 from the viewport reaches the player next, also on the first
+    // step, where "First step" is disabled and cannot take the focus.
+    assert!(
+        h.state_mut()
+            .call("series.go", serde_json::json!({"to": "first"}))
+            .is_some()
+    );
+    h.run_steps(2);
+    assert_eq!(step(&h), 10);
     let mut seen = Vec::new();
     for _ in 0..7 {
         h.key_press(egui::Key::F6);

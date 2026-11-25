@@ -5,6 +5,15 @@ name: CI
 # software Vulkan driver). A full run (later: long tests marked
 # #[ignore = "full run: ..."]) starts by hand (Actions > CI > Run workflow)
 # or with the pull-request label `full-ci`, after asking the maintainer.
+#
+# What keeps it fast (AGENTS.md, "Checks to run before a pull request"):
+# - cargo-nextest runs every test binary at once instead of one after the
+#   other, so the slowest test sets the time, not the sum of the crates;
+# - the mesh and engine crates are built with opt-level 1 for the tests
+#   (Cargo.toml; debug assertions and overflow checks stay on);
+# - no debug info: a smaller cache that restores faster, quicker links
+#   (a panic still names its file and line);
+# - the Mesa packages come from a cache instead of apt.
 on:
   push:
     branches: [main]
@@ -22,6 +31,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   FULL: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
 
 jobs:
@@ -40,16 +51,36 @@ jobs:
         run: rustup update stable && rustup default stable && rustup component add clippy
       - name: Cache the Cargo build
         uses: Swatinem/rust-cache@v2
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Cache the Mesa packages
+        id: mesa
+        uses: actions/cache@v4
+        with:
+          path: ~/mesa-debs
+          key: mesa-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}
       - name: Install Mesa lavapipe (software Vulkan for the render tests)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers
+        run: |
+          if [ "${{ steps.mesa.outputs.cache-hit }}" != "true" ]; then
+            sudo apt-get update -qq
+            mkdir -p ~/mesa-debs
+            sudo apt-get install -y -qq --no-install-recommends --download-only \
+              -o Dir::Cache::Archives="$HOME/mesa-debs" mesa-vulkan-drivers
+            sudo chown -R "$USER" ~/mesa-debs
+          fi
+          # Skip the man page index rebuild that dpkg triggers.
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo dpkg -i ~/mesa-debs/*.deb > /dev/null
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
         run: |
           if [ "$FULL" = "true" ]; then
-            cargo test --locked --workspace --all-targets -- --include-ignored
+            cargo nextest run --profile ci --locked --workspace --all-targets --run-ignored all
           else
-            cargo test --locked --workspace --all-targets
+            cargo nextest run --profile ci --locked --workspace --all-targets
           fi
       - name: Keep the rendered images when a render test fails
         if: failure()
