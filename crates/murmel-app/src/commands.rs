@@ -201,6 +201,14 @@ impl MurmelApp {
         {
             self.session.cancel_preview();
         }
+        // Then a mesh being converted to a blocked file.
+        if self.session.convert_job.is_some()
+            && !typing
+            && self.palette.is_none()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            self.session.cancel_convert();
+        }
         // Then the streamlines being traced through an overview's blocks.
         if self.session.probe_blocks.stream_job.is_some()
             && !typing

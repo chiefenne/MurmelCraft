@@ -13,6 +13,7 @@
 
 pub mod blocks;
 mod boundary;
+pub mod estimate;
 pub mod evidence;
 pub mod fasthash;
 pub mod field;

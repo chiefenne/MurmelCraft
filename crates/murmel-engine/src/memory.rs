@@ -24,6 +24,10 @@ pub struct Memory {
     /// The budget in GiB; left out, half the computer's memory.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_gib: Option<f64>,
+    /// Convert a mesh that is not blocked and needs more than the budget
+    /// without asking ([`crate::convert`]); off, the window asks.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub convert_large: bool,
 }
 
 impl Memory {

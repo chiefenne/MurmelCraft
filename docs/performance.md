@@ -1487,3 +1487,26 @@ whole:
   status bar counts the blocks read, with Cancel or Esc (the lines then
   end at the blocks read so far). Properties says how many blocks the
   lines read; a set being traced says so.
+
+## A large mesh that is not blocked (2026-11-25)
+
+A `.vtu`, an OpenFOAM `polyMesh` or an unblocked VTKHDF file opened
+whole whatever the budget, so a mesh beyond the computer's memory could
+not open at all. Now its size is estimated before anything is read (the
+engine's `convert.rs`, `murmel_mesh::estimate`: the cell count in the
+head of the files times the 1,500 bytes a cell a whole read peaks at),
+and beyond the budget the window asks to convert it once to a blocked
+copy beside it (card 4), which opens as an overview.
+
+- The estimate reads at most the first MiB of a `.vtu` or of `owner`
+  (decompressed for `owner.gz`), or the VTKHDF structure: well under a
+  millisecond on the fixtures. A `.vtu`'s boundary faces stored as cells
+  count as cells, so it errs high.
+- Converting reads the mesh whole once, as `murmel blocks make` does;
+  1 M cells with three fields took 24 s here (most of it the read). The
+  copy is about 1,500 bytes a cell on disk for these polyhedra. When the
+  read needs more than the computer's memory, the question says so: a
+  blocked file written by KoflCraft or FoehnCraft avoids the whole read.
+- The copy is written to a `.part` file and renamed when whole, so a
+  conversion stopped (Cancel, Esc, checked between blocks) or failed
+  leaves nothing behind.

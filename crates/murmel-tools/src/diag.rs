@@ -135,6 +135,14 @@ const OWN: &[Code] = &[
         fix: Some("Remove a region with region.clear, or change one with region.set."),
     },
     Code {
+        code: "BLOCK007",
+        severity: Severity::Warning,
+        meaning: "The mesh is not a blocked VTKHDF file and its whole read needs more memory than the budget; it opened whole.",
+        fix: Some(
+            "Convert it once with blocks.make (the window offers to, and settings.set_memory convert_large does it without asking) to a blocked copy that opens as an overview, or raise the memory budget.",
+        ),
+    },
+    Code {
         code: "REGION004",
         severity: Severity::Error,
         meaning: "On a mesh open as an overview, regions are boxes, spheres and slabs: each reads the blocks it touches. A zone, patch or cell region needs the cells read whole.",

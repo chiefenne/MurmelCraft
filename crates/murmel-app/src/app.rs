@@ -78,6 +78,10 @@ pub struct MurmelApp {
     pub(crate) cube_distance_edit: Option<f64>,
     /// The memory budget being typed or dragged (GiB), set when done.
     pub(crate) memory_edit: Option<f64>,
+    /// A large mesh that is not blocked, asked about ([`crate::convert`]).
+    pub(crate) convert_offer: Option<murmel_engine::convert::Offer>,
+    /// "Convert large meshes without asking", ticked in the question.
+    pub(crate) convert_remember: bool,
     /// Until when a run of wheel steps keeps its undo group open.
     wheel_until: f64,
     /// A drag of a clip plane handle under way.
@@ -174,6 +178,7 @@ impl MurmelApp {
             session.defaults = st.defaults;
             session.formulas = st.formulas;
             session.memory_budget = st.memory.budget_gib;
+            session.convert_large = st.memory.convert_large;
             murmel_engine::defaults::start_view(&mut session);
             let mut problems = problems;
             if let Err(e) = session.set_colors(st.colors) {
@@ -220,6 +225,8 @@ impl MurmelApp {
             cube_busy: false,
             cube_distance_edit: None,
             memory_edit: None,
+            convert_offer: None,
+            convert_remember: false,
             wheel_until: 0.0,
             clip_drag: None,
             clip_spots: Vec::new(),
@@ -394,6 +401,8 @@ impl MurmelApp {
             if !background {
                 self.open_now(Then::Session(path));
             }
+        } else if self.offer_convert(&path, mode) {
+            // converted first, or asked
         } else if !self.open_in_background(path.clone(), Then::Mesh(path.clone(), mode)) {
             self.open_now(Then::Mesh(path, mode));
         }
@@ -1060,6 +1069,7 @@ impl MurmelApp {
                     .color(secondary),
                 );
                 if self.opening_status(ui, &mut said)
+                    || self.convert_status(ui, &mut said)
                     || self.blocks_status(ui, &mut said)
                     || self.preview_status(ui, &mut said)
                     || self.streams_status(ui, &mut said)
@@ -1293,6 +1303,13 @@ impl MurmelApp {
                 }
             });
         }
+        let mut convert = self.session.convert_large;
+        if ui
+            .checkbox(&mut convert, self.i18n.tr("settings-memory-convert"))
+            .changed()
+        {
+            self.call("settings.set_memory", json!({ "convert_large": convert }));
+        }
         ui.label(
             RichText::new(self.i18n.tr_args(
                 "settings-memory-note",
@@ -1459,6 +1476,7 @@ impl eframe::App for MurmelApp {
         self.color_window(&ctx);
         self.export_window(&ctx);
         self.derived_window(&ctx);
+        self.convert_window(&ctx);
         self.poll_movie(&ctx);
         self.poll_probe_history(&ctx);
         self.probe_history_window(&ctx);
@@ -1469,6 +1487,7 @@ impl eframe::App for MurmelApp {
         self.poll_preview(&ctx);
         self.poll_probes(&ctx);
         self.poll_streams(&ctx);
+        self.poll_convert(&ctx);
         self.poll_digest(&ctx);
         self.poll_surface(&ctx);
         self.movie_window(&ctx);

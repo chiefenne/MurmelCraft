@@ -14,6 +14,7 @@ pub mod chart;
 pub mod checked;
 pub mod clip;
 pub mod colormap;
+pub mod convert;
 pub mod cube;
 pub mod defaults;
 pub mod derive;
