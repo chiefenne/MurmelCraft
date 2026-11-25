@@ -84,6 +84,11 @@ mod tests {
             assert!(t.has(&format!("projection-{p}")));
             assert!(t.has(&format!("projection-short-{p}")));
         }
+        // The name and the one-line tip of every help page.
+        for p in murmel_engine::help::pages() {
+            assert!(t.has(&p.title_key()), "missing key {}", p.title_key());
+            assert!(t.has(&p.line_key()), "missing key {}", p.line_key());
+        }
         // The command table, the views of the cube and the render modes.
         for c in murmel_tools::commands::commands() {
             assert!(t.has(&c.label_key), "missing key {}", c.label_key);
