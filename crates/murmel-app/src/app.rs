@@ -1073,6 +1073,7 @@ impl MurmelApp {
                     || self.blocks_status(ui, &mut said)
                     || self.preview_status(ui, &mut said)
                     || self.streams_status(ui, &mut said)
+                    || self.cuts_status(ui, &mut said)
                 {
                 } else if let Some(e) = &self.error {
                     let text = self.i18n.tr_args(
@@ -1487,6 +1488,7 @@ impl eframe::App for MurmelApp {
         self.poll_preview(&ctx);
         self.poll_probes(&ctx);
         self.poll_streams(&ctx);
+        self.poll_cuts(&ctx);
         self.poll_convert(&ctx);
         self.poll_digest(&ctx);
         self.poll_surface(&ctx);

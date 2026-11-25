@@ -228,6 +228,14 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   a region reads the cells of its blocks. The grid is kept in the cache
   folder, so the file opened again unchanged is not sampled again
   (docs/performance.md, "The preview grid kept").
+- The exact faces of an overview's slices and iso-surfaces are then cut
+  through the blocks of the file, one block with its halo at a time, and
+  take the grid's place (the engine's `cut_blocks.rs`): a slice cuts the
+  blocks whose `BlockBounds` its planes cross, an iso-surface those whose
+  `BlockRange_<field>`, with the ranges of the blocks whose bounds touch
+  theirs, holds its value (§ 6); a field without ranges cuts every block
+  (docs/performance.md, "Exact slices and iso-surfaces on an
+  overview").
 - The eye of "Block boxes" in the model tree (the item `blocks`) draws
   each block's `BlockBounds` as a box (the engine's `block_boxes.rs`);
   the blocks a region reads take a colour of their own, so you see what

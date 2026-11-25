@@ -16,6 +16,7 @@ pub mod clip;
 pub mod colormap;
 pub mod convert;
 pub mod cube;
+pub mod cut_blocks;
 pub mod defaults;
 pub mod derive;
 pub mod display;

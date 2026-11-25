@@ -297,6 +297,66 @@ impl MurmelApp {
         true
     }
 
+    /// Follow the cut of an overview's slices and iso-surfaces through its
+    /// blocks: start it once they rest, draw it once cut, and say why a
+    /// cut ended without faces (not when stopped).
+    pub(crate) fn poll_cuts(&mut self, ctx: &egui::Context) {
+        let c = &self.session.probe_blocks;
+        if c.cut_job.is_none() && c.cut_rest.is_none() {
+            return;
+        }
+        let running = c.cut_job.as_ref().is_some_and(|j| !j.is_done());
+        let had = self.session.probe_blocks.cut_problem.clone();
+        self.session.poll_cuts();
+        if running {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        let now = &self.session.probe_blocks.cut_problem;
+        if let Some(e) = now.as_ref().filter(|e| had.as_ref() != Some(*e)) {
+            self.set_error(Some(Diagnostic::new(e.code, e.message.clone())));
+        }
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
+
+    /// What the window says while slices and iso-surfaces are cut through
+    /// an overview's blocks: the blocks gone through, of how many, and the
+    /// seconds so far.
+    pub(crate) fn cuts_text(&self) -> Option<String> {
+        let j = self.session.probe_blocks.cut_job.as_ref()?;
+        let done = j.done.load(std::sync::atomic::Ordering::Relaxed);
+        Some(self.i18n.tr_args(
+            "status-cuts",
+            &[
+                ("done", done.into()),
+                ("blocks", j.blocks.into()),
+                (
+                    "seconds",
+                    format!("{:.1}", j.started.elapsed().as_secs_f64()).into(),
+                ),
+            ],
+        ))
+    }
+
+    /// The status bar while slices and iso-surfaces are cut through the
+    /// blocks: what it says and Cancel.
+    pub(crate) fn cuts_status(&mut self, ui: &mut Ui, said: &mut Vec<String>) -> bool {
+        let Some(text) = self.cuts_text() else {
+            return false;
+        };
+        let cancel = self.i18n.tr("status-loading-cancel");
+        let tip = self.i18n.tr("status-cuts-cancel-tip");
+        let b = ui.small_button(&cancel).on_hover_text(&tip);
+        let name = format!("{cancel}. {tip}");
+        b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+        if b.clicked() {
+            self.session.cancel_cuts();
+        }
+        ui.label(RichText::new(&text).small());
+        said.push(text);
+        true
+    }
+
     /// What the window says while the preview grid of an overview is
     /// read: the phase and the seconds so far.
     pub(crate) fn preview_text(&self) -> Option<String> {

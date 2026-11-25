@@ -3522,14 +3522,16 @@ fn the_memory_budget_decides_how_a_mesh_opens() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Invariant (the maintainer's card 7 of 2026-11-24: the overview is the
-/// surface, the block ranges and a preview grid): through the tools, a
-/// slice and an iso-surface on a mesh open as an overview draw on its
-/// preview grid, read before the tool returns, and mesh.info's overview
-/// tells the grid (`preview`). Breaks when the tool returns before the
-/// grid is read (nothing drawn for a script or an agent), or when the
-/// result does not tell it. The engine tests do not go through the
-/// tools.
+/// Invariant (the maintainer's cards 7 and 8 of 2026-11-24: the overview
+/// is the surface, the block ranges and a preview grid; stream slices and
+/// iso-surfaces): through the tools, a slice and an iso-surface on a mesh
+/// open as an overview draw, read before the tool returns: the preview
+/// grid, and their exact faces cut through the blocks, which
+/// inspect.item tells (`cut_blocks`); mesh.info's overview tells the grid
+/// (`preview`). Breaks when the tool returns before the grid is read or
+/// the faces are cut (nothing, or the grid's, drawn for a script or an
+/// agent), or when the result does not tell it. The engine tests do not
+/// go through the tools.
 #[test]
 fn slices_on_an_overview_draw_through_the_tools() {
     let dir = std::env::temp_dir().join(format!("murmel-preview-tool-{}", std::process::id()));
@@ -3557,6 +3559,27 @@ fn slices_on_an_overview_draw_through_the_tools() {
     let e = call("iso.set", json!({"field": "pressure"}), &mut s);
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert!(s.mesh.as_ref().unwrap().surface.triangles() > sliced);
+    let cuts = s
+        .display
+        .block_cuts
+        .clone()
+        .expect("cut through the blocks");
+    assert_eq!(cuts.0.len(), 2);
+    assert!(cuts.0.iter().all(|c| c.faces.is_some() && c.blocks > 0));
+    for id in ["slice:1", "iso:1"] {
+        let e = call("inspect.item", json!({"item": id}), &mut s);
+        assert!(e.ok(), "{:?}", e.diagnostics);
+        let keys: Vec<&str> = e.result["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r["key"].as_str())
+            .collect();
+        assert!(
+            keys.contains(&"cut_blocks") && !keys.contains(&"cutting"),
+            "{id}: {keys:?}"
+        );
+    }
     let e = call("mesh.info", json!({}), &mut s);
     let preview = &e.result["overview"]["preview"];
     assert_eq!(preview["grid"], json!([16, 8, 4]));

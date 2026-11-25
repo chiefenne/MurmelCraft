@@ -1544,6 +1544,68 @@ whole:
   end at the blocks read so far). Properties says how many blocks the
   lines read; a set being traced says so.
 
+## Exact slices and iso-surfaces on an overview (2026-11-25)
+
+An overview's slices and iso-surfaces showed on its preview grid only
+(about 128 cells along the longest side), however close one looked.
+Now the grid shows at once and their exact faces are then cut through
+the blocks of the file (the engine's `cut_blocks.rs`, card 8: stream
+slices and iso-surfaces), taking the grid's place.
+
+- **Which blocks.** A slice cuts the blocks whose box one of its planes
+  crosses. An iso-surface cuts the blocks whose values, from the
+  smallest to the largest of their own `BlockRange` and those of the
+  blocks whose boxes touch theirs, hold its value (span space, Livnat,
+  Shen and Johnson 1996): a node's value lies between the values of the
+  cells around it, owned by the block or by one beside it. A block's own
+  range is not enough: a large cell whose nodes reach small cells beside
+  it carries values its block does not hold (the channel fixture in
+  blocks of 20 cells has one). A field made on the overview, or one
+  without ranges, cuts every block; a block every clip plane takes away
+  is not read.
+- **Each block** is read with its halo and cut as the mesh read whole
+  is (`extract::append`), owned cells shown and the halo hidden, so every
+  face is cut once. With a velocity linear in space the triangles are the
+  whole mesh's to rounding (corners, values and colours, coloured by the
+  field or by the mesh's colour, on blocks of 100 cells); otherwise node
+  values next to a block's border take the halo cells' gradients, as for
+  regions.
+- **Kept.** The faces stay until the item, the field shown, the colours,
+  the clip planes or the hidden zones change. Selecting an item colours
+  its faces again without cutting (the selection colour mixed in as the
+  whole mesh does it). The last blocks gone through stay, as many as an
+  eighth of the memory budget holds, so a slice moved a little cuts the
+  same blocks again without reading them. The faces may take a quarter
+  of the budget (BLOCK006 beyond); the item then stays on the grid.
+- **In the window** the cut starts once the items have rested 0.3 s, on a
+  thread of its own; the status bar counts the blocks with Cancel or Esc
+  (the item then stays on the grid until it or the budget changes).
+  Properties tells how many blocks a cut went through, or that it is
+  being cut. The arrows stay on the grid. The tools cut before they
+  return.
+
+1 M cells with three cell fields, 16 blocks of 65,536, 4 threads,
+`murmel run` (the envelope's seconds; the preview grid in the cache
+folder), in brackets the same calls on the file read whole:
+
+| call | blocks | seconds |
+|---|---:|---:|
+| first slice (x, middle) | 7 | 2.8 to 4.0 (0.38) |
+| the slice moved by 0.1, its blocks kept | 7 | 0.24 (0.23) |
+| the slice moved by 0.4 | 7 | 1.2 to 1.4 |
+| a second slice (z) | 13 | 1.6 to 1.8 (0.39) |
+| the second slice as a series of 5 | 16 | 2.5 to 2.6 (1.2) |
+| iso-surface of p (middle) | 16 | 2.7 (2.0) |
+| iso-surface beyond every range | 0 | 0.8 (the grid alone) |
+| selecting the slice | 0 | 0.3 (1.5) |
+
+- A block takes 0.3 to 0.4 s to read, make its values and cut; once
+  kept, a cut costs what it costs on the mesh read whole.
+- On 100 M cells (about 1,500 blocks) a plane crosses a few hundred
+  blocks, so the exact slice follows the grid's after a minute or so on
+  the iMac; reading several blocks at once, or keeping an index of the
+  cells near each plane, is the next step if that is too slow.
+
 ## A large mesh that is not blocked (2026-11-25)
 
 A `.vtu`, an OpenFOAM `polyMesh` or an unblocked VTKHDF file opened

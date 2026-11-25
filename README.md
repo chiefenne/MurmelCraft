@@ -170,10 +170,11 @@ every change.
   budget (half the computer's memory unless set in Settings) opens as an
   overview: its boundary with the cell fields on it, without reading the
   cells, and slices, iso-surfaces and arrows across the whole volume on a
-  preview grid of the cell fields, with the boxes of its blocks on
-  request; a probe there reads the block holding it and gives the whole
-  mesh's values, and streamlines are traced through the blocks they
-  reach. A large `.vtu` or OpenFOAM mesh is offered for conversion
+  preview grid of the cell fields at once, the exact slices and
+  iso-surfaces then cut through the blocks of the file in the
+  background, with the boxes of its blocks on request; a probe there
+  reads the block holding it and gives the whole mesh's values, and
+  streamlines are traced through the blocks they reach. A large `.vtu` or OpenFOAM mesh is offered for conversion
   once to a blocked copy beside it
   ([docs/blocked-vtkhdf.md](docs/blocked-vtkhdf.md)).
 - Mouse presets (three-button, Apple, Fusion, ParaView), every binding
