@@ -72,7 +72,8 @@ pub use navigation::Navigation;
 pub use quality::{Metric, Quality};
 pub use region::{Region, RegionCells, Shape};
 pub use session::{
-    Fit, Loaded, OpenMesh, OpenMode, Session, StepAhead, Validity, load, load_checked, load_with,
+    Drawn, Fit, Loaded, OpenMesh, OpenMode, Session, StepAhead, Validity, load, load_checked,
+    load_with,
 };
 pub use session_file::SessionFile;
 pub use stream::{Direction, Look, Seed, Stream};

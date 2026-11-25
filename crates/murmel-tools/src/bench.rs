@@ -422,6 +422,36 @@ pub fn run(path: &Path, opts: &Options) -> Result<Value, String> {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
     });
+    // The thin layer a drag step draws over the surface without the
+    // moving plane (built on a thread of its own in the window): the
+    // first one also bins the cells (`field.bins`, once per mesh).
+    if let Some(m) = &session.mesh {
+        let (mesh, fields, tokens) = (m.mesh.clone(), m.fields.clone(), session.tokens.clone());
+        let mut d = session.display.clone();
+        st.time("clip.layer.first", 1, || {
+            murmel_engine::Surface::clip_layer(&mesh, &fields, &tokens, &d, &[0])
+        });
+        let layer = st.time("clip.layer", r.max(5), || {
+            f += 0.01;
+            d.clips = vec![along(f)];
+            murmel_mesh::profile::record(true);
+            murmel_engine::Surface::clip_layer(&mesh, &fields, &tokens, &d, &[0])
+        });
+        let mut note = surface_note(&layer);
+        note["phases"] = phases();
+        st.note(note);
+        d.clips = vec![Clip {
+            mode: ClipMode::Flat,
+            ..along(f)
+        }];
+        let layer = st.time("clip.layer.flat", r.max(5), || {
+            murmel_mesh::profile::record(true);
+            murmel_engine::Surface::clip_layer(&mesh, &fields, &tokens, &d, &[0])
+        });
+        let mut note = surface_note(&layer);
+        note["phases"] = phases();
+        st.note(note);
+    }
     session.defer_clips = false;
     st.time("clip.step.built", r, || {
         f -= 0.01;

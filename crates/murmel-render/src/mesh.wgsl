@@ -106,11 +106,15 @@ struct FaceOut {
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
     @location(3) value: vec4<f32>,
+    // 1 for the thin layer of a clip drag (drawn as instance 1), which
+    // the preview planes do not cut: it is built at their place.
+    @location(4) @interpolate(flat) uncut: u32,
 };
 
 @vertex
-fn vs_face(v: FaceIn) -> FaceOut {
+fn vs_face(v: FaceIn, @builtin(instance_index) inst: u32) -> FaceOut {
     var o: FaceOut;
+    o.uncut = inst;
     o.clip = g.view_proj * vec4<f32>(v.pos, 1.0);
     o.world = v.pos;
     o.normal = v.normal;
@@ -133,7 +137,7 @@ fn fs_face(f: FaceOut) -> @location(0) vec4<f32> {
     let lines = g.field.w;
     let x = tn * (lines + 1.0);
     let w = fwidth(x);
-    if (cut_away(f.world)) {
+    if (f.uncut == 0u && cut_away(f.world)) {
         discard;
     }
     var color = f.color;
@@ -374,11 +378,14 @@ struct LineOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec3<f32>,
     @location(1) world: vec3<f32>,
+    // 1 for the thin layer's edges (instance 1; see FaceOut.uncut).
+    @location(2) @interpolate(flat) uncut: u32,
 };
 
 @vertex
-fn vs_line(v: LineIn) -> LineOut {
+fn vs_line(v: LineIn, @builtin(instance_index) inst: u32) -> LineOut {
     var o: LineOut;
+    o.uncut = inst;
     o.clip = g.view_proj * vec4<f32>(v.pos, 1.0);
     o.color = v.color;
     o.world = v.pos;
@@ -404,6 +411,7 @@ fn vs_wide(v: WideIn, @builtin(vertex_index) i: u32) -> LineOut {
     var a = g.view_proj * vec4<f32>(v.p0, 1.0);
     var b = g.view_proj * vec4<f32>(v.p1, 1.0);
     var o: LineOut;
+    o.uncut = 0u;
     o.color = v.c0;
     o.world = v.p0;
     if (a.z < 0.0 && b.z < 0.0) {
@@ -441,7 +449,7 @@ fn vs_wide(v: WideIn, @builtin(vertex_index) i: u32) -> LineOut {
 
 @fragment
 fn fs_line(f: LineOut) -> @location(0) vec4<f32> {
-    if (cut_away(f.world)) {
+    if (f.uncut == 0u && cut_away(f.world)) {
         discard;
     }
     return vec4<f32>(f.color, 1.0);

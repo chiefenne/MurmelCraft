@@ -315,9 +315,24 @@ struct Cutter<'a> {
 impl<'a> Cutter<'a> {
     /// The planes of `display` that cut, or `None` when none does.
     fn new(mesh: &'a Mesh, display: &'a Display) -> Option<Cutter<'a>> {
+        Self::with(mesh, display, false)
+    }
+
+    /// The same, with `lazy` the distances of the nodes to the clip
+    /// planes worked out as needed instead of for every node first (a
+    /// thin layer of cells: [`Surface::clip_layer`]); the same
+    /// distances either way, so the same cuts.
+    fn with(mesh: &'a Mesh, display: &'a Display, lazy: bool) -> Option<Cutter<'a>> {
         let mut planes: Vec<Plane> = display
             .active_clips()
             .map(|clip| {
+                if lazy {
+                    return Plane {
+                        bound: Bound::from(clip),
+                        flat: clip.mode == ClipMode::Flat,
+                        nodes: None,
+                    };
+                }
                 let points = &mesh.points;
                 let mut dist = vec![0.0; points.len()];
                 murmel_mesh::par::chunks_mut(&mut dist, 1 << 16, |at, part| {
@@ -758,8 +773,206 @@ impl Surface {
         s.cells = shown.iter().filter(|&&v| v).count();
         let polys = polygons(mesh, tokens, display, &shown, cutter.as_ref());
         drop(phase);
-        let phase = murmel_mesh::profile::span("surface.points");
+        s.mesh_faces(mesh, tokens, display, &polys, cutter.as_ref());
+        let extras = display.extracts_shown() || display.arrows_shown();
+        let sel = tokens.mesh.selection;
+        let _phase = murmel_mesh::profile::span("surface.extras");
+        if extras {
+            s.append_extras(mesh, fields, tokens, display, &shown);
+        }
+        s.outline_color = sel.linear();
+        for (a, b) in outline(mesh, display) {
+            for i in [a, b] {
+                let p = mesh.points[i as usize];
+                s.outline.push([0, 1, 2].map(|k| (p[k] - origin[k]) as f32));
+            }
+        }
+        drop(_phase);
+        let _phase = murmel_mesh::profile::span("surface.boxes");
+        s.tri_boxes = tri_boxes(&s.positions, &s.indices);
+        s
+    }
 
+    /// The thin layer of a clip drag (docs/performance.md, "Clip drag: a
+    /// live cut in a thin layer"): the polygons of the surface of
+    /// `display` that belong to the cells shown that one of the planes
+    /// `moving` (indices into `Display::clips`) crosses, those with nodes
+    /// on both of its sides. Drawn over the surface built without the
+    /// moving planes, which the renderer cuts at them, it shows what
+    /// [`Surface::build_with`] of `display` shows: the cells the moving
+    /// planes leave whole are cut right by the renderer, and only the
+    /// cells they cross need their own faces (a crinkle plane keeps
+    /// them, so all their faces; a flat plane slices them, so their
+    /// sections, as the renderer cuts their faces). Only the cells near
+    /// the planes are tested ([`crate::bins`]) and the distances to the
+    /// planes are worked out for their nodes alone, so a step costs what
+    /// the layer holds, not what the mesh holds. No extras, outline or
+    /// pick boxes: the exact surface follows once the planes rest.
+    pub fn clip_layer(
+        mesh: &Mesh,
+        fields: &FieldSet,
+        tokens: &Tokens,
+        display: &Display,
+        moving: &[usize],
+    ) -> Surface {
+        let bounds = mesh.bounds();
+        let mut s = Surface {
+            origin: bounds.center(),
+            radius: bounds.radius(),
+            bounds: (!bounds.is_empty()).then_some(bounds),
+            ..Surface::default()
+        };
+        let planes: Vec<&crate::clip::Clip> = moving
+            .iter()
+            .filter_map(|&k| display.clips.get(k))
+            .filter(|c| c.enabled)
+            .collect();
+        if planes.is_empty() || mesh.cell_count() == 0 {
+            s.key = BuildKey::next();
+            return s;
+        }
+        let phase = murmel_mesh::profile::span("layer.cells");
+        let bins = fields.bins(mesh);
+        let mut near: Vec<u32> = planes
+            .iter()
+            .flat_map(|c| bins.near_plane(|p| c.distance(p)))
+            .collect();
+        near.sort_unstable();
+        near.dedup();
+        drop(phase);
+        let phase = murmel_mesh::profile::span("layer.crossed");
+        let active: Vec<&crate::clip::Clip> = display.active_clips().collect();
+        let shows = |c: usize| {
+            display.cell_visible(mesh, c)
+                && active.iter().all(|k| {
+                    mesh.cell_points(c)
+                        .any(|i| k.keeps(mesh.points[i as usize]))
+                })
+        };
+        // The cells shown that a moving plane crosses, in cell order.
+        let crossed: Vec<usize> = murmel_mesh::par::collect(near.len(), 1 << 10, |r| {
+            r.map(|i| near[i] as usize)
+                .filter(|&c| {
+                    planes.iter().any(|k| {
+                        mesh.cell_points(c)
+                            .any(|i| !k.keeps(mesh.points[i as usize]))
+                    }) && shows(c)
+                })
+                .collect()
+        });
+        // Whether a cell beside them is shown (the faces between): a
+        // cell the moving planes cross is shown when it is one of them;
+        // any other lies wholly on one side of each, so one node tells a
+        // cell cut away, and only a cell they keep is tested whole.
+        let shown = |c: u32| {
+            if crossed.binary_search(&(c as usize)).is_ok() {
+                return true;
+            }
+            let c = c as usize;
+            let Some(first) = mesh.cell_points(c).next() else {
+                return false;
+            };
+            let p0 = mesh.points[first as usize];
+            planes.iter().all(|k| k.keeps(p0))
+                && planes.iter().all(|k| {
+                    mesh.cell_points(c)
+                        .all(|i| k.keeps(mesh.points[i as usize]))
+                })
+                && shows(c)
+        };
+        s.cells = crossed.len();
+        drop(phase);
+        let _phase = murmel_mesh::profile::span("layer.polygons");
+        let cutter = Cutter::with(mesh, display, true);
+        let flat = cutter.as_ref().filter(|c| c.slices());
+        let flat_moving = planes.iter().any(|c| c.mode == ClipMode::Flat);
+        let regions_cut = flat
+            .and_then(|c| c.regions.as_ref())
+            .and_then(|(rc, _)| rc.cut_by.as_deref());
+        let cut_by = |c: u32| {
+            regions_cut
+                .and_then(|k| k.get(c as usize).copied())
+                .unwrap_or(NOT_CUT)
+        };
+        let mut polys: Vec<Poly> = Vec::new();
+        // A crinkle plane keeps the cells it crosses whole: their faces
+        // on the outside of the cells shown, as the whole build finds
+        // them (the faces a flat plane cuts are left to the renderer).
+        if !flat_moving {
+            let sides = flat.map(Cutter::sides);
+            let slicing = flat.is_some();
+            let found: Vec<Vec<(Poly, bool)>> =
+                murmel_mesh::par::collect(crossed.len(), 1 << 8, |r| {
+                    let mut out = Vec::new();
+                    for i in r {
+                        let c = crossed[i] as u32;
+                        let mut keep = |verts: Vec<V>, cell, face, boundary, color, group| {
+                            if cell != c || verts.len() < 3 {
+                                return;
+                            }
+                            let fate = sides.map_or(Fate::Whole, |s| s.fate(cell, &verts));
+                            if fate != Fate::Drop {
+                                let poly = Poly {
+                                    verts,
+                                    cell,
+                                    face,
+                                    boundary,
+                                    color,
+                                    group,
+                                };
+                                out.push((poly, fate == Fate::Cut));
+                            }
+                        };
+                        for k in mesh.cell_face_range(c as usize) {
+                            let u = mesh.cell_face_id[k] as usize;
+                            face_polys(
+                                mesh, tokens, display, &shown, slicing, &cut_by, u, &mut keep,
+                            );
+                        }
+                    }
+                    vec![out]
+                });
+            for (p, cut) in found.into_iter().flatten() {
+                if cut {
+                    let verts = flat.map_or_else(Vec::new, |f| f.clip_flat(p.cell, p.verts));
+                    if verts.len() >= 3 {
+                        polys.push(Poly { verts, ..p });
+                    }
+                } else {
+                    polys.push(p);
+                }
+            }
+        }
+        if let Some(cutter) = flat {
+            let sides = cutter.sides();
+            let sliced: Vec<usize> = crossed
+                .iter()
+                .copied()
+                .filter(|&c| sides.crosses(mesh, c))
+                .collect();
+            sections(mesh, tokens, display, cutter, &sliced, &mut polys);
+        }
+        drop(_phase);
+        s.mesh_faces(mesh, tokens, display, &polys, cutter.as_ref());
+        s
+    }
+
+    /// The mesh's own faces of `display` from `polys`: corners, normals,
+    /// colours and values, triangles and edges, in draw order (the
+    /// selected first, then boundary faces in file order, then open
+    /// faces), the bounds and field range they give, and a new
+    /// [`BuildKey`]; the extras start after them.
+    fn mesh_faces(
+        &mut self,
+        mesh: &Mesh,
+        tokens: &Tokens,
+        display: &Display,
+        polys: &[Poly],
+        cutter: Option<&Cutter<'_>>,
+    ) {
+        let phase = murmel_mesh::profile::span("surface.points");
+        let origin = self.origin;
+        let cutter = &cutter;
         let pos = |v: V| -> [f64; 3] {
             let p = match (v, &cutter) {
                 (V::Node(i), _) => mesh.points[i as usize],
@@ -781,8 +994,8 @@ impl Surface {
             .map(|(i, p)| (!selected(mesh, display, p), p.boundary, i))
             .collect();
         order.sort_unstable();
-        s.faces = polys.iter().filter(|p| p.boundary != NO_CELL).count();
-        s.open_faces = polys.len() - s.faces;
+        self.faces = polys.iter().filter(|p| p.boundary != NO_CELL).count();
+        self.open_faces = polys.len() - self.faces;
         let pts: Vec<Vec<[f64; 3]>> = polys
             .iter()
             .map(|p| p.verts.iter().map(|&v| pos(v)).collect())
@@ -799,17 +1012,12 @@ impl Surface {
         let mesh_triangles = !(extras && !display.mesh_faces());
         let features = (display.render_mode == RenderMode::FeatureEdges || faint).then(|| {
             let runs = murmel_mesh::par::ranges(polys.len(), 1 << 12);
-            feature_edges(
-                &polys,
-                &normals,
-                &runs,
-                FEATURE_ANGLE_DEG.to_radians().cos(),
-            )
+            feature_edges(polys, &normals, &runs, FEATURE_ANGLE_DEG.to_radians().cos())
         });
         // Colour mode field: the value of each polygon (colour mode flat)
         // and of each corner (smooth, banded).
         let field = display.field_values();
-        s.value_origin = field.map_or(0.0, |f| f.origin);
+        self.value_origin = field.map_or(0.0, |f| f.origin);
         let corner_values: Vec<Vec<f64>> = match field {
             Some(f) => polys
                 .iter()
@@ -918,13 +1126,13 @@ impl Surface {
             vstart.push(nv);
             istart.push(ni);
         }
-        s.positions = vec![[0.0; 3]; nv];
-        s.normals = vec![[0.0; 3]; nv];
-        s.colors = vec![[0.0; 3]; nv];
-        s.values = vec![[0.0; 4]; nv];
-        s.indices = vec![0; ni];
-        s.tri_cell = vec![0; ni / 3];
-        s.tri_face = vec![0; ni / 3];
+        self.positions = vec![[0.0; 3]; nv];
+        self.normals = vec![[0.0; 3]; nv];
+        self.colors = vec![[0.0; 3]; nv];
+        self.values = vec![[0.0; 4]; nv];
+        self.indices = vec![0; ni];
+        self.tri_cell = vec![0; ni / 3];
+        self.tri_face = vec![0; ni / 3];
         let ranges = murmel_mesh::par::ranges(order.len(), 1 << 12);
         let cuts = |at: &[usize], per: usize| -> Vec<usize> {
             ranges
@@ -935,13 +1143,13 @@ impl Surface {
         };
         let (vcuts, icuts, tcuts) = (cuts(&vstart, 1), cuts(&istart, 1), cuts(&istart, 3));
         let mut outs = Vec::with_capacity(ranges.len());
-        let mut positions = murmel_mesh::par::split_mut(&mut s.positions, &vcuts).into_iter();
-        let mut normals_out = murmel_mesh::par::split_mut(&mut s.normals, &vcuts).into_iter();
-        let mut colors = murmel_mesh::par::split_mut(&mut s.colors, &vcuts).into_iter();
-        let mut values = murmel_mesh::par::split_mut(&mut s.values, &vcuts).into_iter();
-        let mut indices = murmel_mesh::par::split_mut(&mut s.indices, &icuts).into_iter();
-        let mut tri_cell = murmel_mesh::par::split_mut(&mut s.tri_cell, &tcuts).into_iter();
-        let mut tri_face = murmel_mesh::par::split_mut(&mut s.tri_face, &tcuts).into_iter();
+        let mut positions = murmel_mesh::par::split_mut(&mut self.positions, &vcuts).into_iter();
+        let mut normals_out = murmel_mesh::par::split_mut(&mut self.normals, &vcuts).into_iter();
+        let mut colors = murmel_mesh::par::split_mut(&mut self.colors, &vcuts).into_iter();
+        let mut values = murmel_mesh::par::split_mut(&mut self.values, &vcuts).into_iter();
+        let mut indices = murmel_mesh::par::split_mut(&mut self.indices, &icuts).into_iter();
+        let mut tri_cell = murmel_mesh::par::split_mut(&mut self.tri_cell, &tcuts).into_iter();
+        let mut tri_face = murmel_mesh::par::split_mut(&mut self.tri_face, &tcuts).into_iter();
         for r in &ranges {
             if let (Some(p), Some(n), Some(c), Some(v), Some(x), Some(tc), Some(tf)) = (
                 positions.next(),
@@ -968,7 +1176,7 @@ impl Surface {
         }
         let fill = Fill {
             order: &order,
-            polys: &polys,
+            polys,
             pts: &pts,
             normals: &normals,
             corner_values: &corner_values,
@@ -976,7 +1184,7 @@ impl Surface {
             vstart: &vstart,
             istart: &istart,
             origin,
-            value_origin: s.value_origin,
+            value_origin: self.value_origin,
             mesh_triangles,
         };
         let parts = on_threads(outs, |(r, mut out)| fill.chunk(r, &mut out));
@@ -984,13 +1192,13 @@ impl Surface {
         // colour of the first in draw order.
         let lines = Lines {
             order: &order,
-            polys: &polys,
+            polys,
             pts: &pts,
             looks: &looks,
             features: features.as_ref(),
         };
         let edges = lines.draw(&ranges);
-        (s.edge_positions, s.edge_colors) = edges;
+        (self.edge_positions, self.edge_colors) = edges;
         let mut vb = Bounds::empty();
         let mut drawn = Bounds1::default();
         for (b, d) in parts {
@@ -1001,31 +1209,16 @@ impl Surface {
             drawn.merge(&d);
         }
         drop(phase);
-        s.visible_bounds = (!vb.is_empty()).then_some(vb);
-        s.field_range = drawn.range();
-        s.key = BuildKey::next();
-        s.extras_at = ExtrasAt {
-            vertices: s.positions.len(),
-            indices: s.indices.len(),
-            edges: s.edge_positions.len(),
-            visible_bounds: s.visible_bounds,
-            field_range: s.field_range,
+        self.visible_bounds = (!vb.is_empty()).then_some(vb);
+        self.field_range = drawn.range();
+        self.key = BuildKey::next();
+        self.extras_at = ExtrasAt {
+            vertices: self.positions.len(),
+            indices: self.indices.len(),
+            edges: self.edge_positions.len(),
+            visible_bounds: self.visible_bounds,
+            field_range: self.field_range,
         };
-        let _phase = murmel_mesh::profile::span("surface.extras");
-        if extras {
-            s.append_extras(mesh, fields, tokens, display, &shown);
-        }
-        s.outline_color = sel.linear();
-        for (a, b) in outline(mesh, display) {
-            for i in [a, b] {
-                let p = mesh.points[i as usize];
-                s.outline.push([0, 1, 2].map(|k| (p[k] - origin[k]) as f32));
-            }
-        }
-        drop(_phase);
-        let _phase = murmel_mesh::profile::span("surface.boxes");
-        s.tri_boxes = tri_boxes(&s.positions, &s.indices);
-        s
     }
 
     /// The slices, iso-surfaces, arrows, streamlines, parcels and block
@@ -1595,74 +1788,9 @@ fn polygons(
             .and_then(|k| k.get(c as usize).copied())
             .unwrap_or(NOT_CUT)
     };
+    let shown_at = |c: u32| shown[c as usize];
     let between = |u: usize, add: &mut dyn FnMut(Vec<V>, u32, u32, u32, Rgb, u32)| {
-        let (o, n) = (mesh.face_owner[u], mesh.face_neighbour[u]);
-        if o == NO_CELL {
-            return;
-        }
-        let so = shown[o as usize];
-        if n == NO_CELL {
-            if !so {
-                return;
-            }
-            match mesh.face_boundary.get(u).copied() {
-                Some(b) if b != NO_CELL => {
-                    let b = b as usize;
-                    if !display.face_visible(mesh, b) {
-                        return;
-                    }
-                    add(
-                        nodes(mesh.boundary.get(b)),
-                        o,
-                        u as u32,
-                        b as u32,
-                        display.face_color(mesh, tokens, b),
-                        patch(b),
-                    );
-                }
-                _ => add(
-                    nodes(mesh.face_nodes(u)),
-                    o,
-                    u as u32,
-                    NO_CELL,
-                    display.cell_color(mesh, tokens, o as usize),
-                    GROUP_OPEN,
-                ),
-            }
-            return;
-        }
-        let sn = shown[n as usize];
-        if so && sn {
-            // Two cells cut differently (one by a flat region, the other
-            // whole or by another region): each side draws the face as
-            // its own clip keeps it, so where one side is cut away the
-            // other's face closes the surface (the rest lies inside).
-            if slicing && cut_by(o) != cut_by(n) {
-                for c in [o, n] {
-                    add(
-                        nodes(mesh.face_nodes(u)),
-                        c,
-                        u as u32,
-                        NO_CELL,
-                        display.cell_color(mesh, tokens, c as usize),
-                        GROUP_OPEN,
-                    );
-                }
-            }
-            return;
-        }
-        if !so && !sn {
-            return;
-        }
-        let c = if so { o } else { n };
-        add(
-            nodes(mesh.face_nodes(u)),
-            c,
-            u as u32,
-            NO_CELL,
-            display.cell_color(mesh, tokens, c as usize),
-            GROUP_OPEN,
-        );
+        face_polys(mesh, tokens, display, &shown_at, slicing, &cut_by, u, add);
     };
     let faces = mesh.face_owner.len().min(mesh.face_neighbour.len());
     // When something cuts flat, the threads also tell which polygons a
@@ -1752,60 +1880,164 @@ fn polygons(
         let crossed: Vec<usize> = murmel_mesh::par::collect(shown.len(), 1 << 12, |r| {
             r.filter(|&c| shown[c] && sides.crosses(mesh, c)).collect()
         });
-        // The cut points first, numbered in cell order as one thread
-        // finds them: a cell one plane slices names where that plane
-        // crosses the edges of its faces; a cell more planes slice is cut
-        // here, whole.
-        let mut rings: Vec<Option<Vec<Vec<V>>>> = Vec::with_capacity(crossed.len());
-        for &c in &crossed {
-            match cutter.only_plane(c as u32) {
-                Some(p) => {
-                    cutter.cut_edges(mesh, p, c);
-                    rings.push(None);
-                }
-                None => rings.push(Some(cutter.sections(mesh, c))),
-            }
-        }
-        // Then the sections of the cells one plane slices, on all
-        // threads, reading the cut points (a point not found, which the
-        // numbering above rules out, sends the cell back to the cutter).
-        let built: Vec<Option<Vec<Vec<V>>>> = {
-            let cuts = cutter.cuts.borrow();
-            let view = View {
-                sides,
-                store: &*cuts,
-            };
-            let (crossed, rings) = (&crossed, &rings);
-            murmel_mesh::par::collect(crossed.len(), 1 << 6, |r| {
-                r.map(|i| match rings[i] {
-                    Some(_) => Some(Vec::new()),
-                    None => view.sections(mesh, crossed[i]),
-                })
-                .collect()
-            })
-        };
-        for ((&c, serial), parallel) in crossed.iter().zip(rings).zip(built) {
-            let rings = match (serial, parallel) {
-                (Some(r), _) | (None, Some(r)) => r,
-                (None, None) => cutter.sections(mesh, c),
-            };
-            if rings.is_empty() {
-                continue;
-            }
-            let color = display.cell_color(mesh, tokens, c);
-            for ring in rings {
-                polys.push(Poly {
-                    verts: ring,
-                    cell: c as u32,
-                    face: NO_CELL,
-                    boundary: NO_CELL,
-                    color,
-                    group: GROUP_SECTION,
-                });
-            }
-        }
+        sections(mesh, tokens, display, cutter, &crossed, &mut polys);
     }
     polys
+}
+
+/// The section polygons of the cells `crossed` (in cell order), which
+/// the flat planes of `cutter` slice, added to `polys`: the cut points
+/// first, numbered in cell order on one thread, then the sections of the
+/// cells one plane slices on all threads.
+fn sections(
+    mesh: &Mesh,
+    tokens: &Tokens,
+    display: &Display,
+    cutter: &Cutter<'_>,
+    crossed: &[usize],
+    polys: &mut Vec<Poly>,
+) {
+    let sides = cutter.sides();
+    // The cut points first, numbered in cell order as one thread
+    // finds them: a cell one plane slices names where that plane
+    // crosses the edges of its faces; a cell more planes slice is cut
+    // here, whole.
+    let mut rings: Vec<Option<Vec<Vec<V>>>> = Vec::with_capacity(crossed.len());
+    for &c in crossed {
+        match cutter.only_plane(c as u32) {
+            Some(p) => {
+                cutter.cut_edges(mesh, p, c);
+                rings.push(None);
+            }
+            None => rings.push(Some(cutter.sections(mesh, c))),
+        }
+    }
+    // Then the sections of the cells one plane slices, on all
+    // threads, reading the cut points (a point not found, which the
+    // numbering above rules out, sends the cell back to the cutter).
+    let built: Vec<Option<Vec<Vec<V>>>> = {
+        let cuts = cutter.cuts.borrow();
+        let view = View {
+            sides,
+            store: &*cuts,
+        };
+        let (crossed, rings) = (&crossed, &rings);
+        murmel_mesh::par::collect(crossed.len(), 1 << 6, |r| {
+            r.map(|i| match rings[i] {
+                Some(_) => Some(Vec::new()),
+                None => view.sections(mesh, crossed[i]),
+            })
+            .collect()
+        })
+    };
+    for ((&c, serial), parallel) in crossed.iter().zip(rings).zip(built) {
+        let rings = match (serial, parallel) {
+            (Some(r), _) | (None, Some(r)) => r,
+            (None, None) => cutter.sections(mesh, c),
+        };
+        if rings.is_empty() {
+            continue;
+        }
+        let color = display.cell_color(mesh, tokens, c);
+        for ring in rings {
+            polys.push(Poly {
+                verts: ring,
+                cell: c as u32,
+                face: NO_CELL,
+                boundary: NO_CELL,
+                color,
+                group: GROUP_SECTION,
+            });
+        }
+    }
+}
+
+/// The polygons distinct face `u` adds to the outside of the cells
+/// shown (`shown`), passed to `add` (corners, cell, face, boundary
+/// polygon, colour, group): a boundary face of a cell shown, a face
+/// between a cell shown and one not, or, where something slices
+/// (`slicing`) and two cells shown are cut by different regions
+/// (`cut_by`), the face once for each side.
+#[allow(clippy::too_many_arguments)]
+fn face_polys(
+    mesh: &Mesh,
+    tokens: &Tokens,
+    display: &Display,
+    shown: &impl Fn(u32) -> bool,
+    slicing: bool,
+    cut_by: &impl Fn(u32) -> u8,
+    u: usize,
+    add: &mut dyn FnMut(Vec<V>, u32, u32, u32, Rgb, u32),
+) {
+    let nodes = |f: &[u32]| f.iter().map(|&i| V::Node(i)).collect::<Vec<_>>();
+    let patch = |b: usize| mesh.boundary_patch.get(b).copied().unwrap_or(0);
+    let (o, n) = (mesh.face_owner[u], mesh.face_neighbour[u]);
+    if o == NO_CELL {
+        return;
+    }
+    let so = shown(o);
+    if n == NO_CELL {
+        if !so {
+            return;
+        }
+        match mesh.face_boundary.get(u).copied() {
+            Some(b) if b != NO_CELL => {
+                let b = b as usize;
+                if !display.face_visible(mesh, b) {
+                    return;
+                }
+                add(
+                    nodes(mesh.boundary.get(b)),
+                    o,
+                    u as u32,
+                    b as u32,
+                    display.face_color(mesh, tokens, b),
+                    patch(b),
+                );
+            }
+            _ => add(
+                nodes(mesh.face_nodes(u)),
+                o,
+                u as u32,
+                NO_CELL,
+                display.cell_color(mesh, tokens, o as usize),
+                GROUP_OPEN,
+            ),
+        }
+        return;
+    }
+    let sn = shown(n);
+    if so && sn {
+        // Two cells cut differently (one by a flat region, the other
+        // whole or by another region): each side draws the face as
+        // its own clip keeps it, so where one side is cut away the
+        // other's face closes the surface (the rest lies inside).
+        if slicing && cut_by(o) != cut_by(n) {
+            for c in [o, n] {
+                add(
+                    nodes(mesh.face_nodes(u)),
+                    c,
+                    u as u32,
+                    NO_CELL,
+                    display.cell_color(mesh, tokens, c as usize),
+                    GROUP_OPEN,
+                );
+            }
+        }
+        return;
+    }
+    if !so && !sn {
+        return;
+    }
+    let c = if so { o } else { n };
+    add(
+        nodes(mesh.face_nodes(u)),
+        c,
+        u as u32,
+        NO_CELL,
+        display.cell_color(mesh, tokens, c as usize),
+        GROUP_OPEN,
+    );
 }
 
 /// Whether `poly` belongs to a selected item.
@@ -2019,6 +2251,179 @@ mod tests {
         }
         let want = 4.0 * 2.0 * (half[0] + half[1] + half[2]);
         assert!((length - want).abs() < 1e-6 * want, "{length} vs {want}");
+    }
+
+    /// Each triangle of `s`: its cell, its face and its corners (in
+    /// steps of a millionth of the mesh's radius: the centre of a fan
+    /// sums its corners in their order), sorted, so two surfaces compare
+    /// triangle by triangle.
+    fn triangles_of(
+        s: &Surface,
+        keep: impl Fn(u32, u32) -> bool,
+    ) -> Vec<(u32, u32, [[i64; 3]; 3])> {
+        let step = 1e-6 * s.radius.max(1e-30);
+        let mut out: Vec<(u32, u32, [[i64; 3]; 3])> = (0..s.triangles())
+            .filter(|&t| keep(s.tri_cell[t], s.tri_face[t]))
+            .map(|t| {
+                let corner = |k: usize| {
+                    s.positions[s.indices[3 * t + k] as usize]
+                        .map(|x| (x as f64 / step).round() as i64)
+                };
+                // Corners in order: a section's ring may start elsewhere
+                // or run the other way (cut points are named in the order
+                // found), the triangle is the same (faces are lit from
+                // both sides).
+                let mut c = [corner(0), corner(1), corner(2)];
+                c.sort_unstable();
+                (s.tri_cell[t], s.tri_face[t], c)
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Invariant (docs/performance.md, "Clip drag: a live cut in a thin
+    /// layer"): the thin layer of a moving plane, drawn over the surface
+    /// built without that plane and cut there by the renderer, shows the
+    /// surface built with it. Crinkle: the layer holds exactly the
+    /// triangles of the whole build that belong to the cells the plane
+    /// crosses, bit for bit; every other triangle of the whole build is
+    /// in the surface without the plane and on the kept side; every
+    /// triangle of the surface without the plane that the whole build
+    /// leaves out lies on the cut-away side. Flat: the layer holds
+    /// exactly the sections of the whole build, and its other triangles
+    /// lie on the kept side. Checked with a second plane that stays, a
+    /// hidden zone, on the channel and a honeycomb. Breaks when the layer
+    /// misses a cell, takes a face the whole build does not draw, or
+    /// cuts a section differently.
+    #[test]
+    fn clip_layer_completes_the_cut_surface() {
+        let t = Tokens::builtin().unwrap();
+        for mesh in [channel(), murmel_mesh::synth::honeycomb(8)] {
+            let fields = FieldSet::new(murmel_mesh::field::Results::default());
+            let b = mesh.bounds();
+            let c = b.center();
+            let n = [0.48f64, 0.6, -0.64];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let moving = Clip {
+                origin: [c[0] + 0.07 * (b.max[0] - b.min[0]), c[1], c[2]],
+                normal: n.map(|x| x / len),
+                mode: ClipMode::Crinkle,
+                enabled: true,
+            };
+            let still = Clip {
+                origin: [c[0], b.min[1] + 0.8 * (b.max[1] - b.min[1]), c[2]],
+                normal: [0.0, 1.0, 0.0],
+                mode: ClipMode::Crinkle,
+                enabled: true,
+            };
+            for (mode, second, hide) in [
+                (ClipMode::Crinkle, false, false),
+                (ClipMode::Crinkle, true, true),
+                (ClipMode::Flat, false, false),
+                (ClipMode::Flat, true, false),
+                (ClipMode::Crinkle, true, false),
+            ] {
+                let mut d = Display {
+                    clips: vec![Clip { mode, ..moving }],
+                    ..Display::default()
+                };
+                if second {
+                    d.clips.insert(
+                        0,
+                        Clip {
+                            mode: if hide {
+                                ClipMode::Crinkle
+                            } else {
+                                ClipMode::Flat
+                            },
+                            ..still
+                        },
+                    );
+                }
+                if hide && mesh.zones.len() > 1 {
+                    d.hidden.insert(Item::Zone(1));
+                }
+                let k = d.clips.len() - 1;
+                let mut without = d.clone();
+                without.clips[k].enabled = false;
+                let full = Surface::build(&mesh, &t, &d);
+                let base = Surface::build(&mesh, &t, &without);
+                let layer = Surface::clip_layer(&mesh, &fields, &t, &d, &[k]);
+                let plane = d.clips[k];
+                let crossed = |cell: u32| {
+                    cell != NO_CELL && {
+                        let pts: Vec<f64> = mesh
+                            .cell_points(cell as usize)
+                            .map(|i| plane.distance(mesh.points[i as usize]))
+                            .collect();
+                        pts.iter().any(|&x| x <= 0.0) && pts.iter().any(|&x| x > 0.0)
+                    }
+                };
+                let what = format!(
+                    "{mode:?} second {second} hide {hide} cells {}",
+                    mesh.cell_count()
+                );
+                let eps = 1e-5 * b.radius() as f32;
+                let o = full.origin;
+                let step = 1e-6 * full.radius;
+                let side = |p: [i64; 3]| {
+                    (0..3)
+                        .map(|i| (p[i] as f64 * step + o[i] - plane.origin[i]) * plane.normal[i])
+                        .sum::<f64>() as f32
+                };
+                let mine = triangles_of(&layer, |_, _| true);
+                assert!(!mine.is_empty(), "{what}");
+                let full_all = triangles_of(&full, |_, _| true);
+                let base_all = triangles_of(&base, |_, _| true);
+                if mode == ClipMode::Crinkle {
+                    let want = triangles_of(&full, |cell, _| crossed(cell));
+                    assert_eq!(mine, want, "{what}");
+                    for x in full_all.iter().filter(|x| !crossed(x.0)) {
+                        assert!(
+                            base_all.binary_search(x).is_ok(),
+                            "{what}: {x:?} not in base"
+                        );
+                        assert!(
+                            x.2.iter().all(|&p| side(p) <= eps),
+                            "{what}: {x:?} cut away"
+                        );
+                    }
+                    for x in base_all
+                        .iter()
+                        .filter(|x| full_all.binary_search(x).is_err())
+                    {
+                        assert!(!crossed(x.0), "{what}: {x:?} of a crossed cell");
+                        assert!(x.2.iter().all(|&p| side(p) >= -eps), "{what}: {x:?} kept");
+                    }
+                } else {
+                    let want = triangles_of(&full, |cell, face| face == NO_CELL && crossed(cell));
+                    if mine != want {
+                        let only_mine: Vec<_> = mine
+                            .iter()
+                            .filter(|x| want.binary_search(x).is_err())
+                            .take(3)
+                            .collect();
+                        let only_want: Vec<_> = want
+                            .iter()
+                            .filter(|x| mine.binary_search(x).is_err())
+                            .take(3)
+                            .collect();
+                        panic!(
+                            "{what}: {} vs {}; only layer {only_mine:?}; only full {only_want:?}",
+                            mine.len(),
+                            want.len()
+                        );
+                    }
+                    for x in full_all.iter().filter(|x| x.1 != NO_CELL) {
+                        assert!(
+                            x.2.iter().all(|&p| side(p) <= eps),
+                            "{what}: {x:?} cut away"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn channel() -> Mesh {

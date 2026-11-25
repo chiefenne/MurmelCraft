@@ -175,6 +175,9 @@ pub struct View<'a> {
     /// the window's clip preview while the exact cut is built
     /// ([`murmel_engine::Session::drawn`]); empty otherwise.
     pub clip_planes: &'a [[f32; 4]],
+    /// The thin layer of a clip drag ([`murmel_engine::Drawn::layer`])
+    /// and its revision: drawn over `surface`, not cut by `clip_planes`.
+    pub layer: Option<(&'a Surface, u64)>,
     /// The slices dragged in the window, drawn from the field's grid
     /// while their exact faces are built ([`murmel_engine::Session::slice_drawn`]).
     pub slice: Option<&'a murmel_engine::slice_preview::SliceDraw>,
@@ -270,6 +273,9 @@ pub struct MeshRenderer {
     /// The build key of the mesh's faces uploaded.
     mesh_key: Option<u64>,
     revision: Option<u64>,
+    /// The thin layer of a clip drag ([`View::layer`]) and its revision.
+    layer: Option<Geometry>,
+    layer_revision: Option<u64>,
     targets: Option<Targets>,
 }
 
@@ -1056,6 +1062,8 @@ impl MeshRenderer {
             bg_pipeline,
             geometry: [None, None],
             mesh_key: None,
+            layer: None,
+            layer_revision: None,
             revision: None,
             targets: None,
         }
@@ -1140,6 +1148,17 @@ impl MeshRenderer {
         if self.revision != Some(view.revision) {
             self.upload(device, view.surface);
             self.revision = Some(view.revision);
+        }
+        match view.layer {
+            Some((s, r)) if self.layer_revision != Some(r) => {
+                self.layer = geometry(device, s, Part::Mesh);
+                self.layer_revision = Some(r);
+            }
+            None => {
+                self.layer = None;
+                self.layer_revision = None;
+            }
+            _ => {}
         }
         self.ensure_targets(device, size);
         let (origin, radius) = view
@@ -1274,6 +1293,14 @@ impl MeshRenderer {
                         pass.draw_indexed(r, 0, 0..1);
                     }
                 }
+                // The thin layer as instance 1, which the preview planes
+                // leave uncut.
+                if let Some(geo) = self.layer.as_ref().filter(|g| g.index_count > 0) {
+                    pass.set_pipeline(&self.face_pipeline);
+                    pass.set_vertex_buffer(0, geo.faces.slice(..));
+                    pass.set_index_buffer(geo.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..geo.index_count, 0, 1..2);
+                }
                 if let Some((buf, count)) = &planes {
                     pass.set_pipeline(&self.slice_pipeline);
                     pass.set_vertex_buffer(0, buf.slice(..));
@@ -1308,6 +1335,16 @@ impl MeshRenderer {
                             lines(&mut pass, edges, r, n, w);
                         }
                     }
+                }
+                // The layer's edges as instance 1 of one-pixel lines (a
+                // clip drag is only drawn in the window; pictures settle
+                // the exact cut first).
+                if let Some(geo) = &self.layer
+                    && let Some(edges) = &geo.edges
+                {
+                    pass.set_pipeline(&self.line_pipeline);
+                    pass.set_vertex_buffer(0, edges.slice(..));
+                    pass.draw(0..geo.edge_count, 1..2);
                 }
             }
             for geo in parts() {
@@ -1496,9 +1533,9 @@ impl Offscreen<'_> {
         // What the window shows: during a clip preview, the surface cut on
         // the GPU (tools settle it first, so their pictures are exact).
         let drawn = session.drawn();
-        let (surface, revision, planes) = match &drawn {
-            Some((s, r, p)) => (Some(*s), *r, p.as_slice()),
-            None => (None, session.surface_revision, &[][..]),
+        let (surface, revision, planes, layer) = match &drawn {
+            Some(d) => (Some(d.surface), d.revision, d.planes.as_slice(), d.layer),
+            None => (None, session.surface_revision, &[][..], None),
         };
         let slice = session.slice_drawn();
         let iso = session.iso_drawn();
@@ -1520,6 +1557,7 @@ impl Offscreen<'_> {
                 // Contour lines widen with the edges of a scaled export.
                 scale: shoot.line_width,
                 clip_planes: planes,
+                layer,
                 slice: slice.as_ref(),
                 iso: iso.as_ref(),
             },

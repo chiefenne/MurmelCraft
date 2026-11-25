@@ -756,6 +756,11 @@ impl MurmelApp {
             resp.widget_info(|| WidgetInfo::labeled(Role::Slider, true, name.clone()));
             if resp.hovered() || resp.dragged() {
                 hot = Some(sh.handle);
+                // A drag is near: bin the cells and build the surface
+                // without this plane ahead of it.
+                if let (Target::Clip(k), false) = (current, resp.dragged()) {
+                    self.session.warm_clip(k);
+                }
                 ui.ctx().set_cursor_icon(if resp.dragged() {
                     CursorIcon::Grabbing
                 } else {

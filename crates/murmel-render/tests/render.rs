@@ -831,6 +831,58 @@ fn clip_preview_cuts_on_the_gpu() {
     assert!(diff_share(&left.rgba, &want.rgba, 24) > 0.05);
 }
 
+/// The live cut of a clip drag (the maintainer's card of 2026-11-25): a
+/// crinkle plane moved from near the far end to the middle, drawn as the
+/// surface cut on the GPU with the thin layer of the cells it crosses
+/// over it, looks from an oblique view like the exact crinkle cut, cell
+/// for cell; without the layer (the cut seen hollow) it does not. Breaks
+/// when the layer is not drawn, the planes cut it, or it sits elsewhere.
+#[test]
+fn clip_drag_draws_the_exact_cut_live() {
+    let at = |s: &Session, f: f64| {
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        let c = b.center();
+        let n = [0.8f64, 0.0, 0.6];
+        Clip {
+            origin: [b.min[0] + f * (b.max[0] - b.min[0]), c[1], c[2]],
+            normal: n,
+            mode: ClipMode::Crinkle,
+            enabled: true,
+        }
+    };
+    let mut exact = session(StandardView::ISO);
+    exact.display.clips = vec![at(&exact, 0.5)];
+    exact.redraw();
+    let drag = || {
+        let mut s = session(StandardView::ISO);
+        s.display.clips = vec![at(&s, 0.9)];
+        s.redraw();
+        s.defer_clips = true;
+        s.display.clips = vec![at(&s, 0.5)];
+        s.redraw();
+        s
+    };
+    let want = render_session(&exact, 480, 320).unwrap();
+    // Before the first layer: the cut seen hollow.
+    let hollow = drag();
+    assert!(hollow.drawn().unwrap().layer.is_none());
+    let shot = render_session(&hollow, 480, 320).unwrap();
+    assert!(diff_share(&shot.rgba, &want.rgba, 24) > 0.02);
+    // The layer comes long before the exact cut (built once the plane
+    // rests for 120 ms).
+    let mut moving = drag();
+    let start = std::time::Instant::now();
+    while moving.drawn().unwrap().layer.is_none() {
+        assert!(start.elapsed().as_secs() < 60, "no layer");
+        moving.poll_surface();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(moving.preview.is_some());
+    let live = render_session(&moving, 480, 320).unwrap();
+    let share = diff_share(&live.rgba, &want.rgba, 24);
+    assert!(share < 0.01, "{:.2} % of pixels differ", 100.0 * share);
+}
+
 /// The slice preview (the window's slice drag) draws the moving slice
 /// from the field's grid on the GPU: a slice through the channel moved
 /// from near one end to the middle, before its exact faces are built,
