@@ -31,8 +31,8 @@ tool that the window, the command line and the MCP server share.
   (typed, or clicked on the colour bar), solid or coloured by the field
   shown, by marching tetrahedra. The mesh shows as a faint outline
   meanwhile, its faces one click away.
-- Shaded with edges, patch colours, orbit, pan, zoom to the cursor, fit,
-  home, the three projection modes (default: perspective with orthographic
+- Shaded with edges, patch colours, orbit, pan, zoom to the cursor, zoom
+  to box (rubber band, W or the toolbar), fit, home, the three projection modes (default: perspective with orthographic
   faces), dark and light themes switched live.
 - Mouse presets (three-button, Apple, Fusion, ParaView), every binding
   editable through `settings.set_bindings` and saved in `navigation.toml`.

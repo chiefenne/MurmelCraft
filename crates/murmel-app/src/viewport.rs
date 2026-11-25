@@ -97,6 +97,10 @@ impl MurmelApp {
         }
         self.clip_handles(ui, rect, &cam, dark);
         self.view_cube(ui, rect, &cam, dark);
+        self.draw_band(ui);
+        if (self.zoom_armed || self.band.is_some()) && resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
 
         let desc = self.describe();
         resp.widget_info(|| WidgetInfo::labeled(Role::Canvas, true, desc.clone()));
@@ -183,8 +187,18 @@ impl MurmelApp {
             .into_iter()
             .find(|(b, _)| resp.dragged_by(*b))
             .map(|(_, b)| b);
-            self.drag = button.and_then(|b| nav.drag(b, m));
+            // An armed zoom to box takes the primary drag, whatever the
+            // bindings say.
+            self.drag = match button {
+                Some(Button::Primary) if self.zoom_armed => Some(Action::ZoomBox),
+                Some(b) => nav.drag(b, m),
+                None => None,
+            };
             self.orbit_pivot = None;
+            if self.drag == Some(Action::ZoomBox) {
+                let start = ui.input(|i| i.pointer.press_origin());
+                self.band = start.map(|p| (p, p));
+            }
             if self.drag == Some(Action::Orbit) {
                 let start = ui.input(|i| i.pointer.press_origin());
                 self.orbit_pivot = self.pivot_at(start.map(|p| ndc(p, rect)));
@@ -215,10 +229,18 @@ impl MurmelApp {
                     let f = (sign * dy * nav.zoom_speed * 2.0).exp();
                     self.call("view.zoom", json!({"factor": f}));
                 }
+                Some(Action::ZoomBox) => {
+                    if let (Some((a, _)), Some(p)) = (self.band, resp.interact_pointer_pos()) {
+                        self.band = Some((a, rect.clamp(p)));
+                    }
+                }
                 _ => {}
             }
         }
         if resp.drag_stopped() {
+            if self.drag == Some(Action::ZoomBox) {
+                self.finish_band(rect, nav.click_slop_px);
+            }
             self.drag = None;
             self.orbit_pivot = None;
         }
@@ -259,6 +281,38 @@ impl MurmelApp {
             let f = 1.0 / pinch as f64;
             self.call("view.zoom", json!({"factor": f, "cursor_ndc": cursor}));
         }
+    }
+
+    /// The end of a rubber-band drag: zoom into the box, unless it is
+    /// thinner than a click (then nothing happens); one box per press of
+    /// W or the toolbar button (the maintainer's card of 2026-11-25).
+    fn finish_band(&mut self, rect: Rect, slop: f64) {
+        let band = self.band.take();
+        self.zoom_armed = false;
+        let Some((a, b)) = band else { return };
+        let r = Rect::from_two_pos(a, b);
+        if (r.width() as f64) < slop || (r.height() as f64) < slop {
+            return;
+        }
+        self.call(
+            "view.zoom_box",
+            json!({"from_ndc": ndc(a, rect), "to_ndc": ndc(b, rect)}),
+        );
+    }
+
+    /// The rubber band: a thin accent outline over a faint accent fill.
+    fn draw_band(&self, ui: &Ui) {
+        let Some((a, b)) = self.band else { return };
+        let accent = color(self.palette(ui.ctx()).accent);
+        let r = Rect::from_two_pos(a, b);
+        let p = ui.painter();
+        p.rect_filled(r, 0.0, accent.gamma_multiply(0.12));
+        p.rect_stroke(
+            r,
+            0.0,
+            egui::Stroke::new(1.5, accent),
+            egui::StrokeKind::Middle,
+        );
     }
 
     /// The point an orbit turns about (UI spec, Viewport): the point of

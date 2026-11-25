@@ -2188,3 +2188,50 @@ fn export_movie_mp4() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Invariant: view.zoom_box zooms into the box at the depth of the mesh
+/// inside it: in perspective the picked point stays under the box centre,
+/// which becomes the screen centre, and the distance to it shrinks by the
+/// box's share of the view. A box without area is refused (TOOL002), a box
+/// over empty space zooms at the target's depth. Breaks if the tool stops
+/// picking (the surface point would be null) or the corners are read in
+/// one order only. No other test calls the tool.
+#[test]
+fn zoom_box_zooms_at_the_mesh() {
+    let mut s = session();
+    let path = root().join("test-fixtures/channel/foehncraft.vtu");
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    s.viewport = [800.0, 600.0];
+    s.camera.projection = murmel_engine::Projection::Perspective;
+    assert!(call("view.fit", json!({}), &mut s).ok());
+    let e = call(
+        "view.zoom_box",
+        json!({"from_ndc": [0.2, 0.2], "to_ndc": [-0.2, -0.1]}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!((e.result["factor"].as_f64().unwrap() - 0.2).abs() < 1e-12);
+    let p: Vec<f64> = serde_json::from_value(e.result["surface_point"].clone()).unwrap();
+    // The mesh point under the box centre is now at the screen centre.
+    let at = s
+        .camera
+        .project([0.0; 3], 1.0, s.aspect(), [p[0], p[1], p[2]])
+        .unwrap();
+    assert!(at[0].abs() < 1e-6 && at[1].abs() < 1e-6, "{at:?}");
+
+    let e = call(
+        "view.zoom_box",
+        json!({"from_ndc": [0.1, 0.2], "to_ndc": [0.1, 0.5]}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let d0 = s.camera.distance;
+    let e = call(
+        "view.zoom_box",
+        json!({"from_ndc": [0.97, 0.97], "to_ndc": [0.99, 0.99]}),
+        &mut s,
+    );
+    assert!(e.ok());
+    assert!(e.result["surface_point"].is_null());
+    assert!((s.camera.distance - 0.01 * d0).abs() < 1e-9 * d0);
+}

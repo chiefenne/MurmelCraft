@@ -148,6 +148,7 @@ pub mod icon {
     pub const INFO: &str = "\u{E0FE}";
     pub const LAYERS: &str = "\u{E104}";
     pub const SEARCH: &str = "\u{E155}";
+    pub const SCAN_SEARCH: &str = "\u{E53C}";
 }
 
 /// The MurmelCraft logo (assets/logo, supplied by the maintainer) as RGBA.

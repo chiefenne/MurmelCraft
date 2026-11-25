@@ -19,6 +19,9 @@ pub enum Action {
     Pick,
     ContextMenu,
     Fit,
+    /// A drag draws a box and zooms into it (the rubber band, as the
+    /// toolbar's Zoom to box and W do for one drag). No preset binds it.
+    ZoomBox,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
