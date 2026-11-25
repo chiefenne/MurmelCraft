@@ -1364,6 +1364,7 @@ pub(crate) fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> 
             },
             keys: s.keys.clone(),
             help: s.help,
+            page: s.page,
             ..Settings::default()
         },
     )
@@ -1671,6 +1672,7 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
         "memory": memory_json(s),
         "keys": s.keys,
         "help": s.help,
+        "page": s.page,
         "config_dir": s.config_dir,
     }))
 }
@@ -2632,6 +2634,8 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
         "writes a file; a mesh or view it is given is for the picture",
     ),
     ("export.image", "writes a file; the view stays as it is"),
+    ("export.pdf", "writes a file; the view stays as it is"),
+    ("settings.set_page", "settings are files, not undone"),
     (
         "export.movie",
         "writes files; the camera and the clip planes go back as they were",
@@ -3120,6 +3124,17 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::export::export_image_schema,
         run: crate::export::export_image,
+    },
+    Tool {
+        id: "export.pdf",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-export-pdf",
+        summary: "Export the view as a one-page PDF at path for reports and for print: the view rendered to fill the page inside its margins (with the legend and axes of export.image, and the time of an open series), and above it a title (the mesh's file name unless given) and a line naming MurmelCraft, the date and the file. paper, orientation, margin_mm, header, dpi and theme come from [page] in settings.toml (settings.set_page: A4 landscape, 12 mm, header, 200 dpi, light) unless given. A page that would need more than the renderer's largest picture gets a lower resolution (dpi in the result). The text is Helvetica; characters outside Latin-1 print as ?.",
+        outputs: &["path"],
+        reads: &[],
+        input_schema: crate::pdf::export_pdf_schema,
+        run: crate::pdf::export_pdf,
     },
     Tool {
         id: "export.movie",
@@ -3828,6 +3843,17 @@ pub static TOOLS: &[Tool] = &[
             )
         },
         run: settings_set_help,
+    },
+    Tool {
+        id: "settings.set_page",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-set-page",
+        summary: "The page of export.pdf and of Print (File > Page setup): paper (a4, a3, letter), orientation (landscape, portrait), margin_mm (0 to 50), header (title and a line above the view), dpi (72 to 600) and theme (light by default: dark backgrounds print badly); reset starts from the built-in page. Writes [page] in settings.toml.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::pdf::settings_set_page_schema,
+        run: crate::pdf::settings_set_page,
     },
     Tool {
         id: "recent.list",

@@ -1,0 +1,5 @@
+[
+  {"tool": "mesh.open", "input": {"path": "test-fixtures/channel/foehncraft.vtu"}},
+  {"tool": "display.render_mode", "input": {"mode": "shaded_edges"}},
+  {"tool": "export.image", "input": {"legend": false, "axes": false}}
+]

@@ -32,6 +32,7 @@ mod own_bars;
 mod panels;
 mod parcels;
 mod player;
+mod print;
 mod probe_history;
 mod quality;
 mod regions;

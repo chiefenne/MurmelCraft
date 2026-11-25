@@ -1,0 +1,7 @@
+[
+  {"tool": "mesh.open", "input": {"path": "test-fixtures/vtkhdf/channel_fields.vtkhdf"}},
+  {"tool": "display.color_by", "input": {"by": "field", "field": "speed"}},
+  {"tool": "slice.set", "input": {"axis": "z"}},
+  {"tool": "arrows.set", "input": {"density": 24, "scale": 1.5, "color": "solid"}},
+  {"tool": "export.image", "input": {"legend": false, "axes": false}}
+]

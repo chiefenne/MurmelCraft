@@ -10,6 +10,7 @@ murmel-engine.workspace = true
 murmel-mesh.workspace = true
 murmel-render.workspace = true
 gif.workspace = true
+miniz_oxide.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

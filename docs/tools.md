@@ -28,6 +28,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `views.list` | 1 | read | The saved views of the open mesh, in the order they were saved, with their cameras. |
 | `view.screenshot` | 1 | write-files | Render the current view offscreen (wgpu) to a PNG at path; mesh and view set up the session first for one-shot use. |
 | `export.image` | 1 | write-files | Export the view as a PNG at path for reports and posters: the viewport's size times scale (or width and height in pixels), lines, legend and text grown with the scale so the picture looks like the window, the colour legend (top left) and the axis triad (bottom left) each optional, the background transparent if asked, the resolution (dpi) stored for print. |
+| `export.pdf` | 1 | write-files | Export the view as a one-page PDF at path for reports and for print: the view rendered to fill the page inside its margins (with the legend and axes of export.image, and the time of an open series), and above it a title (the mesh's file name unless given) and a line naming MurmelCraft, the date and the file. paper, orientation, margin_mm, header, dpi and theme come from [page] in settings.toml (settings.set_page: A4 landscape, 12 mm, header, 200 dpi, light) unless given. A page that would need more than the renderer's largest picture gets a lower resolution (dpi in the result). The text is Helvetica; characters outside Latin-1 print as ?. |
 | `export.movie` | 1 | write-files | Export a movie at path (.mp4, .gif, or a folder of PNG frames) with the look of export.image (size, scale, legend, axes, lines): the camera turning about its target (orbit; a whole turn loops), a clip plane sweeping through the mesh (clip), or a flight through saved views that eases into each and holds there (views). MP4 is H.264 made by the ffmpeg installed on the machine (EXPORT002 without one); GIF and PNG are written by MurmelCraft. The view stays as it was. |
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
 | `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
@@ -81,6 +82,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `journal.list` | 1 | read | The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept. |
 | `help.get` | 1 | read | The help of a command, a tool or a topic (`id`, as in system.commands, the keys table, or a page name such as clip): its title, one-line tip, keys, the rich tip shown after a moment, the whole manual text (Markdown), related pages and the manual's chapter. In English. |
 | `settings.set_help` | 1 | write-files | When tips appear: tip_ms, how long the pointer rests on a control before its tip shows (250 by default), and rich_ms, how much longer before the tip shows more (1000); 0 to 10000 each. Writes settings.toml in the config folder. |
+| `settings.set_page` | 1 | write-files | The page of export.pdf and of Print (File > Page setup): paper (a4, a3, letter), orientation (landscape, portrait), margin_mm (0 to 50), header (title and a line above the view), dpi (72 to 600) and theme (light by default: dark backgrounds print badly); reset starts from the built-in page. Writes [page] in settings.toml. |
 | `recent.list` | 1 | read | The files opened lately in the window (File > Open recent), the latest first: path, kind (mesh, session, series, parcels, charts; the tool that opens it again is mesh.open, session.load, series.open, parcels.open or charts.open) and whether it still exists. Empty without a config folder, and over the agent bridge. |
 | `recent.clear` | 1 | write-files | Forget the files opened lately: writes an empty recent.toml in the config folder. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets, your defaults for new items (and which values of each kind can be defaults), your formulas and the config folder. |
@@ -667,6 +669,75 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       "maximum": 8192,
       "minimum": 1,
       "type": "integer"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+### `export.pdf`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axes": {
+      "default": true,
+      "type": "boolean"
+    },
+    "dpi": {
+      "description": "The picture's resolution; left out: [page] (200)",
+      "maximum": 600,
+      "minimum": 72,
+      "type": "integer"
+    },
+    "header": {
+      "description": "Title and a line naming the file and the date above the view; left out: [page] (true)",
+      "type": "boolean"
+    },
+    "legend": {
+      "default": true,
+      "type": "boolean"
+    },
+    "margin_mm": {
+      "description": "Margin on every side; left out: [page] (12)",
+      "maximum": 50,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "orientation": {
+      "description": "Left out: [page] (landscape)",
+      "enum": [
+        "landscape",
+        "portrait"
+      ]
+    },
+    "paper": {
+      "description": "Left out: [page] in settings.toml (a4)",
+      "enum": [
+        "a4",
+        "a3",
+        "letter"
+      ]
+    },
+    "path": {
+      "description": "The PDF file to write",
+      "type": "string"
+    },
+    "theme": {
+      "description": "Left out: [page] (light, as dark prints badly)",
+      "enum": [
+        "dark",
+        "light",
+        "system"
+      ]
+    },
+    "title": {
+      "description": "The header's title; left out: the mesh's file name",
+      "type": "string"
     }
   },
   "required": [
@@ -2659,6 +2730,55 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `settings.set_page`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "dpi": {
+      "maximum": 600,
+      "minimum": 72,
+      "type": "integer"
+    },
+    "header": {
+      "type": "boolean"
+    },
+    "margin_mm": {
+      "maximum": 50,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "orientation": {
+      "enum": [
+        "landscape",
+        "portrait"
+      ]
+    },
+    "paper": {
+      "enum": [
+        "a4",
+        "a3",
+        "letter"
+      ]
+    },
+    "reset": {
+      "description": "Start from the built-in page (A4 landscape, 12 mm, header, 200 dpi, light)",
+      "type": "boolean"
+    },
+    "theme": {
+      "enum": [
+        "dark",
+        "light",
+        "system"
+      ]
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `recent.list`
 
 ```json
@@ -3799,7 +3919,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `SET002` | error | The navigation bindings bind one input to two actions. | Give each gesture, button and modifier combination one action. |
 | `SET003` | error | A value cannot be a default: its kind has no such value, it does not fit, or it belongs to one mesh or field. | settings.get lists the values each kind can keep as a default (defaultable). |
 | `SET004` | error | A keyboard shortcut is taken by another command, or is Tab, which moves the keyboard focus. | Pass replace: true to move the key, or choose another; settings.get lists your keys. |
-| `EXPORT001` | error | An export setting is out of range (scale, line width, dpi). | Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000; a movie 1 to 60 frames a second and at most 36000 frames, an MP4 without transparency. |
+| `EXPORT001` | error | An export setting is out of range (scale, line width, dpi). | Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000 (a PDF page: 72 to 600 dpi and a margin up to 50 mm); a movie 1 to 60 frames a second and at most 36000 frames, an MP4 without transparency. |
+| `EXPORT008` | error | A PDF page could not be written, or the page to print could not be opened. | Check that the folder exists and is writable, and the free space. |
 | `EXPORT002` | error | An MP4 needs ffmpeg, and none was found (MURMEL_FFMPEG, PATH, /opt/homebrew/bin, /usr/local/bin). | Install ffmpeg (macOS: brew install ffmpeg), set MURMEL_FFMPEG to its path, or write a GIF or PNG frames. |
 | `EXPORT003` | error | ffmpeg could not be started or failed while writing the MP4; the message ends with what it said. | Check the path and the free space; try another ffmpeg with MURMEL_FFMPEG. |
 | `EXPORT004` | error | A movie file or a frame could not be written. | Check that the folder exists and is writable, and the free space. |

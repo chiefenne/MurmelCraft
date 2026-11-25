@@ -2,6 +2,8 @@
 covers = ["region.*", "ui.region", "ui.blocks"]
 related = ["clip", "open"]
 chapter = "display"
+picture = "regions.png"
+shot = "shots/regions.json"
 +++
 A region of interest reads and shows only the cells inside a box, sphere or slab, or a picked zone or patch. On a mesh too large for memory it reads just the blocks it needs.
 

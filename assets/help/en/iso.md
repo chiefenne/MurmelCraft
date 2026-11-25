@@ -2,6 +2,8 @@
 covers = ["iso.*"]
 related = ["slices", "derived"]
 chapter = "results"
+picture = "iso.png"
+shot = "shots/iso.json"
 +++
 Iso-surfaces show where a field has one value: a vortex as an iso-surface of vorticity or Q, a flame front, a shock. Colour them solid or by another field.
 

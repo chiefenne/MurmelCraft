@@ -52,6 +52,8 @@ pub struct MurmelApp {
     pub(crate) history_open: bool,
     /// Help ▸ About is open.
     pub(crate) about_open: bool,
+    /// File ▸ Page setup is open.
+    pub(crate) page_setup_open: bool,
     /// The Help panel (the manual) while it is open.
     pub(crate) help_view: Option<crate::help_panel::HelpView>,
     /// The 250 ms flight to a new view: the camera it started from and
@@ -197,6 +199,7 @@ impl MurmelApp {
             session.formulas = st.formulas;
             session.keys = st.keys;
             session.help = st.help;
+            session.page = st.page;
             session.memory_budget = st.memory.budget_gib;
             session.convert_large = st.memory.convert_large;
             murmel_engine::defaults::start_view(&mut session);
@@ -235,6 +238,7 @@ impl MurmelApp {
             shortcuts_open: false,
             history_open: false,
             about_open: false,
+            page_setup_open: false,
             help_view: None,
             flight: None,
             played_at: None,
@@ -1538,6 +1542,7 @@ impl eframe::App for MurmelApp {
         self.shortcuts_window(&ctx);
         self.history_window(&ctx);
         self.about_window(&ctx);
+        self.page_setup_window(&ctx);
         self.bindings_window(&ctx);
         self.palette_window(&ctx);
         self.color_window(&ctx);

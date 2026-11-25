@@ -251,6 +251,7 @@ impl MurmelApp {
             return;
         }
         ui.separator();
+        show_picture(ui, page, 320.0);
         markdown(ui, &page.tip, false);
         if !page.related.is_empty() {
             let names: Vec<String> = page
@@ -339,4 +340,99 @@ fn inline(ui: &mut Ui, text: &str, links: bool) -> Option<String> {
         ui.label(r);
     }
     hit
+}
+
+/// The help pages' pictures (`murmel help shots`), built in.
+macro_rules! pictures {
+    ($($name:literal),* $(,)?) => {
+        const PICTURES: &[(&str, &[u8])] = &[
+            $(($name, include_bytes!(concat!("../../../assets/help/pictures/", $name)))),*
+        ];
+    };
+}
+
+pictures!(
+    "arrows.png",
+    "clip.png",
+    "color-by.png",
+    "field-style.png",
+    "iso.png",
+    "quality.png",
+    "regions.png",
+    "render-mode.png",
+    "slices.png",
+    "streamlines.png",
+);
+
+/// A PNG as RGBA with its size.
+fn decode(bytes: &[u8]) -> Option<egui::ColorImage> {
+    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
+    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::ALPHA);
+    let mut reader = dec.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    buf.truncate(info.buffer_size());
+    let size = [info.width as usize, info.height as usize];
+    match info.color_type {
+        png::ColorType::Rgba => Some(egui::ColorImage::from_rgba_unmultiplied(size, &buf)),
+        _ => None,
+    }
+}
+
+/// A page's picture as a texture, decoded the first time it shows.
+pub(crate) fn picture(ctx: &egui::Context, page: &Page) -> Option<egui::TextureHandle> {
+    let name = page.picture.as_deref()?;
+    let slot = Id::unique(("murmel-help-picture", name));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(slot)) {
+        return Some(t);
+    }
+    let bytes = PICTURES.iter().find(|(n, _)| *n == name)?.1;
+    let t = ctx.load_texture(
+        format!("help-{name}"),
+        decode(bytes)?,
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(slot, t.clone()));
+    Some(t)
+}
+
+/// Draw a page's picture `width` points wide (at most what there is).
+pub(crate) fn show_picture(ui: &mut Ui, page: &Page, width: f32) {
+    if let Some(t) = picture(ui.ctx(), page) {
+        let [w, h] = t.size();
+        let width = width.min(ui.available_width());
+        let size = egui::vec2(width, width * h as f32 / w as f32);
+        let name = page.name.to_string();
+        let r = ui.add(
+            egui::Image::new(&t)
+                .fit_to_exact_size(size)
+                .corner_radius(4.0),
+        );
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, name.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Invariant: the built-in pictures are exactly the pages' pictures,
+    /// and each decodes. Breaks when `murmel help shots` made a picture
+    /// that is not built in (its page would show none) or a page names
+    /// one that is not.
+    #[test]
+    fn pictures_are_built_in() {
+        let mut built: Vec<&str> = PICTURES.iter().map(|(n, _)| *n).collect();
+        built.sort();
+        let mut named: Vec<&str> = murmel_engine::help::pages()
+            .iter()
+            .filter_map(|p| p.picture.as_deref())
+            .collect();
+        named.sort();
+        assert_eq!(built, named);
+        for (n, b) in PICTURES {
+            let img = decode(b).unwrap_or_else(|| panic!("{n} does not decode"));
+            assert_eq!(img.size, [640, 400], "{n}");
+        }
+    }
 }

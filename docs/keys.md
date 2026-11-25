@@ -90,6 +90,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Ctrl + Z` | Undo (camera and display) | `journal.undo` (input from the session) |
 | `Ctrl + Shift + Z` | Redo | `journal.redo` (input from the session) |
 | `Ctrl + Shift + C` | Copy the view as an image | window |
+| `Ctrl + P` | Print… | window |
 | `F1` | Manual | window |
 | palette | Clear the list of recent files | `recent.clear` `{}` |
 | palette | Load session… | window, then `session.load` |
@@ -287,6 +288,8 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Defaults: start with this view (render mode, mesh look, projection) | `settings.set_default` `{"kind":"view"}` |
 | palette | Defaults: colour new fields like the field shown | `settings.set_default` (input from the session) |
 | palette | Defaults: forget them all | `settings.reset_default` `{}` |
+| palette | Export PDF page… | window, then `export.pdf` |
+| palette | Page setup… | window, then `settings.set_page` |
 | palette | Tool reference (online) | window |
 | palette | Connect an agent (MCP, online) | window |
 | palette | Report an issue (online) | window |

@@ -22,9 +22,12 @@ in the command palette (Ctrl + K) and keeps its keys ([keys.md](keys.md)). On ma
 - Save session as… `Ctrl + Shift + S` → `session.save`
 - **Export** ▸
   - Export image… `Ctrl + Shift + E` → `export.image`
+  - Export PDF page… → `export.pdf`
   - Export movie… `Ctrl + Shift + M` → `export.movie`
   - Save a screenshot… → `view.screenshot`
   - Save the chart as a picture… → `charts.export`
+- Page setup… → `settings.set_page`
+- Print… `Ctrl + P`
 - Quit MurmelCraft `Ctrl + Q`
 
 ## Edit

@@ -39,6 +39,7 @@ vello_cpu = { version = "0.2", default-features = false, features = ["std", "tex
 skrifa = "0.44"
 # GIF movies (export.movie): MIT OR Apache-2.0, with color_quant (MIT).
 gif = "0.14"
+miniz_oxide = "0.8"
 base64 = "0.23"
 flate2 = "1.1"
 # The end of an array's text in the streaming .vtu reader: Unlicense OR

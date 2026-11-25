@@ -53,6 +53,7 @@ pages!(
     "open",
     "sessions",
     "export",
+    "print",
     "quit",
     "palette",
     "shortcuts",

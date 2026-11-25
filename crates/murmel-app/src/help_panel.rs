@@ -189,6 +189,8 @@ impl MurmelApp {
         );
         ui.label(RichText::new(self.i18n.tr(&p.line_key())).color(secondary));
         ui.add_space(4.0);
+        crate::tips::show_picture(ui, p, 360.0);
+        ui.add_space(4.0);
         if let Some(target) = markdown(ui, &p.text, true) {
             go = Some(match help::page(&target) {
                 Some(t) => Go::Page(Some(t.name)),

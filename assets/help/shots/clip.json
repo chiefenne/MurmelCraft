@@ -1,0 +1,6 @@
+[
+  {"tool": "mesh.open", "input": {"path": "test-fixtures/channel/foehncraft.vtu"}},
+  {"tool": "display.color_by", "input": {"by": "cell_type"}},
+  {"tool": "clip.set", "input": {"axis": "z"}},
+  {"tool": "export.image", "input": {"legend": false, "axes": false}}
+]

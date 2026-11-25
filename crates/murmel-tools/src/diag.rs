@@ -323,8 +323,14 @@ const OWN: &[Code] = &[
         severity: Severity::Error,
         meaning: "An export setting is out of range (scale, line width, dpi).",
         fix: Some(
-            "Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000; a movie 1 to 60 frames a second and at most 36000 frames, an MP4 without transparency.",
+            "Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000 (a PDF page: 72 to 600 dpi and a margin up to 50 mm); a movie 1 to 60 frames a second and at most 36000 frames, an MP4 without transparency.",
         ),
+    },
+    Code {
+        code: "EXPORT008",
+        severity: Severity::Error,
+        meaning: "A PDF page could not be written, or the page to print could not be opened.",
+        fix: Some("Check that the folder exists and is writable, and the free space."),
     },
     Code {
         code: "EXPORT002",

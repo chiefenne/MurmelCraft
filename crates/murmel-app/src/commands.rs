@@ -146,6 +146,9 @@ impl MurmelApp {
                 "window.undo_history" => self.history_open = !self.history_open,
                 "window.copy_image" => self.copy_image(ctx),
                 "window.about" => self.about_open = true,
+                "window.export_pdf" => self.export_pdf_dialog(),
+                "window.print" => self.print_page(),
+                "window.page_setup" => self.page_setup_open = true,
                 // F1: the page of the tip showing, else the manual opens
                 // or closes.
                 "window.manual" => match crate::tips::tip_page(ctx) {

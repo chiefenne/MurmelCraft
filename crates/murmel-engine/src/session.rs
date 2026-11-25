@@ -1215,6 +1215,8 @@ pub struct Session {
     pub keys: crate::keys::KeyMap,
     /// When tips appear (`settings.set_help`, `[help]` in settings.toml).
     pub help: crate::settings::Help,
+    /// The page of export.pdf and Print (`[page]`).
+    pub page: crate::settings::PageSetup,
     /// The undo and redo steps of the open mesh.
     pub journal: Journal,
     /// A mesh read in advance (the window reads a large one on a thread
@@ -1333,6 +1335,7 @@ impl Session {
             formulas: Vec::new(),
             keys: crate::keys::KeyMap::new(),
             help: crate::settings::Help::default(),
+            page: crate::settings::PageSetup::default(),
             journal: Journal::default(),
             preloaded: None,
             hash_after_open: false,

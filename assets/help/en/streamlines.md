@@ -2,6 +2,8 @@
 covers = ["stream.*", "ui.stream_handle"]
 related = ["arrows", "slices"]
 chapter = "results"
+picture = "streamlines.png"
+shot = "shots/streamlines.json"
 +++
 Streamlines follow the flow from seeds on a line, in a ball, on a patch or on a plane. Draw them as lines or tubes, with arrowheads, coloured by a field.
 

@@ -60,6 +60,12 @@ The method is the ArtCraft Craft Anything method of KoflCraft and FoehnCraft:
   check all three). A new control takes its tip from there with
   `self.tip(resp, id)` or `self.tip_as(…)` (`crates/murmel-app/src/tips.rs`)
   instead of `on_hover_text`.
+- **SHOULD** give a page whose topic is easier seen than read a picture:
+  `picture = "<page>.png"` and `shot = "shots/<page>.json"` in its header,
+  the recipe a list of tool calls ending in `export.image` without a path,
+  then `cargo run -p murmel-cli -- help shots <page>` (needs a GPU or
+  lavapipe) and the file in `pictures!` (`tips.rs`). Never draw or paste a
+  picture by hand; tests check the recipe's digest and the list.
 - **MUST** decide for every new tool whether its calls are undo steps:
   list it in `JOURNALED` (it changes the camera or the display) or in
   `NOT_JOURNALED` with the reason (`crates/murmel-tools/src/tools.rs`; a
