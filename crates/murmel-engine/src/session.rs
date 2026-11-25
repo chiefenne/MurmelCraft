@@ -1102,6 +1102,12 @@ pub struct Session {
     /// The memory budget set, in GiB (`settings.set_memory`); `None`:
     /// half the computer's memory ([`crate::memory`]).
     pub memory_budget: Option<f64>,
+    /// Convert a mesh that is not blocked and needs more than the budget
+    /// without asking (`settings.set_memory`, [`crate::convert`]).
+    pub convert_large: bool,
+    /// A mesh being converted to a blocked file on a thread of its own
+    /// (the window), opened once converted.
+    pub convert_job: Option<crate::convert::ConvertJob>,
     /// Read the blocks an overview's regions need on a thread of their
     /// own (the window): the overview shows until they are read, and
     /// [`Session::poll_blocks`] puts them in place. Off, a change of the
@@ -1168,6 +1174,8 @@ impl Session {
             steps_ranges: crate::steps_range::Cache::default(),
             charts: None,
             memory_budget: None,
+            convert_large: false,
+            convert_job: None,
             defer_blocks: false,
             block_job: None,
             blocks_problem: None,
@@ -1997,6 +2005,44 @@ impl Session {
             }
             Some(_) => true,
             None => false,
+        }
+    }
+
+    /// The offer to convert the mesh at `path` to a blocked copy: when it
+    /// is not a blocked VTKHDF file and its whole read needs more than the
+    /// memory budget ([`crate::convert`], card 4).
+    pub fn convert_offer(&self, path: &Path) -> Option<crate::convert::Offer> {
+        crate::convert::offer(path, self.budget_bytes())
+    }
+
+    /// Convert the mesh of `offer` to its blocked copy on a thread of its
+    /// own (one at a time: a conversion running is stopped).
+    pub fn start_converting(&mut self, offer: &crate::convert::Offer) {
+        if let Some(j) = self.convert_job.take() {
+            j.stop();
+        }
+        self.convert_job = Some(crate::convert::ConvertJob::start(
+            offer.path.clone(),
+            offer.out.clone(),
+        ));
+    }
+
+    /// The conversion's end once it ended: the blocked copy to open, or
+    /// why there is none (MESH019 when stopped); `None` while it runs or
+    /// when none does. With `wait`, waits for it.
+    pub fn poll_convert(&mut self, wait: bool) -> Option<Result<PathBuf, MeshError>> {
+        let j = self.convert_job.as_ref()?;
+        let r = j.take(wait)?;
+        let out = j.out.clone();
+        self.convert_job = None;
+        Some(r.map(|_| out))
+    }
+
+    /// Stop converting; nothing is left behind and the window stays as
+    /// it is.
+    pub fn cancel_convert(&mut self) {
+        if let Some(j) = &self.convert_job {
+            j.stop();
         }
     }
 

@@ -2013,6 +2013,84 @@ fn streamlines_on_an_overview_in_the_window() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Invariant (the maintainer's card 4 of 2026-11-24, a large legacy
+/// file): opening a mesh that is not blocked and needs more than the
+/// memory budget asks first: "Convert and open" converts it on a thread
+/// of its own (the status bar following it) to a blocked copy beside it,
+/// which opens as an overview; opening it again opens that copy at once;
+/// "Open whole" opens the file itself whole; ticking "Convert large
+/// meshes without asking" keeps that setting. Every control of the
+/// question keeps a clean name. Breaks when the question is skipped
+/// (the mesh opens whole beyond the budget), when a button does not do
+/// what it says, when the window never polls the conversion, or when an
+/// up-to-date copy is converted again. The engine test converts without
+/// the window.
+#[test]
+fn a_large_mesh_that_is_not_blocked_is_offered_for_conversion() {
+    let dir = std::env::temp_dir().join(format!("murmel-convert-win-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let vtu = dir.join("channel.vtu");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/channel/foehncraft.vtu");
+    std::fs::copy(&fixture, &vtu).unwrap();
+    let copy = dir.join("channel.blocked.vtkhdf");
+    let (open, config) = (vtu.clone(), dir.clone());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .build_eframe(move |cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = Some(config);
+            app.bridge_path = None;
+            app.session.memory_budget = Some(1e-9);
+            app.session.cache_dir = None;
+            app.open_path(open);
+            app
+        });
+    h.run_steps(3);
+    assert!(h.state().session.mesh.is_none(), "asked before it opens");
+    assert!(h.state().convert_offer.is_some());
+    h.get_by_label("Open a large mesh");
+    assert_eq!(problems(&h), Vec::<String>::new(), "the question");
+    h.get_by_label("Convert large meshes without asking")
+        .click();
+    h.run_steps(1);
+    h.get_by_label("Convert and open").click();
+    h.run_steps(1);
+    assert!(h.state().convert_offer.is_none());
+    assert!(h.state().session.convert_large, "the setting kept");
+    let start = std::time::Instant::now();
+    while h.state().session.convert_job.is_some() {
+        assert!(start.elapsed().as_secs() < 60, "the conversion never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    opened(&mut h);
+    let m = h.state().session.mesh.as_ref().expect("the copy opens");
+    assert_eq!(m.path, copy);
+    assert!(m.overview.is_some(), "as an overview");
+
+    // Again: the up-to-date copy opens at once.
+    h.state_mut().open_path(vtu.clone());
+    h.run_steps(2);
+    opened(&mut h);
+    assert!(h.state().session.convert_job.is_none() && h.state().convert_offer.is_none());
+    assert_eq!(h.state().session.mesh.as_ref().unwrap().path, copy);
+
+    // Without the copy and the setting, "Open whole" opens the file.
+    std::fs::remove_file(&copy).unwrap();
+    h.state_mut().session.convert_large = false;
+    h.state_mut().open_path(vtu.clone());
+    h.run_steps(2);
+    assert!(h.state().convert_offer.is_some());
+    h.get_by_label("Open whole").click();
+    h.run_steps(2);
+    opened(&mut h);
+    let m = h.state().session.mesh.as_ref().unwrap();
+    assert_eq!(m.path, vtu);
+    assert_eq!(m.mesh.cell_count(), 776);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Invariant: on an overview the model tree has a "Block boxes" row
 /// whose eye shows and hides the boxes of its blocks, named with how
 /// many blocks there are and, once a region is drawn, how many it reads;

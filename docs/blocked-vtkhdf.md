@@ -261,6 +261,19 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   Its HDF5 writer is MurmelCraft's own (`crates/murmel-mesh/src/h5write.rs`,
   from the HDF5 File Format Specification 3.0): superblock 2, version 2
   object headers, compact links and attributes, contiguous datasets.
+- Opening a `.vtu`, an OpenFOAM `polyMesh` or an unblocked VTKHDF file
+  whose whole read needs more than the memory budget (estimated from the
+  head of its files: the `Piece`'s `NumberOfCells`, the `nCells` OpenFOAM
+  notes in `owner`, or the VTKHDF structure) asks first (card 4): convert
+  it once to `NAME.blocked.vtkhdf` beside it (a case's in its folder,
+  named after the case), which then opens as an overview, or open it
+  whole. Converting runs as `blocks.make` does, on a thread of its own
+  with Cancel or Esc, into a `.part` file renamed when whole; a copy
+  newer than every file of the mesh opens at once next time. "Convert
+  large meshes without asking" (in the question or Settings, or
+  `settings.set_memory` with `convert_large`) skips the question. The
+  tools open such a mesh whole, with the warning BLOCK007 naming the
+  copy.
 - KoflCraft writes its binary hand-off this way, FoehnCraft its
   `fields.vtkhdf`.
 - Choices the layout leaves to the writer, which a reader must not

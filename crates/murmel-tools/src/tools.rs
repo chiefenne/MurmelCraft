@@ -183,8 +183,42 @@ fn mesh_summary(s: &Session) -> Value {
 fn mesh_open(input: Value, s: &mut Session) -> Run {
     let i: OpenInput = parse(input)?;
     let fit = s.fit_for(i.mode);
+    // Beyond the budget a mesh that is not blocked opens whole: say so,
+    // and how to open it as an overview (card 4 of 2026-11-24).
+    let offer = (i.mode == murmel_engine::OpenMode::Fit)
+        .then(|| s.convert_offer(&i.path))
+        .flatten();
     s.open_as(&i.path, fit).map_err(mesh_err)?;
-    Ok(mesh_summary(s))
+    let mut out = mesh_summary(s);
+    if let Some(o) = offer
+        && let Some(w) = out["warnings"].as_array_mut()
+    {
+        w.push(json!(Diagnostic::new("BLOCK007", convert_note(&o))));
+    }
+    Ok(out)
+}
+
+/// What the warning on a mesh beyond the budget that is not blocked says.
+pub(crate) fn convert_note(o: &murmel_engine::convert::Offer) -> String {
+    use murmel_engine::memory::gib;
+    let copy = if o.fresh {
+        format!(
+            "its blocked copy {} is up to date: open that",
+            o.out.display()
+        )
+    } else {
+        format!(
+            "blocks.make converts it once to {} (about {} GB), which opens as an overview",
+            o.out.display(),
+            gib(o.disk)
+        )
+    };
+    format!(
+        "{} needs about {} GB to open whole, more than the memory budget of {} GB, and is not blocked, so it opened whole; {copy}",
+        o.path.display(),
+        gib(o.needs),
+        gib(o.budget)
+    )
 }
 
 fn mesh_close(_: Value, s: &mut Session) -> Run {
@@ -1279,6 +1313,7 @@ pub(crate) fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> 
             formulas: s.formulas.clone(),
             memory: murmel_engine::memory::Memory {
                 budget_gib: s.memory_budget,
+                convert_large: s.convert_large,
             },
             ..Settings::default()
         },
@@ -1453,6 +1488,7 @@ fn memory_json(s: &Session) -> Value {
         "budget_gib": gib(s.budget_bytes()),
         "automatic": s.memory_budget.is_none(),
         "system_gib": system_bytes().map(gib),
+        "convert_large": s.convert_large,
     })
 }
 
@@ -1461,12 +1497,15 @@ fn memory_json(s: &Session) -> Value {
 struct SetMemory {
     budget_gib: Option<f64>,
     automatic: Option<bool>,
+    convert_large: Option<bool>,
 }
 
 fn settings_set_memory(input: Value, s: &mut Session) -> Run {
     use murmel_engine::memory::{MAX_GIB, MIN_GIB};
     let i: SetMemory = parse(input)?;
-    s.memory_budget = match (i.budget_gib, i.automatic) {
+    let budget = match (i.budget_gib, i.automatic) {
+        // the conversion setting alone
+        (None, None) if i.convert_large.is_some() => s.memory_budget,
         (Some(g), None | Some(false)) => {
             let g = finite(g, "budget_gib")?;
             if !(MIN_GIB..=MAX_GIB).contains(&g) {
@@ -1481,10 +1520,14 @@ fn settings_set_memory(input: Value, s: &mut Session) -> Run {
         _ => {
             return Err(Diagnostic::new(
                 "TOOL002",
-                "give budget_gib, or automatic: true for half the computer's memory",
+                "give budget_gib, or automatic: true for half the computer's memory (or convert_large alone)",
             ));
         }
     };
+    s.memory_budget = budget;
+    if let Some(c) = i.convert_large {
+        s.convert_large = c;
+    }
     let path = save_session_settings(s)?;
     Ok(json!({"memory": memory_json(s), "files": [path]}))
 }
@@ -3551,14 +3594,15 @@ pub static TOOLS: &[Tool] = &[
         version: 1,
         action: Action::WriteFiles,
         label_key: "tool-settings-set-memory",
-        summary: "Set the memory budget: a mesh whose whole read needs more (estimated from the file before reading) opens as an overview when it is a blocked VTKHDF file; others open whole. budget_gib (0.25 to 4096), or automatic: true for half the computer's memory (the default). Applies to the next mesh opened; writes settings.toml in the config folder.",
+        summary: "Set the memory budget: a mesh whose whole read needs more (estimated from the file before reading) opens as an overview when it is a blocked VTKHDF file; others open whole, and the window offers to convert them once to a blocked copy beside them (NAME.blocked.vtkhdf, as blocks.make writes) that opens as an overview. budget_gib (0.25 to 4096), or automatic: true for half the computer's memory (the default); convert_large true converts without asking (alone or with either). Applies to the next mesh opened; writes settings.toml in the config folder.",
         outputs: &[],
         reads: &[],
         input_schema: || {
             object(
                 json!({
                     "budget_gib": {"type": "number", "minimum": 0.25, "maximum": 4096},
-                    "automatic": {"type": "boolean"}
+                    "automatic": {"type": "boolean"},
+                    "convert_large": {"type": "boolean", "description": "Convert a mesh that is not a blocked VTKHDF file and needs more than the budget to a blocked copy beside it without asking (the window asks otherwise)"}
                 }),
                 &[],
             )

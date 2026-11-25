@@ -424,7 +424,8 @@ settings-memory = Memory
 settings-memory-half = Half of this computer's memory ({ $total } GB)
 settings-memory-half-unknown = Half of this computer's memory (16 GB if it cannot be found)
 settings-memory-budget = Budget
-settings-memory-note = A mesh that needs more than { $budget } GB opens as an overview if it is a blocked .vtkhdf file; others open whole.
+settings-memory-note = A mesh that needs more than { $budget } GB opens as an overview if it is a blocked .vtkhdf file; others are offered for conversion to a blocked copy beside them, or open whole.
+settings-memory-convert = Convert large meshes that aren't blocked without asking
 
 # A mesh beyond the memory budget, open as an overview (model tree).
 overview-note = Overview: the { $cells } cells in { $blocks } blocks are not read. Reading them needs about { $needs } GB, more than the memory budget of { $budget } GB. Cell fields show on the boundary as the value of the cell behind each face.
@@ -517,6 +518,17 @@ status-preview = Sampling the volume on a preview grid for the slices: { $phase 
 status-preview-cancel-tip = Stop sampling; the slices show again when you add one (Esc)
 status-streams = Tracing streamlines through the blocks: { $blocks } blocks read ({ $seconds } s)
 status-streams-cancel-tip = Stop tracing; the lines end where the blocks read so far end (Esc)
+status-convert = Converting { $file } to a blocked file: { $phase } ({ $seconds } s)
+status-convert-cancel-tip = Stop converting; nothing is written (Esc)
+convert-title = Open a large mesh
+convert-needs = { $file } has about { $cells } cells and needs about { $needs } GB to open whole, more than the memory budget of { $budget } GB.
+convert-offer = Convert it once to a blocked file beside it ({ $out }, about { $disk } GB). It then opens as an overview, and regions, slices, probes and streamlines read only the blocks they need.
+convert-beyond-memory = Converting reads the mesh whole once, which needs more than this computer's memory. A blocked file written by KoflCraft or FoehnCraft avoids that.
+convert-always = Convert large meshes without asking
+convert-go = Convert and open
+convert-whole = Open whole
+convert-cancel = Cancel
+loading-phase-write-blocks = writing the blocked file
 loading-phase-file = reading the file
 loading-phase-numbers = reading points and faces
 loading-phase-cells = assembling the cells

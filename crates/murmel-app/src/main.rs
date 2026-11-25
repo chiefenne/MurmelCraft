@@ -13,6 +13,7 @@ mod charts;
 mod clip_handle;
 mod color_edit;
 mod commands;
+mod convert;
 mod cube;
 mod defaults;
 mod derived;

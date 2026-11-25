@@ -422,7 +422,7 @@ impl MurmelApp {
 
 /// The message the window shows for a phase of the reader (the name of
 /// its current `profile::span`).
-fn phase_message(phase: &str) -> &'static str {
+pub(crate) fn phase_message(phase: &str) -> &'static str {
     match phase {
         "read.xml"
         | "read.numbers"
@@ -438,6 +438,7 @@ fn phase_message(phase: &str) -> &'static str {
         p if p.starts_with("read.preview") => "loading-phase-preview",
         p if p == "read.topology" || p.starts_with("topology.") => "loading-phase-topology",
         p if p == "open.surface" || p.starts_with("surface.") => "loading-phase-surface",
+        p if p.starts_with("blocks.") => "loading-phase-write-blocks",
         _ => "loading-phase-file",
     }
 }

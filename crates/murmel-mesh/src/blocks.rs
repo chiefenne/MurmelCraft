@@ -68,6 +68,9 @@ pub struct Written {
 }
 
 fn failed(e: io::Error) -> MeshError {
+    if e.kind() == io::ErrorKind::Interrupted {
+        return MeshError::new("MESH019", "writing the blocked file was cancelled");
+    }
     MeshError::new(
         "BLOCK001",
         format!("the blocked file cannot be written: {e}"),
@@ -424,6 +427,10 @@ fn per_block<T: Element>(
     let mut buf = Vec::new();
     let mut count = 0u64;
     for b in 0..blocks {
+        // A conversion in the window can be stopped between blocks.
+        if crate::profile::check().is_err() {
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
         buf.clear();
         rows(b, &mut buf);
         count += buf.len() as u64;

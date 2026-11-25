@@ -3404,9 +3404,13 @@ fn chart_tools() {
 /// the budget as it was; settings.get shows it; mesh.open opens a blocked
 /// file beyond the budget as an overview (its cells and blocks in the
 /// summary), whole with mode "whole", and refuses an overview of a file
-/// without a block index. Breaks when the setting is not saved or loaded,
-/// a bad budget is taken, or the open ignores the mode; the session tests
-/// open overviews but never through the tool.
+/// without a block index; a file that is not blocked opens whole beyond
+/// the budget with a warning (BLOCK007) naming its blocked copy, which
+/// says when that copy is up to date (card 4); convert_large alone is
+/// kept and saved. Breaks when the setting is not saved or loaded, a bad
+/// budget is taken, the open ignores the mode, or the warning is missing
+/// or comes with mode "whole"; the session tests open overviews but
+/// never through the tool.
 #[test]
 fn the_memory_budget_decides_how_a_mesh_opens() {
     let dir = scratch("memory");
@@ -3440,6 +3444,23 @@ fn the_memory_budget_decides_how_a_mesh_opens() {
     assert_eq!(s.memory_budget, None);
     let (st, _, _) = murmel_engine::settings::load(&dir, false);
     assert!(st.memory.is_default());
+    // Converting without asking, alone: the budget stays.
+    let e = call(
+        "settings.set_memory",
+        json!({"convert_large": true}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["memory"]["convert_large"], true);
+    assert!(s.convert_large && s.memory_budget.is_none());
+    let (st, _, _) = murmel_engine::settings::load(&dir, false);
+    assert!(st.memory.convert_large && st.memory.budget_gib.is_none());
+    let e = call(
+        "settings.set_memory",
+        json!({"convert_large": false}),
+        &mut s,
+    );
+    assert!(e.ok() && !s.convert_large);
 
     let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
     let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
@@ -3462,8 +3483,34 @@ fn the_memory_budget_decides_how_a_mesh_opens() {
     assert!(e.ok(), "{:?}", e.diagnostics);
     assert!(e.result["overview"].is_null());
     assert_eq!(e.result["summary"]["cells"], mesh.cell_count());
-    let e = call("mesh.open", json!({"path": plain}), &mut s);
+    // Not blocked and beyond the budget: opened whole, and the warning
+    // says how to open it as an overview.
+    let plain_copy = dir.join("channel.vtkhdf");
+    std::fs::copy(&plain, &plain_copy).unwrap();
+    let e = call("mesh.open", json!({"path": plain_copy}), &mut s);
     assert!(e.result["overview"].is_null());
+    let w = &e.result["warnings"][0];
+    assert_eq!(w["code"], "BLOCK007", "{e:?}");
+    let note = w["message"].as_str().unwrap();
+    assert!(
+        note.contains("channel.blocked.vtkhdf") && note.contains("blocks.make"),
+        "{note}"
+    );
+    let e = call(
+        "blocks.make",
+        json!({"out": dir.join("channel.blocked.vtkhdf")}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let e = call("mesh.open", json!({"path": plain_copy}), &mut s);
+    let note = e.result["warnings"][0]["message"].as_str().unwrap();
+    assert!(note.contains("up to date"), "{note}");
+    let e = call(
+        "mesh.open",
+        json!({"path": plain_copy, "mode": "whole"}),
+        &mut s,
+    );
+    assert_eq!(e.result["warnings"], json!([]), "asked whole: no warning");
     let e = call(
         "mesh.open",
         json!({"path": plain, "mode": "overview"}),
