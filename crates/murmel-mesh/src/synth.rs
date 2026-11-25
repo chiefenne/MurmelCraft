@@ -26,6 +26,8 @@ use base64::Engine as _;
 
 use crate::{CellKind, Mesh, NO_CELL, Patch, PatchRole, Polygons, boundary};
 
+pub mod blocked;
+
 /// The corners of the truncated octahedron about the origin in quarter
 /// lattice units: every permutation of `(0, ±1, ±2)`.
 fn corners() -> Vec<[i32; 3]> {

@@ -22,7 +22,9 @@ shared by four cells, which is what a KoflCraft Voronoi core looks like to
 the viewer. The outside is left jagged, cut into six patches by the nearest
 side of the box, and the cells into two zones. Formats: `vtu` (ascii, as
 KoflCraft writes `foehncraft.vtu`), `vtu-binary` (base64), `polymesh` and
-`polymesh-binary` (OpenFOAM, `faceCompactList`).
+`polymesh-binary` (OpenFOAM, `faceCompactList`), and `blocked` (a blocked
+VTKHDF file with two cell fields, written without the mesh in memory; see
+"A 100 M cell test file").
 
 `bench run` times, in this order:
 
@@ -1628,3 +1630,86 @@ copy beside it (card 4), which opens as an overview.
 - The copy is written to a `.part` file and renamed when whole, so a
   conversion stopped (Cancel, Esc, checked between blocks) or failed
   leaves nothing behind.
+
+## A 100 M cell test file (2026-11-25)
+
+Card 2 asks for 100 M cells to open on the iMac, but no mesh of that
+size could be made: `bench make` builds the honeycomb in memory first
+(476 MiB a M cells, so 47 GB), and `blocks make` reads the mesh whole.
+`bench make --formats blocked` now writes the honeycomb straight into a
+blocked VTKHDF file (`murmel_mesh::synth::blocked`) with two cell fields,
+a Taylor–Green vortex array in a uniform stream (`velocity`) and its
+`pressure`:
+
+- Every cell, point and face of a block follows from the lattice, so
+  only the cells' Hilbert order is held (16 bytes a cell while it is
+  sorted, 8 after), and one block per thread.
+- A first pass counts each block's ghost cells and points; the datasets
+  are then set aside at their sizes (`H5Writer::reserve`) and every
+  thread writes its blocks' rows where they go (`H5Writer::rows`).
+- The ids within a block are 32-bit (card of 2026-11-25:
+  `blocked-vtkhdf.md` § 5 now allows them), so the file takes 940
+  bytes a cell instead of 1,500: 94 GB at 100 M cells instead of 150 GB,
+  the iMac's whole free space.
+- On a small honeycomb the file holds what `blocks make` writes for the
+  mesh in memory: the same blocks, ghosts, cells, faces, field rows and
+  block index; only the points' numbers differ. VTK 9.7's `vtkHDFReader`
+  opens it with every cell, field and patch.
+
+Here (4 threads, 15 GB, the file written into the page cache):
+
+| `bench make --formats blocked` | 1 M | 3 M | 10 M |
+|---|---:|---:|---:|
+| cells | 1,005,039 | 3,002,419 | 10,088,659 |
+| blocks | 16 | 46 | 154 |
+| file | 0.92 GB | 2.79 GB | 9.45 GB |
+| bytes a cell | 920 | 929 | 937 |
+| time | 1.9 s | 5.7 s | 14.5 s |
+| peak memory | 492 MiB | 520 MiB | 605 MiB |
+
+At 10 M cells the order took 0.8 s, counting 2.2 s, the rows 8.7 s and
+the patches 0.4 s, with 26 s of CPU time over the 4 threads.
+
+The files opened as overviews (`murmel call mesh.open`, mode overview,
+from the page cache):
+
+| | 1 M | 3 M | 10 M |
+|---|---:|---:|---:|
+| open | 0.3 s | 0.8 s | 1.2 s (3.5 s just after writing it) |
+| peak memory | 272 MiB | 564 MiB | 1,243 MiB |
+
+Both grow with the boundary (n², 4.6 times from 10 M to 100 M).
+
+On the 10 M overview, through the tools (which cut before they answer;
+the window shows the preview grid's faces meanwhile):
+
+| step | time | blocks |
+|---|---:|---:|
+| slice across x through the middle, coloured by `pressure` | 24 s | 63 cut |
+| the slice moved by 0.05 | 9 to 11 s | 32 cut, the others kept |
+| a box region a fifth of the mesh wide | 2.8 s | 12 read (786,432 cells and the halo) |
+| iso-surface of `pressure` at its middle value | 42 s, then left on the grid | its faces would take over a quarter of the budget (BLOCK006) |
+
+The peak over that run was 6.3 GB.
+
+What it shows, and what to expect at 100 M cells (n = 369, 100,079,441
+cells, 1,528 blocks), estimated from these numbers:
+
+- Writing is bound by the disk: about 260 s of CPU time (half a minute
+  or so on the iMac's 8 cores) for 94 GB, so about a minute on an SSD
+  and over ten minutes on the spinning part of a Fusion Drive. It holds
+  about 3 to 4 GB: the cell order (1.6 GB while sorted) and about
+  100 MB a thread.
+- The overview opens in about 6 s from the page cache and holds about
+  5.7 GB; longer the first time, as the boundary's owner rows are read
+  from the disk.
+- A box region of 12 blocks takes about 3 s whatever the file.
+- A plane crosses about 4.6 times as many blocks as at 10 M, so the
+  exact slice through the middle follows the grid's after about two
+  minutes (0.38 s a block). Reading several blocks at once is the next
+  step; this file is what it can be measured on.
+- An iso-surface whose value runs through the whole volume finds only
+  after reading the blocks that its faces exceed the budget; estimating
+  the faces from the block ranges first would save that time.
+- The preview grid reads the points and point lists of every block once
+  (about 28 GB at 100 M with 32-bit ids) and is then kept.
