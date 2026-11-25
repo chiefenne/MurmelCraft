@@ -1715,6 +1715,54 @@ cells, 1,528 blocks), estimated from these numbers:
 - The preview grid reads the points and point lists of every block once
   (about 28 GB at 100 M with 32-bit ids) and is then kept.
 
+## Slices of the 100 M cell file over the network (2026-11-25)
+
+The 100 M cell test file (94 GB, n = 369, 1,528 blocks) on the user's
+NAS (gigabit, about 100 MB/s), timed on the iMac with `murmel run
+--script` (main at d6fdfb1):
+
+| step | iMac, file on the NAS |
+|---|---:|
+| `mesh.open`, mode overview, first time (with the BLAKE3 of 94 GB) | 926 s |
+| `mesh.open` again (the digest remembered) | 16.0 s |
+| colour by `pressure` | 6.0 s |
+| slice across x through the middle (and the preview grid, sampled once) | 1,135 s |
+| the slice moved by 0.05 | 361 s |
+| peak memory | 12.1 GB |
+
+The window ended on opening it: the boundary's face vertices took one
+GPU buffer of 1.6 GB, over the 256 MiB a buffer may hold (#115 draws
+the surface in pieces).
+
+The slice was slow for a reason the timings from the page cache here
+had hidden: `read_blocks` read every patch whole for every block, to
+keep the faces the block's cells own. On the 10 M file a slice
+through the middle read 10.9 GB for its 63 blocks, the last 119 MB of
+the file (the patches) each time; at 100 M the patches are about
+550 MB, a block's own rows about 20 MB.
+
+Now an overview reads its blocks through one `vtkhdf::BlockFile`: the
+file opened once (its structure read once, not for every block), the
+owner of each patch face read once, and each block's faces read by
+their rows. The cut reads the next blocks on a thread of its own while
+it cuts one.
+
+On the 10 M file here (4 threads, the file in the page cache):
+
+| | before | after |
+|---|---:|---:|
+| bytes read, open + slice + slice moved | 13.5 GB | 3.7 GB |
+| slice through the middle (63 blocks) | 23.0 s | 12.5 to 13.1 s |
+| the slice moved by 0.05 | 9.3 to 10.1 s | 5.1 to 5.3 s |
+
+Of the 16 s the slice took before reading ahead, reading the blocks
+took about 9 s (cells 4 s, topology 3 s) and cutting them 6.6 s, so
+with the reading on its own thread the cut is now about as long as
+the reading. At 100 M over the NAS each block reads about 20 MB
+instead of 570 MB, so the slice through the middle should take a
+minute or two (its blocks' rows, about 6 GB, at the network's speed,
+with the cutting alongside) instead of 19 minutes.
+
 ## Clip drag: a live cut in a thin layer (2026-11-25)
 
 The maintainer's report: at about 2 M polyhedral cells the clip drag was

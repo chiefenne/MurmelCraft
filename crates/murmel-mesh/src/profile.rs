@@ -47,6 +47,12 @@ pub fn watch<R>(progress: Arc<Progress>, f: impl FnOnce() -> R) -> R {
     r
 }
 
+/// The progress this thread follows, if any: for a thread helping it,
+/// which [`watch`]es it too.
+pub fn watched() -> Option<Arc<Progress>> {
+    WATCHED.with(|w| w.borrow().clone())
+}
+
 /// `MESH019` when the opening this thread does was cancelled.
 pub fn check() -> Result<(), MeshError> {
     let stop = WATCHED.with(|w| w.borrow().as_ref().is_some_and(|p| p.cancelled()));

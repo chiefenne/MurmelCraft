@@ -53,12 +53,24 @@ pub struct OpenMesh {
     /// budget): `mesh` is the boundary only, and this tells what the
     /// volume holds.
     pub overview: Option<Arc<Overview>>,
+    /// The file of an overview, read block by block for its regions,
+    /// slices, iso-surfaces, probes and streamlines: opened once, its
+    /// patch faces read by their rows ([`murmel_mesh::vtkhdf::BlockFile`]).
+    pub block_file: Option<Arc<murmel_mesh::vtkhdf::BlockFile>>,
     /// The blocks of an overview read for its regions: `mesh` and
     /// `fields` are theirs while they show ([`crate::blocks`]).
     pub blocks: Option<crate::blocks::Blocks>,
 }
 
 impl OpenMesh {
+    /// The file read block by block: the overview's shared one, else one
+    /// of its own for `path`.
+    pub fn file(&self) -> Arc<murmel_mesh::vtkhdf::BlockFile> {
+        self.block_file
+            .clone()
+            .unwrap_or_else(|| Arc::new(murmel_mesh::vtkhdf::BlockFile::new(&self.path)))
+    }
+
     /// The volume cells of the mesh: those of the file when it opened as
     /// an overview.
     pub fn cells(&self) -> usize {
@@ -1614,6 +1626,10 @@ impl Session {
         self.surface_revision += 1;
         self.preview = None;
         self.clip_base = None;
+        let block_file = l
+            .overview
+            .is_some()
+            .then(|| Arc::new(murmel_mesh::vtkhdf::BlockFile::new(&l.path)));
         self.mesh = Some(OpenMesh {
             path: l.path,
             built_for: self.display.clone(),
@@ -1626,6 +1642,7 @@ impl Session {
             files: l.files,
             validity: l.validity,
             fields: Arc::new(l.fields),
+            block_file,
             overview: l.overview.map(Arc::new),
             blocks: None,
         });
@@ -1688,6 +1705,10 @@ impl Session {
         self.surface_revision += 1;
         self.preview = None;
         self.clip_base = None;
+        let block_file = l
+            .overview
+            .is_some()
+            .then(|| Arc::new(murmel_mesh::vtkhdf::BlockFile::new(&l.path)));
         self.mesh.insert(OpenMesh {
             path: l.path,
             built_for: self.display.clone(),
@@ -1700,6 +1721,7 @@ impl Session {
             files: l.files,
             validity: l.validity,
             fields: Arc::new(l.fields),
+            block_file,
             overview: l.overview.map(Arc::new),
             blocks: None,
         })
@@ -2293,7 +2315,7 @@ impl Session {
                 self.blocks_problem = None;
                 let cells = crate::blocks::cells_of(&o, &wanted);
                 crate::blocks::BlockJob::start(
-                    m.path.clone(),
+                    m.file(),
                     wanted,
                     cells,
                     m.evidence.clone(),
