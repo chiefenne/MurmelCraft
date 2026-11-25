@@ -2724,3 +2724,55 @@ fn shortcut_editor_records_and_warns() {
     assert_eq!(h.state().session.navigation, before);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Invariant: the menu bar opens its menus by name, an item runs its
+/// command, Undo names the step it undoes, and an item that cannot work
+/// without a mesh is greyed out once the mesh is closed. Breaks when the
+/// bar stops drawing the table of murmel-tools, an item no longer
+/// reaches its command, Undo loses its step name, or a greyed item still
+/// runs. The table test in murmel-tools checks only the data.
+#[test]
+fn menu_bar_runs_commands() {
+    let mut h = harness();
+    // Click the menu item whose name starts with `start` (the key shown
+    // beside it may be part of the name).
+    let click = |h: &mut Harness<'_, MurmelApp>, start: &str| {
+        let start = start.to_string();
+        h.get_by(move |n| {
+            n.role() == Role::Button && n.label().is_some_and(|l| l.starts_with(&start))
+        })
+        .click();
+        h.run_steps(3);
+    };
+    let yaw = |h: &Harness<'_, MurmelApp>| h.state().session.camera.yaw_deg;
+    let before = yaw(&h);
+    h.state_mut().call(
+        "view.orbit",
+        serde_json::json!({"yaw_deg": 30.0, "pitch_deg": 0.0}),
+    );
+    h.run_steps(2);
+    assert_ne!(yaw(&h), before);
+    // Edit ▸ Undo names the orbit and takes it back.
+    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("Edit"))
+        .click();
+    h.run_steps(3);
+    click(&mut h, "Undo Orbit");
+    assert!(
+        (yaw(&h) - before).abs() < 1e-9,
+        "Undo walked back the orbit"
+    );
+    // File ▸ Close mesh closes it; then Fit view is greyed out.
+    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("File"))
+        .click();
+    h.run_steps(3);
+    click(&mut h, "Close mesh");
+    assert!(h.state().session.mesh.is_none(), "Close mesh ran");
+    h.get_by(|n| n.role() == Role::Button && n.label().as_deref() == Some("View"))
+        .click();
+    h.run_steps(3);
+    let fit = h.get_by(|n| {
+        n.role() == Role::Button && n.label().is_some_and(|l| l.starts_with("Fit view"))
+    });
+    assert!(fit.accesskit_node().is_disabled(), "Fit view needs a mesh");
+    assert_eq!(problems(&h), Vec::<String>::new());
+}

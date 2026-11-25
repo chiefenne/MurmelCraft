@@ -11,10 +11,12 @@ Option + 7 works on layouts where it types a character. Every command is also in
 |---|---|---|
 | `Ctrl + O` | Open mesh… | window, then `mesh.open` |
 | `Ctrl + Shift + O` | Open OpenFOAM case folder… | window, then `mesh.open` |
+| `Ctrl + W` | Close mesh | `mesh.close` `{}` |
 | `Ctrl + S` | Save session | window, then `session.save` |
 | `Ctrl + Shift + S` | Save session as… | window, then `session.save` |
 | `Ctrl + Shift + E` | Export image… | window, then `export.image` |
 | `Ctrl + Shift + M` | Export movie… | window, then `export.movie` |
+| `Ctrl + Q` | Quit MurmelCraft | window |
 | `Ctrl + K` | Command palette | window |
 | `F1` | Keyboard shortcuts | window |
 | `T` | Show or hide the model tree | window |
@@ -22,6 +24,8 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Ctrl + F` | Filter the model tree | window |
 | `F6` | Next region (title bar, toolbar, tree, viewport, properties, status) | window |
 | `Shift + F6` | Previous region | window |
+| `Ctrl + M` | Minimise the window | window |
+| `F11` | Full screen on or off | window |
 | `F` | Fit view | `view.fit` `{}` |
 | `W` | Zoom to box (rubber band) | window, then `view.zoom_box` |
 | `Home` | Home view | `view.standard` `{"view":"home"}` |
@@ -85,7 +89,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Escape` | Clear the selection | `select.clear` (input from the session) |
 | `Ctrl + Z` | Undo (camera and display) | `journal.undo` (input from the session) |
 | `Ctrl + Shift + Z` | Redo | `journal.redo` (input from the session) |
-| palette | Close mesh | `mesh.close` `{}` |
+| `Ctrl + Shift + C` | Copy the view as an image | window |
 | palette | Load session… | window, then `session.load` |
 | palette | Save a screenshot… | window, then `view.screenshot` |
 | palette | Settings | window |
@@ -260,6 +264,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Fit the selection | `view.fit` (input from the session) |
 | palette | Click picks cells | `select.filter` `{"target":"cell"}` |
 | palette | Click picks faces | `select.filter` `{"target":"face"}` |
+| palette | Undo history… | window, then `journal.list` |
 | palette | Theme: dark | `settings.set_theme` `{"theme":"dark"}` |
 | palette | Theme: light | `settings.set_theme` `{"theme":"light"}` |
 | palette | Theme: follow the system | `settings.set_theme` `{"theme":"system"}` |
@@ -280,3 +285,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Defaults: start with this view (render mode, mesh look, projection) | `settings.set_default` `{"kind":"view"}` |
 | palette | Defaults: colour new fields like the field shown | `settings.set_default` (input from the session) |
 | palette | Defaults: forget them all | `settings.reset_default` `{}` |
+| palette | Tool reference (online) | window |
+| palette | Connect an agent (MCP, online) | window |
+| palette | Report an issue (online) | window |
+| palette | About MurmelCraft | window |

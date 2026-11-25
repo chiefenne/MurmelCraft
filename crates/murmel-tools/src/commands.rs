@@ -81,6 +81,7 @@ pub const GROUPS: &[&str] = &[
     "series",
     "selection",
     "settings",
+    "help",
 ];
 
 /// The views with keys (the numeric keypad's layout: 1 front, 3 right,
@@ -204,7 +205,7 @@ pub fn commands() -> Vec<Command> {
             "mesh.close",
             "cmd-close",
             "file",
-            &[],
+            &["Ctrl+W"],
             Tool("mesh.close", json!({})),
         ),
         cmd(
@@ -249,6 +250,9 @@ pub fn commands() -> Vec<Command> {
             &["Ctrl+Shift+M"],
             Window(Some("export.movie")),
         ),
+        // Closes the window (macOS takes Cmd + Q itself first, to the same
+        // end).
+        cmd("window.quit", "cmd-quit", "file", &["Ctrl+Q"], Window(None)),
         cmd(
             "window.palette",
             "cmd-palette",
@@ -297,6 +301,20 @@ pub fn commands() -> Vec<Command> {
             "cmd-settings",
             "window",
             &[],
+            Window(None),
+        ),
+        cmd(
+            "window.minimize",
+            "cmd-minimize",
+            "window",
+            &["Ctrl+M"],
+            Window(None),
+        ),
+        cmd(
+            "window.fullscreen",
+            "cmd-fullscreen",
+            "window",
+            &["F11"],
             Window(None),
         ),
         // The shortcut editor: keys (settings.set_keys) and mouse bindings
@@ -1598,6 +1616,22 @@ pub fn commands() -> Vec<Command> {
             (!s.journal.redo.is_empty()).then(|| json!({}))
         }),
     ));
+    // The steps to undo and redo; a click on one walks there.
+    v.push(cmd(
+        "window.undo_history",
+        "cmd-undo-history",
+        "edit",
+        &[],
+        Window(Some("journal.list")),
+    ));
+    // The view as a picture on the clipboard, as the viewport shows it.
+    v.push(cmd(
+        "window.copy_image",
+        "cmd-copy-image",
+        "edit",
+        &["Ctrl+Shift+C"],
+        Window(None),
+    ));
     for t in ["dark", "light", "system"] {
         v.push(cmd(
             format!("settings.set_theme:{t}"),
@@ -1694,6 +1728,16 @@ pub fn commands() -> Vec<Command> {
         &[],
         Tool("settings.reset_default", json!({})),
     ));
+    // Help: pages of the repository opened in the browser, and About.
+    for id in [
+        "window.help_tools",
+        "window.help_agents",
+        "window.report_issue",
+        "window.about",
+    ] {
+        let label = format!("cmd-{}", id.trim_start_matches("window.").replace('_', "-"));
+        v.push(cmd(id, label, "help", &[], Window(None)));
+    }
     v
 }
 
@@ -1779,7 +1823,6 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "journal.group",
         "the window groups each mouse gesture and run of wheel steps itself",
     ),
-    ("journal.list", "for scripts; undo and redo walk it"),
     (
         "select.pick",
         "needs a screen point: a click in the viewport picks",

@@ -30,7 +30,7 @@ pub struct MurmelApp {
     pub(crate) hover: Option<crate::viewport::Hover>,
     pub(crate) settings_open: bool,
     pub(crate) installed_theme: Option<Theme>,
-    logo: Option<egui::TextureHandle>,
+    pub(crate) logo: Option<egui::TextureHandle>,
     /// Side panels shown (T and P toggle them).
     pub(crate) show_tree: bool,
     pub(crate) show_props: bool,
@@ -48,6 +48,10 @@ pub struct MurmelApp {
     pub(crate) bindings: Option<crate::shortcuts::Editor>,
     pub(crate) palette: Option<crate::commands::Palette>,
     pub(crate) shortcuts_open: bool,
+    /// Edit ▸ Undo history is open.
+    pub(crate) history_open: bool,
+    /// Help ▸ About is open.
+    pub(crate) about_open: bool,
     /// The 250 ms flight to a new view: the camera it started from and
     /// when (UI spec, View cube).
     pub(crate) flight: Option<(murmel_engine::Camera, f64)>,
@@ -224,6 +228,8 @@ impl MurmelApp {
             bindings: None,
             palette: None,
             shortcuts_open: false,
+            history_open: false,
+            about_open: false,
             flight: None,
             played_at: None,
             ahead: None,
@@ -541,11 +547,10 @@ impl MurmelApp {
             }
             let name = self.i18n.tr("app-name");
             resp.widget_info(|| WidgetInfo::labeled(Role::Image, true, name.clone()));
-            ui.label(
-                RichText::new(self.i18n.tr("app-name"))
-                    .family(egui::FontFamily::Name(style::SEMIBOLD.into()))
-                    .size(14.0),
-            );
+            // The menus beside the logo; the window's own title bar names
+            // the application.
+            self.menu_bar(ui);
+            ui.add_space(8.0);
             let file = self
                 .session
                 .mesh
@@ -1510,6 +1515,8 @@ impl eframe::App for MurmelApp {
             });
         self.settings_window(&ctx);
         self.shortcuts_window(&ctx);
+        self.history_window(&ctx);
+        self.about_window(&ctx);
         self.bindings_window(&ctx);
         self.palette_window(&ctx);
         self.color_window(&ctx);

@@ -4158,11 +4158,11 @@ fn keys_are_configurable_and_saved() {
     assert_eq!(e.diagnostics[0].code, "SET004");
     let e = call(
         "settings.set_keys",
-        json!({"command": "window.palette", "keys": ["Ctrl+K", "Ctrl+Q"]}),
+        json!({"command": "window.palette", "keys": ["Ctrl+K", "Ctrl+H"]}),
         &mut s,
     );
     assert!(e.ok());
-    assert_eq!(e.result["notes"][0]["macos"], "quit");
+    assert_eq!(e.result["notes"][0]["macos"], "hide");
     let e = call(
         "settings.set_keys",
         json!({"command": "view.spin", "keys": ["Q"]}),

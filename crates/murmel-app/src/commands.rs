@@ -136,6 +136,27 @@ impl MurmelApp {
                 "window.probe" => self.toggle_measuring(crate::measure::Mode::Probe),
                 "window.next_region" => self.cycle_region(ctx, true),
                 "window.previous_region" => self.cycle_region(ctx, false),
+                "window.quit" => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                "window.minimize" => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                "window.fullscreen" => {
+                    let on = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!on));
+                }
+                "window.undo_history" => self.history_open = !self.history_open,
+                "window.copy_image" => self.copy_image(ctx),
+                "window.about" => self.about_open = true,
+                "window.help_tools" => ctx.open_url(egui::OpenUrl::new_tab(format!(
+                    "{}/blob/main/docs/tools.md",
+                    crate::menus::REPO
+                ))),
+                "window.help_agents" => ctx.open_url(egui::OpenUrl::new_tab(format!(
+                    "{}/blob/main/docs/mcp.md",
+                    crate::menus::REPO
+                ))),
+                "window.report_issue" => ctx.open_url(egui::OpenUrl::new_tab(format!(
+                    "{}/issues/new",
+                    crate::menus::REPO
+                ))),
                 "window.color_by" => {
                     let q = self.i18n.tr("toolbar-color-by");
                     self.open_palette(q);

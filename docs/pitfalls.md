@@ -408,3 +408,12 @@ problem took more than a few minutes to understand.
   whole window also lost its clicks, so the Derived fields window scrolls
   only its rows and puts the values its rows take (reference values,
   turning zones, walls) above them; tests click the first rows.
+- **eframe without `clipboard` and `links` copies and opens nothing.** The
+  workspace turns eframe's default features off, and with them egui-winit's
+  `clipboard` (arboard) and `links` (webbrowser): `ctx.copy_text`,
+  `ctx.copy_image` and `ctx.open_url` then fail without a word, so "Copy
+  value" never reached the system clipboard. Both features are on since the
+  menu bar (Copy the view as an image, the Help menu's pages).
+- **A label in a window test may name a menu too.** The menu bar adds
+  buttons named File, Edit, View…; the Properties panel has a "File" row.
+  Find a menu by role and name (`Role::Button`), not by `get_by_label`.
