@@ -132,23 +132,30 @@ shine = "#FFFFFF"
 shine_mix = 0.55
 
 # The handles' colours per theme (users change them with
-# settings.set_colors, "gizmo"). The arrow takes the accent; the tilt
-# arcs and their rotation plane the accent turned 40 degrees towards
-# violet in OKLCH at the same lightness and chroma (dark L 0.70 C 0.15,
-# light L 0.53 C 0.18), so they differ a little from the arrow and stay
-# in its family (maintainer's Mac test, 2026-11-24).
+# settings.set_colors, "gizmo", or in Settings > Colours). The
+# maintainer's card of 2026-11-25 ("neutral arrow, orange + blue"): the
+# slide arrow is neutral, near the theme's text colour, so it fits the
+# grey interface; the two tilt arcs take an orange (OKLCH hue 55, light
+# 48) and a blue (hue 250, light 258), each arc's rotation plane its
+# arc's colour, so the person sees which arc turned the plane. Orange and
+# blue stay apart under protanopia, deuteranopia and tritanopia, and
+# keep away from the green mesh (hue 140) and the magenta accent and
+# selection. Dark: L 0.79 / 0.74; light: L 0.58 / 0.50, so each reads on
+# its theme's viewport (see the theme tests).
 [gizmo.dark]
-slide = "#DE74B6"
-tilt = "#B384EB"
+slide = "#E9EBEE"
+tilt = "#FAA365"
+tilt2 = "#70B0F1"
 
 [gizmo.light]
-slide = "#AD3285"
-tilt = "#8348BE"
+slide = "#2A2E33"
+tilt = "#BF5914"
+tilt2 = "#2460B7"
 
 # Measurements and probes, drawn over the viewport (thread "Measure and
 # probe the mesh", 2026-11-24). Lines take an amber, probes a sky blue,
 # OKLCH hues 80 and 230, both away from the green mesh (hue 140), the
-# magenta accent and the violet tilt arcs; dark L 0.82, light L 0.55, so
+# magenta accent; dark L 0.82, light L 0.55, so
 # each reads on its theme's viewport. The halo is drawn under them, so
 # they also read on a face of their own colour. Users change them with
 # settings.set_colors, "measure".
