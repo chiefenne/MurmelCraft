@@ -562,6 +562,8 @@ fn fields(session: &mut Session, st: &mut Stages, r: usize) -> Result<(), String
     // grid at once (its grid made on the first), the exact faces later
     // (crate::call settles the next other tool).
     session.defer_clips = true;
+    // Timed here, not on the thread the window builds them on.
+    session.preview_grids_wait = true;
     stage(st, session, "slice.preview", 1, &mut |_| {
         vec![("slice.set", json!({"origin": at(0.4)}))]
     })?;
@@ -577,6 +579,17 @@ fn fields(session: &mut Session, st: &mut Stages, r: usize) -> Result<(), String
     stage(st, session, "iso.step", r.max(3), &mut |k| {
         vec![("iso.set", json!({"value": 0.25 + 0.05 * (k + 1) as f64}))]
     })?;
+    // The same values in the window: ray cast from the field's grid at
+    // once (its grid made on the first), the exact surface later.
+    session.defer_clips = true;
+    stage(st, session, "iso.preview", 1, &mut |_| {
+        vec![("iso.set", json!({"value": 0.2}))]
+    })?;
+    stage(st, session, "iso.preview.step", r.max(3), &mut |k| {
+        vec![("iso.set", json!({"value": 0.2 + 0.05 * (k + 1) as f64}))]
+    })?;
+    session.defer_clips = false;
+    session.settle();
     tool(session, "iso.clear", json!({"all": true}))?;
     stage(st, session, "arrows.set", 1, &mut |_| {
         vec![("arrows.set", json!({"field": "U"}))]

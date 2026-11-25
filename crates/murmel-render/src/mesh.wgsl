@@ -68,6 +68,30 @@ struct SliceGrid {
 @group(0) @binding(3) var grid: texture_3d<f32>;
 @group(0) @binding(4) var<uniform> sg: SliceGrid;
 
+// The preview of an iso-surface whose value changed (murmel_engine's
+// slice_preview::IsoDraw): its field on the grid as a share of the way
+// from the grid's smallest to its largest value (x) and 1 inside the
+// mesh (y), mixed between grid cells by the sampler.
+struct IsoGrid {
+    // xyz where the grid starts, relative to the surface's origin; w the
+    // value, as the grid holds values
+    lo: vec4<f32>,
+    // xyz the grid's size; w 1 when coloured by the field shown (from
+    // `grid`)
+    size: vec4<f32>,
+    // xyz the grid cells along each axis; w the clip planes in use
+    dims: vec4<f32>,
+    // rgb the surface's colour; w the selection mix
+    color: vec4<f32>,
+    // xyz the unit vector from the target to the eye (the rays of an
+    // orthographic view)
+    view: vec4<f32>,
+    clips: array<vec4<f32>, 8>,
+};
+
+@group(0) @binding(5) var iso_grid: texture_3d<f32>;
+@group(0) @binding(6) var<uniform> ig: IsoGrid;
+
 struct FaceIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -154,19 +178,14 @@ fn grid_at(i: vec3<i32>) -> vec2<f32> {
     return textureLoad(grid, i, 0).xy;
 }
 
-// A plane of a slice being dragged, coloured from the field's grid: the
-// cell value of the grid cell the fragment is in (colour mode flat), or
-// the predicted values mixed between the eight nearest grid cell centres
-// (smooth and banded); nothing outside the mesh. Without the grid, the
-// slice's own colour.
-@fragment
-fn fs_slice(f: FaceOut) -> @location(0) vec4<f32> {
-    let l = g.to_eye.xyz;
-    let d = abs(dot(normalize(f.normal), l));
-    let shade = 0.32 + 0.68 * d;
+// The field shown at `p` from its grid: x the cell value of the grid
+// cell `p` is in (colour mode flat), y the values between cells and nodes
+// mixed between the eight nearest grid cell centres (smooth and banded),
+// z 1 inside the mesh, w 1 with a value.
+fn slice_value(p: vec3<f32>) -> vec4<f32> {
     let dims = max(vec3<i32>(sg.dims.xyz), vec3<i32>(1));
     let top = dims - vec3<i32>(1);
-    let q = (f.world - sg.lo.xyz) / max(sg.side.xyz, vec3<f32>(1e-30));
+    let q = (p - sg.lo.xyz) / max(sg.side.xyz, vec3<f32>(1e-30));
     let here = grid_at(clamp(vec3<i32>(floor(q)), vec3<i32>(0), top));
     let t0 = q - vec3<f32>(0.5);
     let b = vec3<i32>(floor(t0));
@@ -188,27 +207,162 @@ fn fs_slice(f: FaceOut) -> @location(0) vec4<f32> {
     if (wsum > 1e-6) {
         v = sum / wsum;
     }
+    let inside = all(q >= vec3<f32>(0.0)) && all(q < vec3<f32>(dims)) && here.x < 1e38;
+    return vec4<f32>(
+        here.x,
+        v,
+        select(0.0, 1.0, inside),
+        select(0.0, 1.0, here.x > -1e38),
+    );
+}
+
+// A plane of a slice being dragged, coloured from the field's grid: the
+// cell value of the grid cell the fragment is in (colour mode flat), or
+// the predicted values mixed between the eight nearest grid cell centres
+// (smooth and banded); nothing outside the mesh. Without the grid, the
+// slice's own colour.
+@fragment
+fn fs_slice(f: FaceOut) -> @location(0) vec4<f32> {
+    let l = g.to_eye.xyz;
+    let d = abs(dot(normalize(f.normal), l));
+    let shade = 0.32 + 0.68 * d;
+    let sv = slice_value(f.world);
     let span = max(g.field.y - g.field.x, 1e-30);
-    let tn = (v - g.field.x) / span;
+    let tn = (sv.y - g.field.x) / span;
     let x = tn * (g.field.w + 1.0);
     let w = fwidth(x);
     let colored = sg.lo.w > 0.5;
-    let inside = all(q >= vec3<f32>(0.0)) && all(q < vec3<f32>(dims));
-    if (colored && (!inside || here.x > 1e38)) {
+    if (colored && sv.z < 0.5) {
         discard;
     }
-    let n = u32(sg.dims.w);
-    for (var i = 0u; i < n; i = i + 1u) {
-        let c = sg.clips[i];
-        if (dot(c.xyz, f.world) + c.w > 0.0) {
-            discard;
-        }
+    if (clipped(f.world, sg.clips, u32(sg.dims.w))) {
+        discard;
     }
     var color = f.color;
-    if (colored && g.field_mode.x > 0.5 && here.x > -1e38) {
-        color = field_color(here.x, tn, x, w, f.value.z);
+    if (colored && g.field_mode.x > 0.5 && sv.w > 0.5) {
+        color = field_color(sv.x, tn, x, w, f.value.z);
     }
     return vec4<f32>(color * shade, 1.0);
+}
+
+// Whether one of the first `n` of `planes` cuts `p` away.
+fn clipped(p: vec3<f32>, planes: array<vec4<f32>, 8>, n: u32) -> bool {
+    for (var i = 0u; i < min(n, 8u); i = i + 1u) {
+        let c = planes[i];
+        if (dot(c.xyz, p) + c.w > 0.0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct BoxOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world: vec3<f32>,
+};
+
+// The back faces of the grid's box, where the rays of the iso preview
+// leave it.
+@vertex
+fn vs_box(@location(0) pos: vec3<f32>) -> BoxOut {
+    var o: BoxOut;
+    o.clip = g.view_proj * vec4<f32>(pos, 1.0);
+    o.world = pos;
+    return o;
+}
+
+struct IsoFrag {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
+fn iso_at(p: vec3<f32>) -> vec2<f32> {
+    let uvw = (p - ig.lo.xyz) / max(ig.size.xyz, vec3<f32>(1e-30));
+    return textureSampleLevel(iso_grid, lut_sampler, uvw, 0.0).xy;
+}
+
+// The iso-surface preview: the ray from the eye through the fragment
+// marched through the grid in steps of half a grid cell; where the value
+// crosses the level between two samples inside the mesh (and not cut
+// away), the crossing found between them, shaded by the grid's gradient
+// there and put at its depth.
+@fragment
+fn fs_iso(f: BoxOut) -> IsoFrag {
+    var o: vec3<f32>;
+    var d: vec3<f32>;
+    let size = max(ig.size.xyz, vec3<f32>(1e-30));
+    if (g.params.x > 0.5) {
+        d = -ig.view.xyz;
+        o = f.world - d * 4.0 * length(size);
+    } else {
+        o = g.eye.xyz;
+        d = normalize(f.world - o);
+    }
+    let big = vec3<f32>(1e30);
+    let inv = select(1.0 / d, big, abs(d) < vec3<f32>(1e-12));
+    let ta = (ig.lo.xyz - o) * inv;
+    let tb = (ig.lo.xyz + size - o) * inv;
+    let lo = min(ta, tb);
+    let hi = max(ta, tb);
+    let t_in = max(max(max(lo.x, lo.y), lo.z), 0.0);
+    let t_out = min(min(hi.x, hi.y), hi.z);
+    let cell = size / max(ig.dims.xyz, vec3<f32>(1.0));
+    let step = 0.5 * min(min(cell.x, cell.y), cell.z);
+    let n = min(u32(ceil(max(t_out - t_in, 0.0) / step)), 4096u);
+    let level = ig.lo.w;
+    var prev = iso_at(o + d * t_in);
+    var pt = t_in;
+    var hit = -1.0;
+    for (var i = 1u; i <= n; i = i + 1u) {
+        let t = min(t_in + f32(i) * step, t_out);
+        let s = iso_at(o + d * t);
+        if (prev.y > 0.5 && s.y > 0.5) {
+            let a = prev.x - level;
+            let b = s.x - level;
+            if ((a <= 0.0) != (b <= 0.0)) {
+                let th = pt + (t - pt) * a / (a - b);
+                if (!clipped(o + d * th, ig.clips, u32(ig.dims.w))) {
+                    hit = th;
+                    break;
+                }
+            }
+        }
+        prev = s;
+        pt = t;
+    }
+    if (hit < 0.0) {
+        discard;
+    }
+    let p = o + d * hit;
+    // The gradient over a grid cell and a half each way, so the shading
+    // follows the surface and not the steps of the half floats.
+    let ex = vec3<f32>(1.5 * cell.x, 0.0, 0.0);
+    let ey = vec3<f32>(0.0, 1.5 * cell.y, 0.0);
+    let ez = vec3<f32>(0.0, 0.0, 1.5 * cell.z);
+    let grad = vec3<f32>(
+        (iso_at(p + ex).x - iso_at(p - ex).x) / cell.x,
+        (iso_at(p + ey).x - iso_at(p - ey).x) / cell.y,
+        (iso_at(p + ez).x - iso_at(p - ez).x) / cell.z,
+    );
+    var nrm = -d;
+    if (length(grad) > 1e-20) {
+        nrm = normalize(grad);
+    }
+    let shade = 0.32 + 0.68 * abs(dot(nrm, g.to_eye.xyz));
+    var color = ig.color.rgb;
+    if (ig.size.w > 0.5 && g.field_mode.x > 0.5) {
+        let sv = slice_value(p);
+        if (sv.z > 0.5 && sv.w > 0.5) {
+            let span = max(g.field.y - g.field.x, 1e-30);
+            let tn = (sv.y - g.field.x) / span;
+            color = field_color(sv.x, tn, tn * (g.field.w + 1.0), 1e-6, ig.color.w);
+        }
+    }
+    var out: IsoFrag;
+    out.color = vec4<f32>(color * shade, 1.0);
+    let c = g.view_proj * vec4<f32>(p, 1.0);
+    out.depth = clamp(c.z / c.w, 0.0, 1.0);
+    return out;
 }
 
 struct LineIn {

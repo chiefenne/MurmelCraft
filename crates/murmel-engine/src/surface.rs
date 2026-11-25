@@ -152,8 +152,19 @@ pub struct Surface {
     /// `edge_positions`, so a renderer can leave a moving slice out
     /// while it draws its preview ([`crate::slice_preview`]).
     pub slice_parts: Vec<SlicePart>,
+    /// Where each iso-surface is in `indices`.
+    pub iso_parts: Vec<IsoPart>,
     /// Where the arrows are in `indices`.
     pub arrow_faces: std::ops::Range<u32>,
+}
+
+/// An iso-surface in a surface's buffers.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct IsoPart {
+    /// The iso-surface (its index in `Display::isos`).
+    pub iso: u32,
+    /// Its triangles' entries in `indices`.
+    pub faces: std::ops::Range<u32>,
 }
 
 /// One plane of a slice (a series has several) in a surface's buffers.
@@ -1142,6 +1153,14 @@ impl Surface {
                 slice: p.slice,
                 faces: p.faces.start + i0..p.faces.end + i0,
                 edges: p.edges.start + e0..p.edges.end + e0,
+            })
+            .collect();
+        self.iso_parts = part
+            .iso_parts
+            .into_iter()
+            .map(|p| IsoPart {
+                iso: p.iso,
+                faces: p.faces.start + i0..p.faces.end + i0,
             })
             .collect();
         let a = part.arrow_faces;

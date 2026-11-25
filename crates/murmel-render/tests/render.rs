@@ -818,6 +818,7 @@ fn clip_preview_cuts_on_the_gpu() {
     moving.display.clips = vec![at(&moving, 0.9)];
     moving.redraw();
     moving.defer_clips = true;
+    moving.preview_grids_wait = true;
     moving.display.clips = vec![at(&moving, 0.5)];
     moving.redraw();
     assert!(moving.preview.is_some());
@@ -865,10 +866,11 @@ fn slice_preview_draws_from_the_grid() {
         let exact = make(0.5);
         let mut moving = make(0.9);
         moving.defer_clips = true;
+        moving.preview_grids_wait = true;
         let b = moving.mesh.as_ref().unwrap().mesh.bounds();
         moving.display.slices[0].origin[0] = b.min[0] + 0.5 * (b.max[0] - b.min[0]);
         moving.redraw();
-        assert!(moving.slice_preview.is_some());
+        assert!(moving.extras_preview.is_some());
         let want = render_session(&exact, 480, 320).unwrap();
         let preview = render_session(&moving, 480, 320).unwrap();
         let out = root().join("target/render-test");
@@ -884,8 +886,75 @@ fn slice_preview_draws_from_the_grid() {
             "{mode:?}: {:.2} % of pixels differ",
             100.0 * share
         );
-        moving.slice_preview = None;
+        moving.extras_preview = None;
         let left = render_session(&moving, 480, 320).unwrap();
         assert!(diff_share(&left.rgba, &want.rgba, 24) > 0.02);
+    }
+}
+
+/// The iso preview (a new iso value in the window) ray casts the
+/// iso-surface through its field's grid on the GPU: the speed's
+/// iso-surface moved from one value to another, before its exact faces
+/// are built, looks like the exact surface at the new value, solid and
+/// coloured by the pressure shown, and unlike the surface at the old
+/// value. Breaks when the rays start or stop in the wrong place, the
+/// level is on another scale than the grid, the depth is wrong (the mesh
+/// would hide it or it would hide the mesh) or the old surface stays.
+#[test]
+fn iso_preview_ray_casts_the_grid() {
+    for color in [
+        murmel_engine::IsoColor::Solid,
+        murmel_engine::IsoColor::Field,
+    ] {
+        let make = |f: f64| {
+            let mut s = field_session("pressure", murmel_mesh::Component::Magnitude);
+            s.display.render_mode = RenderMode::Shaded;
+            let speed = murmel_engine::FieldChoice {
+                name: "velocity".into(),
+                component: murmel_mesh::Component::Magnitude,
+            };
+            let (lo, hi) = s
+                .fields()
+                .unwrap()
+                .values_cached(&s.mesh.as_ref().unwrap().mesh, &speed)
+                .unwrap()
+                .range
+                .unwrap();
+            s.display.isos.push(murmel_engine::Iso {
+                field: speed,
+                value: lo + f * (hi - lo),
+                enabled: true,
+                color,
+            });
+            s.redraw();
+            (s, lo, hi)
+        };
+        let (exact, lo, hi) = make(0.5);
+        let (mut moving, _, _) = make(0.8);
+        moving.defer_clips = true;
+        moving.preview_grids_wait = true;
+        moving.display.isos[0].value = lo + 0.5 * (hi - lo);
+        moving.redraw();
+        assert!(moving.iso_drawn().is_some());
+        let want = render_session(&exact, 480, 320).unwrap();
+        let preview = render_session(&moving, 480, 320).unwrap();
+        let out = root().join("target/render-test");
+        std::fs::create_dir_all(&out).unwrap();
+        let name = format!("iso-preview-{color:?}").to_lowercase();
+        write_png(&out.join(format!("{name}.png")), 480, 320, &preview.rgba).unwrap();
+        write_png(&out.join(format!("{name}-exact.png")), 480, 320, &want.rgba).unwrap();
+        moving.extras_preview = None;
+        let left = render_session(&moving, 480, 320).unwrap();
+        // On this coarse mesh the grid's values between cells and nodes
+        // differ from the exact surface's tetrahedra: the preview is
+        // nearer the new surface than the old surface is, by far.
+        let share = diff_share(&preview.rgba, &want.rgba, 24);
+        let old = diff_share(&left.rgba, &want.rgba, 24);
+        assert!(
+            share < 0.1 && share < 0.4 * old,
+            "{color:?}: {:.2} % of pixels differ ({:.2} % for the old value)",
+            100.0 * share,
+            100.0 * old
+        );
     }
 }

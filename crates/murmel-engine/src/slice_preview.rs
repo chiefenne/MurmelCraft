@@ -1,5 +1,7 @@
 //! The preview of a slice while it is dragged in the window (decided
-//! 2026-11-24 on a card: "grid preview, exact slice follows"). Building
+//! 2026-11-24 on a card: "grid preview, exact slice follows"), and of an
+//! iso-surface while its new value is built (card of 2026-11-25: "GPU
+//! ray-cast preview, exact follows"; [`IsoDraw`]). Building
 //! a slice through a large mesh takes a while (about 0.2 s a million
 //! cells), so while the plane moves the renderer draws it at once from a
 //! regular grid of the field held on the GPU as a 3D texture, and the
@@ -17,8 +19,9 @@
 //! per mesh): every grid cell inside the mesh finds the cell it lies in
 //! among them, and the grid cells outside every cell's box show nothing.
 //! It keeps that cell's value (colour mode flat) and, for smooth and
-//! banded, a value between the cell's and its nodes' ([`between`]),
-//! mixed between grid cells on the GPU. Near a curved or concave boundary a
+//! banded, the value at its centre on the cell's tetrahedra, as the
+//! exact slice shows it ([`crate::tets`]), mixed between grid cells on
+//! the GPU. Near a curved or concave boundary a
 //! grid cell inside a cell's box but outside the mesh may show that
 //! cell; the exact slice follows within a moment.
 
@@ -28,7 +31,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use murmel_mesh::{Bounds, Mesh, NO_CELL};
 
-use crate::field::FieldValues;
+use crate::field::{FieldSet, FieldValues};
 
 /// About how many grid cells the preview grid has (2 M: 16 MB on the
 /// GPU).
@@ -159,20 +162,19 @@ pub struct SliceGrid {
 }
 
 impl SliceGrid {
-    /// The grid of `values` on `voxels` of `mesh`, its cells' nodes
-    /// (each once) `nodes(c)` and centroids `centre(c)`, relative to
-    /// `origin` and the value origin `value_origin`.
-    pub(crate) fn of<'a>(
+    /// The grid of `values` (of `fields`) on `voxels` of `mesh`,
+    /// relative to `origin` and the value origin `value_origin`.
+    pub(crate) fn of(
         voxels: &Voxels,
         values: &FieldValues,
-        mesh: &'a Mesh,
-        nodes: impl Fn(usize) -> &'a [u32] + Sync,
-        centre: impl Fn(usize) -> [f64; 3] + Sync,
+        mesh: &Mesh,
+        fields: &FieldSet,
         origin: [f64; 3],
         value_origin: f64,
     ) -> SliceGrid {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let texels = murmel_mesh::par::collect(voxels.cell.len(), 1 << 14, |r| {
+            let mut tets = CellTets::default();
             r.map(|i| {
                 let c = voxels.cell[i];
                 if c == NO_CELL {
@@ -182,14 +184,7 @@ impl SliceGrid {
                 if !v.is_finite() {
                     return [NO_VALUE; 2];
                 }
-                let smooth = between(
-                    mesh,
-                    values,
-                    nodes(c as usize),
-                    centre(c as usize),
-                    v,
-                    voxels.centre(i),
-                );
+                let smooth = tets.value(mesh, fields, values, c, voxels.centre(i), v);
                 [(v - value_origin) as f32, (smooth - value_origin) as f32]
             })
             .collect()
@@ -204,50 +199,275 @@ impl SliceGrid {
             value_origin,
         }
     }
+}
 
-    /// Whether it was made for the origins of `s`.
-    pub(crate) fn fits(&self, s: &crate::surface::Surface) -> bool {
-        self.origin == s.origin && self.value_origin == s.value_origin
+/// The tetrahedra of the last cell asked for, with the field's values at
+/// their corners ([`crate::tets`]: the centroid, a face's centre and an
+/// edge's two nodes), so the grid cells in one mesh cell, which mostly
+/// come one after another, make them once.
+#[derive(Default)]
+struct CellTets {
+    cell: Option<u32>,
+    tets: Vec<([[f64; 3]; 4], [f64; 4])>,
+}
+
+impl CellTets {
+    /// The field at `p` as smooth colours and iso-surfaces show it in
+    /// cell `c` (value `v`): linear on the cell's tetrahedra, as the
+    /// exact slices and iso-surfaces cut them. A point outside them (a
+    /// grid cell given the cell whose centroid is nearest, outside it)
+    /// takes the tetrahedron it is nearest inside of, its weights
+    /// clamped to it.
+    fn value(
+        &mut self,
+        mesh: &Mesh,
+        fields: &FieldSet,
+        values: &FieldValues,
+        c: u32,
+        p: [f64; 3],
+        v: f64,
+    ) -> f64 {
+        use crate::tets::{barycentric, face_centre, face_value, node_value};
+        if self.cell != Some(c) {
+            self.cell = Some(c);
+            self.tets.clear();
+            let x = fields.centroid(mesh, c as usize);
+            for f in mesh.cell(c as usize) {
+                if f.len() < 3 {
+                    continue;
+                }
+                let fc = face_centre(mesh, f.nodes);
+                let vf = face_value(mesh, Some(fields), values, f.id, f.nodes, fc);
+                for j in 0..f.len() {
+                    let (a, b) = (f.at(j), f.at((j + 1) % f.len()));
+                    self.tets.push((
+                        [x, fc, mesh.points[a as usize], mesh.points[b as usize]],
+                        [v, vf, node_value(values, a), node_value(values, b)],
+                    ));
+                }
+            }
+        }
+        // The tetrahedron whose smallest weight at `p` is largest: the
+        // one holding `p`, else the nearest inside of.
+        let mut best: Option<(f64, f64)> = None;
+        for (t, vals) in &self.tets {
+            let Some(w) = barycentric(t, p) else {
+                continue;
+            };
+            if !vals.iter().all(|x| x.is_finite()) {
+                continue;
+            }
+            let worst = w.iter().copied().fold(f64::INFINITY, f64::min);
+            if best.is_none_or(|(b, _)| worst > b) {
+                // Outside, the weights clamped to the tetrahedron, so the
+                // value stays between its corners' (no overshoot).
+                let sum: f64 = w.iter().map(|x| x.max(0.0)).sum();
+                let at = (0..4).map(|k| w[k].max(0.0) * vals[k]).sum::<f64>() / sum;
+                best = Some((worst, at));
+                if worst >= 0.0 {
+                    break;
+                }
+            }
+        }
+        match best {
+            Some((worst, at)) if worst >= -0.5 => at,
+            _ => v,
+        }
     }
 }
 
-/// The value at `p` inside a cell (value `v`, centroid `x`, nodes
-/// `nodes`) as colour modes smooth and banded show it: between the
-/// cell's value at its centroid and its nodes' values, each weighted by
-/// the inverse square of its distance (D. Shepard, "A two-dimensional
-/// interpolation function for irregularly-spaced data", 1968), so it runs
-/// from the cell's value in its middle to the nodes' at its corners as
-/// the exact slice does. A node without a value is left out.
-fn between(
-    mesh: &Mesh,
-    values: &FieldValues,
-    nodes: &[u32],
-    x: [f64; 3],
-    v: f64,
-    p: [f64; 3],
-) -> f64 {
-    let d2 = |q: [f64; 3]| (0..3).map(|k| (q[k] - p[k]).powi(2)).sum::<f64>();
-    let dx = d2(x);
-    if dx.is_nan() || dx <= 0.0 {
-        return v;
+/// The grid of an iso-surface's field: by grid cell (x fastest), the
+/// value smooth colours show at its centre (on the cell's tetrahedra),
+/// and whether it is inside the mesh. A grid cell outside takes the mean
+/// of its neighbours inside, so the values the GPU mixes near the
+/// boundary stay near the field's. The renderer samples it as
+/// [`IsoTexels`], made for one value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IsoGrid {
+    pub dims: [u32; 3],
+    /// Where grid cell (0, 0, 0) starts and the size of a grid cell,
+    /// relative to the surface's origin.
+    pub lo: [f32; 3],
+    pub side: [f32; 3],
+    values: Vec<f32>,
+    inside: Vec<bool>,
+    /// The smallest and largest value on the grid.
+    pub min: f64,
+    pub max: f64,
+    origin: [f64; 3],
+}
+
+/// An iso-surface's grid for one value, as the renderer uploads it (its
+/// texture mixed between grid cells by the GPU): by grid cell, as half
+/// floats, the value less the iso-surface's as a share of the grid's
+/// range (so the half floats are finest where it matters, near 0), and
+/// 1 inside the mesh (0 outside).
+#[derive(Clone, Debug, PartialEq)]
+pub struct IsoTexels {
+    /// Names these texels (a renderer uploads each once).
+    pub id: u64,
+    pub texels: Vec<[u16; 2]>,
+}
+
+impl IsoGrid {
+    /// The grid of `values` (of `fields`) on `voxels` of `mesh` (as
+    /// [`SliceGrid::of`]), relative to `origin`.
+    pub(crate) fn of(
+        voxels: &Voxels,
+        values: &FieldValues,
+        mesh: &Mesh,
+        fields: &FieldSet,
+        origin: [f64; 3],
+    ) -> IsoGrid {
+        let smooth: Vec<f64> = murmel_mesh::par::collect(voxels.cell.len(), 1 << 14, |r| {
+            let mut tets = CellTets::default();
+            r.map(|i| {
+                let c = voxels.cell[i];
+                if c == NO_CELL {
+                    return f64::NAN;
+                }
+                let v = values.flat(c, NO_CELL);
+                if !v.is_finite() {
+                    return f64::NAN;
+                }
+                tets.value(mesh, fields, values, c, voxels.centre(i), v)
+            })
+            .collect()
+        });
+        let (min, max) = smooth
+            .iter()
+            .filter(|v| v.is_finite())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, z), &v| {
+                (a.min(v), z.max(v))
+            });
+        let d = voxels.dims;
+        let filled: Vec<f32> = murmel_mesh::par::collect(smooth.len(), 1 << 14, |r| {
+            r.map(|i| {
+                let v = smooth[i];
+                if v.is_finite() {
+                    return v as f32;
+                }
+                // Outside: the mean of the neighbours inside.
+                let at = [i % d[0], (i / d[0]) % d[1], i / (d[0] * d[1])];
+                let (mut n, mut sum) = (0.0, 0.0);
+                for k in 0..3 {
+                    let step = [1, d[0], d[0] * d[1]][k];
+                    if at[k] > 0 && smooth[i - step].is_finite() {
+                        sum += smooth[i - step];
+                        n += 1.0;
+                    }
+                    if at[k] + 1 < d[k] && smooth[i + step].is_finite() {
+                        sum += smooth[i + step];
+                        n += 1.0;
+                    }
+                }
+                if n > 0.0 { (sum / n) as f32 } else { f32::NAN }
+            })
+            .collect()
+        });
+        IsoGrid {
+            dims: d.map(|n| n as u32),
+            lo: [0, 1, 2].map(|k| (voxels.lo[k] - origin[k]) as f32),
+            side: voxels.side.map(|s| s as f32),
+            inside: smooth.iter().map(|v| v.is_finite()).collect(),
+            values: filled,
+            min: if min.is_finite() { min } else { 0.0 },
+            max: if max.is_finite() { max } else { 0.0 },
+            origin,
+        }
     }
-    let (mut sw, mut sv) = (1.0 / dx, v / dx);
-    for &n in nodes {
-        let (Some(&q), Some(&vn)) = (mesh.points.get(n as usize), values.node.get(n as usize))
-        else {
-            continue;
+
+    /// The texels for the iso-surface of `value`.
+    pub fn texels(&self, value: f64) -> IsoTexels {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let span = if self.max > self.min {
+            self.max - self.min
+        } else {
+            1.0
         };
-        if !vn.is_finite() {
-            continue;
+        let texels = murmel_mesh::par::collect(self.values.len(), 1 << 15, |r| {
+            r.map(|i| {
+                let v = self.values[i];
+                // Far on the other side where nothing is known.
+                let t = if v.is_finite() {
+                    ((f64::from(v) - value) / span) as f32
+                } else {
+                    1.0
+                };
+                [f16_bits(t), if self.inside[i] { 0x3c00 } else { 0 }]
+            })
+            .collect()
+        });
+        IsoTexels {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
+            texels,
         }
-        let d = d2(q);
-        if d.is_nan() || d <= 0.0 {
-            return vn;
-        }
-        sw += 1.0 / d;
-        sv += vn / d;
     }
-    sv / sw
+}
+
+/// The bits of the half float (IEEE 754 binary16) nearest `x`, rounded
+/// to even; beyond its range, infinity.
+pub fn f16_bits(x: f32) -> u16 {
+    let b = x.to_bits();
+    let sign = ((b >> 16) & 0x8000) as u16;
+    let exp = ((b >> 23) & 0xff) as i32;
+    let man = b & 0x007f_ffff;
+    if exp == 0xff {
+        // Infinity or NaN.
+        return sign | 0x7c00 | if man != 0 { 0x200 } else { 0 };
+    }
+    let e = exp - 127 + 15;
+    if e >= 0x1f {
+        return sign | 0x7c00;
+    }
+    if e <= 0 {
+        // A subnormal half, or zero.
+        if e < -10 {
+            return sign;
+        }
+        let m = man | 0x0080_0000;
+        let shift = (14 - e) as u32;
+        let half = 1u32 << (shift - 1);
+        let rest = m & ((1 << shift) - 1);
+        let mut h = m >> shift;
+        if rest > half || (rest == half && h & 1 == 1) {
+            h += 1;
+        }
+        return sign | h as u16;
+    }
+    let rest = man & 0x1fff;
+    let mut h = ((e as u32) << 10) | (man >> 13);
+    if rest > 0x1000 || (rest == 0x1000 && h & 1 == 1) {
+        // A carry into the exponent is the right rounding too.
+        h += 1;
+    }
+    sign | h as u16
+}
+
+/// What the renderer draws for an iso-surface whose value just changed
+/// in the window, while its exact surface is built: where the field of
+/// its grid crosses the value, found by casting a ray through the grid
+/// from each pixel (J. Krüger and R. Westermann, "Acceleration
+/// techniques for GPU-based volume rendering", IEEE Visualization 2003;
+/// Engel et al. 2006, chapter 7), shaded by the grid's gradient there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IsoDraw {
+    pub grid: Arc<IsoGrid>,
+    /// The grid for the iso-surface's value: where it crosses 0.
+    pub texels: Arc<IsoTexels>,
+    /// The linear colour of the surface when it is not coloured by the
+    /// field shown.
+    pub color: [f32; 3],
+    /// Coloured by the field shown: its grid ([`SliceGrid`]), read where
+    /// the ray meets the surface.
+    pub field: Option<Arc<SliceGrid>>,
+    /// How much of the selection colour it mixes in (when selected).
+    pub selection_mix: f32,
+    /// Entries of the surface's `indices` not to draw: the iso-surface
+    /// at its old value.
+    pub hide_faces: Vec<Range<u32>>,
+    /// The clip planes that cut it (as [`SliceDraw::clips`]).
+    pub clips: Vec<[f32; 4]>,
 }
 
 /// What the renderer draws for the slices moving in the window: their
@@ -354,7 +574,7 @@ pub fn shown_ranges(len: u32, hide: &[Range<u32>]) -> Vec<Range<u32>> {
 
 /// `ranges` sorted with the empty ones left out and those that touch
 /// merged.
-pub(crate) fn merged(mut ranges: Vec<Range<u32>>) -> Vec<Range<u32>> {
+pub fn merged(mut ranges: Vec<Range<u32>>) -> Vec<Range<u32>> {
     ranges.retain(|r| !r.is_empty());
     ranges.sort_by_key(|r| r.start);
     let mut out: Vec<Range<u32>> = Vec::new();
@@ -412,6 +632,29 @@ mod tests {
             "{turns:?}"
         );
         assert!(plane_in_box([9.0, 0.0, 0.0], [1.0, 0.0, 0.0], &b).is_empty());
+    }
+
+    /// Invariant: half floats round to the nearest, ties to even, as the
+    /// GPU reads them. Breaks when the exponent bias or a rounding carry
+    /// is off (the iso preview would sit at another value).
+    #[test]
+    fn half_floats_round_to_the_nearest() {
+        for (x, h) in [
+            (0.0f32, 0x0000u16),
+            (1.0, 0x3c00),
+            (-2.0, 0xc000),
+            (0.5, 0x3800),
+            (65504.0, 0x7bff),
+            (1e6, 0x7c00),
+            (6.103_515_6e-5, 0x0400),
+            (5.960_464_5e-8, 0x0001),
+            (0.333_333_34, 0x3555),
+            (1.000_488_3, 0x3c00),
+            (1.000_732_4, 0x3c01),
+            (1.001_464_8, 0x3c02),
+        ] {
+            assert_eq!(f16_bits(x), h, "{x}");
+        }
     }
 
     /// Invariant: every grid cell inside a mesh of hexahedra shows the
