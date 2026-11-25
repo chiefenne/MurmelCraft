@@ -3,8 +3,8 @@
 //! partition of the `internal` UnstructuredGrid with its own points and
 //! one layer of ghost cells, the boundary patches as PolyData blocks, and
 //! an index of the blocks' bounds and field ranges. MurmelCraft reads a
-//! region of such a file by its blocks; any VTKHDF reader (ParaView 5.13
-//! and later) opens it whole.
+//! region of such a file by its blocks; VTK's VTKHDF reader (VTK 9.6 and
+//! later) opens it whole.
 //!
 //! [`write_blocked`] writes one from a mesh in memory and its fields
 //! (`murmel blocks make` converts a `.vtu` or a `polyMesh` once). The

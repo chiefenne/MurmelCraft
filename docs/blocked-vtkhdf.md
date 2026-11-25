@@ -11,9 +11,13 @@ blocked` writes a synthetic mesh of polyhedra of any size up to 684 M
 cells straight into one, without the mesh in memory (the 100 M cell
 test file).
 
-A blocked file is an ordinary VTKHDF 2.4 file. ParaView 5.13 (VTK 9.4)
-and later open it as a partitioned data set; nothing below needs a
-MurmelCraft-specific reader except the optional speed-ups. Written from
+A blocked file is an ordinary VTKHDF 2.4 file. VTK 9.6 and later
+(`vtkHDFReader`) open it as a partitioned data set; nothing below needs a
+MurmelCraft-specific reader except the optional speed-ups. Checked on
+2026-11-25 with the VTK wheels 9.4.2, 9.5.2, 9.6.2 and 9.7.2: 9.4 and 9.5
+crash on the polyhedra (type 42), so ParaView 6.0 (built on VTK 9.5) and
+earlier open only a file of linear cells, and 9.4 only since the text is
+marked ASCII (§ 8). Written from
 the VTK documentation ("VTK File Formats", section "VTKHDF File Format",
 version 2.4) and the HDF5 File Format Specification 3.0.
 
@@ -188,7 +192,8 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   (`koflcraft_version`, `koflcraft_mesh_sha256`, …), not field data.
 - **Strings:** fixed-length (null-terminated or null-padded) or
   variable-length (global heap), ASCII or UTF-8. Fixed-length is
-  preferred.
+  preferred. Text that is ASCII is marked ASCII: VTK 9.4 refuses a
+  `Type` attribute marked UTF-8.
 
 ## 9. HDF5 features MurmelCraft reads
 

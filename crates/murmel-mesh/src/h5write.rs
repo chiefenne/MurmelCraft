@@ -102,8 +102,12 @@ pub enum Ty {
     I32,
     I64,
     F64,
-    /// A UTF-8 string of this many bytes, null-padded.
+    /// An ASCII string of this many bytes, null-padded.
     Str(usize),
+    /// A UTF-8 string of this many bytes, null-padded: for text that is
+    /// not ASCII. VTK 9.4's reader refuses a `Type` attribute marked
+    /// UTF-8, so text that is ASCII is marked ASCII.
+    Utf8(usize),
 }
 
 impl Ty {
@@ -112,7 +116,7 @@ impl Ty {
             Ty::U8 => 1,
             Ty::U32 | Ty::I32 => 4,
             Ty::I64 | Ty::F64 => 8,
-            Ty::Str(n) => n.max(1),
+            Ty::Str(n) | Ty::Utf8(n) => n.max(1),
         }
     }
 
@@ -142,10 +146,11 @@ impl Ty {
                 m.extend([52, 11, 0, 52]);
                 m.extend(1023u32.to_le_bytes());
             }
-            Ty::Str(n) => {
+            Ty::Str(n) | Ty::Utf8(n) => {
                 m.push(0x13);
-                // null-padded, UTF-8
-                m.extend([0x01 | 0x10, 0, 0]);
+                // null-padded; character set 0 ASCII, 1 UTF-8
+                let set = if matches!(self, Ty::Utf8(_)) { 0x10 } else { 0 };
+                m.extend([0x01 | set, 0, 0]);
                 m.extend((n.max(1) as u32).to_le_bytes());
             }
         }
@@ -404,7 +409,7 @@ impl H5Writer {
             buf.resize(buf.len() + n - v.len(), 0);
         }
         self.raw(&buf)?;
-        self.dataset_header(Ty::Str(n), &[values.len() as u64], start)
+        self.dataset_header(text(n, values), &[values.len() as u64], start)
     }
 
     /// A group with `links` and `attrs`; returns its header's address.
@@ -525,6 +530,15 @@ impl H5Writer {
     }
 }
 
+/// Strings of `n` bytes: ASCII when all of `values` are, else UTF-8.
+fn text(n: usize, values: &[String]) -> Ty {
+    if values.iter().all(|v| v.is_ascii()) {
+        Ty::Str(n)
+    } else {
+        Ty::Utf8(n)
+    }
+}
+
 /// The attribute message (version 3) of `name` = `value`.
 fn attribute(name: &str, value: &AttrValue) -> Vec<u8> {
     let (ty, space, data) = match value {
@@ -539,7 +553,7 @@ fn attribute(name: &str, value: &AttrValue) -> Vec<u8> {
             let n = t.len().max(1);
             let mut d = t.as_bytes().to_vec();
             d.resize(n, 0);
-            (Ty::Str(n), dataspace(None), d)
+            (text(n, std::slice::from_ref(t)), dataspace(None), d)
         }
     };
     let ty = ty.message();
@@ -628,6 +642,25 @@ mod tests {
         let want: Vec<f64> = (1..=12).map(f64::from).collect();
         assert_eq!(h.read_f64(&x).unwrap(), want);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Invariant: text that is ASCII is marked ASCII (character set 0)
+    /// and other text UTF-8 (1), in datasets and attributes alike. VTK
+    /// 9.4's reader refuses the `Type` attribute of every file marked
+    /// UTF-8, and the round trip below reads either the same, so only
+    /// this test sees the mark.
+    #[test]
+    fn ascii_text_is_marked_ascii() {
+        let set = |t: Ty| t.message()[1] >> 4;
+        assert_eq!(set(text(4, &["Type".into(), "abc".into()])), 0);
+        assert_eq!(set(text(6, &["1=rotör".into()])), 1);
+        assert_eq!(set(text(1, &[])), 0);
+        // in an attribute message (version 3) the datatype follows the
+        // 9 bytes of its header and the name with its null
+        let m = attribute("Type", &AttrValue::Text("UnstructuredGrid".into()));
+        assert_eq!((m[9 + 5], m[9 + 5 + 1] >> 4), (0x13, 0));
+        let m = attribute("case", &AttrValue::Text("Föhn".into()));
+        assert_eq!((m[9 + 5], m[9 + 5 + 1] >> 4), (0x13, 1));
     }
 
     /// Invariant: what the writer writes, MurmelCraft's own reader reads
