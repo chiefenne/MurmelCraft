@@ -9,9 +9,8 @@ name: CI
 # What keeps it fast (AGENTS.md, "Checks to run before a pull request"):
 # - cargo-nextest runs every test binary at once instead of one after the
 #   other, so the slowest test sets the time, not the sum of the crates;
-# - our own crates are built with opt-level 1 for the tests (debug
-#   assertions and overflow checks stay on), the dependencies at 2 as in
-#   Cargo.toml;
+# - the mesh and engine crates are built with opt-level 1 for the tests
+#   (Cargo.toml; debug assertions and overflow checks stay on);
 # - no debug info: a smaller cache that restores faster, quicker links
 #   (a panic still names its file and line);
 # - the Mesa packages come from a cache instead of apt.
@@ -34,8 +33,6 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
-  CARGO_PROFILE_DEV_OPT_LEVEL: "1"
-  CARGO_PROFILE_TEST_OPT_LEVEL: "1"
   FULL: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
 
 jobs:
