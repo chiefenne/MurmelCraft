@@ -26,7 +26,8 @@ pub const MAX_INLINE_IMAGE_BYTES: u64 = 4 * 1024 * 1024;
 /// Folder below the first write root for screenshots called without a path.
 pub const SHOT_DIR: &str = "screenshots";
 
-const INSTRUCTIONS: &str = "MurmelCraft is a viewer for KoflCraft and OpenFOAM meshes. \
+const INSTRUCTIONS: &str = "MurmelCraft is the viewer for KoflCraft meshes and FoehnCraft results; it also \
+imports OpenFOAM and VTK files of other tools (mesh.open opens both). \
 This server runs one headless viewer session: start with mesh.open, then set the view \
 (view.standard, view.orbit, view.set_camera), the display (display.*, clip.*) and the \
 selection (select.*), and call view.screenshot to see the result as an image. \
@@ -35,7 +36,8 @@ journal.undo and journal.redo walk the camera and display steps. Paths must lie 
 the server's read roots (meshes) or write roots (screenshots); relative paths start \
 at the first write root. Settings tools change this session only.";
 
-const LIVE_INSTRUCTIONS: &str = "MurmelCraft is a viewer for KoflCraft and OpenFOAM meshes. \
+const LIVE_INSTRUCTIONS: &str = "MurmelCraft is the viewer for KoflCraft meshes and FoehnCraft results; it also \
+imports OpenFOAM and VTK files of other tools (mesh.open opens both). \
 This server drives the person's open MurmelCraft window: every call runs in that window, \
 the person sees each step and can undo it, and the status bar shows that an agent is \
 connected. Check what is open with mesh.info and view.get_camera before changing it; open \

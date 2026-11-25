@@ -940,7 +940,10 @@ fn opens_an_openfoam_case() {
             .find(|r| r["key"] == k)
             .map(|r| r["value"].clone())
     };
-    assert_eq!(get("format"), Some(json!("OpenFOAM polyMesh (binary)")));
+    assert_eq!(
+        get("format"),
+        Some(json!("OpenFOAM polyMesh (binary), imported"))
+    );
     assert_eq!(get("validity"), Some(json!("no_evidence")));
     let e = call(
         "mesh.open",
@@ -1059,6 +1062,74 @@ fn reads_only_tools_change_nothing() {
         ran += 1;
     }
     assert!(ran >= 10, "only {ran} reads-only tools");
+}
+
+/// Invariant: `mesh.open` names the tool that wrote each file from its
+/// marks, and only a file of another tool's format is `imported`:
+/// KoflCraft's .vtu and blocked .vtkhdf, FoehnCraft's results and
+/// MurmelCraft's own blocked copy are ours; a polyMesh is imported (a
+/// KoflCraft export with its evidence stays KoflCraft's); a .vtu without
+/// any mark is a VTK file of another tool. Breaks if File ▸ Open recent
+/// or an agent could no longer tell ours from imports (the maintainer's
+/// cards of 2026-11-25).
+#[test]
+fn mesh_open_names_the_origin() {
+    let mut s = session();
+    let dir = scratch("origin");
+    let open = |p: PathBuf, s: &mut Session| {
+        let e = call("mesh.open", json!({ "path": p }), s);
+        assert!(e.ok(), "{p:?}: {:?}", e.diagnostics);
+        (
+            e.result["format"].as_str().unwrap().to_string(),
+            e.result["origin"].as_str().unwrap().to_string(),
+            e.result["imported"].as_bool().unwrap(),
+        )
+    };
+    let t = |f: &str, o: &str, i: bool| (f.to_string(), o.to_string(), i);
+    let fx = root().join("test-fixtures");
+    assert_eq!(
+        open(fx.join("box/foehncraft.vtu"), &mut s),
+        t("vtu", "koflcraft", false)
+    );
+    assert_eq!(
+        open(fx.join("vtkhdf/koflcraft/box4.vtkhdf"), &mut s),
+        t("vtkhdf", "koflcraft", false)
+    );
+    assert_eq!(
+        open(fx.join("vtkhdf/channel_fields.vtkhdf"), &mut s),
+        t("vtkhdf", "foehncraft", false)
+    );
+    assert_eq!(
+        open(fx.join("openfoam/box"), &mut s),
+        t("openfoam", "koflcraft", true)
+    );
+    assert_eq!(
+        open(fx.join("openfoam/channel_binary"), &mut s),
+        t("openfoam", "openfoam", true)
+    );
+    // A blocked copy MurmelCraft writes of an OpenFOAM mesh is ours.
+    let blocked = dir.join("channel.blocked.vtkhdf");
+    let e = call("blocks.make", json!({ "out": blocked }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(open(blocked, &mut s), t("vtkhdf", "murmelcraft", false));
+    // The same .vtu without KoflCraft's marks and evidence: another tool's.
+    let text = std::fs::read_to_string(fx.join("box/foehncraft.vtu")).unwrap();
+    let plain: String = text
+        .lines()
+        .filter(|l| !l.contains("Name=\"koflcraft_"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let vtk = dir.join("plain.vtu");
+    std::fs::write(&vtk, plain).unwrap();
+    assert_eq!(open(vtk, &mut s), t("vtu", "vtk", true));
+    let e = call("inspect.item", json!({"item": "mesh"}), &mut s);
+    let format = e.result["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "format")
+        .map(|r| r["value"].clone());
+    assert_eq!(format, Some(json!("VTK file (.vtu), imported")));
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -4227,6 +4298,13 @@ fn recent_files_follow_the_window_only() {
     assert_eq!(files.as_array().map(Vec::len), Some(1), "{files}");
     assert_eq!(files[0]["kind"], "mesh");
     assert_eq!(files[0]["exists"], true);
+    assert_eq!(files[0]["origin"], "koflcraft", "the tag beside it");
+    assert_eq!(files[0]["imported"], false);
+    let case = root().join("test-fixtures/openfoam/channel_ascii");
+    assert!(call("mesh.open", json!({"path": case}), &mut s).ok());
+    let files = list(&mut s);
+    assert_eq!(files[0]["origin"], "openfoam");
+    assert_eq!(files[0]["imported"], true);
     let mut bridge = s.clone();
     bridge.config_dir = None;
     assert_eq!(list(&mut bridge), json!([]), "no config folder, no list");
