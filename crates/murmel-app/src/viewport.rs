@@ -431,6 +431,18 @@ impl MurmelApp {
                 &d.clips,
             )
         });
+        // A new iso value: ray cast through its field's grid until its
+        // exact surface is in place.
+        let iso = self.session.iso_drawn();
+        let iso_key = iso.as_ref().map(|d| {
+            (
+                d.texels.id,
+                d.color,
+                d.field.as_ref().map(|g| g.id),
+                &d.hide_faces,
+                &d.clips,
+            )
+        });
         // While the view moves the edges are left out if frames with
         // them are slow (the maintainer's card: over 33 ms).
         let display = &self.session.display;
@@ -448,7 +460,7 @@ impl MurmelApp {
         }
         let edges = display.draw_edges() && !moving.hide;
         let key = format!(
-            "{cam:?}|{revision}|{planes:?}|{slice_key:?}|{px:?}|{dark}|{:?}|{edges}|{field:?}",
+            "{cam:?}|{revision}|{planes:?}|{slice_key:?}|{iso_key:?}|{px:?}|{dark}|{:?}|{edges}|{field:?}",
             display.render_mode
         );
         if g.last.as_deref() != Some(key.as_str()) {
@@ -470,6 +482,7 @@ impl MurmelApp {
                     scale: ppp,
                     clip_planes: planes,
                     slice: slice.as_ref(),
+                    iso: iso.as_ref(),
                 },
             );
             if let Some(view) = g.renderer.egui_view() {

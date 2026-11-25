@@ -48,7 +48,7 @@ use crate::display::{Display, Item};
 use crate::field::{FieldChoice, FieldSet, FieldValues};
 use crate::glyph::ArrowColor;
 use crate::region::Bound;
-use crate::surface::{SlicePart, Surface};
+use crate::surface::{IsoPart, SlicePart, Surface};
 use crate::theme::{Rgb, Tokens};
 
 /// Most slices (a series counts once) and iso-surfaces one display holds.
@@ -764,6 +764,7 @@ pub fn append(
                 None,
                 shown,
             );
+            let f0 = out.s.indices.len() as u32;
             for t in tris {
                 let paint = Paint {
                     color: face.linear(),
@@ -775,6 +776,10 @@ pub fn append(
                 let verts = clip_flat(t.verts.to_vec(), &flat, borders(t.cell));
                 out.poly(&verts, &paint);
             }
+            out.s.iso_parts.push(IsoPart {
+                iso: k as u32,
+                faces: f0..out.s.indices.len() as u32,
+            });
         }
     }
     drop(phase);
@@ -870,7 +875,7 @@ pub fn append(
     }
 }
 
-fn mixed(a: Rgb, b: Rgb, mix: f32) -> Rgb {
+pub(crate) fn mixed(a: Rgb, b: Rgb, mix: f32) -> Rgb {
     Rgb(std::array::from_fn(|k| {
         (a.0[k] as f32 * (1.0 - mix) + b.0[k] as f32 * mix).round() as u8
     }))

@@ -167,12 +167,13 @@ pub fn call(id: &str, input: Value, session: &mut Session) -> Envelope {
         return Envelope::failed(id, 0, Diagnostic::new("TOOL001", format!("no tool {id}")));
     };
     let start = Instant::now();
-    // A clip or slice preview (the window's clip and slice drags) ends
-    // with the exact surface before any other tool reads or draws it;
-    // moving a plane or slice again keeps it going.
+    // A clip, slice or iso preview (the window's clip and slice drags, a
+    // new iso value) ends with the exact surface before any other tool
+    // reads or draws it; moving a plane or slice again, or another iso
+    // value, keeps it going.
     if !matches!(
         tool.id,
-        "clip.set" | "clip.rotate" | "slice.set" | "slice.rotate"
+        "clip.set" | "clip.rotate" | "slice.set" | "slice.rotate" | "iso.set"
     ) {
         session.settle();
     }

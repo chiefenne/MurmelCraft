@@ -1416,8 +1416,10 @@ Cam and Foran 1994; Engel et al., "Real-Time Volume Graphics", 2006).
   cells whose box holds that centre (made once per mesh, on all
   threads, an atomic minimum per grid cell, so the same on any number
   of threads); grid cells outside every cell's box show nothing. It
-  holds the cell's value (flat colours) and a value between the cell's
-  and its nodes' (smooth and banded), made once per field shown.
+  holds the cell's value (flat colours) and the value smooth colours
+  show at the grid cell's centre (smooth and banded: linear on the
+  cell's tetrahedra, as the exact slice cuts them), made once per field
+  shown, on a thread of its own (below).
 - **The drag** (`Session::redraw` with `defer_clips`): a change that
   only moves slices keeps the surface and starts a `SlicePreview`.
   `Session::slice_drawn` gives the renderer the planes inside the
@@ -1436,12 +1438,66 @@ Cam and Foran 1994; Engel et al., "Real-Time Volume Graphics", 2006).
 
 | Stage (ms) | now |
 |---|---:|
-| slice.preview (first: the grid's cells 49, its values 62) | 111 |
+| slice.preview (first: the grid's cells 49, its values 62; now built on a thread, below) | 111 |
 | slice.preview.step | 0.0 |
 | slice.step (the exact slice, as the tools build it) | 230 to 275 |
 
 Near a curved or concave boundary a grid cell inside a cell's box but
 outside the mesh may show that cell until the exact slice is in place.
+
+## An iso value changed: ray cast from the field's grid (2026-11-25)
+
+A new iso value takes about a second at 1 M cells (extract.iso about
+0.9 s), more at 10 M. So in the window an iso-surface whose value
+changes, or one just added, is drawn at once by casting rays through a
+grid of its field on the GPU, and its exact triangles follow on a
+thread once the value rests for 120 ms (the maintainer's iso card of
+2026-11-25, option 1; GPU ray casting, Krüger and Westermann 2003;
+Engel et al., "Real-Time Volume Graphics", 2006).
+
+- **The grid** (`IsoGrid`): the same 2 M grid cells as the slice's,
+  each holding the value smooth colours show at its centre (linear on
+  the mesh cell's tetrahedra, as the exact iso-surface cuts them; a
+  grid cell just outside its cell takes the tetrahedron it is nearest,
+  its weights clamped, so no value overshoots), and whether it is
+  inside the mesh. Made once per field.
+- **The texels** (`IsoTexels`, an `Rg16Float` 3D texture, 8 MB): per
+  value, each grid cell's `(v - value) / span` as a half float, so the
+  precision is finest at the surface (a half float of the plain value
+  speckled the surface), and whether it is inside. 4 to 5 ms per value
+  at 1 M cells.
+- **The ray cast** (`fs_iso`): the box's back faces are drawn; each
+  fragment walks from the eye (or the box's near face) towards them in
+  half a grid cell's steps through the trilinear texels, finds the sign
+  change, refines it with two secant steps, shades it with the
+  gradient (central differences over 1.5 grid cells), cuts it with the
+  clip planes, colours it solid or by the field shown (the slice grid),
+  and writes its depth, so it sits right among the faces.
+- **The drag** (`Session::redraw` with `defer_clips`): a change of one
+  iso value (or one new iso-surface) keeps the surface and starts the
+  preview; `Session::iso_drawn` gives the renderer the grid, the
+  texels, the colour and the iso-surface's old triangles to leave out
+  (`Surface.iso_parts`). Two values at once build at once.
+- **Grids on threads** (both previews): a grid is built on a thread of
+  its own (`GridSlot`), started as soon as a slice or an iso-surface
+  exists in the window, so the first drag seldom waits. A change that
+  comes before its grid is done leaves the old faces as they were
+  until the grid comes in (or the exact faces, whichever is first).
+
+1 M honeycomb, polyMesh binary, 4 threads, `--no-render` (the bench
+builds the grids on its own thread to time them):
+
+| Stage (ms) | now |
+|---|---:|
+| iso.preview (first: the grid, on a thread in the window) | 1,160 |
+| iso.preview.step (the texels for the value) | 4.5 |
+| iso.step (the exact surface, as the tools build it) | 1,100 |
+| slice.preview (first: the grid with tetrahedra, on a thread in the window) | 990 |
+
+The grid's values cost about as much as one exact iso-surface; they are
+paid once per field, off the window's thread. Where the mesh is finer
+than the grid (2 M cells over its box) the preview is coarser than the
+exact surface, which replaces it 120 ms after the value rests.
 
 ## Streamlines on an overview (2026-11-25)
 
