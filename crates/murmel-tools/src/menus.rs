@@ -23,6 +23,8 @@ pub enum Entry {
     Sub(&'static str, Vec<Entry>),
     /// A line between groups of entries.
     Separator,
+    /// The files opened lately (`recent.list`), filled in by the window.
+    Recent,
 }
 
 /// One menu of the bar.
@@ -49,6 +51,7 @@ pub fn menus() -> Vec<Menu> {
             entries: vec![
                 C("window.open"),
                 C("window.open_folder"),
+                Sub("menu-recent", vec![Entry::Recent, S, C("recent.clear")]),
                 C("window.session_load"),
                 S,
                 C("window.series_open"),
@@ -331,7 +334,7 @@ pub fn resolve<'a>(entry: &Entry, all: &'a [Command]) -> Vec<&'a Command> {
     match entry {
         Entry::Command(id) => all.iter().filter(|c| c.id == *id).collect(),
         Entry::Each(prefix) => all.iter().filter(|c| c.id.starts_with(prefix)).collect(),
-        Entry::Sub(..) | Entry::Separator => Vec::new(),
+        Entry::Sub(..) | Entry::Separator | Entry::Recent => Vec::new(),
     }
 }
 
@@ -350,6 +353,9 @@ pub fn menus_markdown() -> String {
         for e in list {
             match e {
                 Entry::Separator => {}
+                Entry::Recent => {
+                    let _ = writeln!(out, "{pad}- *the files opened lately* → `recent.list`");
+                }
                 Entry::Sub(key, sub) => {
                     let _ = writeln!(out, "{pad}- **{}** ▸", english(key));
                     entries(out, sub, depth + 1, all);
@@ -410,7 +416,7 @@ mod tests {
                     assert_ne!(english(key), *key, "{key} untranslated");
                     assert!(!sub.is_empty(), "{key} is empty");
                 }
-                Entry::Separator => {}
+                Entry::Separator | Entry::Recent => {}
                 _ => {
                     let found = resolve(e, &all);
                     assert!(!found.is_empty(), "{e:?} names no command");

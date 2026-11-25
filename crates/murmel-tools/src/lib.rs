@@ -182,8 +182,18 @@ pub fn call(id: &str, input: Value, session: &mut Session) -> Envelope {
     // A call that changes the camera or the display is a step of the
     // journal (undo and redo).
     let before = tools::journaled(tool.id).then(|| Snapshot::of(session));
+    // A file opened goes first in File ▸ Open recent (the window only).
+    let opened = murmel_engine::recent::Kind::of_tool(tool.id).and_then(|k| {
+        input
+            .get("path")
+            .and_then(Value::as_str)
+            .map(|p| (std::path::PathBuf::from(p), k))
+    });
     let mut e = match (tool.run)(input, session) {
         Ok(result) => {
+            if let Some((path, kind)) = &opened {
+                session.note_recent(path, *kind);
+            }
             if let Some(b) = before {
                 let after = Snapshot::of(session);
                 session.journal.record(tool.id, b, &after);

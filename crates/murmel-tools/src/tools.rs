@@ -2617,6 +2617,11 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("journal.redo", "walks the journal"),
     ("journal.group", "groups the steps"),
     ("journal.list", READS_ONLY),
+    ("recent.list", READS_ONLY),
+    (
+        "recent.clear",
+        "the list of recent files is a file, not undone",
+    ),
     ("session.save", "writes a file; the view stays as it is"),
     ("session.load", "a loaded session starts a new journal"),
     ("measure.snap", READS_ONLY),
@@ -2694,6 +2699,25 @@ fn journal_group(input: Value, s: &mut Session) -> Run {
     let i: Group = parse(input)?;
     s.journal.group(i.open);
     Ok(json!({"open": s.journal.group_open()}))
+}
+
+fn recent_list(_: Value, s: &mut Session) -> Run {
+    let files = s
+        .config_dir
+        .as_deref()
+        .map(murmel_engine::recent::load)
+        .unwrap_or_default();
+    let files: Vec<Value> = files
+        .iter()
+        .map(|e| json!({"path": e.path, "kind": e.kind, "exists": e.path.exists()}))
+        .collect();
+    Ok(json!({ "files": files }))
+}
+
+fn recent_clear(_: Value, s: &mut Session) -> Run {
+    let dir = config_dir(s)?;
+    let path = murmel_engine::recent::save(&dir, &[]).map_err(|e| Diagnostic::new("SET001", e))?;
+    Ok(json!({ "files": [path] }))
 }
 
 fn journal_list(_: Value, s: &mut Session) -> Run {
@@ -3708,6 +3732,28 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: no_input,
         run: journal_list,
+    },
+    Tool {
+        id: "recent.list",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-recent-list",
+        summary: "The files opened lately in the window (File > Open recent), the latest first: path, kind (mesh, session, series, parcels, charts; the tool that opens it again is mesh.open, session.load, series.open, parcels.open or charts.open) and whether it still exists. Empty without a config folder, and over the agent bridge.",
+        outputs: &[],
+        reads: &[],
+        input_schema: no_input,
+        run: recent_list,
+    },
+    Tool {
+        id: "recent.clear",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-recent-clear",
+        summary: "Forget the files opened lately: writes an empty recent.toml in the config folder.",
+        outputs: &[],
+        reads: &[],
+        input_schema: no_input,
+        run: recent_clear,
     },
     Tool {
         id: "settings.get",

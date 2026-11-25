@@ -90,6 +90,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Ctrl + Z` | Undo (camera and display) | `journal.undo` (input from the session) |
 | `Ctrl + Shift + Z` | Redo | `journal.redo` (input from the session) |
 | `Ctrl + Shift + C` | Copy the view as an image | window |
+| palette | Clear the list of recent files | `recent.clear` `{}` |
 | palette | Load session… | window, then `session.load` |
 | palette | Save a screenshot… | window, then `view.screenshot` |
 | palette | Settings | window |

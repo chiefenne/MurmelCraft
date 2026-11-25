@@ -4200,3 +4200,36 @@ fn keys_are_configurable_and_saved() {
     assert_eq!(p.len(), 3, "{p:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Invariant: with `remember_recent` (the window) a file opened goes first
+/// in recent.list, which says whether it still exists, and recent.clear
+/// empties it; without it (scripts, agents) opening leaves the list alone,
+/// and without a config folder the list is empty. Breaks if a script's
+/// opens flood File ▸ Open recent, a failed open is listed, or the agent
+/// bridge (no config folder) could read the paths. The engine test
+/// checks the order and the cap.
+#[test]
+fn recent_files_follow_the_window_only() {
+    let dir = std::env::temp_dir().join(format!("murmel-recent-tools-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let channel = root().join("test-fixtures/channel/foehncraft.vtu");
+    let mut s = session();
+    s.config_dir = Some(dir.clone());
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    let list = |s: &mut Session| call("recent.list", json!({}), s).result["files"].clone();
+    assert_eq!(list(&mut s), json!([]), "a script's open is not listed");
+    s.remember_recent = true;
+    assert!(call("mesh.open", json!({"path": channel}), &mut s).ok());
+    let missing = dir.join("gone.vtu");
+    assert!(!call("mesh.open", json!({"path": missing}), &mut s).ok());
+    let files = list(&mut s);
+    assert_eq!(files.as_array().map(Vec::len), Some(1), "{files}");
+    assert_eq!(files[0]["kind"], "mesh");
+    assert_eq!(files[0]["exists"], true);
+    let mut bridge = s.clone();
+    bridge.config_dir = None;
+    assert_eq!(list(&mut bridge), json!([]), "no config folder, no list");
+    assert!(call("recent.clear", json!({}), &mut s).ok());
+    assert_eq!(list(&mut s), json!([]));
+    let _ = std::fs::remove_dir_all(dir);
+}
