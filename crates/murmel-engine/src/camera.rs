@@ -460,6 +460,46 @@ impl Camera {
         self.distance = (self.distance * factor).max(1e-9);
     }
 
+    /// Zoom into the box with corners `a` and `b` in normalised device
+    /// coordinates (-1..1, y up) of a viewport of `aspect` (the rubber-band
+    /// zoom): the box centre moves to the screen centre and the box grows
+    /// until its longer side, relative to the view, fills the view; the
+    /// whole box stays visible. In perspective the zoom works at the depth
+    /// of `surface`, a world point seen inside the box (the mesh under it),
+    /// so the part of the mesh in the box fills the view; without one, or
+    /// in orthographic projection, at the target's depth. Returns the
+    /// factor the distance was scaled by.
+    pub fn zoom_box(
+        &mut self,
+        a: [f64; 2],
+        b: [f64; 2],
+        aspect: f64,
+        surface: Option<[f64; 3]>,
+    ) -> f64 {
+        if !self.is_orthographic()
+            && let Some(p) = surface
+        {
+            // Move the target along the view axis to the point's depth;
+            // the eye, and so the picture, stays where it is.
+            let fwd = -self.to_eye();
+            let eye = self.eye();
+            let d = (DVec3::from(p) - eye).dot(fwd);
+            if d.is_finite() && d > self.distance * 1e-6 {
+                self.target = (eye + fwd * d).into();
+                self.distance = d;
+            }
+        }
+        let c = [0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])];
+        let (right, up) = self.basis();
+        let hh = self.half_height();
+        let t = DVec3::from(self.target) + right * c[0] * hh * aspect + up * c[1] * hh;
+        self.target = t.into();
+        let share = (0.5 * (a[0] - b[0]).abs()).max(0.5 * (a[1] - b[1]).abs());
+        let factor = share.clamp(1e-6, 1e3);
+        self.distance = (self.distance * factor).max(1e-9);
+        factor
+    }
+
     /// World point `p` in normalised device coordinates (-1..1, y up) of
     /// the frame for a scene about `origin` of `radius`; `None` behind
     /// the eye.
@@ -791,6 +831,79 @@ mod tests {
         let f = c.frame([0.0; 3], 1.0, 1.5);
         let q = f.view_proj.project_point3(p.as_vec3());
         assert!((q.x - 0.4).abs() < 1e-4 && (q.y + 0.3).abs() < 1e-4, "{q}");
+    }
+
+    /// Invariant: a box zoom puts the box's corners on the edges of the
+    /// view: the longer side (relative to the view) touches two edges,
+    /// the box centre lands on the screen centre, in both projections and
+    /// at the depth of the surface point given. Breaks if the centre is
+    /// not panned to, or the factor uses the shorter side (the box would
+    /// be cut). No other test zooms to a box.
+    #[test]
+    fn zoom_box_frames_the_box() {
+        for ortho in [false, true] {
+            let mut c = Camera {
+                projection: if ortho {
+                    Projection::Orthographic
+                } else {
+                    Projection::Perspective
+                },
+                ..Camera::default()
+            };
+            c.fit(&unit_box(), 1.5);
+            let aspect = 1.5;
+            // A point of the scene off the target plane, inside the box.
+            let (a, b) = ([0.1, -0.5], [0.5, -0.1]);
+            let centre = [0.3, -0.3];
+            let (start, dir) = c.ray(centre, aspect);
+            let target_depth = (DVec3::from(c.target) - c.eye()).dot(-c.to_eye());
+            let along = if ortho {
+                c.distance * 0.7
+            } else {
+                target_depth * 0.8
+            };
+            let surface = start + dir * along;
+            let corner = |c: &Camera, ndc: [f64; 2]| {
+                let (o, d) = c.ray(ndc, aspect);
+                // The corner's ray at the depth of the surface point.
+                let depth = (surface - o).dot(-c.to_eye()) / d.dot(-c.to_eye());
+                o + d * depth
+            };
+            let (pa, pb) = (corner(&c, a), corner(&c, b));
+            let f = c.zoom_box(a, b, aspect, Some(surface.into()));
+            assert!((f - 0.2).abs() < 1e-12, "{f}");
+            let fr = c.frame([0.0; 3], 1.0, aspect);
+            let qa = fr.view_proj.project_point3(pa.as_vec3());
+            let qb = fr.view_proj.project_point3(pb.as_vec3());
+            let qc = fr.view_proj.project_point3(surface.as_vec3());
+            assert!(
+                qc.x.abs() < 1e-4 && qc.y.abs() < 1e-4,
+                "{ortho}: centre {qc}"
+            );
+            // Equal width and height in NDC: the 0.4 x 0.4 box fills both.
+            assert!(
+                (qa.x + 1.0).abs() < 1e-4 && (qb.x - 1.0).abs() < 1e-4,
+                "{ortho}: {qa} {qb}"
+            );
+            assert!(
+                (qa.y + 1.0).abs() < 1e-4 && (qb.y - 1.0).abs() < 1e-4,
+                "{ortho}: {qa} {qb}"
+            );
+        }
+    }
+
+    /// Invariant: a wide flat box fills the width and stays whole: its
+    /// height is less than the view's.
+    #[test]
+    fn zoom_box_keeps_the_whole_box() {
+        let mut c = Camera {
+            projection: Projection::Orthographic,
+            ..Camera::default()
+        };
+        let d0 = c.distance;
+        let f = c.zoom_box([-0.8, 0.0], [0.0, 0.2], 1.0, None);
+        assert!((f - 0.4).abs() < 1e-12);
+        assert!((c.distance - d0 * 0.4).abs() < 1e-9);
     }
 
     /// Invariant: dragging right moves the scene right (the target moves

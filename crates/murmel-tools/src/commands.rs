@@ -303,6 +303,16 @@ pub fn commands() -> Vec<Command> {
             &["F"],
             Tool("view.fit", json!({})),
         ),
+        // Arms the rubber band: the next drag in the viewport draws a box
+        // and zooms into it, then the mouse navigates again (one box per
+        // press, the maintainer's card of 2026-11-25). Z is the Z clip.
+        cmd(
+            "window.zoom_box",
+            "cmd-zoom-box",
+            "view",
+            &["W"],
+            Window(Some("view.zoom_box")),
+        ),
         cmd(
             "view.standard:home",
             "cmd-home",
