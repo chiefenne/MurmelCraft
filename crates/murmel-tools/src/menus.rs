@@ -316,6 +316,7 @@ pub fn menus() -> Vec<Menu> {
         Menu {
             id: "help",
             entries: vec![
+                C("window.manual"),
                 C("window.shortcuts"),
                 S,
                 C("window.help_tools"),

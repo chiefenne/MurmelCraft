@@ -20,7 +20,8 @@ checked. The rules for new widgets are in [AGENTS.md](../AGENTS.md).
   control; in the viewport it clears the selection.
 - **Enter and Space** press the focused button.
 - Every command has a key or a palette entry (Ctrl + K); the shortcut
-  sheet (F1) and [keys.md](keys.md) list them. The view cube's views are
+  sheet (Ctrl + /) and [keys.md](keys.md) list them. F1 opens the manual
+  in the Help panel, at the page of the tip showing. The view cube's views are
   also on keys (Alt + 1, 3, 7) and in the palette.
 
 ## Focus ring
@@ -29,6 +30,16 @@ The focused control gets a 2 px ring in the accent colour, outside the
 control (inside the viewport, which fills its pane). It shows only after
 keyboard use (Tab, F6) and hides on the next mouse press, like CSS
 `:focus-visible`.
+
+## Tips
+
+A control's tip names it, says in one line what it does and shows its
+key. After a longer rest, or at once while **Shift** is held, it shows
+the first part of the control's help page (`assets/help/en/`). A control
+the keyboard reached (Tab, F6) shows the same tip after the same rest, so
+tips are not for the mouse only. Settings ▸ Tips sets both delays
+(settings.toml `[help]`: `tip_ms`, 250 by default, and `rich_ms`, 1000).
+Settings scrolls when it is taller than the screen.
 
 ## Screen readers (AccessKit)
 

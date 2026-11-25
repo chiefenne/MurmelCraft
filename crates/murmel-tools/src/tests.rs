@@ -1030,6 +1030,7 @@ fn reads_only_tools_change_nothing() {
         let input = match t.id {
             "inspect.at" | "measure.snap" => json!({"ndc": [0.0, 0.0]}),
             "probe.at" => json!({"at": {"ndc": [0.0, 0.0]}}),
+            "help.get" => json!({"id": "view.fit"}),
             _ => json!({}),
         };
         let e = call(t.id, input, &mut s);

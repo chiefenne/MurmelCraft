@@ -18,7 +18,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Ctrl + Shift + M` | Export movie… | window, then `export.movie` |
 | `Ctrl + Q` | Quit MurmelCraft | window |
 | `Ctrl + K` | Command palette | window |
-| `F1` | Keyboard shortcuts | window |
+| `Ctrl + Slash` | Keyboard shortcuts | window |
 | `T` | Show or hide the model tree | window |
 | `P` | Show or hide the properties | window |
 | `Ctrl + F` | Filter the model tree | window |
@@ -90,6 +90,7 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | `Ctrl + Z` | Undo (camera and display) | `journal.undo` (input from the session) |
 | `Ctrl + Shift + Z` | Redo | `journal.redo` (input from the session) |
 | `Ctrl + Shift + C` | Copy the view as an image | window |
+| `F1` | Manual | window |
 | palette | Clear the list of recent files | `recent.clear` `{}` |
 | palette | Load session… | window, then `session.load` |
 | palette | Save a screenshot… | window, then `view.screenshot` |

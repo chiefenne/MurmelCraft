@@ -271,7 +271,7 @@ pub fn commands() -> Vec<Command> {
             "window.shortcuts",
             "cmd-shortcuts",
             "window",
-            &["F1"],
+            &["Ctrl+Slash"],
             Window(None),
         ),
         cmd("window.tree", "cmd-tree", "window", &["T"], Window(None)),
@@ -1735,7 +1735,15 @@ pub fn commands() -> Vec<Command> {
         &[],
         Tool("settings.reset_default", json!({})),
     ));
-    // Help: pages of the repository opened in the browser, and About.
+    // Help: the manual in its panel, pages of the repository opened in
+    // the browser, and About.
+    v.push(cmd(
+        "window.manual",
+        "cmd-manual",
+        "help",
+        &["F1"],
+        Window(None),
+    ));
     for id in [
         "window.help_tools",
         "window.help_agents",
@@ -1767,6 +1775,11 @@ fn new_stream(s: &Session, kind: &str) -> Option<Value> {
 /// the window already shows, or need an input only a panel can give.
 pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     ("recent.list", "File ▸ Open recent shows it"),
+    ("help.get", "the tips show it"),
+    (
+        "settings.set_help",
+        "needs a delay: the Settings window sets when tips appear",
+    ),
     (
         "series.range",
         "the window reads it by itself while range mode steps colours a series",
@@ -2226,5 +2239,31 @@ mod tests {
             doc == keys_markdown(),
             "docs/keys.md is out of date; run `cargo run -p murmel-cli -- keys --markdown > docs/keys.md`"
         );
+    }
+}
+
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+
+    /// Invariant: every command of the window has a help page, so every
+    /// tip and menu item can show more and F1 can open the manual; and
+    /// every page has its name and one-line tip in the Fluent file.
+    /// Breaks when a command is added without a page (its tip would show
+    /// only its name). The engine's test checks the pages themselves.
+    #[test]
+    fn every_command_has_a_help_page() {
+        for c in commands() {
+            assert!(
+                murmel_engine::help::page_for(&c.id).is_some(),
+                "{} has no help page (assets/help/en)",
+                c.id
+            );
+        }
+        for p in murmel_engine::help::pages() {
+            for key in [p.title_key(), p.line_key()] {
+                assert_ne!(english(&key), key, "{key} untranslated");
+            }
+        }
     }
 }

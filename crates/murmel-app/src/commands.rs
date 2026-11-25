@@ -1,5 +1,5 @@
 //! The keyboard map, the command palette (Ctrl + K) and the shortcut
-//! sheet (F1). All three read the command table of `murmel-tools`, so a
+//! sheet (Ctrl + /). All three read the command table of `murmel-tools`, so a
 //! key, a palette entry and the sheet always agree, and each ends in a
 //! call of a registered tool.
 
@@ -60,6 +60,7 @@ pub fn key_text(key: &str) -> String {
             "Minus" => "−",
             "Equals" => "=",
             "Escape" => "Esc",
+            "Slash" => "/",
             other => other,
         })
         .collect::<Vec<_>>()
@@ -145,6 +146,13 @@ impl MurmelApp {
                 "window.undo_history" => self.history_open = !self.history_open,
                 "window.copy_image" => self.copy_image(ctx),
                 "window.about" => self.about_open = true,
+                // F1: the page of the tip showing, else the manual opens
+                // or closes.
+                "window.manual" => match crate::tips::tip_page(ctx) {
+                    Some(page) => self.open_help(Some(page)),
+                    None if self.help_view.is_some() => self.help_view = None,
+                    None => self.open_help(None),
+                },
                 "window.help_tools" => ctx.open_url(egui::OpenUrl::new_tab(format!(
                     "{}/blob/main/docs/tools.md",
                     crate::menus::REPO
@@ -448,7 +456,7 @@ impl MurmelApp {
         }
     }
 
-    /// The shortcut sheet (F1): every keyed command by group.
+    /// The shortcut sheet (Ctrl + /): every keyed command by group.
     pub(crate) fn shortcuts_window(&mut self, ctx: &egui::Context) {
         if !self.shortcuts_open {
             return;

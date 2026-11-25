@@ -189,7 +189,7 @@ impl MurmelApp {
         );
         let b = match why {
             Some(key) => b.on_disabled_hover_text(self.i18n.tr(key)),
-            None => b,
+            None => self.tip(b, &c.id),
         };
         if b.clicked() {
             *run = Some(Picked::Command(c.clone()));

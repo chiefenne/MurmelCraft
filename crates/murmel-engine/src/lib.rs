@@ -24,6 +24,7 @@ pub mod extract;
 pub mod field;
 pub mod glyph;
 mod gradient;
+pub mod help;
 pub mod history;
 pub mod i18n;
 pub mod inspect;

@@ -79,6 +79,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `journal.redo` | 1 | read | Redo the last undone step; a new step after an undo drops the steps to redo. redone is the tool of the step, null when there was none. |
 | `journal.group` | 1 | read | Open or close a group: the calls inside one group undo as one step (the window groups each mouse gesture and each run of wheel steps). |
 | `journal.list` | 1 | read | The steps to undo and to redo (oldest first, by tool), whether a group is open, and how many steps are kept. |
+| `help.get` | 1 | read | The help of a command, a tool or a topic (`id`, as in system.commands, the keys table, or a page name such as clip): its title, one-line tip, keys, the rich tip shown after a moment, the whole manual text (Markdown), related pages and the manual's chapter. In English. |
+| `settings.set_help` | 1 | write-files | When tips appear: tip_ms, how long the pointer rests on a control before its tip shows (250 by default), and rich_ms, how much longer before the tip shows more (1000); 0 to 10000 each. Writes settings.toml in the config folder. |
 | `recent.list` | 1 | read | The files opened lately in the window (File > Open recent), the latest first: path, kind (mesh, session, series, parcels, charts; the tool that opens it again is mesh.open, session.load, series.open, parcels.open or charts.open) and whether it still exists. Empty without a config folder, and over the agent bridge. |
 | `recent.clear` | 1 | write-files | Forget the files opened lately: writes an empty recent.toml in the config folder. |
 | `settings.get` | 1 | read | The theme, the mesh colours, the navigation bindings, the view cube placement, whether agents may drive the window, the presets, your defaults for new items (and which values of each kind can be defaults), your formulas and the config folder. |
@@ -2618,6 +2620,45 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `help.get`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "type": "object"
+}
+```
+
+### `settings.set_help`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "rich_ms": {
+      "maximum": 10000,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tip_ms": {
+      "maximum": 10000,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `recent.list`
 
 ```json
@@ -3771,6 +3812,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `PROBE001` | error | No probe history can be read: no probe lies inside the mesh, the open mesh has no cell or node fields, or a probe named is not inside the mesh. | Place a probe inside the mesh (probe.add) on a mesh with results; measure.list gives the probes. |
 | `PROBE002` | error | The probe history was cancelled before every step was read. | Read it again; the steps already read are not kept. |
 | `PROBE003` | error | The probe history's CSV file cannot be written. | Give a path in a folder that exists and can be written. |
+| `HELP001` | error | No help page explains this id. | Pass a command id (murmel keys), a tool id (murmel commands) or a page name (assets/help/en). |
 | `SESS001` | error | A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values. | Check the path; save the session again with session.save. |
 | `SESS002` | error | A session file could not be written. | Choose a writable folder. |
 | `SESS003` | warning | The session's mesh changed since the session was saved (its digest differs). | Check the view; save the session again to accept the new mesh. |

@@ -159,7 +159,7 @@ every change.
   centres (distances and angles), and probes (Shift + P) that read every
   field at a point; both stay in the tree.
 - Undo and redo of the camera and the display (Ctrl + Z, Ctrl + Shift + Z),
-  a command palette (Ctrl + K) and a shortcut sheet (F1,
+  a command palette (Ctrl + K) and a shortcut sheet (Ctrl + /,
   [docs/keys.md](docs/keys.md)).
 - Session files (`.murmel`, Ctrl + S): mesh, camera, display, clip planes,
   saved views, regions, measurements ([docs/sessions.md](docs/sessions.md)).
