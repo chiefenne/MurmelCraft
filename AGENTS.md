@@ -48,6 +48,11 @@ The method is the ArtCraft Craft Anything method of KoflCraft and FoehnCraft:
   and regenerate `docs/keys.md` with
   `cargo run -p murmel-cli -- keys --markdown > docs/keys.md` (tests check
   both, and that no key is bound twice).
+- **SHOULD** put a new command that people use often in a menu
+  (`crates/murmel-tools/src/menus.rs`, a curated choice: every command
+  stays in the palette) and regenerate `docs/menus.md` with
+  `cargo run -p murmel-cli -- menus --markdown > docs/menus.md` (a test
+  checks that it is up to date and that every entry names a command once).
 - **MUST** decide for every new tool whether its calls are undo steps:
   list it in `JOURNALED` (it changes the camera or the display) or in
   `NOT_JOURNALED` with the reason (`crates/murmel-tools/src/tools.rs`; a

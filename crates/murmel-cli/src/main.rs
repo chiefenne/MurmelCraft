@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 const USAGE: &str = "Usage: murmel COMMAND
   murmel commands [--markdown]          list every tool (JSON, or docs/tools.md)
   murmel keys [--markdown]              the window's commands and keys (JSON, or docs/keys.md)
+  murmel menus --markdown               the window's menus (docs/menus.md)
   murmel call TOOL_ID [--input FILE|-|JSON]
                                         run one tool and print its result envelope
   murmel run --script FILE              run a JSON list of {\"tool\", \"input\"} calls
@@ -130,6 +131,10 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         ["commands"] => murmel_tools::call("system.commands", json!({}), &mut s),
         ["commands", "--markdown"] => {
             print!("{}", murmel_tools::markdown());
+            return Ok(ExitCode::SUCCESS);
+        }
+        ["menus", "--markdown"] => {
+            print!("{}", murmel_tools::menus::menus_markdown());
             return Ok(ExitCode::SUCCESS);
         }
         ["keys", "--markdown"] => {

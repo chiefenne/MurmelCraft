@@ -24,6 +24,7 @@ pub mod export;
 mod extract;
 pub mod live;
 mod markdown;
+pub mod menus;
 pub mod movie;
 mod parcel;
 pub mod probe;

@@ -24,6 +24,7 @@ mod field;
 mod focus;
 mod i18n;
 mod measure;
+mod menus;
 mod movie_dialog;
 mod opening;
 mod own_bars;
