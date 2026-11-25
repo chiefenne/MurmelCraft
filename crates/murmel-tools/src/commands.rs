@@ -194,11 +194,20 @@ pub fn commands() -> Vec<Command> {
             &["Ctrl+O"],
             Window(Some("mesh.open")),
         ),
+        // File ▸ Import: the formats of other tools (the maintainer's
+        // cards of 2026-11-25; no default key, Ctrl+Shift+O is free).
         cmd(
-            "window.open_folder",
-            "cmd-open-folder",
+            "window.import_openfoam",
+            "cmd-import-openfoam",
             "file",
-            &["Ctrl+Shift+O"],
+            &[],
+            Window(Some("mesh.open")),
+        ),
+        cmd(
+            "window.import_vtk",
+            "cmd-import-vtk",
+            "file",
+            &[],
             Window(Some("mesh.open")),
         ),
         cmd(
@@ -1907,10 +1916,18 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
 /// The command table with your keys (`[keys]` in settings.toml) laid
 /// over the built-in ones; ids that are no command are left out (they
 /// are reported by [`key_problems`]).
+/// Commands renamed since an earlier version: (old id, new id). Keys
+/// set for the old id in `[keys]` still reach the command.
+pub const RENAMED: &[(&str, &str)] = &[("window.open_folder", "window.import_openfoam")];
+
 pub fn with_keys(map: &KeyMap) -> Vec<Command> {
     let mut all = commands();
     for c in &mut all {
-        if let Some(k) = map.get(&c.id) {
+        let old = RENAMED
+            .iter()
+            .find(|(_, new)| *new == c.id)
+            .and_then(|(old, _)| map.get(*old));
+        if let Some(k) = map.get(&c.id).or(old) {
             c.keys = k.clone();
         }
     }

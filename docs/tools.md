@@ -3956,7 +3956,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `FIELD016` | error | The turning zones of a turbomachinery quantity cannot be used: an axis of length 0, a speed or axis point that is not finite, a zone the mesh does not have, a frame that is not one of the zones, or more than 16 zones. | Give each zone a cell zone of the mesh (field.catalogue lists them under rotation.mesh_zones) or none for every cell, an axis that is not zero and a finite rpm. |
 | `FIELD017` | error | The wall distance has no wall face to measure to: no patch is a wall (by the result's case or the patch role), a named patch is not one of the mesh's, or the patches have no face. | Name the wall patches with walls (field.catalogue lists the mesh's patches under walls.mesh_patches). |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
-| `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a .vtu file such as KoflCraft's foehncraft.vtu. |
+| `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a KoflCraft mesh or a FoehnCraft result (.vtu, .vtkhdf); other tools' meshes come in through File, Import (OpenFOAM polyMesh, VTK file). |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |
 | `MESH004` | error | A count the file declares cannot fit in the file size. | The file is truncated or its header is wrong; write it again. |
 | `MESH005` | error | A data array has the wrong number of values or a value that is not a number. | Write the file again; it may be truncated or edited by hand. |

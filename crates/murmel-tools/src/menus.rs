@@ -50,13 +50,16 @@ pub fn menus() -> Vec<Menu> {
             id: "file",
             entries: vec![
                 C("window.open"),
-                C("window.open_folder"),
                 Sub("menu-recent", vec![Entry::Recent, S, C("recent.clear")]),
-                C("window.session_load"),
-                S,
                 C("window.series_open"),
                 C("window.parcels_open"),
                 C("window.charts_open"),
+                S,
+                // Other tools' formats; Open is for our own files.
+                Sub(
+                    "menu-import",
+                    vec![C("window.import_openfoam"), C("window.import_vtk")],
+                ),
                 S,
                 C("mesh.close"),
                 S,
@@ -432,6 +435,57 @@ mod tests {
             });
         }
         assert!(seen.len() > 100, "{}", seen.len());
+    }
+
+    /// Invariant: File ▸ Open names only our own files and Import holds
+    /// the formats of other tools, with no default key (the maintainer's
+    /// cards of 2026-11-25); a key set for the old `window.open_folder`
+    /// still reaches the OpenFOAM import. Breaks if OpenFOAM came back
+    /// beside Open, or a renamed command lost someone's binding.
+    #[test]
+    fn import_holds_other_tools_formats() {
+        let file = menus().into_iter().find(|m| m.id == "file").unwrap();
+        let import = file
+            .entries
+            .iter()
+            .find_map(|e| match e {
+                Entry::Sub("menu-import", sub) => Some(sub.clone()),
+                _ => None,
+            })
+            .expect("File ▸ Import");
+        let ids: Vec<&str> = import
+            .iter()
+            .filter_map(|e| match e {
+                Entry::Command(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, ["window.import_openfoam", "window.import_vtk"]);
+        let all = commands();
+        for id in &ids {
+            let c = all.iter().find(|c| c.id == *id).unwrap();
+            assert!(c.keys.is_empty(), "{id} has a default key");
+        }
+        for e in &file.entries {
+            if let Entry::Command(id) = e {
+                let c = all.iter().find(|c| c.id == *id).unwrap();
+                assert!(!english(&c.label_key).contains("OpenFOAM"), "{id}");
+            }
+        }
+        assert!(
+            !file
+                .entries
+                .iter()
+                .any(|e| matches!(e, Entry::Command("window.session_load"))),
+            "Open… loads sessions"
+        );
+        let mut map = murmel_engine::keys::KeyMap::new();
+        map.insert("window.open_folder".into(), vec!["Ctrl+Shift+O".into()]);
+        let c = crate::commands::with_keys(&map)
+            .into_iter()
+            .find(|c| c.id == "window.import_openfoam")
+            .unwrap();
+        assert_eq!(c.keys, ["Ctrl+Shift+O"]);
     }
 
     /// Invariant: docs/menus.md is what `murmel menus --markdown` prints.

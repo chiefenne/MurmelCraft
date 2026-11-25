@@ -51,6 +51,7 @@ macro_rules! pages {
 
 pages!(
     "open",
+    "import",
     "sessions",
     "export",
     "print",

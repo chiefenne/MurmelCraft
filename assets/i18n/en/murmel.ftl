@@ -5,13 +5,25 @@ app-name = MurmelCraft
 app-no-file = No mesh open
 
 toolbar-open = Open
-toolbar-open-tip = Open a mesh or a session ({ $key-window-open }; an OpenFOAM case folder: { $key-window-open_folder })
-open-filter-meshes = Meshes, results and sessions (.vtu, .vtkhdf, .foam, .murmel)
-open-filter-session = MurmelCraft session (.murmel)
-open-filter-vtu = VTK unstructured grid (.vtu)
-open-filter-vtkhdf = FoehnCraft result (.vtkhdf)
-open-filter-foam = OpenFOAM case (.foam)
-open-filter-all = All files (a file of a polyMesh folder)
+toolbar-open-tip = Open a KoflCraft mesh, a FoehnCraft result or a MurmelCraft session ({ $key-window-open }); other tools' files: File, Import
+# File ▸ Open lists only the files of our three tools; others are greyed out.
+open-filter-ours = MurmelCraft, KoflCraft and FoehnCraft files (.murmel, .vtu, .vtkhdf)
+open-filter-session = MurmelCraft sessions (.murmel)
+open-filter-meshes = KoflCraft meshes and FoehnCraft results (.vtu, .vtkhdf)
+open-filter-vtkhdf = FoehnCraft results (.vtkhdf, .hdf, .h5)
+# File ▸ Import: the formats of other tools.
+import-openfoam-title = Import an OpenFOAM polyMesh (a case, constant or polyMesh folder)
+import-vtk-title = Import a VTK file
+import-filter-vtk = VTK files (.vtu, .vtkhdf, .hdf, .h5)
+# Where an open file comes from: the title bar, Open recent, the status bar.
+origin-koflcraft = KoflCraft
+origin-foehncraft = FoehnCraft
+origin-murmelcraft = MurmelCraft
+origin-openfoam = OpenFOAM
+origin-vtk = VTK
+origin-session = Session
+origin-imported = { $origin }, imported
+status-imported = Imported { $file } ({ $origin })
 toolbar-group-view = View
 toolbar-fit = Fit
 toolbar-fit-tip = Fit the mesh in the view ({ $key-view-fit })
@@ -441,7 +453,7 @@ overview-regions-tip = A box, sphere or slab region reads the cells of the block
 overview-preview-note = Slices, iso-surfaces and arrows show on a preview grid of { $nx } × { $ny } × { $nz } cells, each with the values of the cell at its centre, until a region reads the cells.
 overview-open-whole-tip = Opens the whole mesh, which needs more memory than the budget.
 
-viewport-empty = Open a KoflCraft mesh (foehncraft.vtu) with Open or { $key-window-open }, or drop it here.
+viewport-empty = Open a KoflCraft mesh, a FoehnCraft result or a MurmelCraft session with Open or { $key-window-open }, or drop it here.
 viewport-description = { $view }, { $cells } cells, { $faces } boundary faces, colour by { $colour }
 viewport-view-custom = Custom view
 menu-fit = Fit
@@ -670,8 +682,9 @@ group-display = Display
 group-selection = Selection
 group-clip = Clip
 group-settings = Settings
-cmd-open = Open mesh…
-cmd-open-folder = Open OpenFOAM case folder…
+cmd-open = Open…
+cmd-import-openfoam = OpenFOAM polyMesh…
+cmd-import-vtk = VTK file…
 cmd-close = Close mesh
 cmd-screenshot = Save a screenshot…
 cmd-export-image = Export image…
@@ -1527,6 +1540,7 @@ menu-tools = Tools
 menu-window = Window
 menu-help = Help
 menu-export = Export
+menu-import = Import
 menu-standard-views = Standard views
 menu-projection = Projection
 menu-render-mode = Render mode
@@ -1599,7 +1613,9 @@ recent-missing = { $name } (missing)
 
 # Help pages (assets/help/en/<page>.md): the name and one-line tip of each.
 help-open-title = Open a mesh
-help-open-line = Open a KoflCraft mesh, a FoehnCraft result or an OpenFOAM case.
+help-open-line = Open a KoflCraft mesh, a FoehnCraft result or a MurmelCraft session.
+help-import-title = Import from other tools
+help-import-line = Bring in an OpenFOAM polyMesh or a VTK file written by another tool.
 help-sessions-title = Sessions
 help-sessions-line = Save what you set up on a mesh, and load it again.
 help-export-title = Pictures and movies

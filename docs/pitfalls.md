@@ -417,3 +417,7 @@ problem took more than a few minutes to understand.
 - **A label in a window test may name a menu too.** The menu bar adds
   buttons named File, Edit, View…; the Properties panel has a "File" row.
   Find a menu by role and name (`Role::Button`), not by `get_by_label`.
+
+- **The window's fonts (Inter, Lucide) have no `▸`.** Text the window draws
+  (Fluent strings, a help page's rich tip above `<!-- more -->`) writes a
+  menu path as "File, Import"; a missing glyph panics in the window tests.
