@@ -7,14 +7,39 @@
 //! tip too.
 
 use egui::{Id, Response, RichText, Ui};
-use murmel_engine::help::{Page, page_for};
+use murmel_engine::help::{Page, Span, page_for, spans};
 
 use crate::app::MurmelApp;
 use crate::commands::key_text;
 use crate::style::color;
 
-/// Where the last tip drawn is noted: its title and whether it was rich.
+/// Where the last tip drawn is noted (a [`Shown`]).
 pub(crate) const SHOWN: &str = "murmel-tip-shown";
+/// Where a tip's "More in the manual" leaves the page to open.
+pub(crate) const OPEN: &str = "murmel-tip-open";
+
+/// The last tip drawn: F1 opens its page, and the window tests read it
+/// (a tooltip is not in the AccessKit tree).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Shown {
+    pub title: String,
+    pub rich: bool,
+    pub page: Option<&'static str>,
+    pub time: f64,
+}
+
+/// The page of the tip shown in the last moment, if any.
+pub(crate) fn tip_page(ctx: &egui::Context) -> Option<&'static str> {
+    let now = ctx.input(|i| i.time);
+    ctx.data(|d| d.get_temp::<Shown>(Id::unique(SHOWN)))
+        .filter(|s| now - s.time < 0.3)
+        .and_then(|s| s.page)
+}
+
+/// Take the page a tip's link asked for.
+pub(crate) fn take_open(ctx: &egui::Context) -> Option<&'static str> {
+    ctx.data_mut(|d| d.remove_temp::<&'static str>(Id::unique(OPEN)))
+}
 
 /// The widget a tip was first wanted for, and since when.
 #[derive(Clone, Copy, PartialEq)]
@@ -175,10 +200,14 @@ impl MurmelApp {
         }
         let draw = |ui: &mut Ui| {
             self.tip_contents(ui, t, rich);
-            // What was shown last, for the window tests (a tooltip is not
-            // in the AccessKit tree).
+            let shown = Shown {
+                title: t.title.clone(),
+                rich,
+                page: t.page.map(|p| p.name),
+                time: now,
+            };
             ui.ctx()
-                .data_mut(|d| d.insert_temp(Id::unique(SHOWN), (t.title.clone(), rich)));
+                .data_mut(|d| d.insert_temp(Id::unique(SHOWN), shown));
         };
         if resp.hovered() {
             resp.on_hover_ui(draw)
@@ -222,7 +251,7 @@ impl MurmelApp {
             return;
         }
         ui.separator();
-        markdown(ui, &page.tip);
+        markdown(ui, &page.tip, false);
         if !page.related.is_empty() {
             let names: Vec<String> = page
                 .related
@@ -240,11 +269,19 @@ impl MurmelApp {
                 .color(secondary),
             );
         }
+        if ui.link(self.i18n.tr("help-f1")).clicked() {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(Id::unique(OPEN), page.name));
+        }
     }
 }
 
-/// A little Markdown: paragraphs, `- ` bullets, `**bold**` and `` `code` ``.
-pub(crate) fn markdown(ui: &mut Ui, text: &str) {
+/// A little Markdown: `## ` headings, paragraphs, `- ` bullets and the
+/// spans of [`murmel_engine::help::spans`]. With `links`, a link is
+/// clickable and the clicked one's target is returned; else it reads as
+/// its text.
+pub(crate) fn markdown(ui: &mut Ui, text: &str, links: bool) -> Option<String> {
+    let mut hit = None;
     for block in text.split("\n\n") {
         let block = block.trim();
         if block.is_empty() {
@@ -265,21 +302,23 @@ pub(crate) fn markdown(ui: &mut Ui, text: &str) {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.label("•  ");
-                    inline(ui, &l[2..]);
+                    hit = inline(ui, &l[2..], links).or(hit.take());
                 });
             }
         } else {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                inline(ui, &block.replace('\n', " "));
+                hit = inline(ui, &block.replace('\n', " "), links).or(hit.take());
             });
         }
         ui.add_space(2.0);
     }
+    hit
 }
 
-/// One line of text with `**bold**` and `` `code` `` spans.
-fn inline(ui: &mut Ui, text: &str) {
+/// One line of text with its bold, code and link spans.
+fn inline(ui: &mut Ui, text: &str, links: bool) -> Option<String> {
+    let mut hit = None;
     for span in spans(text) {
         let r = match span {
             Span::Plain(s) => RichText::new(s),
@@ -287,73 +326,17 @@ fn inline(ui: &mut Ui, text: &str) {
                 RichText::new(s).family(egui::FontFamily::Name(crate::style::SEMIBOLD.into()))
             }
             Span::Code(s) => RichText::new(s).monospace(),
+            Span::Link { text, target } => {
+                if links && ui.link(text).clicked() {
+                    hit = Some(target.to_string());
+                }
+                if links {
+                    continue;
+                }
+                RichText::new(text)
+            }
         };
         ui.label(r);
     }
-}
-
-#[derive(Debug, PartialEq)]
-enum Span<'a> {
-    Plain(&'a str),
-    Bold(&'a str),
-    Code(&'a str),
-}
-
-/// Split a line at `**` and `` ` `` marks; an unclosed mark is plain text.
-fn spans(text: &str) -> Vec<Span<'_>> {
-    let mut out = Vec::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        let bold = rest.find("**");
-        let code = rest.find('`');
-        let (at, mark) = match (bold, code) {
-            (Some(b), Some(c)) if c < b => (c, "`"),
-            (Some(b), _) => (b, "**"),
-            (None, Some(c)) => (c, "`"),
-            (None, None) => {
-                out.push(Span::Plain(rest));
-                break;
-            }
-        };
-        let after = &rest[at + mark.len()..];
-        let Some(end) = after.find(mark) else {
-            out.push(Span::Plain(rest));
-            break;
-        };
-        if at > 0 {
-            out.push(Span::Plain(&rest[..at]));
-        }
-        let inner = &after[..end];
-        out.push(if mark == "`" {
-            Span::Code(inner)
-        } else {
-            Span::Bold(inner)
-        });
-        rest = &after[end + mark.len()..];
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Invariant: bold and code spans are found and an unclosed mark stays
-    /// as typed. Breaks if a tip showed stars or lost the text after a
-    /// stray mark. Nothing else reads the help pages' inline marks.
-    #[test]
-    fn spans_split_bold_and_code() {
-        assert_eq!(
-            spans("a **b** c `d` e"),
-            vec![
-                Span::Plain("a "),
-                Span::Bold("b"),
-                Span::Plain(" c "),
-                Span::Code("d"),
-                Span::Plain(" e"),
-            ]
-        );
-        assert_eq!(spans("2 ** 3"), vec![Span::Plain("2 ** 3")]);
-        assert_eq!(spans("`x`"), vec![Span::Code("x")]);
-    }
+    hit
 }

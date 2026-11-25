@@ -19,11 +19,13 @@ pub enum Region {
     /// run's tables are open.
     Charts,
     Properties,
+    /// The Help panel (the manual), right of the properties while open.
+    Help,
     Status,
 }
 
 impl Region {
-    pub const ORDER: [Region; 8] = [
+    pub const ORDER: [Region; 9] = [
         Region::Title,
         Region::Toolbar,
         Region::Tree,
@@ -31,6 +33,7 @@ impl Region {
         Region::Player,
         Region::Charts,
         Region::Properties,
+        Region::Help,
         Region::Status,
     ];
 
@@ -44,6 +47,7 @@ impl Region {
             Region::Player => "region-player",
             Region::Charts => "region-charts",
             Region::Properties => "region-properties",
+            Region::Help => "region-help",
             Region::Status => "region-status",
         }
     }
@@ -73,8 +77,8 @@ pub struct Focus {
     /// The viewport canvas, which keeps the arrow keys for orbiting.
     pub viewport: Option<Id>,
     /// The regions as drawn last frame, and as drawn this frame.
-    shown: [Seen; 8],
-    drawing: [Seen; 8],
+    shown: [Seen; 9],
+    drawing: [Seen; 9],
 }
 
 impl Focus {
@@ -246,6 +250,7 @@ mod tests {
                 Seen::default(),
                 Seen::default(),
                 seen(r, 5),
+                Seen::default(),
                 seen(r, 6),
             ],
             ..Focus::default()

@@ -223,7 +223,8 @@ in the command palette (Ctrl + K) and keeps its keys ([keys.md](keys.md)). On ma
 
 ## Help
 
-- Keyboard shortcuts `F1`
+- Manual `F1`
+- Keyboard shortcuts `Ctrl + Slash`
 - Tool reference (online)
 - Connect an agent (MCP, online)
 - Report an issue (online)

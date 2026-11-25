@@ -28,6 +28,17 @@ use serde::Deserialize;
 /// The marker between a page's rich tip and the rest of it.
 pub const MORE: &str = "<!-- more -->";
 
+/// The manual's chapters in order; a page names one in its header, and
+/// its name is `help-chapter-<id>` in the Fluent file.
+pub const CHAPTERS: &[&str] = &[
+    "getting-started",
+    "navigation",
+    "display",
+    "results",
+    "measure",
+    "export",
+];
+
 /// The pages, by file name (without `.md`), built in.
 macro_rules! pages {
     ($($name:literal),* $(,)?) => {
@@ -177,13 +188,95 @@ pub fn page_for(id: &str) -> Option<&'static Page> {
         .map(|(_, p)| p)
 }
 
+/// The manual: every chapter with its pages, in the order of
+/// [`CHAPTERS`] and of the files.
+pub fn manual() -> Vec<(&'static str, Vec<&'static Page>)> {
+    CHAPTERS
+        .iter()
+        .map(|c| (*c, pages().iter().filter(|p| p.chapter == *c).collect()))
+        .collect()
+}
+
+/// A piece of a line of a page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Span<'a> {
+    Plain(&'a str),
+    /// `**bold**`
+    Bold(&'a str),
+    /// `` `code` ``
+    Code(&'a str),
+    /// `[text](target)`: another page by its file name, or a web address.
+    Link {
+        text: &'a str,
+        target: &'a str,
+    },
+}
+
+/// Split a line at `**`, `` ` `` and `[…](…)` marks; an unclosed mark is
+/// plain text.
+pub fn spans(text: &str) -> Vec<Span<'_>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let next = ["**", "`", "["]
+            .into_iter()
+            .filter_map(|m| rest.find(m).map(|at| (at, m)))
+            .min_by_key(|(at, _)| *at);
+        let Some((at, mark)) = next else {
+            out.push(Span::Plain(rest));
+            break;
+        };
+        let after = &rest[at + mark.len()..];
+        let found = if mark == "[" {
+            after.split_once("](").and_then(|(text, more)| {
+                let (target, tail) = more.split_once(')')?;
+                (!text.contains(']')).then_some((Span::Link { text, target }, tail))
+            })
+        } else {
+            after.find(mark).map(|end| {
+                let inner = &after[..end];
+                let span = if mark == "`" {
+                    Span::Code(inner)
+                } else {
+                    Span::Bold(inner)
+                };
+                (span, &after[end + mark.len()..])
+            })
+        };
+        match found {
+            Some((span, tail)) => {
+                if at > 0 {
+                    out.push(Span::Plain(&rest[..at]));
+                }
+                out.push(span);
+                rest = tail;
+            }
+            // Unclosed: plain up to and with the mark, then go on.
+            None => {
+                out.push(Span::Plain(&rest[..at + mark.len()]));
+                rest = after;
+            }
+        }
+    }
+    out
+}
+
+/// Whether every word of `query` occurs in the page's name, text or
+/// `extra` (its translated title and line), case ignored.
+pub fn matches(page: &Page, query: &str, extra: &str) -> bool {
+    let hay = format!("{} {} {}", page.name, page.text, extra).to_lowercase();
+    query
+        .split_whitespace()
+        .all(|w| hay.contains(&w.to_lowercase()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Invariant: every page in assets/help/en is built in, reads, names
-    /// a chapter, covers at least one id, has a rich tip, and its related
-    /// pages exist. Breaks when a page is added to the folder but not to
+    /// a chapter of the manual, covers at least one id, has a rich tip,
+    /// and its related pages and links exist. Breaks when a page is added to the folder but not to
     /// `pages!` (it would never show), or its header is mistyped (it
     /// would be left out without a word). The tools test checks that
     /// every command has a page.
@@ -208,6 +301,21 @@ mod tests {
             assert!(!p.chapter.is_empty(), "{n} has no chapter");
             for r in &p.related {
                 assert!(page(r).is_some(), "{n}: related {r} is no page");
+            }
+            assert!(
+                CHAPTERS.contains(&p.chapter.as_str()),
+                "{n}: no chapter {}",
+                p.chapter
+            );
+            for line in p.text.lines() {
+                for s in spans(line) {
+                    if let Span::Link { target, .. } = s {
+                        assert!(
+                            target.starts_with("https://") || page(target).is_some(),
+                            "{n}: link to {target}, which is no page"
+                        );
+                    }
+                }
             }
         }
         assert_eq!(pages().len(), FILES.len());
@@ -234,5 +342,54 @@ mod tests {
         assert!(narrow.score(id) > wide.score(id));
         assert_eq!(p(&["view.fit"]).score("view.fit"), Some(usize::MAX));
         assert_eq!(p(&["view.fit"]).score("view.fit:selection"), None);
+    }
+
+    /// Invariant: bold, code and links are found and an unclosed mark
+    /// stays as typed. Breaks if a tip showed stars, lost the text after
+    /// a stray mark, or a link in the manual did not lead anywhere.
+    #[test]
+    fn spans_split_bold_code_and_links() {
+        assert_eq!(
+            spans("a **b** c `d` e [f](clip) g"),
+            vec![
+                Span::Plain("a "),
+                Span::Bold("b"),
+                Span::Plain(" c "),
+                Span::Code("d"),
+                Span::Plain(" e "),
+                Span::Link {
+                    text: "f",
+                    target: "clip"
+                },
+                Span::Plain(" g"),
+            ]
+        );
+        assert_eq!(spans("2 ** 3").concat_plain(), "2 ** 3");
+        assert_eq!(spans("`x`"), vec![Span::Code("x")]);
+        assert_eq!(spans("a [b] c").concat_plain(), "a [b] c");
+    }
+
+    trait Plain {
+        fn concat_plain(&self) -> String;
+    }
+    impl Plain for Vec<Span<'_>> {
+        fn concat_plain(&self) -> String {
+            self.iter()
+                .map(|s| match s {
+                    Span::Plain(t) => *t,
+                    _ => panic!("not plain: {s:?}"),
+                })
+                .collect()
+        }
+    }
+
+    /// Invariant: the manual holds every page once, in chapter order.
+    /// Breaks if a page named a chapter the manual leaves out (it could
+    /// only be found by search).
+    #[test]
+    fn manual_holds_every_page() {
+        let n: usize = manual().iter().map(|(_, p)| p.len()).sum();
+        assert_eq!(n, pages().len());
+        assert_eq!(manual()[0].0, "getting-started");
     }
 }

@@ -2801,13 +2801,15 @@ fn tips_grow_with_rest_and_shift() {
     // The tip drawn in the last frame: its title and whether it is rich.
     let shown = |h: &mut Harness<'_, MurmelApp>| {
         let slot = egui::Id::unique(crate::tips::SHOWN);
-        h.ctx.data_mut(|d| d.remove_temp::<(String, bool)>(slot));
+        h.ctx
+            .data_mut(|d| d.remove_temp::<crate::tips::Shown>(slot));
         h.step();
         h.ctx
-            .data(|d| d.get_temp::<(String, bool)>(slot))
-            .map(|(t, r)| {
-                assert_eq!(t, "Fit view");
-                r
+            .data(|d| d.get_temp::<crate::tips::Shown>(slot))
+            .map(|s| {
+                assert_eq!(s.title, "Fit view");
+                assert_eq!(s.page, Some("fit-zoom"));
+                s.rich
             })
     };
     let hover_fit = |h: &mut Harness<'_, MurmelApp>| {
@@ -2830,4 +2832,57 @@ fn tips_grow_with_rest_and_shift() {
     h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
     assert_eq!(shown(&mut h), Some(true), "Shift shows more");
     assert_eq!(problems(&h), Vec::<String>::new());
+}
+
+/// Invariant: F1 on a tip opens its page in the Help panel, F1 with no
+/// tip opens the contents or closes the panel, a page's links and Back
+/// walk the manual, search finds pages by their words, and a page's
+/// commands run from it. Breaks if F1 still opened the shortcut sheet,
+/// the panel lost its way back, or a page could not be reached.
+#[test]
+fn f1_enters_the_manual() {
+    let mut h = harness();
+    let page = |h: &Harness<'_, MurmelApp>| h.state().help_view.as_ref().map(|v| v.page);
+    h.key_press(egui::Key::F1);
+    h.run_steps(2);
+    assert_eq!(page(&h), Some(None), "F1: the contents");
+    assert!(named(&h, "Help"), "the pane has a name");
+    assert_eq!(problems(&h), Vec::<String>::new(), "the contents");
+    h.get_by(|n| n.role() == Role::Link && n.label().as_deref() == Some("Clip planes"))
+        .click_accesskit();
+    h.run_steps(2);
+    assert_eq!(page(&h), Some(Some("clip")));
+    assert_eq!(problems(&h), Vec::<String>::new(), "a page");
+    // Its commands run from the page.
+    let on = |h: &Harness<'_, MurmelApp>| h.state().session.display.clip().is_some();
+    assert!(!on(&h));
+    h.get_by(|n| {
+        n.role() == Role::Button
+            && n.label().is_some_and(|l| l.starts_with("Clip normal to X"))
+            && pane_of(n).as_deref() == Some("Help")
+    })
+    .click_accesskit();
+    h.run_steps(2);
+    assert!(on(&h), "the page's command ran");
+    h.get_by_label("Back").click_accesskit();
+    h.run_steps(2);
+    assert_eq!(page(&h), Some(None), "Back: the contents");
+    h.get_by_label("Search the manual")
+        .type_text("streamline seed");
+    h.run_steps(2);
+    assert!(
+        h.query_by(|n| n.role() == Role::Link && n.label().as_deref() == Some("Streamlines"))
+            .is_some()
+    );
+    h.key_press(egui::Key::F1);
+    h.run_steps(2);
+    assert_eq!(page(&h), None, "F1 again closes it");
+    // F1 on a tip: its page.
+    let fit = h.state().i18n.tr("toolbar-fit");
+    h.get_by(move |n| n.role() == Role::Button && n.label().as_deref() == Some(&fit))
+        .hover();
+    h.run_steps(3);
+    h.key_press(egui::Key::F1);
+    h.run_steps(2);
+    assert_eq!(page(&h), Some(Some("fit-zoom")), "F1 on the Fit tip");
 }

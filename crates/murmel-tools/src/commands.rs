@@ -271,7 +271,7 @@ pub fn commands() -> Vec<Command> {
             "window.shortcuts",
             "cmd-shortcuts",
             "window",
-            &["F1"],
+            &["Ctrl+Slash"],
             Window(None),
         ),
         cmd("window.tree", "cmd-tree", "window", &["T"], Window(None)),
@@ -1735,7 +1735,15 @@ pub fn commands() -> Vec<Command> {
         &[],
         Tool("settings.reset_default", json!({})),
     ));
-    // Help: pages of the repository opened in the browser, and About.
+    // Help: the manual in its panel, pages of the repository opened in
+    // the browser, and About.
+    v.push(cmd(
+        "window.manual",
+        "cmd-manual",
+        "help",
+        &["F1"],
+        Window(None),
+    ));
     for id in [
         "window.help_tools",
         "window.help_agents",

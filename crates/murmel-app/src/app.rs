@@ -52,6 +52,8 @@ pub struct MurmelApp {
     pub(crate) history_open: bool,
     /// Help ▸ About is open.
     pub(crate) about_open: bool,
+    /// The Help panel (the manual) while it is open.
+    pub(crate) help_view: Option<crate::help_panel::HelpView>,
     /// The 250 ms flight to a new view: the camera it started from and
     /// when (UI spec, View cube).
     pub(crate) flight: Option<(murmel_engine::Camera, f64)>,
@@ -233,6 +235,7 @@ impl MurmelApp {
             shortcuts_open: false,
             history_open: false,
             about_open: false,
+            help_view: None,
             flight: None,
             played_at: None,
             ahead: None,
@@ -1489,6 +1492,25 @@ impl eframe::App for MurmelApp {
                 .show(ui, |ui| {
                     self.region(ui, Region::Tree);
                     self.model_tree(ui)
+                });
+        }
+        if let Some(page) = crate::tips::take_open(&ctx) {
+            self.open_help(Some(page));
+        }
+        if self.help_view.is_some() {
+            egui::Panel::right("help")
+                .default_size(380.0)
+                .size_range(280.0..=640.0)
+                .resizable(true)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(color(p.bg_panel))
+                        .inner_margin(egui::Margin::symmetric(12, 6))
+                        .stroke(egui::Stroke::new(1.0, color(p.line))),
+                )
+                .show(ui, |ui| {
+                    self.region(ui, Region::Help);
+                    self.help_panel(ui)
                 });
         }
         if self.show_props {

@@ -20,7 +20,8 @@ checked. The rules for new widgets are in [AGENTS.md](../AGENTS.md).
   control; in the viewport it clears the selection.
 - **Enter and Space** press the focused button.
 - Every command has a key or a palette entry (Ctrl + K); the shortcut
-  sheet (F1) and [keys.md](keys.md) list them. The view cube's views are
+  sheet (Ctrl + /) and [keys.md](keys.md) list them. F1 opens the manual
+  in the Help panel, at the page of the tip showing. The view cube's views are
   also on keys (Alt + 1, 3, 7) and in the palette.
 
 ## Focus ring

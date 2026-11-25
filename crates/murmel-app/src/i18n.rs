@@ -66,6 +66,7 @@ mod tests {
             include_str!("probe_history.rs"),
             include_str!("menus.rs"),
             include_str!("tips.rs"),
+            include_str!("help_panel.rs"),
         ];
         for s in src {
             for part in s
@@ -83,6 +84,9 @@ mod tests {
         for p in ["orthographic", "perspective", "perspective_ortho_faces"] {
             assert!(t.has(&format!("projection-{p}")));
             assert!(t.has(&format!("projection-short-{p}")));
+        }
+        for c in murmel_engine::help::CHAPTERS {
+            assert!(t.has(&format!("help-chapter-{c}")), "missing chapter {c}");
         }
         // The name and the one-line tip of every help page.
         for p in murmel_engine::help::pages() {
