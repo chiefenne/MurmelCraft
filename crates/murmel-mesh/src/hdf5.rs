@@ -177,6 +177,8 @@ pub struct H5 {
     holes: Mutex<Vec<usize>>,
     /// The bytes read first, and at least at each hole.
     page: usize,
+    /// The bytes of data read from the file (outside `parts`).
+    data_read: std::sync::atomic::AtomicU64,
 }
 
 /// A run of the file's bytes from position `at`.
@@ -751,6 +753,7 @@ impl H5 {
             root,
             holes: Mutex::new(Vec::new()),
             page: PAGE,
+            data_read: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -1007,11 +1010,20 @@ impl H5 {
             .zip(crate::par::split_mut(&mut bytes, &cuts))
             .collect();
         for read in crate::par::each(pieces, |(r, piece)| {
+            self.data_read
+                .fetch_add(piece.len() as u64, std::sync::atomic::Ordering::Relaxed);
             read_exact_at(f, piece, (start + r.start) as u64)
         }) {
             read.map_err(cannot_read)?;
         }
         Ok(Cow::Owned(bytes))
+    }
+
+    /// The bytes read from the file so far: its structure and the data
+    /// read since (all of it for [`H5::from_bytes`]).
+    pub fn bytes_read(&self) -> u64 {
+        let held: usize = self.parts.iter().map(|p| p.bytes.len()).sum();
+        held as u64 + self.data_read.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn root(&self) -> Result<Object, MeshError> {

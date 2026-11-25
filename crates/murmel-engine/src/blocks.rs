@@ -12,12 +12,11 @@
 //! values at the border are the whole mesh's, and it is never drawn
 //! ([`crate::region::ensure_on`]).
 
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use murmel_mesh::profile::{self, Progress};
-use murmel_mesh::vtkhdf::{Overview, Subset};
+use murmel_mesh::vtkhdf::{BlockFile, Overview, Subset};
 use murmel_mesh::{Evidence, Mesh, MeshError};
 
 use crate::field::FieldSet;
@@ -139,16 +138,16 @@ pub struct Read {
     pub subset: Subset,
 }
 
-/// Read `blocks` of the blocked VTKHDF file at `path` with their halo: the
+/// Read `blocks` of the blocked VTKHDF `file` with their halo: the
 /// evidence's patch roles applied, the fields coloured over the volume's
 /// `ranges`.
 pub fn read(
-    path: &Path,
+    file: &BlockFile,
     blocks: &[usize],
     evidence: Option<&Evidence>,
     ranges: Vec<(String, (f64, f64))>,
 ) -> Result<Read, MeshError> {
-    let (mut mesh, results, subset) = murmel_mesh::vtkhdf::read_blocks(path, blocks, true)?;
+    let (mut mesh, results, subset) = file.read(blocks, true)?;
     if let Some(e) = evidence {
         mesh.apply_evidence_roles(e);
     }
@@ -177,9 +176,9 @@ pub struct BlockJob {
 }
 
 impl BlockJob {
-    /// Start reading `blocks` of the file at `path` (see [`read`]).
+    /// Start reading `blocks` of `file` (see [`read`]).
     pub fn start(
-        path: PathBuf,
+        file: Arc<BlockFile>,
         blocks: Vec<usize>,
         cells: u64,
         evidence: Option<Evidence>,
@@ -190,7 +189,7 @@ impl BlockJob {
         let (out, watched, which) = (done.clone(), progress.clone(), blocks.clone());
         std::thread::spawn(move || {
             let r = profile::watch(watched, || {
-                let r = read(&path, &which, evidence.as_ref(), ranges)?;
+                let r = read(&file, &which, evidence.as_ref(), ranges)?;
                 profile::check()?;
                 Ok(r)
             });

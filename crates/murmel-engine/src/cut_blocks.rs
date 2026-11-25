@@ -3,7 +3,8 @@
 //! slices and iso-surfaces"). An overview holds no volume cells, so a
 //! slice or an iso-surface shows on its preview grid at once
 //! ([`crate::preview`]); its exact faces are then cut through the blocks
-//! of the file, one block at a time, and take the grid's place.
+//! of the file, one block at a time, and take the grid's place. The
+//! next blocks are read on a thread of their own while one is cut.
 //!
 //! - **Which blocks.** A slice cuts the blocks whose box ([`BlockBounds`]
 //!   of the file) one of its planes crosses. An iso-surface cuts the
@@ -478,43 +479,75 @@ pub(crate) fn cut(src: &Source, todo: &[Want], kept: &[Arc<Kept>], done: &Atomic
     let keep = keep_for(src);
     let mut used: Vec<Arc<Kept>> = Vec::new();
     let mut problem = None;
-    for &b in &blocks {
-        if let Err(e) = profile::check() {
-            problem = Some(MeshError::new(e.code, STOPPED));
-            break;
-        }
-        let block = match crate::probe_blocks::load(src, b, kept) {
-            Ok(x) => x,
-            Err(e) if e.code == "MESH019" => {
+    let order: Vec<usize> = blocks.iter().copied().collect();
+    let watched = profile::watched();
+    std::thread::scope(|scope| {
+        // The next blocks are read on a thread of their own while this
+        // one cuts (one waiting, one being read), so a file over the
+        // network is read while the CPU cuts.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, Result<Arc<Kept>, MeshError>)>(1);
+        scope.spawn(move || {
+            let read = || {
+                for &b in &order {
+                    if profile::check().is_err() {
+                        return;
+                    }
+                    let block = crate::probe_blocks::load(src, b, kept);
+                    let failed = block.is_err();
+                    if tx.send((b, block)).is_err() || failed {
+                        return;
+                    }
+                }
+            };
+            match watched {
+                Some(p) => profile::watch(p, read),
+                None => read(),
+            }
+        });
+        for (b, block) in rx.iter() {
+            if let Err(e) = profile::check() {
                 problem = Some(MeshError::new(e.code, STOPPED));
                 break;
             }
-            Err(e) => {
-                problem = Some(e);
+            let block = match block {
+                Ok(x) => x,
+                Err(e) if e.code == "MESH019" => {
+                    problem = Some(MeshError::new(e.code, STOPPED));
+                    break;
+                }
+                Err(e) => {
+                    problem = Some(e);
+                    break;
+                }
+            };
+            let _c = profile::span("read.cut.faces");
+            for (i, w) in todo.iter().enumerate() {
+                if plans[i].binary_search(&b).is_ok() {
+                    cut_block(&mut faces[i], &block, &w.key.look, &w.tokens);
+                }
+            }
+            used.push(block);
+            let over = used.len().saturating_sub(keep);
+            used.drain(..over);
+            done.fetch_add(1, Ordering::Relaxed);
+            let taken: u64 = faces.iter().map(bytes).sum();
+            if taken > limit {
+                problem = Some(MeshError::new(
+                    "BLOCK006",
+                    format!(
+                        "the exact faces of the slices and iso-surfaces would take more than a quarter of the memory budget ({:.1} GB)",
+                        src.budget as f64 / 1e9
+                    ),
+                ));
                 break;
             }
-        };
-        let _c = profile::span("read.cut.faces");
-        for (i, w) in todo.iter().enumerate() {
-            if plans[i].binary_search(&b).is_ok() {
-                cut_block(&mut faces[i], &block, &w.key.look, &w.tokens);
-            }
         }
-        used.push(block);
-        let over = used.len().saturating_sub(keep);
-        used.drain(..over);
-        done.fetch_add(1, Ordering::Relaxed);
-        let taken: u64 = faces.iter().map(bytes).sum();
-        if taken > limit {
-            problem = Some(MeshError::new(
-                "BLOCK006",
-                format!(
-                    "the exact faces of the slices and iso-surfaces would take more than a quarter of the memory budget ({:.1} GB)",
-                    src.budget as f64 / 1e9
-                ),
-            ));
-            break;
-        }
+        // A cut that ended early stops the reading after its block.
+        drop(rx);
+    });
+    // Stopped before the reading ended: as the loop above saw it.
+    if problem.is_none() && profile::check().is_err() {
+        problem = Some(MeshError::new("MESH019", STOPPED));
     }
     let cuts = todo
         .iter()

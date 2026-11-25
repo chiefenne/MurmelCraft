@@ -158,6 +158,8 @@ pub fn values(open: &OpenMesh, cell: &FoundCell, at: &Anchor) -> Vec<FieldValue>
 #[derive(Clone, Debug)]
 pub struct Source {
     pub path: PathBuf,
+    /// The file, read block by block ([`murmel_mesh::vtkhdf::BlockFile`]).
+    pub file: Arc<murmel_mesh::vtkhdf::BlockFile>,
     pub overview: Arc<Overview>,
     pub evidence: Option<Evidence>,
     /// The fields made on the mesh shown, in order.
@@ -269,7 +271,7 @@ pub(crate) fn load(src: &Source, k: usize, kept: &[Arc<Kept>]) -> Result<Arc<Kep
     let o = &*src.overview;
     crate::blocks::fits(o, &[k], src.budget)?;
     let ranges = crate::blocks::volume_ranges(o);
-    let r = crate::blocks::read(&src.path, &[k], src.evidence.as_ref(), ranges)?;
+    let r = crate::blocks::read(&src.file, &[k], src.evidence.as_ref(), ranges)?;
     let base = Arc::new(r.fields);
     Ok(Arc::new(Kept {
         block: k,
@@ -409,6 +411,7 @@ impl ProbeJob {
 pub(crate) fn source(open: &OpenMesh, budget: u64) -> Option<Source> {
     Some(Source {
         path: open.path.clone(),
+        file: open.file(),
         overview: open.overview.clone()?,
         evidence: open.evidence.clone(),
         made: open.fields.made().to_vec(),

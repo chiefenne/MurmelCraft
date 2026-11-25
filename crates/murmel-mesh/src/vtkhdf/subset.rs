@@ -15,21 +15,31 @@
 //! joined by their ids shard by shard ([`join_blocks`]), and each block's
 //! cells are read on a thread of its own (its windows share the threads
 //! left over); the blocks are then put together in order.
+//!
+//! A [`BlockFile`] reads block after block of one file: its structure is
+//! read once, and the owner cell of every patch face once, so each read
+//! takes from the patches only the rows of the faces its cells own. Read
+//! whole, the patches of a 100 M cell file are about 550 MB, a block's
+//! own rows about 20 MB (docs/performance.md, "Slices of the 100 M cell
+//! file over the network").
 
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use super::cells::{self, PointMap, Set};
-use super::overview::{CELL_RESERVED, POINT_RESERVED, field_sets, index_of, not_blocked, rows_at};
+use super::overview::{
+    CELL_RESERVED, NEAR, POINT_RESERVED, field_sets, index_of, not_blocked, rows_at,
+};
 use super::{
-    Builder, GridSets, Parts, as_fields, bad, blocks_of, count, dataset_of, ints, names_of,
-    read_patches, text_attrs,
+    Builder, GridSets, Parts, as_fields, attr_text, bad, blocks_of, components, count, dataset_of,
+    ints, names_of, read_patches, text_attrs,
 };
 use crate::fasthash::FastMap;
 use crate::field::{Location, Results};
-use crate::hdf5::{H5, Object, Values};
+use crate::hdf5::{Dataset, Dtype, H5, Object, Values};
 use crate::{Mesh, MeshError, par};
 
 /// What [`read_blocks`] read besides the mesh.
@@ -50,29 +60,290 @@ pub struct Subset {
 
 /// Read blocks `blocks` of the blocked VTKHDF file at `path`, with the
 /// halo of their ghost cells when `halo` is set. BLOCK004 for a file
-/// without a block index, BLOCK005 for a block it does not have.
+/// without a block index, BLOCK005 for a block it does not have. A
+/// caller reading several times from one file keeps a [`BlockFile`].
 pub fn read_blocks(
     path: &Path,
     blocks: &[usize],
     halo: bool,
 ) -> Result<(Mesh, Results, Subset), MeshError> {
-    if !path.is_file() {
-        return Err(MeshError::new(
-            "MESH001",
-            format!("{} is not a readable file", path.display()),
-        ));
+    BlockFile::new(path).read(blocks, halo)
+}
+
+/// A blocked VTKHDF file read block by block (see the module notes): the
+/// file opened once, and the owner of each patch face read the first
+/// time a block is. Shared between threads; reads may run at once.
+#[derive(Debug)]
+pub struct BlockFile {
+    path: PathBuf,
+    opened: Mutex<Option<Arc<Opened>>>,
+}
+
+/// A [`BlockFile`] opened: the file with its structure read, and the
+/// owners of the patch faces once read.
+struct Opened {
+    h: H5,
+    owners: Mutex<Option<Arc<Owners>>>,
+}
+
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Opened")
     }
-    let io = crate::profile::span("read.file");
-    let h = H5::open(path)?;
-    drop(io);
-    let t = crate::profile::span("read.blocks");
-    let read = subset_parts(&h, blocks, halo);
-    drop(t);
-    drop(h);
-    let (parts, subset) = read?;
-    let (mut mesh, results) = parts.finish()?;
-    mesh.files = vec![path.to_path_buf()];
-    Ok((mesh, results, subset))
+}
+
+/// The file cell owning each face of each patch, in patch order; `None`
+/// for a patch read whole instead (more than one partition, no
+/// `GlobalPointIds` or no `OwnerCell`, so the read fails as it did).
+type Owners = Vec<Option<Vec<i64>>>;
+
+impl BlockFile {
+    /// The file at `path`, opened on the first read.
+    pub fn new(path: &Path) -> BlockFile {
+        BlockFile {
+            path: path.to_path_buf(),
+            opened: Mutex::new(None),
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// As [`read_blocks`].
+    pub fn read(&self, blocks: &[usize], halo: bool) -> Result<(Mesh, Results, Subset), MeshError> {
+        if !self.path.is_file() {
+            return Err(MeshError::new(
+                "MESH001",
+                format!("{} is not a readable file", self.path.display()),
+            ));
+        }
+        let o = self.opened()?;
+        let t = crate::profile::span("read.blocks");
+        let read = subset_parts(&o.h, blocks, halo, Some(&o));
+        drop(t);
+        let (parts, subset) = read?;
+        let (mut mesh, results) = parts.finish()?;
+        mesh.files = vec![self.path.clone()];
+        Ok((mesh, results, subset))
+    }
+
+    /// The bytes read from the file so far (structure, owners and blocks).
+    pub fn bytes_read(&self) -> u64 {
+        let o = self.opened.lock().unwrap_or_else(PoisonError::into_inner);
+        o.as_ref().map_or(0, |o| o.h.bytes_read())
+    }
+
+    /// The file opened, its structure read: the first time, else as it
+    /// was (a failed open is tried again next time).
+    fn opened(&self) -> Result<Arc<Opened>, MeshError> {
+        let mut o = self.opened.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(o) = o.as_ref() {
+            return Ok(o.clone());
+        }
+        let io = crate::profile::span("read.file");
+        let h = H5::open(&self.path)?;
+        drop(io);
+        let opened = Arc::new(Opened {
+            h,
+            owners: Mutex::new(None),
+        });
+        *o = Some(opened.clone());
+        Ok(opened)
+    }
+}
+
+impl Opened {
+    /// The owners of the faces of `patches`, read the first time.
+    fn owners(&self, patches: &[(String, Object)]) -> Result<Arc<Owners>, MeshError> {
+        let mut o = self.owners.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(o) = o.as_ref() {
+            return Ok(o.clone());
+        }
+        let _t = crate::profile::span("read.blocks.owners");
+        let h = &self.h;
+        let mut all = Vec::with_capacity(patches.len());
+        for (_, obj) in patches {
+            let one = |name: &str| ints(h, obj, name).is_ok_and(|v| v.len() == 1);
+            let by_rows = one("NumberOfPoints")
+                && h.child(obj, "Polygons")?
+                    .is_some_and(|p| ints(h, &p, "NumberOfCells").is_ok_and(|v| v.len() == 1))
+                && optional_dataset(h, obj, "PointData", "GlobalPointIds")?.is_some();
+            all.push(match by_rows {
+                true => super::optional_ints(h, obj, "CellData", "OwnerCell")?,
+                false => None,
+            });
+        }
+        let all = Arc::new(all);
+        *o = Some(all.clone());
+        Ok(all)
+    }
+}
+
+/// Patch `patch` (the next of `b`) with the faces at `rows` (ascending)
+/// of its `faces`, and its boundary fields at those rows: what
+/// [`read_patches`] keeps of it, read row by row. Its points are those of
+/// the volume, found by their `GlobalPointIds` (a blocked file's patch
+/// has one partition, § 7).
+fn patch_rows(
+    h: &H5,
+    b: &mut Builder,
+    (name, obj): &(String, Object),
+    roles: &BTreeMap<usize, String>,
+    faces: usize,
+    rows: &[u32],
+) -> Result<(usize, Vec<crate::Field>), MeshError> {
+    let p = b.mesh.patches.len() as u32;
+    let before = b.mesh.boundary.len();
+    if b.mesh.boundary.start.is_empty() {
+        b.mesh.boundary = crate::Polygons::new();
+    }
+    if let Some(polys) = h.child(obj, "Polygons")?
+        && !rows.is_empty()
+    {
+        let npart = ints(h, obj, "NumberOfPoints")?
+            .first()
+            .map_or(Ok(0), |&n| count(n, "points"))?;
+        // each face's offsets: its row and the next
+        let mut at: Vec<usize> = rows
+            .iter()
+            .flat_map(|&r| [r as usize, r as usize + 1])
+            .collect();
+        at.dedup();
+        let offs = ints_at(h, &dataset_of(h, &polys, "Offsets")?, &at)
+            .map_err(|_| bad("Polygons/Offsets is shorter than its cells"))?;
+        let off = |r: usize| at.binary_search(&r).ok().map(|i| offs[i]);
+        let mut spans = Vec::with_capacity(rows.len());
+        for &r in rows {
+            let span = off(r as usize)
+                .zip(off(r as usize + 1))
+                .and_then(|(s, e)| usize::try_from(s).ok().zip(usize::try_from(e).ok()))
+                .filter(|(s, e)| *e >= s + 3)
+                .ok_or_else(|| MeshError::new("MESH006", format!("polygon {r}: offsets")))?;
+            spans.push(span.0..span.1);
+        }
+        let mut ids: Vec<usize> = spans.iter().flat_map(Clone::clone).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let conn = ints_at(h, &dataset_of(h, &polys, "Connectivity")?, &ids)
+            .map_err(|_| bad("Polygons/Connectivity is shorter than its count"))?;
+        let local = |k: usize| ids.binary_search(&k).ok().map(|i| conn[i]);
+        // the patch's points the faces use, and their global ids
+        let mut pts: Vec<usize> = ids
+            .iter()
+            .filter_map(|&k| local(k))
+            .filter_map(|v| usize::try_from(v).ok().filter(|&v| v < npart))
+            .collect();
+        pts.sort_unstable();
+        pts.dedup();
+        let gp = optional_dataset(h, obj, "PointData", "GlobalPointIds")?
+            .ok_or_else(|| bad(format!("patch {p} has no PointData/GlobalPointIds")))?;
+        let gids = ints_at(h, &gp, &pts).map_err(|_| {
+            bad(format!(
+                "patch {p}: GlobalPointIds is shorter than its points"
+            ))
+        })?;
+        let map = b
+            .gids
+            .as_ref()
+            .ok_or_else(|| bad("the volume has no GlobalPointIds"))?;
+        for (&r, span) in rows.iter().zip(&spans) {
+            let face: Vec<u32> = span
+                .clone()
+                .map(|k| {
+                    local(k)
+                        .and_then(|v| usize::try_from(v).ok())
+                        .filter(|&v| v < npart)
+                        .and_then(|v| pts.binary_search(&v).ok())
+                        .and_then(|i| map.get(gids[i]))
+                        .ok_or_else(|| MeshError::new("MESH006", format!("polygon {r}: point")))
+                })
+                .collect::<Result<_, _>>()?;
+            b.mesh.boundary.push(face);
+            b.mesh.boundary_patch.push(p);
+        }
+    }
+    let role = match attr_text(h, obj, "role").or_else(|| roles.get(&(p as usize)).cloned()) {
+        Some(r) => crate::PatchRole::parse(&r),
+        None => crate::polymesh::patch_role(name, ""),
+    };
+    b.mesh.patches.push(crate::Patch {
+        name: name.clone(),
+        role,
+    });
+    Ok((before, fields_at(h, obj, faces, rows)?))
+}
+
+/// The boundary fields of a patch of `faces` faces at `rows`, as
+/// [`super::data_fields`] gives them with those rows kept.
+fn fields_at(
+    h: &H5,
+    obj: &Object,
+    faces: usize,
+    rows: &[u32],
+) -> Result<Vec<crate::Field>, MeshError> {
+    let Some(g) = h.child(obj, "CellData")? else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for link in h.links(&g)? {
+        if ["boundary", "OwnerCell"].contains(&link.name.as_str()) {
+            continue;
+        }
+        let Some(o) = h.child(&g, &link.name)? else {
+            continue;
+        };
+        if h.is_group(&o) {
+            continue;
+        }
+        let ds = h.dataset(&o)?;
+        if !matches!(ds.dtype, Dtype::Float { .. } | Dtype::Int { .. }) {
+            continue;
+        }
+        let Some(comps) = components(&ds, faces) else {
+            return Err(MeshError::new(
+                "MESH005",
+                format!(
+                    "CellData/{} has shape {:?} for {faces} {}s",
+                    link.name,
+                    ds.dims,
+                    Location::Boundary.name()
+                ),
+            ));
+        };
+        let values = rows_at(h, &ds, comps, rows)?;
+        out.extend(as_fields(&link.name, Location::Boundary, comps, values));
+    }
+    Ok(out)
+}
+
+/// The integers of the one-dimensional `ds` at `rows` (ascending, each
+/// once), read in windows of rows near each other.
+fn ints_at(h: &H5, ds: &Dataset, rows: &[usize]) -> Result<Vec<i64>, MeshError> {
+    let short = || bad("a dataset is shorter than its rows");
+    if !h.reads_rows(ds) {
+        let v = h.int_values(ds)?;
+        return rows
+            .iter()
+            .map(|&r| (r < v.len()).then(|| v.int(r)).ok_or_else(short))
+            .collect();
+    }
+    let mut out = Vec::with_capacity(rows.len());
+    let mut i = 0;
+    while i < rows.len() {
+        let mut j = i + 1;
+        while j < rows.len() && rows[j] - rows[j - 1] <= NEAR {
+            j += 1;
+        }
+        let (first, last) = (rows[i], rows[j - 1]);
+        let v = h.int_values_in(ds, first..last + 1)?;
+        if v.held().end <= last {
+            return Err(short());
+        }
+        out.extend(rows[i..j].iter().map(|&r| v.int(r)));
+        i = j;
+    }
+    Ok(out)
 }
 
 /// A block the file does not have, or none.
@@ -108,7 +379,12 @@ struct Plan {
     ghost_ids: Vec<i64>,
 }
 
-fn subset_parts(h: &H5, asked: &[usize], halo: bool) -> Result<(Parts, Subset), MeshError> {
+fn subset_parts(
+    h: &H5,
+    asked: &[usize],
+    halo: bool,
+    file: Option<&Opened>,
+) -> Result<(Parts, Subset), MeshError> {
     let (vtk, (volumes, patches)) = blocks_of(h)?;
     let ix = index_of(h, &volumes)?.ok_or_else(not_blocked)?;
     let nb = ix.owned.len();
@@ -219,9 +495,37 @@ fn subset_parts(h: &H5, asked: &[usize], halo: bool) -> Result<(Parts, Subset), 
         point_fields.extend(as_fields(&name, Location::Point, comps, values));
     }
 
-    // the faces of the patches whose owner cell was read
+    // the faces of the patches whose owner cell was read: by their rows
+    // when the owners are known, else from the patches read whole
     let read = |id: i64| usize::try_from(id).is_ok_and(|f| taken.has(f));
-    let boundary_fields = read_patches(h, &mut b, &patches, &roles, Some(&read))?;
+    let owners = match file {
+        Some(o) => Some(o.owners(&patches)?),
+        None => None,
+    };
+    let mut boundary_fields = Vec::with_capacity(patches.len());
+    for (i, patch) in patches.iter().enumerate() {
+        let by_rows = owners
+            .as_deref()
+            .and_then(|o| o.get(i))
+            .and_then(Option::as_ref)
+            .filter(|_| b.gids.is_some());
+        match by_rows {
+            Some(own) => {
+                let rows: Vec<u32> = (0..own.len())
+                    .filter(|&r| read(own[r]))
+                    .map(|r| r as u32)
+                    .collect();
+                boundary_fields.push(patch_rows(h, &mut b, patch, &roles, own.len(), &rows)?);
+            }
+            None => boundary_fields.extend(read_patches(
+                h,
+                &mut b,
+                std::slice::from_ref(patch),
+                &roles,
+                Some(&read),
+            )?),
+        }
+    }
     let (attrs, vtk_attrs) = text_attrs(h, &vtk)?;
     Ok((
         Parts {
@@ -710,6 +1014,62 @@ mod tests {
     /// partitions read apart join their points in another order, a cell
     /// row or field row shifts, or a patch face is lost; the whole read's
     /// tests never read a partition alone.
+    /// Keep rule: a block read of a [`BlockFile`] takes from the patches
+    /// only the rows of the faces its cells own, and reads what a read
+    /// of its own reads. Reading the patches whole for every block (as
+    /// before 2026-11-25) read 550 MB a block of the 100 M cell file and
+    /// made a slice over the network take 19 minutes; the parity tests
+    /// above pass either way, so only this test measures the bytes.
+    #[test]
+    fn a_block_reads_only_its_own_patch_rows() {
+        // a boundary far larger than a block, with a boundary field
+        let m = crate::synth::honeycomb(20);
+        let tau: Vec<f64> = (0..m.boundary.len()).map(|i| i as f64).collect();
+        let r = Results {
+            fields: vec![crate::Field {
+                name: "tau".into(),
+                unit: None,
+                location: Location::Boundary,
+                components: 1,
+                values: tau,
+            }],
+            ..Results::default()
+        };
+        let path = scratch("own-rows.vtkhdf");
+        write_blocked(&path, &m, &r, 64).unwrap();
+        let nb = (0..)
+            .find(|&k| read_blocks(&path, &[k], false).is_err())
+            .unwrap();
+        // the first block, at a corner of the curve, has faces on three
+        // patches
+        let k = 0;
+        // the patches read whole, as a read without the owners does
+        let whole = {
+            let h = H5::open(&path).unwrap();
+            let base = h.bytes_read();
+            subset_parts(&h, &[k], true, None).unwrap();
+            h.bytes_read() - base
+        };
+        let file = BlockFile::new(&path);
+        file.read(&[nb / 2], true).unwrap();
+        let base = file.bytes_read();
+        let (bm, br, bs) = file.read(&[k], true).unwrap();
+        let rows = file.bytes_read() - base;
+        // The block's own cells take about a third of what the whole
+        // read takes here; read whole, the patches take the rest.
+        assert!(
+            rows * 2 < whole,
+            "{rows} bytes by rows, {whole} with the patches whole"
+        );
+        let (om, or, os) = read_blocks(&path, &[k], true).unwrap();
+        assert!(!bm.boundary.is_empty());
+        assert_eq!(bm.boundary, om.boundary);
+        assert_eq!(bm.boundary_patch, om.boundary_patch);
+        assert_eq!(bm.patches, om.patches);
+        assert_eq!((bm.points, bm.cell_faces), (om.points, om.cell_faces));
+        assert_eq!((br, bs), (or, os));
+    }
+
     #[test]
     fn every_block_is_the_whole_read() {
         for (name, path) in files("all") {

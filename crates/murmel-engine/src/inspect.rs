@@ -1166,6 +1166,7 @@ mod tests {
             fields: Default::default(),
             built_for: Display::default(),
             overview: None,
+            block_file: None,
             blocks: None,
         };
         let d = Display::default();

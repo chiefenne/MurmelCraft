@@ -28,7 +28,7 @@ pub(super) const CELL_RESERVED: [&str; 4] =
 pub(super) const POINT_RESERVED: [&str; 2] = ["vtkGhostType", "GlobalPointIds"];
 
 /// Rows of a dataset this close to the row before are read with it.
-const NEAR: usize = 4096;
+pub(super) const NEAR: usize = 4096;
 
 /// What an overview knows of the volume without reading its cells.
 #[derive(Clone, Debug, PartialEq)]

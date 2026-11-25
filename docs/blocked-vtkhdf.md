@@ -234,7 +234,11 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   partition alone, its owned cells and, with the halo, its ghosts (§ 4)
   that no block read owns, with the patch faces their cells own. It
   needs `GlobalPointIds` (§ 3), and `GlobalCellIds` for the halo; a
-  block number the file does not have is BLOCK005.
+  block number the file does not have is BLOCK005. An overview reads
+  its blocks through one `vtkhdf::BlockFile`: the file opened once, the
+  `OwnerCell` of every patch face read once, and each block's patch
+  faces read by their rows (with their `GlobalPointIds` and boundary
+  fields), instead of every patch whole for every block.
 - `vtkhdf::read_preview` reads the preview grid of the overview: each
   cell field of the volume on a regular grid of about 128 cells along
   the longest side of the blocks' box, a grid cell showing the cell its

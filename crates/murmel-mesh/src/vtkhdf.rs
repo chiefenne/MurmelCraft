@@ -42,7 +42,7 @@ pub use overview::{
     Block, OPEN_BYTES_PER_CELL, Overview, Size, VolumeField, read_overview, size_of,
 };
 pub use preview::{PREVIEW_CELLS, PREVIEW_VERSION, PreviewGrid, read_preview};
-pub use subset::{Subset, read_blocks};
+pub use subset::{BlockFile, Subset, read_blocks};
 
 /// No mesh point yet for a global point id.
 const NO_POINT: u32 = u32::MAX;
