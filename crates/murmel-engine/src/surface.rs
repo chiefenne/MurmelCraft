@@ -41,8 +41,47 @@ const GROUP_SECTION: u32 = u32::MAX - 2;
 /// Triangles per pick box ([`Surface::tri_boxes`]).
 pub const PICK_RUN: usize = 128;
 
+/// Which build a surface's own faces come from: a new key each time
+/// [`Surface::build_with`] builds them, kept when only the slices,
+/// iso-surfaces, arrows, streamlines, parcels and block boxes are built
+/// again ([`Surface::rebuild_extras`]), so a renderer uploads only those.
+/// It names a build, not what was built, so it never makes two surfaces
+/// differ.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BuildKey(pub u64);
+
+impl PartialEq for BuildKey {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl BuildKey {
+    fn next() -> BuildKey {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        BuildKey(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+/// Where the slices, iso-surfaces, arrows, streamline tubes, parcels and
+/// block boxes start in a surface's buffers (everything before is the
+/// mesh's own), and what the mesh's own faces gave of the bounds and the
+/// field range before them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ExtrasAt {
+    pub vertices: usize,
+    pub indices: usize,
+    pub edges: usize,
+    visible_bounds: Option<Bounds>,
+    field_range: Option<(f64, f64)>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Surface {
+    /// The build of the mesh's own faces ([`BuildKey`]).
+    pub key: BuildKey,
+    /// Where the extras start ([`ExtrasAt`]).
+    pub extras_at: ExtrasAt,
     pub origin: [f64; 3],
     pub radius: f64,
     pub bounds: Option<Bounds>,
@@ -936,22 +975,17 @@ impl Surface {
         drop(phase);
         s.visible_bounds = (!vb.is_empty()).then_some(vb);
         s.field_range = drawn.range();
+        s.key = BuildKey::next();
+        s.extras_at = ExtrasAt {
+            vertices: s.positions.len(),
+            indices: s.indices.len(),
+            edges: s.edge_positions.len(),
+            visible_bounds: s.visible_bounds,
+            field_range: s.field_range,
+        };
         let _phase = murmel_mesh::profile::span("surface.extras");
         if extras {
-            // An overview has no cells: what cuts through the volume draws
-            // on its preview grid.
-            match fields
-                .and_then(FieldSet::preview)
-                .filter(|_| mesh.cell_count() == 0)
-            {
-                Some(p) => crate::preview::append(&mut s, p, tokens, display),
-                None => {
-                    crate::extract::append(&mut s, mesh, fields, tokens, display, &shown);
-                    crate::stream::append(&mut s, mesh, fields, tokens, display);
-                }
-            }
-            crate::parcel::append(&mut s, mesh, tokens, display);
-            crate::block_boxes::append(&mut s, tokens, display);
+            s.append_extras(mesh, fields, tokens, display, &shown);
         }
         s.outline_color = sel.linear();
         for (a, b) in outline(mesh, display) {
@@ -965,6 +999,128 @@ impl Surface {
         s.tri_boxes = tri_boxes(&s.positions, &s.indices);
         s
     }
+
+    /// The slices, iso-surfaces, arrows, streamlines, parcels and block
+    /// boxes of `display`, appended.
+    fn append_extras(
+        &mut self,
+        mesh: &Mesh,
+        fields: Option<&FieldSet>,
+        tokens: &Tokens,
+        display: &Display,
+        shown: &[bool],
+    ) {
+        // An overview has no cells: what cuts through the volume draws
+        // on its preview grid.
+        match fields
+            .and_then(FieldSet::preview)
+            .filter(|_| mesh.cell_count() == 0)
+        {
+            Some(p) => crate::preview::append(self, p, tokens, display),
+            None => {
+                crate::extract::append(self, mesh, fields, tokens, display, shown);
+                crate::stream::append(self, mesh, fields, tokens, display);
+            }
+        }
+        crate::parcel::append(self, mesh, tokens, display);
+        crate::block_boxes::append(self, tokens, display);
+    }
+
+    /// Build the extras (slices, iso-surfaces, arrows, streamlines,
+    /// parcels, block boxes) of `display` again, keeping the mesh's own
+    /// faces: the same surface, bit for bit, as [`Surface::build_with`]
+    /// of `display`, when it differs from the display this surface was
+    /// built for only where [`extras_only`] allows. The key stays, so a
+    /// renderer uploads only the extras.
+    pub fn rebuild_extras(
+        &mut self,
+        mesh: &Mesh,
+        fields: Option<&FieldSet>,
+        tokens: &Tokens,
+        display: &Display,
+    ) {
+        let at = self.extras_at;
+        self.positions.truncate(at.vertices);
+        self.normals.truncate(at.vertices);
+        self.colors.truncate(at.vertices);
+        self.values.truncate(at.vertices);
+        self.indices.truncate(at.indices);
+        self.tri_cell.truncate(at.indices / 3);
+        self.tri_face.truncate(at.indices / 3);
+        self.edge_positions.truncate(at.edges);
+        self.edge_colors.truncate(at.edges);
+        self.stream_positions.clear();
+        self.stream_colors.clear();
+        self.visible_bounds = at.visible_bounds;
+        self.field_range = at.field_range;
+        self.arrows = 0;
+        self.arrows_capped = false;
+        self.arrow_longest = 0.0;
+        self.arrow_range = None;
+        self.block_boxes = 0;
+        self.parcels = 0;
+        self.parcels_capped = false;
+        self.parcel_range = None;
+        let _phase = murmel_mesh::profile::span("surface.extras");
+        if display.extracts_shown() || display.arrows_shown() {
+            let shown = display.shown_cells(mesh);
+            self.append_extras(mesh, fields, tokens, display, &shown);
+        }
+        drop(_phase);
+        let _phase = murmel_mesh::profile::span("surface.boxes");
+        // The pick boxes of the runs from the first the extras touch.
+        let first = at.indices / 3 / PICK_RUN;
+        self.tri_boxes.truncate(first);
+        let from = first * PICK_RUN * 3;
+        let rest = tri_boxes(&self.positions, &self.indices[from..]);
+        self.tri_boxes.extend(rest);
+    }
+}
+
+/// Whether a surface built for display `old` becomes the surface of
+/// `new` by building its extras again ([`Surface::rebuild_extras`]): the
+/// two differ only in their slices, iso-surfaces, arrows, streamlines,
+/// parcels and block boxes (and in which of those are selected), and
+/// whether the mesh is drawn as its outline, with faces, or without its
+/// triangles is the same.
+pub fn extras_only(old: &Display, new: &Display) -> bool {
+    let extra = |i: &Item| {
+        matches!(
+            i,
+            Item::Slice(_)
+                | Item::Iso(_)
+                | Item::Arrows
+                | Item::Stream(_)
+                | Item::Parcels
+                | Item::Blocks
+        )
+    };
+    let mesh_items =
+        |d: &Display| -> Vec<Item> { d.selection.iter().copied().filter(|i| !extra(i)).collect() };
+    let any = |d: &Display| d.extracts_shown() || d.arrows_shown();
+    if any(old) != any(new)
+        || old.outline_mesh() != new.outline_mesh()
+        || old.mesh_faces() != new.mesh_faces()
+        || mesh_items(old) != mesh_items(new)
+    {
+        return false;
+    }
+    let mut d = Display {
+        slices: new.slices.clone(),
+        isos: new.isos.clone(),
+        arrows: new.arrows.clone(),
+        streams: new.streams.clone(),
+        stream_traces: new.stream_traces.clone(),
+        parcels: new.parcels.clone(),
+        parcel_data: new.parcel_data.clone(),
+        show_blocks: new.show_blocks,
+        block_boxes: new.block_boxes.clone(),
+        selection: new.selection.clone(),
+        ..old.clone()
+    };
+    // The pick target follows a click on a slice and changes nothing drawn.
+    d.pick = new.pick;
+    crate::session::same_display(&d, new)
 }
 
 /// The box of each run of [`PICK_RUN`] triangles, runs split over the
