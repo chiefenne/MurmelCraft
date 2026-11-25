@@ -121,7 +121,8 @@ impl MurmelApp {
                     ("menu-isolate", "display.visibility:isolate"),
                     ("menu-fit-selection", "view.fit:selection"),
                 ] {
-                    if ui.button(self.i18n.tr(key)).clicked() {
+                    let b = egui::Button::new(self.i18n.tr(key)).shortcut_text(self.key_of(cmd));
+                    if ui.add(b).clicked() {
                         if let Some(c) = self.commands.iter().find(|c| c.id == cmd).cloned() {
                             let ctx = ui.ctx().clone();
                             self.run_command(&ctx, &c);

@@ -84,6 +84,71 @@ pub struct Binding {
     pub mods: Mods,
 }
 
+impl Action {
+    pub const ALL: [Action; 8] = [
+        Action::Orbit,
+        Action::Pan,
+        Action::Zoom,
+        Action::Roll,
+        Action::ZoomBox,
+        Action::Pick,
+        Action::ContextMenu,
+        Action::Fit,
+    ];
+
+    /// The name in navigation.toml and of the translation `action-<key>`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Action::Orbit => "orbit",
+            Action::Pan => "pan",
+            Action::Zoom => "zoom",
+            Action::Roll => "roll",
+            Action::Pick => "pick",
+            Action::ContextMenu => "context_menu",
+            Action::Fit => "fit",
+            Action::ZoomBox => "zoom_box",
+        }
+    }
+}
+
+impl Button {
+    pub const ALL: [Button; 3] = [Button::Primary, Button::Secondary, Button::Middle];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Button::Primary => "primary",
+            Button::Secondary => "secondary",
+            Button::Middle => "middle",
+        }
+    }
+}
+
+impl Gesture {
+    pub const ALL: [Gesture; 5] = [
+        Gesture::Drag,
+        Gesture::Click,
+        Gesture::DoubleClick,
+        Gesture::Scroll,
+        Gesture::Pinch,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Gesture::Drag => "drag",
+            Gesture::Click => "click",
+            Gesture::DoubleClick => "double_click",
+            Gesture::Scroll => "scroll",
+            Gesture::Pinch => "pinch",
+        }
+    }
+
+    /// Whether the gesture is made with a mouse button (the wheel and a
+    /// pinch are not).
+    pub fn has_button(self) -> bool {
+        !matches!(self, Gesture::Scroll | Gesture::Pinch)
+    }
+}
+
 const fn b(action: Action, gesture: Gesture, button: Option<Button>, mods: Mods) -> Binding {
     Binding {
         action,
@@ -324,6 +389,23 @@ mod tests {
                 assert!(n.of(a).next().is_some(), "{name} lacks {a:?}");
             }
         }
+    }
+
+    /// Invariant: the names the editor translates are the names of
+    /// navigation.toml, and the lists hold every value. Breaks if a new
+    /// action is left out of ALL (the editor could not choose it).
+    #[test]
+    fn names_match_the_file() {
+        for a in Action::ALL {
+            assert_eq!(serde_json::to_value(a).unwrap(), a.key());
+        }
+        for b in Button::ALL {
+            assert_eq!(serde_json::to_value(b).unwrap(), b.key());
+        }
+        for g in Gesture::ALL {
+            assert_eq!(serde_json::to_value(g).unwrap(), g.key());
+        }
+        assert_eq!(Action::ALL.len(), 8);
     }
 
     /// Invariant: navigation.toml round-trips, and a file of another

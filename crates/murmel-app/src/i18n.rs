@@ -7,6 +7,36 @@ pub use murmel_engine::i18n::{I18n, count, modifier_names};
 mod tests {
     use super::*;
 
+    /// Invariant: every `{ $key-<command> }` of the English file names a
+    /// command of the table, and the window gives such a string the keys
+    /// you set. Breaks if a command is renamed and a tip keeps the old
+    /// name (it would show the raw variable), or the keys stop reaching
+    /// the strings after a change. No other test formats key variables.
+    #[test]
+    fn key_variables_name_commands() {
+        const FTL: &str = include_str!("../../../assets/i18n/en/murmel.ftl");
+        let all = murmel_tools::commands::commands();
+        let vars: Vec<String> = all
+            .iter()
+            .map(|c| murmel_engine::i18n::key_variable(&c.id))
+            .collect();
+        let mut seen = 0;
+        for part in FTL.split("{ $key-").skip(1) {
+            let name = format!("key-{}", part.split(' ').next().unwrap_or(""));
+            assert!(vars.contains(&name), "{name} names no command");
+            seen += 1;
+        }
+        assert!(seen > 20, "{seen}");
+        let mut t = I18n::english().unwrap();
+        t.set_keys(all.iter().map(|c| (c.id.clone(), c.keys.join(", "))));
+        assert_eq!(t.tr("toolbar-fit-tip"), "Fit the mesh in the view (F)");
+        t.set_keys([("view.fit".to_string(), "Shift + F".to_string())]);
+        assert_eq!(
+            t.tr("toolbar-fit-tip"),
+            "Fit the mesh in the view (Shift + F)"
+        );
+    }
+
     /// Invariant: every key the window uses and every tool's label key is
     /// in the English file (the window would show a raw key otherwise).
     #[test]
@@ -31,6 +61,9 @@ mod tests {
             include_str!("stream_handle.rs"),
             include_str!("derived.rs"),
             include_str!("defaults.rs"),
+            include_str!("shortcuts.rs"),
+            include_str!("measure.rs"),
+            include_str!("probe_history.rs"),
         ];
         for s in src {
             for part in s
@@ -62,6 +95,28 @@ mod tests {
         }
         for p in murmel_engine::navigation::PRESETS {
             assert!(t.has(&format!("preset-{p}")));
+        }
+        {
+            use murmel_engine::navigation::{Action, Button, Gesture};
+            for a in Action::ALL {
+                assert!(t.has(&format!("action-{}", a.key())));
+            }
+            for b in Button::ALL {
+                assert!(t.has(&format!("button-{}", b.key())));
+            }
+            for g in Gesture::ALL {
+                assert!(t.has(&format!("gesture-{}", g.key())));
+            }
+            for why in [
+                "quit",
+                "hide",
+                "minimise",
+                "spotlight",
+                "preferences",
+                "screenshot",
+            ] {
+                assert!(t.has(&format!("keys-os-{why}")));
+            }
         }
         for c in murmel_engine::ColorBy::ALL {
             assert!(t.has(&format!("color-by-{}", c.key())));

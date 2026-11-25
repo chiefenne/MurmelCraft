@@ -89,6 +89,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `settings.reset_default` | 1 | write-files | Forget your defaults: one value (kind and key), every value of a kind (kind), or all (no input), so new items start from the built-in values again. Items already open keep theirs. Writes settings.toml in the config folder. |
 | `settings.keep_formula` | 1 | write-files | Keep a formula among your formulas (name, formula, unit; as field.calculate takes them), offered for every result: the Derived fields window lists them and field.calculate computes one by its name alone. A formula of the same name is replaced. The formula is checked for its grammar, not for the fields it names (a result without them refuses it when computed). Writes settings.toml in the config folder. |
 | `settings.forget_formula` | 1 | write-files | Forget one of your formulas, by name. A field already computed from it stays. Writes settings.toml in the config folder. |
+| `settings.set_keys` | 1 | write-files | Set the keyboard shortcuts of a command (command id as `murmel keys` lists them, keys like Ctrl+Shift+S, W or Alt+7, all of them, [] for none), put one command back to its built-in keys (command and reset), or all (reset alone). A key another command has is refused (SET004) unless replace is true, which moves it. Writes the commands that differ from the built-in keys to [keys] in settings.toml. |
 | `settings.set_bindings` | 1 | write-files | Choose a navigation preset (three_button, apple, fusion, paraview) or a custom binding table and write navigation.toml in the config folder. |
 | `session.save` | 1 | write-files | Write the session to a .murmel file (JSON, format murmelcraft.session): the mesh (path relative to the file and absolute, its digest as `blake3`, or `sha256` when its evidence recorded SHA-256), the camera, the colour and render mode, the quality metric and threshold, the pick target, the hidden, isolated and selected items and item colours by id, the clip plane, the saved views, the field shown and each field's style, the mesh colours and the view cube placement. |
 | `session.load` | 1 | read | Load a .murmel session file: open its mesh unless that mesh is already open (tried relative to the file first, then at its absolute path), then restore the camera, the display, the selection and the clip plane; the mesh colours and the view cube placement apply to this session and are not written to settings.toml. A mesh changed since the save (SESS003) or items it no longer has (SESS004) give warnings. A new journal starts. |
@@ -2983,6 +2984,33 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `settings.set_keys`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "string"
+    },
+    "keys": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "replace": {
+      "type": "boolean"
+    },
+    "reset": {
+      "type": "boolean"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `settings.set_bindings`
 
 ```json
@@ -3705,6 +3733,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `SET001` | error | A settings file could not be written, or no config folder is known. | Set MURMEL_CONFIG_DIR to a writable folder. |
 | `SET002` | error | The navigation bindings bind one input to two actions. | Give each gesture, button and modifier combination one action. |
 | `SET003` | error | A value cannot be a default: its kind has no such value, it does not fit, or it belongs to one mesh or field. | settings.get lists the values each kind can keep as a default (defaultable). |
+| `SET004` | error | A keyboard shortcut is taken by another command, or is Tab, which moves the keyboard focus. | Pass replace: true to move the key, or choose another; settings.get lists your keys. |
 | `EXPORT001` | error | An export setting is out of range (scale, line width, dpi). | Use a scale of 0.25 to 8, a line width of 1 to 32 pixels and a dpi of 1 to 10000; a movie 1 to 60 frames a second and at most 36000 frames, an MP4 without transparency. |
 | `EXPORT002` | error | An MP4 needs ffmpeg, and none was found (MURMEL_FFMPEG, PATH, /opt/homebrew/bin, /usr/local/bin). | Install ffmpeg (macOS: brew install ffmpeg), set MURMEL_FFMPEG to its path, or write a GIF or PNG frames. |
 | `EXPORT003` | error | ffmpeg could not be started or failed while writing the MP4; the message ends with what it said. | Check the path and the free space; try another ffmpeg with MURMEL_FFMPEG. |

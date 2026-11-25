@@ -379,7 +379,15 @@ impl MurmelApp {
                         ("display.color_by", json!({"by": "zone"})),
                     )
                 })) {
-                    if ui.button(self.i18n.tr(key)).clicked() {
+                    let keys = if key == "tree-isolate" {
+                        self.key_of("display.visibility:isolate")
+                    } else {
+                        String::new()
+                    };
+                    if ui
+                        .add(egui::Button::new(self.i18n.tr(key)).shortcut_text(keys))
+                        .clicked()
+                    {
                         action = Some(call);
                         ui.close();
                     }

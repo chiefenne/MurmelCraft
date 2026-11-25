@@ -28,6 +28,7 @@ pub mod history;
 pub mod i18n;
 pub mod inspect;
 pub mod journal;
+pub mod keys;
 pub mod legend;
 pub mod measure;
 pub mod memory;

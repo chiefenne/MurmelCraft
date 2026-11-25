@@ -2640,3 +2640,87 @@ fn zoom_box_by_key_and_drag() {
     h.run_steps(2);
     assert!(!h.state().zoom_armed, "Esc cancels");
 }
+
+/// Invariant (configurable shortcuts, the maintainer's cards of
+/// 2026-11-25): in the shortcut editor a key is recorded by pressing it,
+/// saved to [keys] in settings.toml and runs its command at once; a key
+/// another command has stops at a warning naming it, and only Replace
+/// moves it; a mouse input another binding has stops at a warning too,
+/// and Cancel leaves the bindings as they were; the editor has no
+/// unnamed controls. Breaks if recording lets the key run a command,
+/// the window keeps the old table after a change, or a clash is applied
+/// without asking; the tool test checks the tool, not the window.
+#[test]
+fn shortcut_editor_records_and_warns() {
+    let dir = std::env::temp_dir().join(format!("murmel-app-keys-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = harness();
+    h.state_mut().session.config_dir = Some(dir.clone());
+    h.state_mut().open_bindings(crate::shortcuts::Tab::Keys);
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "keys tab");
+    // Record Shift + F for Fit view (a free key).
+    h.get_by_label("Add a key to Fit view").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::F);
+    h.run_steps(3);
+    assert_eq!(h.state().keys_of("view.fit"), ["F", "Shift+F"]);
+    let (st, _, _) = murmel_engine::settings::load(&dir, false);
+    assert_eq!(st.keys.get("view.fit").unwrap(), &["F", "Shift+F"]);
+    // The new key fits the view at once (the editor stays open).
+    h.state_mut()
+        .call("view.zoom", serde_json::json!({"factor": 0.3}));
+    h.run_steps(2);
+    let d = h.state().session.camera.distance;
+    h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::F);
+    h.run_steps(30);
+    assert!(
+        h.state().session.camera.distance > 2.0 * d,
+        "Shift + F fits"
+    );
+    // W is Zoom to box: a warning, nothing moves until Replace. (The
+    // pointer leaves the row first: the tooltip of the new key's button
+    // would cover Add key.)
+    h.input_mut()
+        .events
+        .push(egui::Event::PointerMoved(egui::pos2(1430.0, 890.0)));
+    h.run_steps(3);
+    h.get_by_label("Add a key to Fit view").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::W);
+    h.run_steps(3);
+    assert!(!h.state().zoom_armed, "a recorded key runs nothing");
+    let clash = h.state().bindings.as_ref().unwrap().clash.clone().unwrap();
+    assert_eq!(
+        (clash.key.as_str(), clash.others.clone()),
+        ("W", vec!["Zoom to box (rubber band)".to_string()])
+    );
+    assert_eq!(h.state().keys_of("window.zoom_box"), ["W"]);
+    h.get_by_label("Replace").click();
+    h.run_steps(3);
+    assert_eq!(h.state().keys_of("view.fit"), ["F", "Shift+F", "W"]);
+    assert!(h.state().keys_of("window.zoom_box").is_empty());
+    // Reset all puts the built-in keys back.
+    h.get_by_label("Reset all keys").click();
+    h.run_steps(3);
+    assert_eq!(h.state().keys_of("window.zoom_box"), ["W"]);
+    assert!(h.state().session.keys.is_empty());
+    // Mouse: give the second binding the first one's input; Cancel.
+    h.state_mut().open_bindings(crate::shortcuts::Tab::Mouse);
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "mouse tab");
+    let before = h.state().session.navigation.clone();
+    let mut draft = before.bindings.clone();
+    draft[1].gesture = draft[0].gesture;
+    draft[1].button = draft[0].button;
+    draft[1].mods = draft[0].mods;
+    h.state_mut().apply_mouse_for_test(draft, 1);
+    h.run_steps(3);
+    assert!(h.state().bindings.as_ref().unwrap().mouse_clash.is_some());
+    assert_eq!(h.state().session.navigation, before, "nothing applied yet");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().bindings.as_ref().unwrap().mouse_clash.is_none());
+    assert_eq!(h.state().session.navigation, before);
+    let _ = std::fs::remove_dir_all(dir);
+}

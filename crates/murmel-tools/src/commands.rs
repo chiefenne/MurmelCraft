@@ -8,6 +8,7 @@
 //! The table is data, so the window, the shortcut sheet, `docs/keys.md`
 //! and the tests all read the same keys.
 
+use murmel_engine::keys::KeyMap;
 use murmel_engine::{
     ColorBy, FieldMode, Item, Metric, Projection, Quality, RenderMode, Session, StandardView,
 };
@@ -36,9 +37,11 @@ pub struct Command {
     pub label_key: String,
     /// Palette group (translation key `group-<group>`).
     pub group: &'static str,
-    /// Keys, like `Ctrl+K`, `Alt+1`, `Shift+Left` or `F1`. `Ctrl` is the
-    /// Command key on macOS. Empty for palette-only commands.
-    pub keys: Vec<&'static str>,
+    /// Keys, like `Ctrl+K`, `Alt+1`, `Shift+Left` or `F1`, in the form
+    /// of [`murmel_engine::keys::canonical`]. `Ctrl` is the Command key
+    /// on macOS. Empty for palette-only commands. [`with_keys`] puts
+    /// your keys here.
+    pub keys: Vec<String>,
     pub run: Run,
 }
 
@@ -174,7 +177,7 @@ fn cmd(
         id: id.into(),
         label_key: label_key.into(),
         group,
-        keys: keys.to_vec(),
+        keys: keys.iter().map(|k| k.to_string()).collect(),
         run,
     }
 }
@@ -295,6 +298,15 @@ pub fn commands() -> Vec<Command> {
             "window",
             &[],
             Window(None),
+        ),
+        // The shortcut editor: keys (settings.set_keys) and mouse bindings
+        // (settings.set_bindings) in one window.
+        cmd(
+            "window.edit_shortcuts",
+            "cmd-edit-shortcuts",
+            "settings",
+            &[],
+            Window(Some("settings.set_keys")),
         ),
         cmd(
             "view.fit",
@@ -1806,6 +1818,75 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
     ),
 ];
 
+/// The command table with your keys (`[keys]` in settings.toml) laid
+/// over the built-in ones; ids that are no command are left out (they
+/// are reported by [`key_problems`]).
+pub fn with_keys(map: &KeyMap) -> Vec<Command> {
+    let mut all = commands();
+    for c in &mut all {
+        if let Some(k) = map.get(&c.id) {
+            c.keys = k.clone();
+        }
+    }
+    all
+}
+
+/// The commands other than `except` that `key` (canonical) runs now.
+pub fn holders<'a>(all: &'a [Command], key: &str, except: &str) -> Vec<&'a Command> {
+    all.iter()
+        .filter(|c| c.id != except && c.keys.iter().any(|k| k == key))
+        .collect()
+}
+
+/// Every key that runs more than one command, with their ids (a clash
+/// only a hand-edited settings.toml can make; the window and
+/// `settings.set_keys` refuse one).
+pub fn clashes(all: &[Command]) -> Vec<(String, Vec<String>)> {
+    let mut by: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
+    for c in all {
+        for k in &c.keys {
+            by.entry(k.as_str()).or_default().push(c.id.clone());
+        }
+    }
+    by.into_iter()
+        .filter(|(_, ids)| ids.len() > 1)
+        .map(|(k, ids)| (k.to_string(), ids))
+        .collect()
+}
+
+/// What is wrong with a `[keys]` table, one line each, for the warning
+/// at start: ids that are no command, keys that are not keys (or not in
+/// their one form, or reserved), and keys that run two commands.
+pub fn key_problems(map: &KeyMap) -> Vec<String> {
+    let all = with_keys(map);
+    let mut out = Vec::new();
+    for (id, keys) in map {
+        if !all.iter().any(|c| &c.id == id) {
+            out.push(format!("settings.toml [keys]: {id} is no command"));
+            continue;
+        }
+        for k in keys {
+            match murmel_engine::keys::canonical(k) {
+                Err(e) => out.push(format!("settings.toml [keys] {id}: {e}")),
+                Ok(c) if c != *k => out.push(format!(
+                    "settings.toml [keys] {id}: write {k:?} as {c:?}"
+                )),
+                Ok(c) if murmel_engine::keys::reserved(&c) => out.push(format!(
+                    "settings.toml [keys] {id}: {c} moves the keyboard focus and cannot run a command"
+                )),
+                Ok(_) => {}
+            }
+        }
+    }
+    for (k, ids) in clashes(&all) {
+        out.push(format!(
+            "settings.toml [keys]: {k} runs {}; only the first acts",
+            ids.join(" and ")
+        ));
+    }
+    out
+}
+
 /// Normalise a key for comparison: modifiers in a fixed order.
 pub fn normalise(key: &str) -> String {
     let mut parts: Vec<&str> = key.split('+').collect();
@@ -1929,12 +2010,41 @@ mod tests {
         keys.dedup();
         assert_eq!(keys.len(), n, "a key is bound twice");
         let key_of = |id: &str| all.iter().find(|c| c.id == id).map(|c| c.keys.clone());
-        assert_eq!(key_of("window.palette"), Some(vec!["Ctrl+K"]));
-        assert_eq!(key_of("view.fit"), Some(vec!["F"]));
-        assert_eq!(key_of("view.projection:next"), Some(vec!["5"]));
-        assert_eq!(key_of("view.standard:front"), Some(vec!["Alt+1"]));
-        assert_eq!(key_of("view.standard:bottom"), Some(vec!["Ctrl+Alt+7"]));
-        assert_eq!(key_of("display.render_mode:feature_edges"), Some(vec!["4"]));
+        assert_eq!(key_of("window.palette"), Some(vec!["Ctrl+K".to_string()]));
+        assert_eq!(key_of("view.fit"), Some(vec!["F".to_string()]));
+        assert_eq!(key_of("view.projection:next"), Some(vec!["5".to_string()]));
+        assert_eq!(
+            key_of("view.standard:front"),
+            Some(vec!["Alt+1".to_string()])
+        );
+        assert_eq!(
+            key_of("view.standard:bottom"),
+            Some(vec!["Ctrl+Alt+7".to_string()])
+        );
+        assert_eq!(
+            key_of("display.render_mode:feature_edges"),
+            Some(vec!["4".to_string()])
+        );
+    }
+
+    /// Invariant: every built-in key is in the one form of
+    /// `murmel_engine::keys::canonical` and is not reserved, so a key you
+    /// type in the editor or settings.toml compares equal to the table's
+    /// and the clash check sees it. Breaks if a key is added as
+    /// `Shift+Ctrl+X` or with a name the editor cannot record.
+    #[test]
+    fn builtin_keys_are_canonical() {
+        for c in commands() {
+            for k in &c.keys {
+                assert_eq!(
+                    murmel_engine::keys::canonical(k).as_deref(),
+                    Ok(k.as_str()),
+                    "{}",
+                    c.id
+                );
+                assert!(!murmel_engine::keys::reserved(k), "{}", c.id);
+            }
+        }
     }
 
     /// Invariant: every command with a fixed input runs on a session with
