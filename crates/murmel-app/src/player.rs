@@ -289,16 +289,17 @@ impl MurmelApp {
         let mut calls: Vec<(&'static str, Value)> = Vec::new();
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            // F6 focuses the first of the controls that is enabled: on the
+            // first step "First step" is not.
             let first = self.glyph_button(ui, Glyph::First, "player-first", k > 0);
             self.focus.offer(crate::focus::Region::Player, &first);
             if first.clicked() {
                 calls.push(("series.go", json!({"to": "first"})));
             }
             let back = k > 0 || r.playback.looping;
-            if self
-                .glyph_button(ui, Glyph::Previous, "player-previous", back && n > 1)
-                .clicked()
-            {
+            let previous = self.glyph_button(ui, Glyph::Previous, "player-previous", back && n > 1);
+            self.focus.offer(crate::focus::Region::Player, &previous);
+            if previous.clicked() {
                 calls.push(("series.go", json!({"by": -1})));
             }
             let (g, key) = if r.playback.playing {
@@ -306,7 +307,9 @@ impl MurmelApp {
             } else {
                 (Glyph::Play, "player-play")
             };
-            if self.glyph_button(ui, g, key, n > 1).clicked() {
+            let play = self.glyph_button(ui, g, key, n > 1);
+            self.focus.offer(crate::focus::Region::Player, &play);
+            if play.clicked() {
                 // Play from the start when the last step of a series that
                 // does not loop is shown.
                 if !r.playback.playing && !r.playback.looping && k + 1 == n {
@@ -315,10 +318,9 @@ impl MurmelApp {
                 calls.push(("series.play", json!({"playing": !r.playback.playing})));
             }
             let on = k + 1 < n || r.playback.looping;
-            if self
-                .glyph_button(ui, Glyph::Next, "player-next", on && n > 1)
-                .clicked()
-            {
+            let next = self.glyph_button(ui, Glyph::Next, "player-next", on && n > 1);
+            self.focus.offer(crate::focus::Region::Player, &next);
+            if next.clicked() {
                 calls.push(("series.go", json!({"by": 1})));
             }
             if self
