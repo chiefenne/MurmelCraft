@@ -1654,7 +1654,7 @@ a Taylor–Green vortex array in a uniform stream (`velocity`) and its
 - On a small honeycomb the file holds what `blocks make` writes for the
   mesh in memory: the same blocks, ghosts, cells, faces, field rows and
   block index; only the points' numbers differ. VTK 9.7's `vtkHDFReader`
-  opens it with every cell, field and patch.
+  opens it with every cell, field and patch, and 9.6 reads its cells.
 
 Here (4 threads, 15 GB, the file written into the page cache):
 
