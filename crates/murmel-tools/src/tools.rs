@@ -1363,6 +1363,7 @@ pub(crate) fn save_session_settings(s: &Session) -> Result<PathBuf, Diagnostic> 
                 convert_large: s.convert_large,
             },
             keys: s.keys.clone(),
+            help: s.help,
             ..Settings::default()
         },
     )
@@ -1669,6 +1670,7 @@ fn settings_get(_: Value, s: &mut Session) -> Run {
         "formulas": s.formulas,
         "memory": memory_json(s),
         "keys": s.keys,
+        "help": s.help,
         "config_dir": s.config_dir,
     }))
 }
@@ -1689,6 +1691,68 @@ struct SetMemory {
     budget_gib: Option<f64>,
     automatic: Option<bool>,
     convert_large: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetHelp {
+    tip_ms: Option<u32>,
+    rich_ms: Option<u32>,
+}
+
+fn settings_set_help(input: Value, s: &mut Session) -> Run {
+    use murmel_engine::settings::MAX_TIP_MS;
+    let i: SetHelp = parse(input)?;
+    for v in [i.tip_ms, i.rich_ms].into_iter().flatten() {
+        if v > MAX_TIP_MS {
+            return Err(Diagnostic::new(
+                "TOOL002",
+                format!("{v} ms is longer than {MAX_TIP_MS} ms"),
+            ));
+        }
+    }
+    // Applied live first; see settings.set_bindings.
+    if let Some(v) = i.tip_ms {
+        s.help.tip_ms = v;
+    }
+    if let Some(v) = i.rich_ms {
+        s.help.rich_ms = v;
+    }
+    let path = save_session_settings(s)?;
+    Ok(json!({"help": s.help, "files": [path]}))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelpGet {
+    id: String,
+}
+
+/// `help.get`: the help of a command, a tool or a topic, in English.
+fn help_get(input: Value, s: &mut Session) -> Run {
+    use crate::commands::{english, with_keys};
+    let i: HelpGet = parse(input)?;
+    let page = murmel_engine::help::page_for(&i.id)
+        .or_else(|| murmel_engine::help::page(&i.id))
+        .ok_or_else(|| Diagnostic::new("HELP001", format!("no help page explains {}", i.id)))?;
+    let command = with_keys(&s.keys).into_iter().find(|c| c.id == i.id);
+    let title = command
+        .as_ref()
+        .map(|c| english(&c.label_key))
+        .or_else(|| crate::find(&i.id).map(|t| english(t.label_key)))
+        .unwrap_or_else(|| english(&page.title_key()));
+    Ok(json!({
+        "id": i.id,
+        "page": page.name,
+        "title": title,
+        "line": english(&page.line_key()),
+        "keys": command.map(|c| c.keys).unwrap_or_default(),
+        "tip": page.tip,
+        "text": page.text,
+        "related": page.related,
+        "chapter": page.chapter,
+        "picture": page.picture,
+    }))
 }
 
 fn settings_set_memory(input: Value, s: &mut Session) -> Run {
@@ -2618,6 +2682,8 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ("journal.group", "groups the steps"),
     ("journal.list", READS_ONLY),
     ("recent.list", READS_ONLY),
+    ("help.get", READS_ONLY),
+    ("settings.set_help", "settings are files, not undone"),
     (
         "recent.clear",
         "the list of recent files is a file, not undone",
@@ -3732,6 +3798,36 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: no_input,
         run: journal_list,
+    },
+    Tool {
+        id: "help.get",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-help-get",
+        summary: "The help of a command, a tool or a topic (`id`, as in system.commands, the keys table, or a page name such as clip): its title, one-line tip, keys, the rich tip shown after a moment, the whole manual text (Markdown), related pages and the manual's chapter. In English.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || object(json!({"id": {"type": "string"}}), &["id"]),
+        run: help_get,
+    },
+    Tool {
+        id: "settings.set_help",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-settings-set-help",
+        summary: "When tips appear: tip_ms, how long the pointer rests on a control before its tip shows (250 by default), and rich_ms, how much longer before the tip shows more (1000); 0 to 10000 each. Writes settings.toml in the config folder.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "tip_ms": {"type": "integer", "minimum": 0, "maximum": 10000},
+                    "rich_ms": {"type": "integer", "minimum": 0, "maximum": 10000}
+                }),
+                &[],
+            )
+        },
+        run: settings_set_help,
     },
     Tool {
         id: "recent.list",

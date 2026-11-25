@@ -53,6 +53,13 @@ The method is the ArtCraft Craft Anything method of KoflCraft and FoehnCraft:
   stays in the palette) and regenerate `docs/menus.md` with
   `cargo run -p murmel-cli -- menus --markdown > docs/menus.md` (a test
   checks that it is up to date and that every entry names a command once).
+- **MUST** give every new command or tool a help page: a Markdown file in
+  `assets/help/en/` whose `covers` names its id (a prefix ending in `*`
+  is fine), listed in `pages!` (`crates/murmel-engine/src/help.rs`), with
+  `help-<page>-title` and `help-<page>-line` in the Fluent file (tests
+  check all three). A new control takes its tip from there with
+  `self.tip(resp, id)` or `self.tip_as(…)` (`crates/murmel-app/src/tips.rs`)
+  instead of `on_hover_text`.
 - **MUST** decide for every new tool whether its calls are undo steps:
   list it in `JOURNALED` (it changes the camera or the display) or in
   `NOT_JOURNALED` with the reason (`crates/murmel-tools/src/tools.rs`; a

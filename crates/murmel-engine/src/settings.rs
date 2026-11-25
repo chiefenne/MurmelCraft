@@ -89,6 +89,48 @@ pub struct Settings {
     /// the commands you changed, by command id.
     #[serde(default, skip_serializing_if = "KeyMap::is_empty")]
     pub keys: KeyMap,
+    /// When tips appear (`[help]`).
+    #[serde(default, skip_serializing_if = "Help::is_default")]
+    pub help: Help,
+}
+
+/// `[help]` in settings.toml: how long the pointer rests on a control
+/// before its tip appears, and how much longer before the tip shows more
+/// (the maintainer's card of 2026-11-25: 250 ms, then 1 s; Shift shows
+/// more at once).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Help {
+    #[serde(default = "tip_ms")]
+    pub tip_ms: u32,
+    #[serde(default = "rich_ms")]
+    pub rich_ms: u32,
+}
+
+/// The longest delay either can have.
+pub const MAX_TIP_MS: u32 = 10_000;
+
+fn tip_ms() -> u32 {
+    250
+}
+
+fn rich_ms() -> u32 {
+    1000
+}
+
+impl Default for Help {
+    fn default() -> Self {
+        Self {
+            tip_ms: tip_ms(),
+            rich_ms: rich_ms(),
+        }
+    }
+}
+
+impl Help {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// `[agents]` in settings.toml: the window listens for `murmel mcp --live`
@@ -122,6 +164,7 @@ impl Default for Settings {
             formulas: Vec::new(),
             memory: Memory::default(),
             keys: KeyMap::new(),
+            help: Help::default(),
         }
     }
 }

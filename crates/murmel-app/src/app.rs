@@ -194,6 +194,7 @@ impl MurmelApp {
             session.defaults = st.defaults;
             session.formulas = st.formulas;
             session.keys = st.keys;
+            session.help = st.help;
             session.memory_budget = st.memory.budget_gib;
             session.convert_large = st.memory.convert_large;
             murmel_engine::defaults::start_view(&mut session);
@@ -586,23 +587,24 @@ impl MurmelApp {
                 .i18n
                 .tr(&format!("theme-{}", theme_key(self.session.theme)));
             let name = self.i18n.tr_args("theme-name", &[("theme", theme.into())]);
-            let b = icon_button(ui, glyph, &name, &self.i18n.tr("settings-theme"), false);
+            let b = icon_button(ui, glyph, &name, "", false);
+            let b = self.tip_as(b, "settings.set_theme", Some(name.clone()), None);
             self.focus.offer(Region::Title, &b);
             if b.clicked() {
                 self.call("settings.set_theme", json!({ "theme": next }));
             }
             let palette = self.i18n.tr("cmd-palette");
-            let tip = format!("{palette} ({})", crate::commands::key_text("Ctrl+K"));
-            if icon_button(ui, icon::SEARCH, &palette, &tip, self.palette.is_some()).clicked() {
+            let b = icon_button(ui, icon::SEARCH, &palette, "", self.palette.is_some());
+            if self.tip(b, "window.palette").clicked() {
                 self.open_palette(String::new());
             }
             let settings = self.i18n.tr("settings-title");
-            let b = icon_button(
-                ui,
-                icon::SETTINGS,
-                &settings,
-                &self.i18n.tr("settings-tip"),
-                self.settings_open,
+            let b = icon_button(ui, icon::SETTINGS, &settings, "", self.settings_open);
+            let b = self.tip_as(
+                b,
+                "window.settings",
+                None,
+                Some(self.i18n.tr("settings-tip")),
             );
             if b.clicked() {
                 self.settings_open = !self.settings_open;
@@ -651,25 +653,15 @@ impl MurmelApp {
             let start = ui.cursor().min.x;
             ui.separator();
             let tree = self.i18n.tr("toolbar-tree");
-            if icon_button(
-                ui,
-                icon::LAYERS,
-                &tree,
-                &self.i18n.tr("toolbar-tree-tip"),
-                self.show_tree,
-            )
-            .clicked()
-            {
+            let b = icon_button(ui, icon::LAYERS, &tree, "", self.show_tree);
+            let line = self.i18n.tr("toolbar-tree-tip");
+            if self.tip_as(b, "window.tree", None, Some(line)).clicked() {
                 self.show_tree = !self.show_tree;
             }
             let props = self.i18n.tr("toolbar-properties");
-            let b = icon_button(
-                ui,
-                icon::INFO,
-                &props,
-                &self.i18n.tr("toolbar-properties-tip"),
-                self.show_props,
-            );
+            let b = icon_button(ui, icon::INFO, &props, "", self.show_props);
+            let line = self.i18n.tr("toolbar-properties-tip");
+            let b = self.tip_as(b, "window.properties", None, Some(line));
             if b.clicked() {
                 self.show_props = !self.show_props;
             }
@@ -700,11 +692,15 @@ impl MurmelApp {
     fn toolbar_groups(&mut self, ui: &mut Ui) {
         let secondary = color(self.palette(ui.ctx()).text_secondary);
         let open = self.i18n.tr("toolbar-open");
-        let b = ui
-            .add(egui::Button::new(
-                RichText::new(format!("{}  {open}", icon::FOLDER_OPEN)).size(13.0),
-            ))
-            .on_hover_text(self.i18n.tr("toolbar-open-tip"));
+        let b = ui.add(egui::Button::new(
+            RichText::new(format!("{}  {open}", icon::FOLDER_OPEN)).size(13.0),
+        ));
+        let b = self.tip_as(
+            b,
+            "window.open",
+            None,
+            Some(self.i18n.tr("toolbar-open-tip")),
+        );
         b.widget_info(|| WidgetInfo::labeled(Role::Button, true, open.clone()));
         self.focus.offer(Region::Toolbar, &b);
         if b.clicked() {
@@ -713,33 +709,25 @@ impl MurmelApp {
         ui.separator();
         self.group_label(ui, "view", secondary);
         let fit = self.i18n.tr("toolbar-fit");
-        if icon_button(
-            ui,
-            icon::SCAN,
-            &fit,
-            &self.i18n.tr("toolbar-fit-tip"),
-            false,
-        )
-        .clicked()
-        {
+        let b = icon_button(ui, icon::SCAN, &fit, "", false);
+        let line = self.i18n.tr("toolbar-fit-tip");
+        if self.tip_as(b, "view.fit", None, Some(line)).clicked() {
             self.call("view.fit", json!({}));
         }
         let home = self.i18n.tr("toolbar-home");
-        if icon_button(
-            ui,
-            icon::HOUSE,
-            &home,
-            &self.i18n.tr("toolbar-home-tip"),
-            false,
-        )
-        .clicked()
+        let b = icon_button(ui, icon::HOUSE, &home, "", false);
+        let line = self.i18n.tr("toolbar-home-tip");
+        if self
+            .tip_as(b, "view.standard:home", None, Some(line))
+            .clicked()
         {
             self.call("view.standard", json!({"view": "home"}));
         }
         let zoom = self.i18n.tr("toolbar-zoom-box");
         let tip = self.i18n.tr("toolbar-zoom-box-tip");
         let armed = self.zoom_armed;
-        let b = icon_button(ui, icon::SCAN_SEARCH, &zoom, &tip, armed);
+        let b = icon_button(ui, icon::SCAN_SEARCH, &zoom, "", armed);
+        let b = self.tip_as(b, "window.zoom_box", None, Some(tip));
         b.widget_info(|| WidgetInfo::selected(Role::Button, true, armed, zoom.clone()));
         if b.clicked() {
             self.arm_zoom_box(!armed);
@@ -752,14 +740,11 @@ impl MurmelApp {
         };
         let short = self.i18n.tr(&format!("projection-short-{}", proj.key()));
         let long = self.i18n.tr(&format!("projection-{}", proj.key()));
-        let b = ui
-            .add(egui::Button::new(RichText::new(format!(
-                "{glyph}  {short}"
-            ))))
-            .on_hover_text(format!(
-                "{long}\n{}",
-                self.i18n.tr("toolbar-projection-tip")
-            ));
+        let b = ui.add(egui::Button::new(RichText::new(format!(
+            "{glyph}  {short}"
+        ))));
+        let line = self.i18n.tr("toolbar-projection-tip");
+        let b = self.tip_as(b, "view.projection:next", Some(long.clone()), Some(line));
         let name = self
             .i18n
             .tr_args("projection-name", &[("mode", long.clone().into())]);
@@ -794,9 +779,13 @@ impl MurmelApp {
                     }
                 }
             });
-        let r = r
-            .response
-            .on_hover_text(self.i18n.tr("toolbar-render-mode-tip"));
+        let line = self.i18n.tr("toolbar-render-mode-tip");
+        let r = self.tip_as(
+            r.response,
+            "display.render_mode",
+            Some(name.clone()),
+            Some(line),
+        );
         r.widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, name.clone()));
         if let Some(m) = pick_mode.filter(|&m| m != mode) {
             self.call("display.render_mode", json!({ "mode": m }));
@@ -879,13 +868,12 @@ impl MurmelApp {
                     open_derived = true;
                 }
             });
-        let tip = format!(
-            "{label}: {current}\n{}",
-            self.i18n.tr("toolbar-color-by-tip")
-        );
-        r.response.on_hover_text(tip).widget_info(|| {
-            WidgetInfo::labeled(Role::ComboBox, true, format!("{label}: {current}"))
-        });
+        let line = self.i18n.tr("toolbar-color-by-tip");
+        let title = format!("{label}: {current}");
+        self.tip_as(r.response, "window.color_by", Some(title), Some(line))
+            .widget_info(|| {
+                WidgetInfo::labeled(Role::ComboBox, true, format!("{label}: {current}"))
+            });
         if let Some(input) = pick.filter(|i| {
             i["by"] != json!(by) || i.get("metric").is_some() || i.get("field").is_some()
         }) {
@@ -930,13 +918,12 @@ impl MurmelApp {
             for (axis, n) in [("x", 0), ("y", 1), ("z", 2)] {
                 let active = on && clip.is_some_and(|c| c.normal[n].abs() > 0.999);
                 let name = self.i18n.tr(&format!("cmd-clip-{axis}"));
-                let b = ui
-                    .add(
-                        egui::Button::new(RichText::new(axis.to_uppercase()).size(13.0))
-                            .selected(active)
-                            .min_size(egui::vec2(28.0, 28.0)),
-                    )
-                    .on_hover_text(format!("{name} ({})", axis.to_uppercase()));
+                let b = ui.add(
+                    egui::Button::new(RichText::new(axis.to_uppercase()).size(13.0))
+                        .selected(active)
+                        .min_size(egui::vec2(28.0, 28.0)),
+                );
+                let b = self.tip(b, &format!("clip.set:{axis}"));
                 b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
                 if b.clicked() {
                     if active {
@@ -965,30 +952,28 @@ impl MurmelApp {
                         }
                     }
                 });
-            r.response
-                .on_hover_text(self.i18n.tr("toolbar-clip-mode-tip"))
+            let line = self.i18n.tr("toolbar-clip-mode-tip");
+            self.tip_as(r.response, "clip.set", Some(name.clone()), Some(line))
                 .widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, name.clone()));
             if let Some(m) = pick.filter(|&m| m != mode) {
                 self.call("clip.set", json!({ "mode": m }));
             }
             let flip = self.i18n.tr("toolbar-clip-flip");
-            if ui
-                .button(flip)
-                .on_hover_text(self.i18n.tr("toolbar-clip-flip-tip"))
-                .clicked()
-            {
+            let b = ui.button(flip);
+            let line = self.i18n.tr("toolbar-clip-flip-tip");
+            if self.tip_as(b, "clip.set:flip", None, Some(line)).clicked() {
                 self.call("clip.set", json!({"flip": true}));
             }
             if let Some(m) = &self.session.mesh {
                 let (off, [lo, hi]) = c.offset(&m.mesh.bounds());
                 let mut v = off;
                 let name = self.i18n.tr("toolbar-clip-position");
-                let r = ui
-                    .add_sized(
-                        [120.0, 20.0],
-                        egui::Slider::new(&mut v, lo..=hi).show_value(false),
-                    )
-                    .on_hover_text(self.i18n.tr("toolbar-clip-position-tip"));
+                let r = ui.add_sized(
+                    [120.0, 20.0],
+                    egui::Slider::new(&mut v, lo..=hi).show_value(false),
+                );
+                let line = self.i18n.tr("toolbar-clip-position-tip");
+                let r = self.tip_as(r, "clip.set", Some(name.clone()), Some(line));
                 r.widget_info(|| WidgetInfo::slider(true, v, name.clone()));
                 if r.changed() && v != off {
                     self.call("clip.set", json!({ "offset": v }));
@@ -1004,9 +989,8 @@ impl MurmelApp {
         for t in murmel_engine::PickTarget::ALL {
             let label = self.i18n.tr(&format!("toolbar-pick-{}", t.key()));
             let tip = self.i18n.tr(&format!("cmd-pick-{}", t.key()));
-            let b = ui
-                .add(egui::Button::new(RichText::new(&label).size(13.0)).selected(now == t))
-                .on_hover_text(&tip);
+            let b = ui.add(egui::Button::new(RichText::new(&label).size(13.0)).selected(now == t));
+            let b = self.tip(b, &format!("select.filter:{}", t.key()));
             b.widget_info(|| WidgetInfo::selected(Role::Button, true, now == t, tip.clone()));
             if b.clicked() && now != t {
                 self.call("select.filter", json!({ "target": t }));
@@ -1208,92 +1192,100 @@ impl MurmelApp {
         }
         let mut open = true;
         let title = self.i18n.tr("settings-title");
+        let max_h = (ctx.content_rect().height() - 120.0).max(200.0);
         egui::Window::new(title)
             .open(&mut open)
             .resizable(false)
             .collapsible(false)
             .default_width(300.0)
             .show(ctx, |ui| {
-                ui.heading(self.i18n.tr("settings-theme"));
-                for t in [Theme::Dark, Theme::Light, Theme::System] {
-                    let label = self.i18n.tr(&format!("theme-{}", theme_key(t)));
-                    if ui.radio(self.session.theme == t, label).clicked() {
-                        self.call("settings.set_theme", json!({ "theme": t }));
-                    }
-                }
-                ui.add_space(8.0);
-                // The heading and the editor of every key and mouse binding
-                // on one line, so the window grows no taller.
-                ui.horizontal(|ui| {
-                    ui.heading(self.i18n.tr("settings-navigation"));
-                    if ui.small_button(self.i18n.tr("shortcuts-edit")).clicked() {
-                        self.open_bindings(crate::shortcuts::Tab::Mouse);
-                    }
-                });
-                let current = self.session.navigation.preset.clone();
-                for p in murmel_engine::navigation::PRESETS {
-                    let label = self.i18n.tr(&format!("preset-{p}"));
-                    if ui.radio(current == *p, label).clicked() {
-                        self.call("settings.set_bindings", json!({ "preset": p }));
-                    }
-                }
-                if current == "custom" {
-                    let _ = ui.radio(true, self.i18n.tr("preset-custom"));
-                }
-                let mut z = self.session.navigation.zoom_to_cursor;
-                if ui
-                    .checkbox(&mut z, self.i18n.tr("settings-zoom-to-cursor"))
-                    .changed()
-                {
-                    self.call("settings.set_bindings", json!({ "zoom_to_cursor": z }));
-                }
-                let mut inv = self.session.navigation.invert_zoom;
-                if ui
-                    .checkbox(&mut inv, self.i18n.tr("settings-invert-zoom"))
-                    .changed()
-                {
-                    self.call("settings.set_bindings", json!({ "invert_zoom": inv }));
-                }
-                ui.add_space(8.0);
-                ui.heading(self.i18n.tr("settings-view-cube"));
-                self.cube_menu(ui, false);
-                ui.add_space(8.0);
-                self.agents_settings(ui);
-                ui.add_space(8.0);
-                ui.heading(self.i18n.tr("settings-colors"));
-                ui.horizontal(|ui| {
-                    let current = self.session.tokens.mesh.solid;
-                    let mut rgb = current.0;
-                    let name = self.i18n.tr("settings-mesh-color");
-                    let r = egui::color_picker::color_edit_button_srgb(ui, &mut rgb);
-                    r.widget_info(|| WidgetInfo::labeled(Role::ColorWell, true, name.clone()));
-                    ui.label(&name);
-                    if rgb != current.0 {
-                        let hex = murmel_engine::Rgb(rgb).hex();
-                        self.call("settings.set_colors", json!({ "solid": hex }));
-                    }
-                });
-                if self.session.colors != murmel_engine::MeshColors::default()
-                    && ui.button(self.i18n.tr("settings-reset-colors")).clicked()
-                {
-                    self.call("settings.set_colors", json!({"reset": true}));
-                }
-                ui.add_space(8.0);
-                self.defaults_settings(ui);
-                ui.add_space(8.0);
-                self.memory_settings(ui);
-                if let Some(d) = &self.session.config_dir {
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(
-                            self.i18n.tr_args(
-                                "settings-file",
-                                &[("path", d.display().to_string().into())],
-                            ),
-                        )
-                        .small(),
-                    );
-                }
+                // Taller than a small screen: it scrolls.
+                egui::ScrollArea::vertical()
+                    .max_height(max_h)
+                    .show(ui, |ui| {
+                        ui.heading(self.i18n.tr("settings-theme"));
+                        for t in [Theme::Dark, Theme::Light, Theme::System] {
+                            let label = self.i18n.tr(&format!("theme-{}", theme_key(t)));
+                            if ui.radio(self.session.theme == t, label).clicked() {
+                                self.call("settings.set_theme", json!({ "theme": t }));
+                            }
+                        }
+                        ui.add_space(8.0);
+                        // The heading and the editor of every key and mouse binding
+                        // on one line, so the window grows no taller.
+                        ui.horizontal(|ui| {
+                            ui.heading(self.i18n.tr("settings-navigation"));
+                            if ui.small_button(self.i18n.tr("shortcuts-edit")).clicked() {
+                                self.open_bindings(crate::shortcuts::Tab::Mouse);
+                            }
+                        });
+                        let current = self.session.navigation.preset.clone();
+                        for p in murmel_engine::navigation::PRESETS {
+                            let label = self.i18n.tr(&format!("preset-{p}"));
+                            if ui.radio(current == *p, label).clicked() {
+                                self.call("settings.set_bindings", json!({ "preset": p }));
+                            }
+                        }
+                        if current == "custom" {
+                            let _ = ui.radio(true, self.i18n.tr("preset-custom"));
+                        }
+                        let mut z = self.session.navigation.zoom_to_cursor;
+                        if ui
+                            .checkbox(&mut z, self.i18n.tr("settings-zoom-to-cursor"))
+                            .changed()
+                        {
+                            self.call("settings.set_bindings", json!({ "zoom_to_cursor": z }));
+                        }
+                        let mut inv = self.session.navigation.invert_zoom;
+                        if ui
+                            .checkbox(&mut inv, self.i18n.tr("settings-invert-zoom"))
+                            .changed()
+                        {
+                            self.call("settings.set_bindings", json!({ "invert_zoom": inv }));
+                        }
+                        ui.add_space(8.0);
+                        ui.heading(self.i18n.tr("settings-view-cube"));
+                        self.cube_menu(ui, false);
+                        ui.add_space(8.0);
+                        self.agents_settings(ui);
+                        ui.add_space(8.0);
+                        self.tip_settings(ui);
+                        ui.add_space(8.0);
+                        ui.heading(self.i18n.tr("settings-colors"));
+                        ui.horizontal(|ui| {
+                            let current = self.session.tokens.mesh.solid;
+                            let mut rgb = current.0;
+                            let name = self.i18n.tr("settings-mesh-color");
+                            let r = egui::color_picker::color_edit_button_srgb(ui, &mut rgb);
+                            r.widget_info(|| {
+                                WidgetInfo::labeled(Role::ColorWell, true, name.clone())
+                            });
+                            ui.label(&name);
+                            if rgb != current.0 {
+                                let hex = murmel_engine::Rgb(rgb).hex();
+                                self.call("settings.set_colors", json!({ "solid": hex }));
+                            }
+                        });
+                        if self.session.colors != murmel_engine::MeshColors::default()
+                            && ui.button(self.i18n.tr("settings-reset-colors")).clicked()
+                        {
+                            self.call("settings.set_colors", json!({"reset": true}));
+                        }
+                        ui.add_space(8.0);
+                        self.defaults_settings(ui);
+                        ui.add_space(8.0);
+                        self.memory_settings(ui);
+                        if let Some(d) = &self.session.config_dir {
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(self.i18n.tr_args(
+                                    "settings-file",
+                                    &[("path", d.display().to_string().into())],
+                                ))
+                                .small(),
+                            );
+                        }
+                    });
             });
         self.settings_open &= open;
     }
@@ -1394,13 +1386,17 @@ pub(crate) fn icon_button(
     tip: &str,
     selected: bool,
 ) -> egui::Response {
-    let b = ui
-        .add(
-            egui::Button::new(RichText::new(glyph).size(16.0))
-                .selected(selected)
-                .min_size(egui::vec2(28.0, 28.0)),
-        )
-        .on_hover_text(tip);
+    let b = ui.add(
+        egui::Button::new(RichText::new(glyph).size(16.0))
+            .selected(selected)
+            .min_size(egui::vec2(28.0, 28.0)),
+    );
+    // An empty tip: the caller adds a rich one (crate::tips).
+    let b = if tip.is_empty() {
+        b
+    } else {
+        b.on_hover_text(tip)
+    };
     let name = name.to_string();
     b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
     b
@@ -1413,6 +1409,7 @@ impl eframe::App for MurmelApp {
         self.expire_error(&ctx);
         self.focus.begin(&ctx);
         self.apply_theme(&ctx);
+        self.apply_tip_delay(&ctx);
         self.group_steps(&ctx);
         self.serve_agents(&ctx);
         self.rebuild_commands();

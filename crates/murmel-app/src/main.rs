@@ -38,6 +38,7 @@ mod shortcuts;
 mod stream_handle;
 mod streams;
 mod style;
+mod tips;
 mod viewport;
 
 use std::path::PathBuf;

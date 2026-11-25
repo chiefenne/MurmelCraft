@@ -1170,7 +1170,9 @@ fn defaults_from_the_window() {
     let forget = "Forget Arrows · Arrows across: 60";
     assert!(named(&h, forget), "the density's row");
     assert_eq!(problems(&h), Vec::<String>::new(), "settings with defaults");
-    h.get_by_label(forget).click();
+    // The Settings window scrolls on a small screen: a click by AccessKit
+    // reaches the button wherever it is.
+    h.get_by_label(forget).click_accesskit();
     h.run_steps(3);
     let d = &h.state().session.defaults;
     assert!(d.get(Kind::Arrows, "density").is_none());
@@ -2321,11 +2323,13 @@ fn overview_in_the_window() {
     h.run_steps(2);
     assert!(named(&h, "Budget"), "the budget box");
     assert_eq!(problems(&h), Vec::<String>::new(), "settings with a budget");
-    h.get_by(|n| {
+    // The Settings window scrolls on a small screen: a click by AccessKit
+    // reaches the box wherever it is.
+    let half = |n: &AccessKitNode<'_>| {
         n.label()
             .is_some_and(|l| l.starts_with("Half of this computer's memory"))
-    })
-    .click();
+    };
+    h.get_by(half).click_accesskit();
     h.run_steps(3);
     assert_eq!(h.state().session.memory_budget, None);
     assert!(!named(&h, "Budget"));
@@ -2782,5 +2786,48 @@ fn menu_bar_runs_commands() {
         n.role() == Role::Button && n.label().is_some_and(|l| l.starts_with("Fit view"))
     });
     assert!(fit.accesskit_node().is_disabled(), "Fit view needs a mesh");
+    assert_eq!(problems(&h), Vec::<String>::new());
+}
+
+/// Invariant: a control's tip names it and says what it does after a
+/// moment, shows more of its help page after a longer rest or at once
+/// with Shift, and starts over when the pointer comes back. Breaks if the
+/// rich tip never came, came at once without Shift, or stayed rich on
+/// the next visit.
+#[test]
+fn tips_grow_with_rest_and_shift() {
+    let mut h = harness();
+    let fit = h.state().i18n.tr("toolbar-fit");
+    // The tip drawn in the last frame: its title and whether it is rich.
+    let shown = |h: &mut Harness<'_, MurmelApp>| {
+        let slot = egui::Id::unique(crate::tips::SHOWN);
+        h.ctx.data_mut(|d| d.remove_temp::<(String, bool)>(slot));
+        h.step();
+        h.ctx
+            .data(|d| d.get_temp::<(String, bool)>(slot))
+            .map(|(t, r)| {
+                assert_eq!(t, "Fit view");
+                r
+            })
+    };
+    let hover_fit = |h: &mut Harness<'_, MurmelApp>| {
+        let f = fit.clone();
+        h.get_by(move |n| n.role() == Role::Button && n.label().as_deref() == Some(&f))
+            .hover();
+    };
+    hover_fit(&mut h);
+    h.run_steps(2);
+    assert_eq!(shown(&mut h), Some(false), "the quick tip");
+    h.run_steps(5);
+    assert_eq!(shown(&mut h), Some(true), "rich after a rest");
+    // Away and back: quick again; Shift makes it rich at once.
+    h.hover_at(egui::pos2(700.0, 450.0));
+    h.run_steps(2);
+    assert_eq!(shown(&mut h), None, "the tip closed");
+    hover_fit(&mut h);
+    h.run_steps(2);
+    assert_eq!(shown(&mut h), Some(false), "quick again");
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    assert_eq!(shown(&mut h), Some(true), "Shift shows more");
     assert_eq!(problems(&h), Vec::<String>::new());
 }

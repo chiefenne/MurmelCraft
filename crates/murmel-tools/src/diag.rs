@@ -405,6 +405,14 @@ const OWN: &[Code] = &[
         fix: Some("Give a path in a folder that exists and can be written."),
     },
     Code {
+        code: "HELP001",
+        severity: Severity::Error,
+        meaning: "No help page explains this id.",
+        fix: Some(
+            "Pass a command id (murmel keys), a tool id (murmel commands) or a page name (assets/help/en).",
+        ),
+    },
+    Code {
         code: "SESS001",
         severity: Severity::Error,
         meaning: "A session file could not be read, or it is not a MurmelCraft session (format murmelcraft.session 1.x) with valid values.",

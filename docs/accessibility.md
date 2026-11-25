@@ -30,6 +30,16 @@ control (inside the viewport, which fills its pane). It shows only after
 keyboard use (Tab, F6) and hides on the next mouse press, like CSS
 `:focus-visible`.
 
+## Tips
+
+A control's tip names it, says in one line what it does and shows its
+key. After a longer rest, or at once while **Shift** is held, it shows
+the first part of the control's help page (`assets/help/en/`). A control
+the keyboard reached (Tab, F6) shows the same tip after the same rest, so
+tips are not for the mouse only. Settings ▸ Tips sets both delays
+(settings.toml `[help]`: `tip_ms`, 250 by default, and `rich_ms`, 1000).
+Settings scrolls when it is taller than the screen.
+
 ## Screen readers (AccessKit)
 
 eframe builds the AccessKit tree, which reaches VoiceOver (macOS),

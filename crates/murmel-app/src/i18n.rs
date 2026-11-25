@@ -65,6 +65,7 @@ mod tests {
             include_str!("measure.rs"),
             include_str!("probe_history.rs"),
             include_str!("menus.rs"),
+            include_str!("tips.rs"),
         ];
         for s in src {
             for part in s

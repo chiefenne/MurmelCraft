@@ -1213,6 +1213,8 @@ pub struct Session {
     /// Your keyboard shortcuts (`settings.set_keys`, `[keys]` in
     /// settings.toml): the keys of the commands you changed.
     pub keys: crate::keys::KeyMap,
+    /// When tips appear (`settings.set_help`, `[help]` in settings.toml).
+    pub help: crate::settings::Help,
     /// The undo and redo steps of the open mesh.
     pub journal: Journal,
     /// A mesh read in advance (the window reads a large one on a thread
@@ -1330,6 +1332,7 @@ impl Session {
             defaults: crate::defaults::Defaults::default(),
             formulas: Vec::new(),
             keys: crate::keys::KeyMap::new(),
+            help: crate::settings::Help::default(),
             journal: Journal::default(),
             preloaded: None,
             hash_after_open: false,
