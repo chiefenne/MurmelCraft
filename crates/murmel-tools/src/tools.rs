@@ -152,19 +152,16 @@ fn mesh_summary(s: &Session) -> Value {
     let Some(m) = &s.mesh else {
         return Value::Null;
     };
+    let source = m.source();
     let mut warnings = Vec::new();
     if let Some(e) = &m.evidence_problem {
         warnings.push(json!(Diagnostic::new(e.code, e.message.clone())));
     }
     json!({
         "path": m.path,
-        "format": if m.mesh.metadata.contains_key("openfoam_format") {
-            "openfoam"
-        } else if m.mesh.metadata.contains_key("vtkhdf") {
-            "vtkhdf"
-        } else {
-            "vtu"
-        },
+        "format": source.format.key(),
+        "origin": source.origin.key(),
+        "imported": source.imported(),
         "fields": m.fields.names(),
         "hash": m.hash.key(),
         "files": m.files.iter().map(|(n, d)| json!({"name": n, m.hash.key(): d})).collect::<Vec<_>>(),
@@ -2779,7 +2776,15 @@ fn recent_list(_: Value, s: &mut Session) -> Run {
         .unwrap_or_default();
     let files: Vec<Value> = files
         .iter()
-        .map(|e| json!({"path": e.path, "kind": e.kind, "exists": e.path.exists()}))
+        .map(|e| {
+            json!({
+                "path": e.path,
+                "kind": e.kind,
+                "origin": e.origin,
+                "imported": e.imported,
+                "exists": e.path.exists(),
+            })
+        })
         .collect();
     Ok(json!({ "files": files }))
 }
@@ -2840,16 +2845,16 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "mesh.open",
-        version: 5,
+        version: 6,
         action: Action::Read,
         label_key: "tool-mesh-open",
-        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a .vtu (KoflCraft's foehncraft.vtu, with its cell and point data as fields), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or an OpenFOAM mesh: a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file (ascii, binary, gzip). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty. `mode` fit (the default) opens the mesh whole when it fits the memory budget (settings.set_memory) and a blocked VTKHDF file (murmel blocks make) that does not as an overview: its boundary only, each cell field on it as the value of the cell behind each face, and `overview` (cells, blocks, memory a whole read needs); whole reads it whole whatever it needs; overview asks for the overview.",
+        summary: "Load a mesh and the mesh-evidence.json beside it, replace the open mesh and fit the view; returns counts, zones, patches, the fields read with it and the files read. `path` is a KoflCraft mesh (foehncraft.vtu with its cell and point data as fields, or foehncraft.vtkhdf), a FoehnCraft result (.vtkhdf: mesh and fields in one HDF5 file) or a blocked .vtkhdf of MurmelCraft; it also imports the files of other tools: an OpenFOAM mesh (a case, constant or polyMesh folder, a .foam file in the case or a polyMesh file; ascii, binary, gzip) or a VTK .vtu or .vtkhdf. The result says `format` (vtu, vtkhdf, openfoam), `origin` (the tool that wrote it, from the marks in the file: koflcraft, foehncraft, murmelcraft, openfoam, vtk) and `imported` (true for a polyMesh, KoflCraft's export too, and for a VTK file none of our tools wrote). The files are checked with BLAKE3 (`hash`, the key of each file's digest), or with SHA-256 when the evidence beside them is KoflCraft's format 1.0. In the window the digests are taken after the mesh opens: until they are, `validity` is `checking` and `digest` and the files' digests are empty. `mode` fit (the default) opens the mesh whole when it fits the memory budget (settings.set_memory) and a blocked VTKHDF file (murmel blocks make) that does not as an overview: its boundary only, each cell field on it as the value of the cell behind each face, and `overview` (cells, blocks, memory a whole read needs); whole reads it whole whatever it needs; overview asks for the overview.",
         outputs: &[],
         reads: &["path"],
         input_schema: || {
             object(
                 json!({
-                    "path": {"type": "string", "description": "A .vtu or .vtkhdf file, or an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case)"},
+                    "path": {"type": "string", "description": "A KoflCraft mesh or FoehnCraft result (.vtu, .vtkhdf); also imports an OpenFOAM case, constant or polyMesh folder (or a .foam file in the case) and VTK files of other tools"},
                     "mode": {"type": "string", "enum": ["fit", "whole", "overview"], "description": "fit (default): whole within the memory budget, else an overview of a blocked VTKHDF file; whole; overview"}
                 }),
                 &["path"],
@@ -3857,10 +3862,10 @@ pub static TOOLS: &[Tool] = &[
     },
     Tool {
         id: "recent.list",
-        version: 1,
+        version: 2,
         action: Action::Read,
         label_key: "tool-recent-list",
-        summary: "The files opened lately in the window (File > Open recent), the latest first: path, kind (mesh, session, series, parcels, charts; the tool that opens it again is mesh.open, session.load, series.open, parcels.open or charts.open) and whether it still exists. Empty without a config folder, and over the agent bridge.",
+        summary: "The files opened lately in the window (File > Open recent), the latest first: path, kind (mesh, session, series, parcels, charts; the tool that opens it again is mesh.open, session.load, series.open, parcels.open or charts.open), for a mesh its origin (koflcraft, foehncraft, murmelcraft, openfoam, vtk) and whether it was imported, and whether it still exists. Empty without a config folder, and over the agent bridge.",
         outputs: &[],
         reads: &[],
         input_schema: no_input,

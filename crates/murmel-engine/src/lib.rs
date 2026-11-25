@@ -34,6 +34,7 @@ pub mod legend;
 pub mod measure;
 pub mod memory;
 pub mod navigation;
+pub mod origin;
 pub mod parcel;
 pub mod pick;
 pub mod preview;

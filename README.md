@@ -27,12 +27,9 @@ Not released yet (version 0.1.0): the V0.2 to V0.6 milestones of the UI
 spec are done and V1.0 is in progress; [changelog.d](changelog.d) lists
 every change.
 
-- Opens KoflCraft's `foehncraft.vtu` (VTK polyhedra, boundary polygons, zone
-  and patch names and roles) and the `mesh-evidence.json` beside it.
-- Opens OpenFOAM meshes: a case, `constant` or `polyMesh` folder, or a
-  `.foam` file in the case (ascii, binary and gzip files, `cellZones`),
-  such as KoflCraft's `export … openfoam`; the evidence in the polyMesh
-  folder is checked file by file.
+- Opens KoflCraft's `foehncraft.vtu` and `foehncraft.vtkhdf` (VTK polyhedra,
+  boundary polygons, zone and patch names and roles) and the
+  `mesh-evidence.json` beside them.
 - Opens FoehnCraft results (`fields.vtkhdf`, read by our own HDF5 reader)
   and the cell or point data of a `.vtu`, and colours the mesh by a field
   (`display.color_by` with `field`, `field.style`): flat (one colour per
@@ -43,6 +40,14 @@ every change.
   Inferno second, Rainbow Uniform for ranges symmetric about zero), each reversible, and a
   colour bar with its settings menu. Properties and probes show the
   values.
+- File ▸ Open takes the files of our three tools (KoflCraft meshes,
+  FoehnCraft results, MurmelCraft sessions and blocked meshes) and names
+  the tool that wrote each one. Files of other tools come in through
+  File ▸ Import: OpenFOAM meshes (a case, `constant` or `polyMesh` folder,
+  or a `.foam` file in the case; ascii, binary and gzip files,
+  `cellZones`, KoflCraft's `export … openfoam` too, whose evidence is
+  checked file by file) and VTK files (`.vtu`, `.vtkhdf`) written by
+  ParaView, VTK or others. Both are tagged "imported".
 - Slices and iso-surfaces of the results (`slice.set`, `slice.rotate`,
   `iso.set`): slices placed and moved like clip planes (handles, X/Y/Z,
   typed origin and normal), single or as a series with count and

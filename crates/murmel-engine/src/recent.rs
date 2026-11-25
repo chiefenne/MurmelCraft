@@ -61,6 +61,14 @@ impl Kind {
 pub struct Entry {
     pub path: PathBuf,
     pub kind: Kind,
+    /// The tool that wrote a mesh (`mesh.open` only), for the tag the
+    /// menu shows beside it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::origin::Origin>,
+    /// Came in through File ▸ Import (an OpenFOAM polyMesh, a VTK file
+    /// of another tool).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub imported: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -94,9 +102,27 @@ pub fn save(dir: &Path, files: &[Entry]) -> Result<PathBuf, String> {
 /// Put `path` first (as an absolute path), dropping an older entry of
 /// the same path and the ones beyond [`KEEP`].
 pub fn add(files: &mut Vec<Entry>, path: &Path, kind: Kind) {
+    add_from(files, path, kind, None);
+}
+
+/// [`add`], with where a mesh came from (`source`).
+pub fn add_from(
+    files: &mut Vec<Entry>,
+    path: &Path,
+    kind: Kind,
+    source: Option<crate::origin::Source>,
+) {
     let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     files.retain(|e| e.path != path);
-    files.insert(0, Entry { path, kind });
+    files.insert(
+        0,
+        Entry {
+            path,
+            kind,
+            origin: source.map(|s| s.origin),
+            imported: source.is_some_and(|s| s.imported()),
+        },
+    );
     files.truncate(KEEP);
 }
 

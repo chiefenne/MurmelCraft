@@ -65,6 +65,12 @@ impl OpenMesh {
         cells_of(&self.mesh, self.overview.as_deref())
     }
 
+    /// Where the mesh comes from: its container and the tool that wrote
+    /// it ([`crate::origin`]).
+    pub fn source(&self) -> crate::origin::Source {
+        crate::origin::Source::of(&self.path, &self.domain().metadata, self.evidence.as_ref())
+    }
+
     /// The mesh of the whole domain: the overview's boundary while blocks
     /// of it show for the regions, else `mesh`.
     pub fn domain(&self) -> &Mesh {
@@ -1462,7 +1468,13 @@ impl Session {
     pub fn note_recent(&self, path: &Path, kind: crate::recent::Kind) {
         if let Some(dir) = self.recent_dir() {
             let mut files = crate::recent::load(dir);
-            crate::recent::add(&mut files, path, kind);
+            // A mesh just opened says where it came from.
+            let source = self
+                .mesh
+                .as_ref()
+                .filter(|_| kind == crate::recent::Kind::Mesh)
+                .map(OpenMesh::source);
+            crate::recent::add_from(&mut files, path, kind, source);
             let _ = crate::recent::save(dir, &files);
         }
     }
