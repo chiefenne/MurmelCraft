@@ -217,9 +217,129 @@ pub struct MeshRenderer {
     wide_pipeline: wgpu::RenderPipeline,
     wide_outline_pipeline: wgpu::RenderPipeline,
     bg_pipeline: wgpu::RenderPipeline,
-    geometry: Option<Geometry>,
+    /// The mesh's own faces and the extras (slices, iso-surfaces, arrows
+    /// and the like), uploaded apart so a change of the extras leaves the
+    /// mesh's buffers as they are.
+    geometry: [Option<Geometry>; 2],
+    /// The build key of the mesh's faces uploaded.
+    mesh_key: Option<u64>,
     revision: Option<u64>,
     targets: Option<Targets>,
+}
+
+/// Which part of a surface a [`Geometry`] holds.
+#[derive(Clone, Copy, PartialEq)]
+enum Part {
+    /// The mesh's own faces, edges and the outline of what is picked.
+    Mesh,
+    /// The slices, iso-surfaces, arrows, streamlines, parcels and block
+    /// boxes ([`murmel_engine::surface::ExtrasAt`]).
+    Extras,
+}
+
+/// The buffers of part `part` of `s`; `None` when it has nothing to draw.
+fn geometry(device: &wgpu::Device, s: &Surface, part: Part) -> Option<Geometry> {
+    use wgpu::util::DeviceExt;
+    let at = s.extras_at;
+    // A surface built before the extras were marked holds them all in
+    // the mesh's part.
+    let (v0, v1, i0, i1, e0, e1) = match part {
+        Part::Mesh => (0, at.vertices, 0, at.indices, 0, at.edges),
+        Part::Extras => (
+            at.vertices,
+            s.positions.len(),
+            at.indices,
+            s.indices.len(),
+            at.edges,
+            s.edge_positions.len(),
+        ),
+    };
+    let (v1, i1, e1) = (
+        v1.min(s.positions.len()),
+        i1.min(s.indices.len()),
+        e1.min(s.edge_positions.len()),
+    );
+    let mut faces = Vec::with_capacity((v1 - v0.min(v1)) * 13);
+    for i in v0..v1 {
+        faces.extend_from_slice(&s.positions[i]);
+        faces.extend_from_slice(&s.normals[i]);
+        faces.extend_from_slice(&s.colors[i]);
+        faces.extend_from_slice(s.values.get(i).unwrap_or(&[0.0; 4]));
+    }
+    let base = v0 as u32;
+    let indices: Vec<u32> = s.indices[i0.min(i1)..i1]
+        .iter()
+        .map(|&k| k - base)
+        .collect();
+    let mut lines = Vec::with_capacity((e1 - e0.min(e1)) * 6);
+    for i in e0..e1 {
+        lines.extend_from_slice(&s.edge_positions[i]);
+        lines.extend_from_slice(&s.edge_colors[i]);
+    }
+    let mut outline = Vec::new();
+    let mut streams = Vec::new();
+    match part {
+        Part::Mesh => {
+            outline.reserve(s.outline.len() * 6);
+            for p in &s.outline {
+                outline.extend_from_slice(p);
+                outline.extend_from_slice(&s.outline_color);
+            }
+        }
+        Part::Extras => {
+            streams.reserve(s.stream_positions.len() * 6);
+            for (p, c) in s.stream_positions.iter().zip(&s.stream_colors) {
+                streams.extend_from_slice(p);
+                streams.extend_from_slice(c);
+            }
+        }
+    }
+    if indices.is_empty() && lines.is_empty() && outline.is_empty() && streams.is_empty() {
+        return None;
+    }
+    let buf = |label: &str, data: &[u8], usage| {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: data,
+            usage,
+        })
+    };
+    let some = |label: &str, data: &[f32]| {
+        (!data.is_empty()).then(|| {
+            buf(
+                label,
+                bytemuck::cast_slice(data),
+                wgpu::BufferUsages::VERTEX,
+            )
+        })
+    };
+    Some(Geometry {
+        faces: buf(
+            "murmel-faces",
+            bytemuck::cast_slice(if faces.is_empty() {
+                &[0.0f32; 13][..]
+            } else {
+                &faces
+            }),
+            wgpu::BufferUsages::VERTEX,
+        ),
+        indices: buf(
+            "murmel-indices",
+            bytemuck::cast_slice(if indices.is_empty() {
+                &[0u32; 3][..]
+            } else {
+                &indices
+            }),
+            wgpu::BufferUsages::INDEX,
+        ),
+        index_count: indices.len() as u32,
+        edge_count: (lines.len() / 6) as u32,
+        edges: some("murmel-edges", &lines),
+        outline_count: (outline.len() / 6) as u32,
+        outline: some("murmel-outline", &outline),
+        stream_count: (streams.len() / 6) as u32,
+        streams: some("murmel-streams", &streams),
+    })
 }
 
 /// Bytes per face vertex: position, normal, colour, field values.
@@ -487,84 +607,27 @@ impl MeshRenderer {
             wide_pipeline,
             wide_outline_pipeline,
             bg_pipeline,
-            geometry: None,
+            geometry: [None, None],
+            mesh_key: None,
             revision: None,
             targets: None,
         }
     }
 
+    /// Upload `surface`: its extras alone when its own faces are those
+    /// uploaded already (the same [`murmel_engine::surface::BuildKey`]),
+    /// else both parts.
     fn upload(&mut self, device: &wgpu::Device, surface: Option<&Surface>) {
-        use wgpu::util::DeviceExt;
-        self.geometry = surface
-            .filter(|s| !s.indices.is_empty() || !s.stream_positions.is_empty())
-            .map(|s| {
-                let mut faces = Vec::with_capacity(s.positions.len() * 13);
-                for i in 0..s.positions.len() {
-                    faces.extend_from_slice(&s.positions[i]);
-                    faces.extend_from_slice(&s.normals[i]);
-                    faces.extend_from_slice(&s.colors[i]);
-                    faces.extend_from_slice(s.values.get(i).unwrap_or(&[0.0; 4]));
-                }
-                let mut lines = Vec::with_capacity(s.edge_positions.len() * 6);
-                for i in 0..s.edge_positions.len() {
-                    lines.extend_from_slice(&s.edge_positions[i]);
-                    lines.extend_from_slice(&s.edge_colors[i]);
-                }
-                let mut outline = Vec::with_capacity(s.outline.len() * 6);
-                for p in &s.outline {
-                    outline.extend_from_slice(p);
-                    outline.extend_from_slice(&s.outline_color);
-                }
-                let mut streams = Vec::with_capacity(s.stream_positions.len() * 6);
-                for (p, c) in s.stream_positions.iter().zip(&s.stream_colors) {
-                    streams.extend_from_slice(p);
-                    streams.extend_from_slice(c);
-                }
-                let buf = |label: &str, data: &[u8], usage| {
-                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(label),
-                        contents: data,
-                        usage,
-                    })
-                };
-                Geometry {
-                    faces: buf(
-                        "murmel-faces",
-                        bytemuck::cast_slice(&faces),
-                        wgpu::BufferUsages::VERTEX,
-                    ),
-                    indices: buf(
-                        "murmel-indices",
-                        bytemuck::cast_slice(&s.indices),
-                        wgpu::BufferUsages::INDEX,
-                    ),
-                    index_count: s.indices.len() as u32,
-                    edges: (!lines.is_empty()).then(|| {
-                        buf(
-                            "murmel-edges",
-                            bytemuck::cast_slice(&lines),
-                            wgpu::BufferUsages::VERTEX,
-                        )
-                    }),
-                    edge_count: s.edge_positions.len() as u32,
-                    outline: (!outline.is_empty()).then(|| {
-                        buf(
-                            "murmel-outline",
-                            bytemuck::cast_slice(&outline),
-                            wgpu::BufferUsages::VERTEX,
-                        )
-                    }),
-                    outline_count: s.outline.len() as u32,
-                    streams: (!streams.is_empty()).then(|| {
-                        buf(
-                            "murmel-streams",
-                            bytemuck::cast_slice(&streams),
-                            wgpu::BufferUsages::VERTEX,
-                        )
-                    }),
-                    stream_count: (streams.len() / 6) as u32,
-                }
-            });
+        let Some(s) = surface else {
+            self.geometry = [None, None];
+            self.mesh_key = None;
+            return;
+        };
+        if self.mesh_key != Some(s.key.0) {
+            self.geometry[0] = geometry(device, s, Part::Mesh);
+            self.mesh_key = Some(s.key.0);
+        }
+        self.geometry[1] = geometry(device, s, Part::Extras);
     }
 
     fn ensure_targets(&mut self, device: &wgpu::Device, size: [u32; 2]) {
@@ -721,44 +784,50 @@ impl MeshRenderer {
             // One-pixel lines keep the line list, so the window and the
             // render tests draw exactly as before.
             let wide = view.line_width > 1.0;
-            if let Some(geo) = &self.geometry {
-                if view.faces && geo.index_count > 0 {
+            // Faces, then edges, then streamlines, then the outline, each
+            // the mesh's first and then the extras', as one buffer drew
+            // them.
+            let parts = || self.geometry.iter().flatten();
+            if view.faces {
+                for geo in parts().filter(|g| g.index_count > 0) {
                     pass.set_pipeline(&self.face_pipeline);
                     pass.set_vertex_buffer(0, geo.faces.slice(..));
                     pass.set_index_buffer(geo.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..geo.index_count, 0, 0..1);
                 }
-                if view.edges
-                    && let Some(edges) = &geo.edges
-                {
-                    pass.set_vertex_buffer(0, edges.slice(..));
-                    if wide {
-                        pass.set_pipeline(&self.wide_pipeline);
-                        pass.draw(0..6, 0..geo.edge_count / 2);
-                    } else {
-                        pass.set_pipeline(&self.line_pipeline);
-                        pass.draw(0..geo.edge_count, 0..1);
+            }
+            let lines = |pass: &mut wgpu::RenderPass<'_>,
+                         buf: &wgpu::Buffer,
+                         count: u32,
+                         narrow: &wgpu::RenderPipeline,
+                         widened: &wgpu::RenderPipeline| {
+                pass.set_vertex_buffer(0, buf.slice(..));
+                if wide {
+                    pass.set_pipeline(widened);
+                    pass.draw(0..6, 0..count / 2);
+                } else {
+                    pass.set_pipeline(narrow);
+                    pass.draw(0..count, 0..1);
+                }
+            };
+            if view.edges {
+                for geo in parts() {
+                    if let Some(edges) = &geo.edges {
+                        let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
+                        lines(&mut pass, edges, geo.edge_count, n, w);
                     }
                 }
+            }
+            for geo in parts() {
                 if let Some(streams) = &geo.streams {
-                    pass.set_vertex_buffer(0, streams.slice(..));
-                    if wide {
-                        pass.set_pipeline(&self.wide_pipeline);
-                        pass.draw(0..6, 0..geo.stream_count / 2);
-                    } else {
-                        pass.set_pipeline(&self.line_pipeline);
-                        pass.draw(0..geo.stream_count, 0..1);
-                    }
+                    let (n, w) = (&self.line_pipeline, &self.wide_pipeline);
+                    lines(&mut pass, streams, geo.stream_count, n, w);
                 }
+            }
+            for geo in parts() {
                 if let Some(outline) = &geo.outline {
-                    pass.set_vertex_buffer(0, outline.slice(..));
-                    if wide {
-                        pass.set_pipeline(&self.wide_outline_pipeline);
-                        pass.draw(0..6, 0..geo.outline_count / 2);
-                    } else {
-                        pass.set_pipeline(&self.outline_pipeline);
-                        pass.draw(0..geo.outline_count, 0..1);
-                    }
+                    let (n, w) = (&self.outline_pipeline, &self.wide_outline_pipeline);
+                    lines(&mut pass, outline, geo.outline_count, n, w);
                 }
             }
         }

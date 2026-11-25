@@ -321,7 +321,7 @@ impl Hashing {
 /// every copy of the display, and the preview compares displays on every
 /// frame, where comparing millions of values would cost more than the
 /// frame.
-fn same_display(a: &Display, b: &Display) -> bool {
+pub(crate) fn same_display(a: &Display, b: &Display) -> bool {
     fn same<T>(x: &Option<Arc<T>>, y: &Option<Arc<T>>) -> bool {
         match (x, y) {
             (None, None) => true,
@@ -899,6 +899,40 @@ impl Loaded {
     }
 }
 
+/// The mesh, fields and colours a surface's own faces were built from,
+/// and that build's key. The faces can stay only while all are the same:
+/// a field defined again, a new time step or other colours change them
+/// with the display unchanged.
+#[derive(Clone, Debug)]
+struct BuiltFrom {
+    key: u64,
+    /// Weak, so an old mesh is not kept (its place stays taken, so no
+    /// other mesh can come to have the same address).
+    mesh: std::sync::Weak<Mesh>,
+    fields: std::sync::Weak<FieldSet>,
+    tokens: Tokens,
+}
+
+impl BuiltFrom {
+    fn of(m: &OpenMesh, tokens: &Tokens) -> Self {
+        BuiltFrom {
+            key: m.surface.key.0,
+            mesh: Arc::downgrade(&m.mesh),
+            fields: Arc::downgrade(&m.fields),
+            tokens: tokens.clone(),
+        }
+    }
+
+    /// Whether `m`'s surface is still this build, from the same inputs
+    /// (any other build of a surface has another key).
+    fn is(&self, m: &OpenMesh, tokens: &Tokens) -> bool {
+        self.key == m.surface.key.0
+            && std::ptr::eq(self.mesh.as_ptr(), Arc::as_ptr(&m.mesh))
+            && std::ptr::eq(self.fields.as_ptr(), Arc::as_ptr(&m.fields))
+            && self.tokens == *tokens
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Session {
     pub tokens: Tokens,
@@ -949,6 +983,9 @@ pub struct Session {
     pub defer_clips: bool,
     /// The clip planes moving while their exact cut is built.
     pub preview: Option<ClipPreview>,
+    /// What the mesh's own faces of the surface were last built from in
+    /// [`Session::redraw`], so a change of the extras alone can keep them.
+    built_from: Option<BuiltFrom>,
     /// The time series being walked (`series.open`), whose current entry
     /// is the open mesh and parcels; ended by opening another mesh.
     pub series: Option<crate::series::Series>,
@@ -1021,6 +1058,7 @@ impl Session {
             remember_checked: false,
             defer_clips: false,
             preview: None,
+            built_from: None,
             series: None,
             probe_history: crate::history::Cache::default(),
             steps_ranges: crate::steps_range::Cache::default(),
@@ -1356,9 +1394,26 @@ impl Session {
             p.changed = Some(Instant::now());
             return;
         }
+        // Only the slices, iso-surfaces, arrows and the like changed: the
+        // mesh's own faces stay (and a renderer keeps them uploaded).
+        if self.preview.is_none()
+            && !swapped
+            && self
+                .built_from
+                .as_ref()
+                .is_some_and(|b| b.is(m, &self.tokens))
+            && crate::surface::extras_only(&m.built_for, &self.display)
+        {
+            m.surface
+                .rebuild_extras(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
+            m.built_for = self.display.clone();
+            self.surface_revision += 1;
+            return;
+        }
         self.preview = None;
         m.surface = Surface::build_with(&m.mesh, Some(&m.fields), &self.tokens, &self.display);
         m.built_for = self.display.clone();
+        self.built_from = Some(BuiltFrom::of(m, &self.tokens));
         self.surface_revision += 1;
     }
 
@@ -1879,6 +1934,91 @@ mod tests {
         assert!(matches!(stale, Validity::Failed(w) if w.len() == 1));
         let m = s.open(&fixture("box/foehncraft.vtu")).unwrap();
         assert_eq!(m.validity, Validity::NoEvidence);
+    }
+
+    /// Invariant (fields on large meshes): a change of the slices,
+    /// iso-surfaces, arrows or streamlines alone builds only those again
+    /// ([`Surface::rebuild_extras`]): the mesh's own faces keep their
+    /// build key (a renderer keeps them uploaded) and the surface is the
+    /// one a whole build of the display gives, bit for bit, pick boxes
+    /// included. Anything else (a colour, a clip, the first slice, which
+    /// makes the mesh an outline) builds the whole surface with a new
+    /// key. Breaks when a rebuild leaves stale extras or counts behind,
+    /// or when a change of the mesh's faces takes the short path. The
+    /// other session tests do not look at the key.
+    #[test]
+    fn extras_alone_are_built_again_alone() {
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        s.open(&fixture("vtkhdf/channel_fields.vtkhdf")).unwrap();
+        let b = s.mesh.as_ref().unwrap().mesh.bounds();
+        let c = b.center();
+        let check = |s: &mut Session, short: bool, what: &str| {
+            let key = s.mesh.as_ref().unwrap().surface.key.0;
+            s.redraw();
+            let m = s.mesh.as_ref().unwrap();
+            let whole = Surface::build_with(&m.mesh, Some(&m.fields), &s.tokens, &s.display);
+            assert_eq!(m.surface, whole, "{what}");
+            assert_eq!(m.surface.tri_boxes, whole.tri_boxes, "{what}");
+            assert_eq!(m.surface.key.0 == key, short, "{what}");
+        };
+        let p = crate::field::FieldChoice {
+            name: "pressure".into(),
+            component: Component::Magnitude,
+        };
+        s.display.color_by = ColorBy::Field;
+        s.display.field = Some(p.clone());
+        check(&mut s, false, "colour by a field");
+        s.display.slices.push(crate::Slice::new(c, [1.0, 0.0, 0.0]));
+        check(&mut s, false, "the first slice makes the mesh an outline");
+        s.display.slices[0].origin[0] += 0.1 * (b.max[0] - b.min[0]);
+        check(&mut s, true, "a slice moved");
+        s.display.isos.push(crate::Iso {
+            field: p.clone(),
+            value: 0.0,
+            enabled: true,
+            color: crate::IsoColor::Field,
+        });
+        check(&mut s, true, "an iso-surface added");
+        s.display.isos[0].value = 0.5;
+        check(&mut s, true, "its value changed");
+        s.display.arrows = Some(crate::Arrows::new("velocity"));
+        check(&mut s, true, "arrows");
+        s.display.selection = vec![Item::Slice(0)];
+        check(&mut s, true, "the slice selected");
+        let line = crate::Seed::Line {
+            from: [b.min[0], c[1], c[2]],
+            to: [b.min[0], b.max[1], c[2]],
+        };
+        s.display.streams.push(crate::Stream::new("velocity", line));
+        check(&mut s, true, "streamlines");
+        s.display.slices[0].count = 3;
+        check(&mut s, true, "a series");
+        check(&mut s, true, "nothing changed");
+        let set = (*s.mesh.as_ref().unwrap().fields).clone();
+        s.mesh.as_mut().unwrap().fields = Arc::new(set);
+        check(&mut s, false, "the fields made again, the display the same");
+        s.colors.solid = Some(crate::Rgb([200, 30, 30]));
+        s.tokens = Tokens::builtin().unwrap().with_colors(&s.colors).unwrap();
+        check(&mut s, false, "other colours, the display the same");
+        s.display.selection = vec![Item::Cell(3)];
+        check(&mut s, false, "a cell selected");
+        s.display.clips.push(crate::Clip {
+            origin: c,
+            normal: [0.0, 0.0, 1.0],
+            mode: crate::ClipMode::Flat,
+            enabled: true,
+        });
+        check(&mut s, false, "a clip");
+        s.display.slices[0].origin[1] += 0.01;
+        check(&mut s, true, "a slice moved under the clip");
+        s.display.mesh_look = crate::MeshLook::Faces;
+        check(&mut s, false, "the mesh's faces asked for");
+        s.display.isos.clear();
+        s.display.arrows = None;
+        s.display.slices.clear();
+        s.display.streams.clear();
+        check(&mut s, false, "nothing extra left");
     }
 
     /// Invariant: with `defer_clips`, moving a clip plane leaves the

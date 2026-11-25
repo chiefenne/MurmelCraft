@@ -1333,3 +1333,37 @@ before this and the section above:
 
 Left: the topology's centroids and its node to cell lists (about 470
 ms of the 706), made once per mesh.
+
+## Slices, iso-surfaces and arrows built again alone (2026-11-24)
+
+Moving a slice built the whole surface again: the mesh's own faces,
+their field colours and feature edges first, then the slice. On a
+mesh of 1 M cells that was about 220 ms of each slice step, for faces
+that had not changed.
+
+Now the surface remembers where its extras start (`Surface.extras_at`:
+the slices, iso-surfaces, arrows, streamlines, parcels and block
+boxes, appended after the mesh's faces). When only extras changed
+(`surface::extras_only`: the same mesh items, clip, selection of mesh
+items and look), `Session::redraw` cuts the surface back to that point
+and appends the extras again (`Surface::rebuild_extras`); the pick
+boxes are made again only for the runs from there on. The renderer
+keeps two sets of buffers, the mesh's and the extras', and uploads the
+mesh's only when the surface was built anew (`Surface.key`), so a
+slice step also uploads only the slice.
+
+The surface is the same, bit for bit, as when built whole (a test
+steps through colour, slices, iso-surfaces, arrows, streamlines, a
+time series, selection and clips, comparing each with a whole build,
+and checks which steps keep the mesh's buffers).
+
+1 M honeycomb, polyMesh binary, 4 threads, `--no-render`; in brackets
+before this:
+
+| Stage (ms) | now (was) |
+|---|---:|
+| slice.step | 230 (421) |
+| iso.step | 813 (1,023) |
+| slice.step.arrows | 337 (493) |
+
+The slice itself is now most of a step (extract.slice, about 170 ms).
