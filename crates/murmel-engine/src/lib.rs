@@ -43,6 +43,7 @@ pub mod session_file;
 pub mod settings;
 pub mod steps_range;
 pub mod stream;
+pub mod stream_blocks;
 pub mod surface;
 mod tets;
 pub mod theme;

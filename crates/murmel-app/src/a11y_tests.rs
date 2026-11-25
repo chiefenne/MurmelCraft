@@ -1949,6 +1949,70 @@ fn probes_on_an_overview_in_the_window() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Invariant (the maintainer's card 8 of 2026-11-24, a block cache for
+/// streamlines): on an overview a streamline set is traced through the
+/// blocks of the file on a thread of its own, the window polling it, and
+/// its lines then draw; the controls keep clean names meanwhile and
+/// after. Breaks when the window never polls the trace (no lines draw),
+/// or when the call waits for it. The engine and tool tests trace at
+/// once.
+#[test]
+fn streamlines_on_an_overview_in_the_window() {
+    let dir = std::env::temp_dir().join(format!("murmel-stream-win-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let (open, config) = (path.clone(), dir.clone());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .build_eframe(move |cc| {
+            let mut app = MurmelApp::new(cc, None).unwrap();
+            app.session.config_dir = Some(config);
+            app.bridge_path = None;
+            app.session.memory_budget = Some(1e-9);
+            app.session.cache_dir = None;
+            app.open_path(open);
+            app
+        });
+    h.run_steps(3);
+    opened(&mut h);
+    assert!(h.state().session.mesh.as_ref().unwrap().overview.is_some());
+    // (opened as an overview; the blocks the lines reach fit the budget)
+    h.state_mut().session.memory_budget = None;
+    let set = serde_json::json!({"new": true, "field": "velocity", "seed": "line", "count": 8});
+    assert!(h.state_mut().call("stream.set", set).is_some());
+    assert!(
+        h.state().session.probe_blocks.stream_job.is_some(),
+        "traced on a thread of its own"
+    );
+    let start = std::time::Instant::now();
+    while h.state().session.probe_blocks.stream_job.is_some() {
+        assert!(start.elapsed().as_secs() < 60, "the trace never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    let s = &h.state().session;
+    let t = s.display.stream_traces.as_ref().unwrap().0[0]
+        .clone()
+        .unwrap();
+    assert!(
+        t.fits(&s.display.streams[0]) && !t.lines.is_empty(),
+        "{t:?}"
+    );
+    let m = s.mesh.as_ref().unwrap();
+    assert!(!m.surface.stream_positions.is_empty(), "the lines draw");
+    assert_eq!(
+        problems(&h),
+        Vec::<String>::new(),
+        "streamlines on an overview"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Invariant: on an overview the model tree has a "Block boxes" row
 /// whose eye shows and hides the boxes of its blocks, named with how
 /// many blocks there are and, once a region is drawn, how many it reads;

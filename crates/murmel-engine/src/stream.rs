@@ -471,7 +471,7 @@ impl CellGrid {
     }
 
     /// The cell whose centroid is nearest `p`.
-    fn nearest(&self, p: [f64; 3]) -> Option<u32> {
+    pub(crate) fn nearest(&self, p: [f64; 3]) -> Option<u32> {
         let b = self.bucket(p);
         let step = self.side.iter().copied().fold(f64::INFINITY, f64::min);
         let most = self.dims.iter().copied().max().unwrap_or(1);
@@ -510,10 +510,62 @@ impl CellGrid {
     }
 }
 
+/// A cell of a part ([`Parts`]): of the mesh shown (part 0), or of a
+/// block of an overview's file (the part is the block).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct At {
+    pub part: u32,
+    pub cell: u32,
+}
+
+impl At {
+    /// Cell `cell` of the mesh shown.
+    fn whole(cell: u32) -> At {
+        At { part: 0, cell }
+    }
+}
+
+/// A mesh streamlines are traced through: the mesh shown, or a block of
+/// an overview's file read with its halo ([`crate::stream_blocks`]).
+#[derive(Clone, Copy)]
+pub(crate) struct Part<'a> {
+    pub mesh: &'a Mesh,
+    pub fields: &'a FieldSet,
+    /// The three components of the traced vector field.
+    pub v: [&'a FieldValues; 3],
+    /// The values the lines are coloured by.
+    pub color: Option<&'a FieldValues>,
+    /// Which cells are the halo: a walk entering one goes on in the block
+    /// that owns it, so the field is always read in an owned cell.
+    pub halo: Option<&'a [bool]>,
+}
+
+/// The meshes streamlines are traced through.
+pub(crate) trait Parts: Sync {
+    /// Part `i`, when it is read.
+    fn part(&self, i: u32) -> Option<Part<'_>>;
+    /// The cell owning halo cell `c` of part `i`, in the part of its
+    /// block (read when needed); `None` when that block cannot be read.
+    fn owner(&self, i: u32, c: u32) -> Option<At>;
+}
+
+/// The mesh shown, the one part.
+struct Whole<'a>(Part<'a>);
+
+impl Parts for Whole<'_> {
+    fn part(&self, i: u32) -> Option<Part<'_>> {
+        (i == 0).then_some(self.0)
+    }
+
+    fn owner(&self, _: u32, _: u32) -> Option<At> {
+        None
+    }
+}
+
 /// Where a point lies: in one tetrahedron of a cell, with its weights.
 #[derive(Clone, Copy, Debug)]
 struct Hit<'m> {
-    cell: u32,
+    at: At,
     face: u32,
     nodes: &'m [u32],
     fc: [f64; 3],
@@ -535,6 +587,9 @@ enum End {
     Steps,
     /// The field has no value there, or the walk got lost.
     Lost,
+    /// On an overview: the block it went on into could not be read
+    /// (beyond the memory budget, or the file failed).
+    Unread,
 }
 
 /// How many streamlines ended each way (each direction counts once).
@@ -545,6 +600,12 @@ pub struct Ends {
     pub length: usize,
     pub steps: usize,
     pub lost: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unread: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 impl Ends {
@@ -555,17 +616,22 @@ impl Ends {
             End::Length => &mut self.length,
             End::Steps => &mut self.steps,
             End::Lost => &mut self.lost,
+            End::Unread => &mut self.unread,
         } += 1;
     }
 }
 
-/// One streamline: its points upstream to downstream, the cell of each,
-/// and the colour field's value at each (empty when solid).
+/// One streamline: its points upstream to downstream, the cell of each
+/// (of the mesh shown; none on an overview), and the colour field's value
+/// at each (empty when solid).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Line {
     pub points: Vec<[f64; 3]>,
     pub cells: Vec<u32>,
     pub values: Vec<f64>,
+    /// On an overview: the colour field's value of each point's cell
+    /// (the flat style), as `cells` give it on the mesh shown.
+    pub cell_values: Vec<f64>,
 }
 
 /// What a trace was made for.
@@ -624,6 +690,11 @@ pub struct Traced {
     pub color_range: Option<(f64, f64)>,
     /// Why nothing was traced (the field is missing or not a vector).
     pub problem: Option<String>,
+    /// The memory budget it was traced through an overview's blocks
+    /// within ([`crate::stream_blocks`]); `None` on the cells shown.
+    pub(crate) budget: Option<u64>,
+    /// How many blocks the lines went through (an overview's).
+    pub blocks: Option<usize>,
 }
 
 impl std::fmt::Debug for Traced {
@@ -648,6 +719,17 @@ impl Traced {
             && self.key.max_length == s.max_length
             && self.color == s.color
     }
+}
+
+/// Whether sets `a` and `b` trace the same lines, coloured alike (their
+/// looks aside).
+pub(crate) fn same_trace(a: &Stream, b: &Stream) -> bool {
+    a.field == b.field
+        && a.seed == b.seed
+        && a.count == b.count
+        && a.direction == b.direction
+        && a.max_length == b.max_length
+        && a.color == b.color
 }
 
 /// The traces of the display's streamline sets, by set (`None` for a set
@@ -699,24 +781,41 @@ pub fn ensure(display: &mut Display, mesh: &Mesh, fields: &FieldSet) {
     }
 }
 
-/// Finds points in the cells and the vector field there.
+/// Finds points in the cells of the parts and the vector field there.
 struct Tracer<'a> {
-    mesh: &'a Mesh,
-    fields: &'a FieldSet,
-    v: [&'a FieldValues; 3],
+    parts: &'a dyn Parts,
+    /// The regions shown (cells of part 0).
     region: Option<&'a RegionCells>,
 }
 
+/// Which values of a part [`Tracer::value`] reads.
+#[derive(Clone, Copy)]
+enum Of {
+    /// A component of the traced vector.
+    V(usize),
+    /// The colour field.
+    Color,
+}
+
 impl<'a> Tracer<'a> {
-    fn allowed(&self, c: u32) -> bool {
-        self.region.is_none_or(|r| r.contains(c as usize))
+    fn part(&self, i: u32) -> Result<Part<'a>, End> {
+        self.parts.part(i).ok_or(End::Lost)
     }
 
-    /// The tetrahedron of cell `c` holding `p`, or the one it is nearest
+    fn allowed(&self, at: At) -> bool {
+        self.region.is_none_or(|r| r.contains(at.cell as usize))
+    }
+
+    /// The tetrahedron of cell `at` holding `p`, or the one it is nearest
     /// to (its weights clamped), and whether `p` lies inside.
-    fn in_cell(&self, c: u32, p: [f64; 3]) -> Option<(Hit<'a>, bool)> {
-        let mesh = self.mesh;
-        let centre = centroid(mesh, Some(self.fields), c as usize);
+    fn in_cell(&self, at: At, p: [f64; 3]) -> Option<(Hit<'a>, bool)> {
+        let part = self.parts.part(at.part)?;
+        let mesh = part.mesh;
+        let c = at.cell;
+        if c as usize >= mesh.cell_count() {
+            return None;
+        }
+        let centre = centroid(mesh, Some(part.fields), c as usize);
         let mut best: Option<(f64, Hit<'a>)> = None;
         for f in mesh.cell(c as usize) {
             if f.len() < 3 {
@@ -734,7 +833,7 @@ impl<'a> Tracer<'a> {
                     best = Some((
                         low,
                         Hit {
-                            cell: c,
+                            at,
                             face: f.id,
                             nodes: f.nodes,
                             fc,
@@ -761,18 +860,32 @@ impl<'a> Tracer<'a> {
         })
     }
 
-    /// Walk from cell `from` to the cell holding `p`.
-    fn locate_from(&self, p: [f64; 3], from: u32) -> Result<Hit<'a>, End> {
+    /// Walk from cell `from` to the cell holding `p`. A walk entering a
+    /// halo cell goes on from the same cell in the block owning it.
+    fn locate_from(&self, p: [f64; 3], from: At) -> Result<Hit<'a>, End> {
         if !p.iter().all(|v| v.is_finite()) {
             return Err(End::Lost);
         }
-        let mesh = self.mesh;
-        let (mut c, mut prev) = (from, NO_CELL);
+        let (mut at, mut prev) = (from, NO_CELL);
         for _ in 0..MAX_HOPS {
-            if !self.allowed(c) {
+            let part = self.part(at.part)?;
+            if part
+                .halo
+                .is_some_and(|h| h.get(at.cell as usize).copied().unwrap_or(false))
+            {
+                at = self.parts.owner(at.part, at.cell).ok_or(End::Unread)?;
+                prev = NO_CELL;
+                continue;
+            }
+            if !self.allowed(at) {
                 return Err(End::Left);
             }
-            let cc = centroid(mesh, Some(self.fields), c as usize);
+            let mesh = part.mesh;
+            let c = at.cell;
+            if c as usize >= mesh.cell_count() {
+                return Err(End::Lost);
+            }
+            let cc = centroid(mesh, Some(part.fields), c as usize);
             // The face whose plane the way from the centroid to `p`
             // crosses first.
             let mut exit: Option<(f64, u32)> = None;
@@ -803,38 +916,48 @@ impl<'a> Tracer<'a> {
                 }
             }
             let Some((_, u)) = exit else {
-                return self.in_cell(c, p).map(|(h, _)| h).ok_or(End::Lost);
+                return self.in_cell(at, p).map(|(h, _)| h).ok_or(End::Lost);
             };
             let next = mesh.across(u as usize, c);
             if next == NO_CELL {
                 // Past a boundary face's plane, which a warped face may
                 // not bound exactly.
-                return match self.in_cell(c, p) {
+                return match self.in_cell(at, p) {
                     Some((h, true)) => Ok(h),
                     _ => Err(End::Left),
                 };
             }
             if next == prev {
                 // Between two cells whose faces are not flat: the nearer.
-                return self.in_cell(c, p).map(|(h, _)| h).ok_or(End::Lost);
+                return self.in_cell(at, p).map(|(h, _)| h).ok_or(End::Lost);
             }
             prev = c;
-            c = next;
+            at.cell = next;
         }
         Err(End::Lost)
     }
 
-    /// The value of `f` where `h` lies.
-    fn value(&self, f: &FieldValues, h: &Hit<'_>) -> f64 {
-        let fv = face_value(self.mesh, Some(self.fields), f, h.face, h.nodes, h.fc);
-        h.w[0] * cell_value(f, h.cell as usize)
+    /// The value of `of` where `h` lies.
+    fn value(&self, of: Of, h: &Hit<'_>) -> f64 {
+        let Some(part) = self.parts.part(h.at.part) else {
+            return f64::NAN;
+        };
+        let f = match of {
+            Of::V(k) => part.v[k],
+            Of::Color => match part.color {
+                Some(f) => f,
+                None => return f64::NAN,
+            },
+        };
+        let fv = face_value(part.mesh, Some(part.fields), f, h.face, h.nodes, h.fc);
+        h.w[0] * cell_value(f, h.at.cell as usize)
             + h.w[1] * fv
             + h.w[2] * node_value(f, h.a)
             + h.w[3] * node_value(f, h.b)
     }
 
     fn vector(&self, h: &Hit<'_>) -> Result<[f64; 3], End> {
-        let v = self.v.map(|f| self.value(f, h));
+        let v = [0, 1, 2].map(|k| self.value(Of::V(k), h));
         if v.iter().all(|x| x.is_finite()) {
             Ok(v)
         } else {
@@ -842,12 +965,15 @@ impl<'a> Tracer<'a> {
         }
     }
 
-    /// The size of cell `c`: the cube root of its box's volume (its
+    /// The size of cell `at`: the cube root of its box's volume (its
     /// largest side when the box is flat).
-    fn size(&self, c: u32) -> f64 {
+    fn size(&self, at: At) -> f64 {
+        let Some(part) = self.parts.part(at.part) else {
+            return f64::NAN;
+        };
         let mut b = Bounds::empty();
-        for i in self.mesh.cell_points(c as usize) {
-            if let Some(&p) = self.mesh.points.get(i as usize) {
+        for i in part.mesh.cell_points(at.cell as usize) {
+            if let Some(&p) = part.mesh.points.get(i as usize) {
                 b.add(p);
             }
         }
@@ -859,7 +985,7 @@ impl<'a> Tracer<'a> {
 
     /// The unit direction (times `sign`) at `p`, found from cell `from`:
     /// its cell, the direction and the vector.
-    fn direction(&self, p: [f64; 3], from: u32, sign: f64) -> Result<(u32, [f64; 3]), End> {
+    fn direction(&self, p: [f64; 3], from: At, sign: f64) -> Result<(At, [f64; 3]), End> {
         let h = self.locate_from(p, from)?;
         let v = self.vector(&h)?;
         let s = norm(v);
@@ -868,25 +994,25 @@ impl<'a> Tracer<'a> {
         } else {
             [0.0; 3]
         };
-        Ok((h.cell, d))
+        Ok((h.at, d))
     }
 
     /// One step of `h` from `x` (in cell `c`, direction `k1`).
     fn rk4(
         &self,
         x: [f64; 3],
-        c: u32,
+        c: At,
         k1: [f64; 3],
         h: f64,
         sign: f64,
-    ) -> Result<([f64; 3], u32), End> {
+    ) -> Result<([f64; 3], At), End> {
         let (c2, k2) = self.direction(add(x, scale(k1, 0.5 * h)), c, sign)?;
         let (c3, k3) = self.direction(add(x, scale(k2, 0.5 * h)), c2, sign)?;
         let (_, k4) = self.direction(add(x, scale(k3, h)), c3, sign)?;
         let d = [0, 1, 2].map(|i| (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]) / 6.0);
         let xn = add(x, scale(d, h));
         let hit = self.locate_from(xn, c3)?;
-        Ok((xn, hit.cell))
+        Ok((xn, hit.at))
     }
 
     /// Follow the field from `p0` (in cell `c0`) one way: the points
@@ -894,12 +1020,12 @@ impl<'a> Tracer<'a> {
     fn march(
         &self,
         p0: [f64; 3],
-        c0: u32,
+        c0: At,
         sign: f64,
         limit: f64,
         steps: usize,
         slow: f64,
-    ) -> (Vec<[f64; 3]>, Vec<u32>, End) {
+    ) -> (Vec<[f64; 3]>, Vec<At>, End) {
         let (mut pts, mut cells) = (Vec::new(), Vec::new());
         let (mut x, mut c, mut len) = (p0, c0, 0.0);
         loop {
@@ -910,6 +1036,8 @@ impl<'a> Tracer<'a> {
                 Ok(h) => h,
                 Err(e) => return (pts, cells, e),
             };
+            // (on an overview the cell may now be of another block)
+            c = hit.at;
             let v = match self.vector(&hit) {
                 Ok(v) => v,
                 Err(e) => return (pts, cells, e),
@@ -950,26 +1078,45 @@ impl<'a> Tracer<'a> {
     }
 }
 
-/// The values of `values` at the lines' points, and their range.
+/// The colour field's values at the lines' points (`ats`: the cell of
+/// each), and their range; `own` keeps each point's cell's own value too
+/// (an overview's lines, which name no cell of the mesh shown).
 fn color_values(
     lines: &mut [Line],
+    ats: &[Vec<At>],
     tracer: &Tracer<'_>,
-    values: Option<&FieldValues>,
+    colored: bool,
+    own: bool,
 ) -> Option<(f64, f64)> {
     let mut range: Option<(f64, f64)> = None;
-    for l in lines.iter_mut() {
+    for (l, ats) in lines.iter_mut().zip(ats) {
         l.values.clear();
-        let Some(f) = values else { continue };
+        l.cell_values.clear();
+        if !colored {
+            continue;
+        }
         l.values = l
             .points
             .iter()
-            .zip(&l.cells)
+            .zip(ats)
             .map(|(&p, &c)| {
                 tracer
                     .in_cell(c, p)
-                    .map_or(f64::NAN, |(h, _)| tracer.value(f, &h))
+                    .map_or(f64::NAN, |(h, _)| tracer.value(Of::Color, &h))
             })
             .collect();
+        if own {
+            l.cell_values = ats
+                .iter()
+                .map(|a| {
+                    tracer
+                        .parts
+                        .part(a.part)
+                        .and_then(|p| p.color)
+                        .map_or(f64::NAN, |f| cell_value(f, a.cell as usize))
+                })
+                .collect();
+        }
         for &v in l.values.iter().filter(|v| v.is_finite()) {
             range = Some(range.map_or((v, v), |(a, b)| (a.min(v), b.max(v))));
         }
@@ -1023,6 +1170,8 @@ fn empty(key: Key, color: Option<FieldChoice>, problem: Option<String>) -> Trace
         points: 0,
         color_range: None,
         problem,
+        budget: None,
+        blocks: None,
     }
 }
 
@@ -1033,18 +1182,28 @@ fn recolor(mut t: Traced, mesh: &Mesh, fields: &FieldSet, color: &Option<FieldCh
         t.color_range = None;
         return t;
     };
-    let tracer = Tracer {
+    let values = color.as_ref().and_then(|c| fields.values_cached(mesh, c));
+    let whole = Whole(Part {
         mesh,
         fields,
         v: [&*v[0], &*v[1], &*v[2]],
+        color: values.as_deref(),
+        halo: None,
+    });
+    let tracer = Tracer {
+        parts: &whole,
         region: t.key.region.as_deref(),
     };
-    let values = color.as_ref().and_then(|c| fields.values_cached(mesh, c));
-    t.color_range = color_values(&mut t.lines, &tracer, values.as_deref());
+    let ats: Vec<Vec<At>> = t
+        .lines
+        .iter()
+        .map(|l| l.cells.iter().map(|&c| At::whole(c)).collect())
+        .collect();
+    t.color_range = color_values(&mut t.lines, &ats, &tracer, values.is_some(), false);
     t
 }
 
-/// Trace the streamlines of `s`.
+/// Trace the streamlines of `s` on the mesh shown.
 fn trace(mesh: &Mesh, fields: &FieldSet, s: &Stream, key: Key) -> Traced {
     let (v, top) = match vector_values(mesh, fields, &s.field) {
         Ok(v) => v,
@@ -1053,16 +1212,93 @@ fn trace(mesh: &Mesh, fields: &FieldSet, s: &Stream, key: Key) -> Traced {
     if let Some(e) = s.seed.problem(mesh) {
         return empty(key, s.color.clone(), Some(e));
     }
+    let values = s.color.as_ref().and_then(|c| fields.values_cached(mesh, c));
     let region = key.region.clone();
-    let tracer = Tracer {
+    let whole = Whole(Part {
         mesh,
         fields,
         v: [&*v[0], &*v[1], &*v[2]],
+        color: values.as_deref(),
+        halo: None,
+    });
+    let tracer = Tracer {
+        parts: &whole,
         region: region.as_deref(),
     };
     let grid = fields.cell_grid(mesh);
-    let (seeds, outside) = seeds(&tracer, grid, &s.seed, s.count.clamp(MIN_COUNT, MAX_COUNT));
-    let limit = s.length_limit(mesh);
+    let locate = |p: [f64; 3]| -> Option<At> {
+        let start = grid.nearest(p)?;
+        tracer.locate_from(p, At::whole(start)).ok().map(|h| h.at)
+    };
+    let (mut t, ats) = trace_lines(&tracer, mesh, s, key, top, &locate);
+    t.color_range = color_values(&mut t.lines, &ats, &tracer, values.is_some(), false);
+    for (l, a) in t.lines.iter_mut().zip(&ats) {
+        l.cells = a.iter().map(|a| a.cell).collect();
+    }
+    t
+}
+
+/// Trace the streamlines of `s` through the parts of `tracer`, seeded on
+/// `domain` (the mesh shown, or an overview's boundary) and placed in the
+/// parts by `locate`; `top` is the traced field's largest magnitude. The
+/// lines name the cells of the mesh shown unless `blocks` (then none),
+/// and are coloured by the parts' colour values (their range too).
+pub(crate) fn trace_parts(
+    parts: &dyn Parts,
+    domain: &Mesh,
+    s: &Stream,
+    top: f64,
+    locate: &(dyn Fn([f64; 3]) -> Option<At> + Sync),
+) -> Traced {
+    let key = Key::of(s, None);
+    if let Some(e) = s.seed.problem(domain) {
+        return empty(key, s.color.clone(), Some(e));
+    }
+    let tracer = Tracer {
+        parts,
+        region: None,
+    };
+    let (mut t, ats) = trace_lines(&tracer, domain, s, key, top, locate);
+    t.color_range = color_values(&mut t.lines, &ats, &tracer, s.color.is_some(), true);
+    for l in &mut t.lines {
+        l.cells = vec![NO_CELL; l.points.len()];
+    }
+    t
+}
+
+/// The cell holding `p`, walking through `parts` from cell `start`;
+/// `None` outside the mesh or when the walk gets lost.
+pub(crate) fn locate_in(parts: &dyn Parts, p: [f64; 3], start: At) -> Option<At> {
+    let tracer = Tracer {
+        parts,
+        region: None,
+    };
+    tracer.locate_from(p, start).ok().map(|h| h.at)
+}
+
+/// The streamlines of `s` not traced, and why.
+pub(crate) fn failed(s: &Stream, problem: String) -> Traced {
+    empty(Key::of(s, None), s.color.clone(), Some(problem))
+}
+
+/// Seed and trace the lines of `s`: the trace (not coloured, its lines
+/// naming no cell) and the cell of each point of each line.
+fn trace_lines(
+    tracer: &Tracer<'_>,
+    domain: &Mesh,
+    s: &Stream,
+    key: Key,
+    top: f64,
+    locate: &(dyn Fn([f64; 3]) -> Option<At> + Sync),
+) -> (Traced, Vec<Vec<At>>) {
+    let (seeds, outside) = seeds(
+        tracer,
+        domain,
+        locate,
+        &s.seed,
+        s.count.clamp(MIN_COUNT, MAX_COUNT),
+    );
+    let limit = s.length_limit(domain);
     let ways = match s.direction {
         Direction::Forward => vec![1.0],
         Direction::Backward => vec![-1.0],
@@ -1070,47 +1306,48 @@ fn trace(mesh: &Mesh, fields: &FieldSet, s: &Stream, key: Key) -> Traced {
     };
     let steps = (MAX_POINTS / (seeds.len().max(1) * ways.len())).clamp(1, MAX_STEPS);
     let slow = SLOW * top;
-    let traced: Vec<(Line, Vec<End>)> = murmel_mesh::par::collect(seeds.len(), 1, |r| {
+    let traced: Vec<(Line, Vec<At>, Vec<End>)> = murmel_mesh::par::collect(seeds.len(), 1, |r| {
         r.map(|i| {
             let (p, c) = seeds[i];
             let mut line = Line::default();
+            let mut ats: Vec<At> = Vec::new();
             let mut ends = Vec::new();
             for &sign in &ways {
                 let (pts, cells, end) = tracer.march(p, c, sign, limit, steps, slow);
                 ends.push(end);
                 if sign < 0.0 {
                     line.points.extend(pts.into_iter().rev());
-                    line.cells.extend(cells.into_iter().rev());
+                    ats.extend(cells.into_iter().rev());
                     line.points.push(p);
-                    line.cells.push(c);
+                    ats.push(c);
                 } else {
                     if line.points.is_empty() {
                         line.points.push(p);
-                        line.cells.push(c);
+                        ats.push(c);
                     }
                     line.points.extend(pts);
-                    line.cells.extend(cells);
+                    ats.extend(cells);
                 }
             }
-            (line, ends)
+            (line, ats, ends)
         })
         .collect()
     });
     let mut t = empty(key, s.color.clone(), None);
     t.seeds = seeds.len();
     t.outside = outside;
-    for (line, ends) in traced {
+    let mut all = Vec::new();
+    for (line, ats, ends) in traced {
         for e in ends {
             t.ends.add(e);
         }
         if line.points.len() >= 2 {
             t.points += line.points.len();
             t.lines.push(line);
+            all.push(ats);
         }
     }
-    let values = s.color.as_ref().and_then(|c| fields.values_cached(mesh, c));
-    t.color_range = color_values(&mut t.lines, &tracer, values.as_deref());
-    t
+    (t, all)
 }
 
 /// Van der Corput's radical inverse of `i` in `base` (Halton's sequence
@@ -1129,17 +1366,13 @@ fn radical_inverse(mut i: usize, base: usize) -> f64 {
 /// how many points of the shape fell outside the mesh.
 fn seeds(
     tracer: &Tracer<'_>,
-    grid: &CellGrid,
+    mesh: &Mesh,
+    locate: &(dyn Fn([f64; 3]) -> Option<At> + Sync),
     seed: &Seed,
     count: u32,
-) -> (Vec<([f64; 3], u32)>, usize) {
+) -> (Vec<([f64; 3], At)>, usize) {
     let n = count as usize;
-    let mesh = tracer.mesh;
-    let locate = |p: [f64; 3]| -> Option<u32> {
-        let start = grid.nearest(p)?;
-        tracer.locate_from(p, start).ok().map(|h| h.cell)
-    };
-    let place = |pts: Vec<[f64; 3]>| -> (Vec<([f64; 3], u32)>, usize) {
+    let place = |pts: Vec<[f64; 3]>| -> (Vec<([f64; 3], At)>, usize) {
         let mut out = Vec::with_capacity(pts.len());
         let mut outside = 0;
         for p in pts {
@@ -1183,8 +1416,10 @@ fn seeds(
             let Some(pi) = mesh.patches.iter().position(|p| &p.name == patch) else {
                 return (Vec::new(), 0);
             };
-            // The patch's faces: centre, area, owner.
-            let faces: Vec<([f64; 3], f64, u32)> = (0..mesh.boundary.len())
+            // The patch's faces: centre, area, owner (none on an
+            // overview's boundary, whose faces point out of the volume).
+            let cells = mesh.cell_count() > 0;
+            let faces: Vec<([f64; 3], f64, u32, [f64; 3])> = (0..mesh.boundary.len())
                 .filter(|&b| mesh.boundary_patch.get(b) == Some(&(pi as u32)))
                 .map(|b| {
                     let nodes = mesh.boundary.get(b);
@@ -1200,9 +1435,9 @@ fn seeds(
                         );
                     }
                     let owner = mesh.boundary_owner.get(b).copied().unwrap_or(NO_CELL);
-                    (fc, 0.5 * norm(a), owner)
+                    (fc, 0.5 * norm(a), owner, a)
                 })
-                .filter(|f| f.2 != NO_CELL && f.0.iter().all(|v| v.is_finite()))
+                .filter(|f| (f.2 != NO_CELL || !cells) && f.0.iter().all(|v| v.is_finite()))
                 .collect();
             let total: f64 = faces.iter().map(|f| f.1).sum();
             if faces.is_empty() {
@@ -1234,14 +1469,26 @@ fn seeds(
             picks.sort_unstable();
             let mut out = Vec::with_capacity(picks.len());
             let mut outside = 0;
+            let inward = 1e-6 * mesh.bounds().radius();
             for k in picks {
-                let (fc, _, owner) = faces[k];
-                // Just inside the owner, so the walk starts in it.
-                let cc = centroid(mesh, Some(tracer.fields), owner as usize);
-                let p = add(fc, scale(sub(cc, fc), 1e-3));
-                match tracer.locate_from(p, owner) {
-                    Ok(h) => out.push((p, h.cell)),
-                    Err(_) => outside += 1,
+                let (fc, _, owner, normal) = faces[k];
+                let found = if owner == NO_CELL {
+                    // Just inside the volume, against the face's normal.
+                    let p = sub(fc, scale(unit(normal), inward));
+                    locate(p).map(|c| (p, c))
+                } else {
+                    // Just inside the owner, so the walk starts in it.
+                    let fields = tracer.parts.part(0).map(|p| p.fields);
+                    let cc = centroid(mesh, fields, owner as usize);
+                    let p = add(fc, scale(sub(cc, fc), 1e-3));
+                    tracer
+                        .locate_from(p, At::whole(owner))
+                        .ok()
+                        .map(|h| (p, h.at))
+                };
+                match found {
+                    Some(f) => out.push(f),
+                    None => outside += 1,
                 }
             }
             (out, outside)
@@ -1319,7 +1566,8 @@ enum Paint {
         hi: f64,
         mode: FieldMode,
         bands: u32,
-        values: Arc<FieldValues>,
+        /// The mesh's values (none on an overview without the field).
+        values: Option<Arc<FieldValues>>,
         none: [f32; 3],
         mix: Option<(Rgb, f32)>,
     },
@@ -1341,10 +1589,14 @@ impl Paint {
                 mix,
             } => {
                 let v = match mode {
-                    FieldMode::Flat => line
-                        .cells
-                        .get(i)
-                        .map_or(f64::NAN, |&c| cell_value(values, c as usize)),
+                    // (an overview's lines keep their cells' values)
+                    FieldMode::Flat if !line.cell_values.is_empty() => {
+                        line.cell_values.get(i).copied().unwrap_or(f64::NAN)
+                    }
+                    FieldMode::Flat => match (values, line.cells.get(i)) {
+                        (Some(v), Some(&c)) => cell_value(v, c as usize),
+                        _ => f64::NAN,
+                    },
                     _ => line.values.get(i).copied().unwrap_or(f64::NAN),
                 };
                 if !v.is_finite() {
@@ -1462,33 +1714,31 @@ pub fn append(
             continue;
         }
         let picked = display.selection.contains(&Item::Stream(k as u32));
-        let paint = match (&st.color, color_range(display, mesh, fields, k), fields) {
-            (Some(choice), Some((lo, hi)), Some(f)) => match f.values_cached(mesh, choice) {
-                Some(values) => {
-                    let style = display.style_of(&choice.name);
-                    match crate::field::map_for(&style, (lo, hi)) {
-                        Some(map) => Paint::Field {
-                            map,
-                            reverse: style.reverse,
-                            lo,
-                            hi,
-                            mode: style.mode,
-                            bands: style
-                                .bands
-                                .clamp(crate::field::MIN_BANDS, crate::field::MAX_BANDS),
-                            values,
-                            none: tokens.mesh.field.none.linear(),
-                            mix: picked.then_some((sel, mix)),
-                        },
-                        None => Paint::Solid(solid_color(display, tokens, k).linear()),
-                    }
+        let solid = || {
+            let rgb = solid_color(display, tokens, k);
+            Paint::Solid(if picked { mixed(rgb, sel, mix) } else { rgb }.linear())
+        };
+        let paint = match (&st.color, color_range(display, mesh, fields, k)) {
+            (Some(choice), Some((lo, hi))) => {
+                let style = display.style_of(&choice.name);
+                match crate::field::map_for(&style, (lo, hi)) {
+                    Some(map) => Paint::Field {
+                        map,
+                        reverse: style.reverse,
+                        lo,
+                        hi,
+                        mode: style.mode,
+                        bands: style
+                            .bands
+                            .clamp(crate::field::MIN_BANDS, crate::field::MAX_BANDS),
+                        values: fields.and_then(|f| f.values_cached(mesh, choice)),
+                        none: tokens.mesh.field.none.linear(),
+                        mix: picked.then_some((sel, mix)),
+                    },
+                    None => solid(),
                 }
-                None => Paint::Solid(solid_color(display, tokens, k).linear()),
-            },
-            _ => {
-                let rgb = solid_color(display, tokens, k);
-                Paint::Solid(if picked { mixed(rgb, sel, mix) } else { rgb }.linear())
             }
+            _ => solid(),
         };
         let radius = st.tube_radius(mesh);
         for line in &t.lines {
@@ -1738,10 +1988,15 @@ mod tests {
     fn walks_find_the_cells() {
         let (m, f) = channel();
         let v = vector_values(&m, &f, "velocity").unwrap().0;
-        let tracer = Tracer {
+        let whole = Whole(Part {
             mesh: &m,
             fields: &f,
             v: [&*v[0], &*v[1], &*v[2]],
+            color: None,
+            halo: None,
+        });
+        let tracer = Tracer {
+            parts: &whole,
             region: None,
         };
         let grid = f.cell_grid(&m);
@@ -1749,14 +2004,17 @@ mod tests {
             let p = f.centroid(&m, c);
             assert_eq!(grid.nearest(p), Some(c as u32));
             let from = ((c * 7919) % m.cell_count()) as u32;
-            let h = tracer.locate_from(p, from).unwrap();
-            assert_eq!(h.cell, c as u32, "from {from}");
+            let h = tracer.locate_from(p, At::whole(from)).unwrap();
+            assert_eq!(h.at, At::whole(c as u32), "from {from}");
             assert!(h.w.iter().all(|&w| w >= -1e-9));
         }
         let b = m.bounds();
         let out = [b.max[0] + 1.0, b.center()[1], b.center()[2]];
         let start = grid.nearest(out).unwrap();
-        assert_eq!(tracer.locate_from(out, start).unwrap_err(), End::Left);
+        assert_eq!(
+            tracer.locate_from(out, At::whole(start)).unwrap_err(),
+            End::Left
+        );
     }
 
     /// Invariant: the field inside a cell is the tetrahedra's linear
@@ -1766,15 +2024,20 @@ mod tests {
     fn values_follow_the_tetrahedra() {
         let (m, f) = channel();
         let v = vector_values(&m, &f, "velocity").unwrap().0;
-        let tracer = Tracer {
+        let whole = Whole(Part {
             mesh: &m,
             fields: &f,
             v: [&*v[0], &*v[1], &*v[2]],
+            color: None,
+            halo: None,
+        });
+        let tracer = Tracer {
+            parts: &whole,
             region: None,
         };
         for c in (0..m.cell_count()).step_by(11) {
             let p = f.centroid(&m, c);
-            let (h, inside) = tracer.in_cell(c as u32, p).unwrap();
+            let (h, inside) = tracer.in_cell(At::whole(c as u32), p).unwrap();
             assert!(inside);
             let u = tracer.vector(&h).unwrap();
             for k in 0..3 {

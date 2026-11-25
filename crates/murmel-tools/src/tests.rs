@@ -3630,6 +3630,64 @@ fn probe_fields_agree(a: &serde_json::Value, b: &serde_json::Value) -> bool {
         })
 }
 
+/// Invariant: through the tools, streamlines on an overview (stream.set,
+/// inspect.item) are traced through the blocks of the file before the
+/// tool answers and give what the whole mesh gives: as many seeds and
+/// lines, every end counted, none at a block not read. Breaks when
+/// stream.set answers before the lines are traced, when the overview's
+/// lines are traced on its cells (none: nothing traced), or when an
+/// unread end is reported within the budget. The engine tests compare
+/// the lines but never through the tools.
+#[test]
+fn streamlines_on_an_overview_through_the_tools() {
+    let dir = std::env::temp_dir().join(format!("murmel-stream-tool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, results) = murmel_mesh::read_results(&plain).unwrap();
+    let path = dir.join("blocked.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = None;
+    let set = json!({"new": true, "field": "velocity", "seed": "line", "count": 10});
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    let whole = call("stream.set", set.clone(), &mut s);
+    assert!(whole.ok(), "{:?}", whole.diagnostics);
+    let open = json!({"path": path, "mode": "overview"});
+    assert!(call("mesh.open", open, &mut s).ok());
+    let e = call("stream.set", set, &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let (t, w) = (
+        &e.result["stream"]["traced"],
+        &whole.result["stream"]["traced"],
+    );
+    assert!(e.result["stream"].get("tracing").is_none());
+    assert_eq!(t["seeds"], w["seeds"], "{t} vs {w}");
+    assert_eq!(t["lines"], w["lines"], "{t} vs {w}");
+    assert!(t["lines"].as_u64().unwrap() > 0);
+    assert!(t["ended"].get("unread").is_none(), "{t}");
+    let sum = |t: &serde_json::Value| -> u64 {
+        ["left", "slow", "length", "steps", "lost"]
+            .iter()
+            .map(|k| t["ended"][k].as_u64().unwrap())
+            .sum()
+    };
+    assert_eq!(sum(t), sum(w));
+    let inspect = call("inspect.item", json!({"item": "stream:1"}), &mut s);
+    assert!(inspect.ok(), "{:?}", inspect.diagnostics);
+    let keys: Vec<&str> = inspect.result["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["key"].as_str())
+        .collect();
+    assert!(
+        keys.contains(&"lines") && !keys.contains(&"tracing"),
+        "{keys:?}"
+    );
+    s.close();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Invariant: through the tools, a probe on an overview (probe.add,
 /// probe.at, measure.list, inspect) gives the fields the whole mesh gives
 /// at its point, says the cell's number in the file and its block, and

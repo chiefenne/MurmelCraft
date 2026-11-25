@@ -243,6 +243,60 @@ impl MurmelApp {
         }
     }
 
+    /// Show the streamlines traced through an overview's blocks once
+    /// traced ([`murmel_engine::stream_blocks`]), or say why a block
+    /// could not be read; keep looking while they are traced.
+    pub(crate) fn poll_streams(&mut self, ctx: &egui::Context) {
+        let Some(j) = &self.session.probe_blocks.stream_job else {
+            return;
+        };
+        if !j.is_done() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        self.session.poll_streams();
+        if let Some(e) = &self.session.probe_blocks.stream_problem {
+            self.set_error(Some(Diagnostic::new(e.code, e.message.clone())));
+        }
+        ctx.request_repaint();
+    }
+
+    /// What the window says while streamlines are traced through an
+    /// overview's blocks: the blocks read and the seconds so far.
+    pub(crate) fn streams_text(&self) -> Option<String> {
+        let j = self.session.probe_blocks.stream_job.as_ref()?;
+        let read = j.read.load(std::sync::atomic::Ordering::Relaxed);
+        Some(self.i18n.tr_args(
+            "status-streams",
+            &[
+                ("blocks", read.into()),
+                (
+                    "seconds",
+                    format!("{:.1}", j.started.elapsed().as_secs_f64()).into(),
+                ),
+            ],
+        ))
+    }
+
+    /// The status bar while streamlines are traced through the blocks:
+    /// what it says and Cancel.
+    pub(crate) fn streams_status(&mut self, ui: &mut Ui, said: &mut Vec<String>) -> bool {
+        let Some(text) = self.streams_text() else {
+            return false;
+        };
+        let cancel = self.i18n.tr("status-loading-cancel");
+        let tip = self.i18n.tr("status-streams-cancel-tip");
+        let b = ui.small_button(&cancel).on_hover_text(&tip);
+        let name = format!("{cancel}. {tip}");
+        b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+        if b.clicked() {
+            self.session.cancel_streams();
+        }
+        ui.label(RichText::new(&text).small());
+        said.push(text);
+        true
+    }
+
     /// What the window says while the preview grid of an overview is
     /// read: the phase and the seconds so far.
     pub(crate) fn preview_text(&self) -> Option<String> {

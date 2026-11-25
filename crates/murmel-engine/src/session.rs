@@ -1403,6 +1403,7 @@ impl Session {
     pub fn redraw(&mut self) {
         let swapped = self.sync_blocks() | self.sync_preview();
         self.sync_probes();
+        self.sync_streams();
         let Some(m) = &mut self.mesh else {
             self.preview = None;
             self.surface_revision += 1;
@@ -1412,7 +1413,10 @@ impl Session {
         find_regions(&mut self.display, m);
         ensure_quality(&mut self.display, &m.mesh);
         crate::field::ensure_field(&mut self.display, &m.mesh, &m.fields);
-        crate::stream::ensure(&mut self.display, &m.mesh, &m.fields);
+        // (an overview's lines go through the blocks of its file)
+        if m.overview.is_none() || m.blocks.is_some() {
+            crate::stream::ensure(&mut self.display, &m.mesh, &m.fields);
+        }
         if self.defer_clips
             && !swapped
             && let Some(moving) = clip_moves(&m.built_for, &self.display)
@@ -1533,6 +1537,118 @@ impl Session {
             self.display.probe_findings = new;
         }
         changed
+    }
+
+    /// Trace the enabled streamline sets of the open overview through the
+    /// blocks of its file while no region's cells show
+    /// ([`crate::stream_blocks`]): the sets not traced as they are now,
+    /// with `defer_blocks` on a thread of their own, put in place by a
+    /// later call; otherwise now. True when a trace was put in place.
+    pub fn sync_streams(&mut self) -> bool {
+        use crate::probe_blocks::Kept;
+        use crate::stream_blocks::{StreamJob, install, most_blocks, same_sets, todo};
+        let budget = self.budget_bytes();
+        let open = self.mesh.as_ref().filter(|m| m.blocks.is_none());
+        let found =
+            open.and_then(|m| Some((crate::probe_blocks::source(m, budget)?, m.mesh.clone())));
+        let c = &mut self.probe_blocks;
+        let overview = found.is_some();
+        let Some((src, domain)) = found.filter(|_| !self.display.streams.is_empty()) else {
+            // The cells shown hold the lines ([`crate::stream::ensure`]),
+            // or there are none.
+            for j in [c.stream_job.take(), c.stream_ending.take()]
+                .into_iter()
+                .flatten()
+            {
+                j.stop();
+            }
+            if overview {
+                self.display.stream_traces = None;
+            }
+            return false;
+        };
+        let most = most_blocks(&src);
+        let keep = |kept: &mut Vec<Arc<Kept>>, used: Vec<Arc<Kept>>| {
+            for b in used {
+                kept.retain(|x| x.block != b.block);
+                kept.push(b);
+            }
+            let over = kept.len().saturating_sub(most);
+            kept.drain(..over);
+        };
+        // The blocks a trace stopped for other sets read, once it ends.
+        if let Some(j) = c.stream_ending.take() {
+            match j.take(false) {
+                Some(out) => keep(&mut c.stream_kept, out.kept),
+                None => c.stream_ending = Some(j),
+            }
+        }
+        let mut changed = false;
+        loop {
+            let want = todo(
+                &self.display.streams,
+                self.display.stream_traces.as_deref(),
+                budget,
+            );
+            if let Some(job) = c.stream_job.take() {
+                let alike = job.budget == budget && same_sets(&job.sets, &want);
+                match job.take(alike && !self.defer_blocks) {
+                    Some(out) => {
+                        changed |= install(&mut self.display, out.traced);
+                        c.stream_kept = out.kept;
+                        c.stream_problem = out.problem;
+                        continue;
+                    }
+                    None if alike => {
+                        c.stream_job = Some(job);
+                        break;
+                    }
+                    None => {
+                        // Other sets now: what it read is kept once it ends.
+                        job.stop();
+                        c.stream_ending = Some(job);
+                    }
+                }
+            }
+            if want.is_empty() {
+                break;
+            }
+            let mut kept = c.kept.clone();
+            for b in &c.stream_kept {
+                if !kept.iter().any(|x| x.block == b.block) {
+                    kept.push(b.clone());
+                }
+            }
+            c.stream_job = Some(StreamJob::start(src.clone(), domain.clone(), want, kept));
+            if self.defer_blocks {
+                break;
+            }
+        }
+        changed
+    }
+
+    /// Put the streamlines traced through the open overview's blocks in
+    /// place once traced (`defer_blocks`) and draw again. True while they
+    /// are traced, or when they were put in place now (the window draws
+    /// again).
+    pub fn poll_streams(&mut self) -> bool {
+        match &self.probe_blocks.stream_job {
+            Some(j) if j.is_done() => {
+                self.redraw();
+                true
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Stop tracing the streamlines through the blocks: the lines end
+    /// where the blocks read so far end, and those sets are not traced
+    /// again until they or the memory budget change.
+    pub fn cancel_streams(&mut self) {
+        if let Some(j) = &self.probe_blocks.stream_job {
+            j.stop();
+        }
     }
 
     /// The blocks the enabled box, sphere and slab regions of the open
@@ -3052,6 +3168,327 @@ mod tests {
             .collect();
         let want = whole_values(&whole, &full, file_cell as u32, p);
         assert!(same_values(&got, &want), "{got:?} vs {want:?}");
+        s.close();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A blocked copy of the channel (blocks of 100 cells) whose velocity
+    /// is linear in space, in a folder of its own: the folder, the whole
+    /// read of it with its fields, and a session open on it as an
+    /// overview. A linear field's least-squares gradients are exact in
+    /// any cell, so a block's values match the whole mesh's to rounding.
+    fn linear_overview(name: &str) -> (PathBuf, Mesh, FieldSet, Session) {
+        use murmel_mesh::field::{Field, Location, Results};
+        let dir = std::env::temp_dir().join(format!("murmel-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (mesh, _) =
+            murmel_mesh::read_results(&fixture("vtkhdf/channel_fields.vtkhdf")).unwrap();
+        let b = mesh.bounds();
+        let e: [f64; 3] = std::array::from_fn(|k| b.max[k] - b.min[k]);
+        let none = FieldSet::new(Results::default());
+        let mut values = Vec::with_capacity(3 * mesh.cell_count());
+        for c in 0..mesh.cell_count() {
+            let p = none.centroid(&mesh, c);
+            let q: [f64; 3] = std::array::from_fn(|k| (p[k] - b.min[k]) / e[k]);
+            values.extend([1.0 + 0.3 * q[1], 0.08 * (q[0] - 0.4), 0.1 * (0.5 - q[2])]);
+        }
+        let results = Results {
+            fields: vec![Field {
+                name: "velocity".into(),
+                unit: Some("m/s".into()),
+                location: Location::Cell,
+                components: 3,
+                values,
+            }],
+            ..Results::default()
+        };
+        let path = dir.join("blocked.vtkhdf");
+        murmel_mesh::blocks::write_blocked(&path, &mesh, &results, 100).unwrap();
+        let (whole, r) = murmel_mesh::read_results(&path).unwrap();
+        let mut s = Session::new(Tokens::builtin().unwrap());
+        s.config_dir = None;
+        s.open_as(&path, Fit::Overview).unwrap();
+        (dir, whole, FieldSet::new(r), s)
+    }
+
+    /// The trace of set `st` on the whole mesh.
+    fn whole_trace(
+        whole: &Mesh,
+        full: &FieldSet,
+        st: &crate::Stream,
+    ) -> Arc<crate::stream::Traced> {
+        let mut d = Display {
+            streams: vec![st.clone()],
+            ..Display::default()
+        };
+        crate::stream::ensure(&mut d, whole, full);
+        d.stream_traces.unwrap().0[0].clone().unwrap()
+    }
+
+    /// The trace of set `k` shown.
+    fn shown_trace(s: &Session, k: usize) -> Arc<crate::stream::Traced> {
+        s.display.stream_traces.as_ref().unwrap().0[k]
+            .clone()
+            .expect("traced")
+    }
+
+    /// Whether traces `a` (on the whole mesh) and `b` (through the
+    /// blocks) hold the same lines, to `tol` of the mesh's size: their
+    /// points, colour values and the cell values a flat colour shows.
+    fn same_lines(
+        a: &crate::stream::Traced,
+        b: &crate::stream::Traced,
+        cells: &crate::field::FieldValues,
+        tol: f64,
+    ) -> Result<(), String> {
+        if (a.seeds, a.outside, a.lines.len()) != (b.seeds, b.outside, b.lines.len()) {
+            return Err(format!("{a:?} vs {b:?}"));
+        }
+        for (j, (x, y)) in a.lines.iter().zip(&b.lines).enumerate() {
+            if x.points.len() != y.points.len() {
+                return Err(format!(
+                    "line {j}: {} vs {} points",
+                    x.points.len(),
+                    y.points.len()
+                ));
+            }
+            for i in 0..x.points.len() {
+                let (p, q) = (x.points[i], y.points[i]);
+                if (0..3).any(|k| (p[k] - q[k]).abs() > tol) {
+                    return Err(format!("line {j} point {i}: {p:?} vs {q:?}"));
+                }
+                if (x.values[i] - y.values[i]).abs() > 1e-9 * (1.0 + x.values[i].abs()) {
+                    return Err(format!(
+                        "line {j} value {i}: {} vs {}",
+                        x.values[i], y.values[i]
+                    ));
+                }
+                let flat = cells.cell[x.cells[i] as usize];
+                if (flat - y.cell_values[i]).abs() > 1e-9 * (1.0 + flat.abs()) {
+                    return Err(format!(
+                        "line {j} cell value {i}: {flat} vs {}",
+                        y.cell_values[i]
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Invariant (the maintainer's card 8 of 2026-11-24, a block cache
+    /// for streamlines): on an overview a streamline set is traced
+    /// through the blocks of the file, each read the first time a line
+    /// reaches it, and gives the lines the whole mesh gives: the same
+    /// seeds, the same points (a field linear in space, so every block's
+    /// values are exact) and the same colour values, also when seeded
+    /// both ways across blocks of 100 cells. The lines draw; drawing
+    /// again traces nothing; the blocks gone through stay for the next
+    /// trace, within a quarter of the memory budget; with room for fewer
+    /// blocks, lines end where they reach one not read (`unread`, and
+    /// BLOCK006 says why), until the budget changes. Breaks when a walk
+    /// stays in a halo cell (its values are a border's), when a block is
+    /// not read as a line reaches it, when the overview draws no lines,
+    /// when a trace is made again unchanged, or when the budget is
+    /// ignored or its limit sticks. The stream tests trace the whole
+    /// mesh only.
+    #[test]
+    fn streamlines_on_an_overview_go_through_the_blocks() {
+        let (dir, whole, full, mut s) = linear_overview("stream-blocks");
+        // Coloured by a component (linear too; a magnitude's node values
+        // differ in the sixth digit at block borders).
+        let choice = crate::field::FieldChoice {
+            name: "velocity".into(),
+            component: Component::X,
+        };
+        let cells = full.values_cached(&whole, &choice).unwrap();
+        let diag = 2.0 * whole.bounds().radius();
+        let mut st = crate::Stream::new(
+            "velocity",
+            crate::Seed::default_for("line", &whole).unwrap(),
+        );
+        st.count = 12;
+        st.color = Some(choice.clone());
+        let want = whole_trace(&whole, &full, &st);
+        assert_eq!(want.lines.len(), 12);
+        s.display.streams.push(st.clone());
+        s.redraw();
+        let m = s.mesh.as_ref().unwrap();
+        assert_eq!(m.mesh.cell_count(), 0, "the overview shows");
+        assert!(s.probe_blocks.stream_job.is_none());
+        let got = shown_trace(&s, 0);
+        assert_eq!(got.ends.unread, 0, "{:?}", got.ends);
+        assert_eq!(got.ends, want.ends);
+        same_lines(&want, &got, &cells, 1e-9 * diag).unwrap();
+        assert_eq!(got.color_range.is_some(), want.color_range.is_some());
+        assert!(!m.surface.stream_positions.is_empty(), "the lines draw");
+        let src = crate::probe_blocks::source(m, s.budget_bytes()).unwrap();
+        let most = crate::stream_blocks::most_blocks(&src);
+        let kept = s.probe_blocks.stream_kept.len();
+        assert!(kept > 1 && kept <= most, "{kept} of at most {most}");
+
+        // Drawing again traces nothing; with a slice on the preview
+        // grid the lines still draw.
+        s.display.slices.push(crate::extract::Slice::new(
+            whole.bounds().center(),
+            [0.0, 0.0, 1.0],
+        ));
+        s.redraw();
+        assert!(Arc::ptr_eq(&got, &shown_trace(&s, 0)));
+        let m = s.mesh.as_ref().unwrap();
+        assert!(m.fields.preview().is_some());
+        assert!(
+            !m.surface.stream_positions.is_empty(),
+            "the lines draw by the slice"
+        );
+        s.display.slices.clear();
+
+        // A seed moved: traced again, the same as the whole mesh's.
+        let crate::Seed::Line { from, to } = st.seed.clone() else {
+            unreachable!()
+        };
+        let mid: [f64; 3] = std::array::from_fn(|k| 0.5 * (from[k] + to[k]));
+        st.seed = crate::Seed::Line {
+            from: [mid[0] + 0.3, from[1], from[2]],
+            to: [mid[0] + 0.3, to[1], to[2]],
+        };
+        st.direction = crate::Direction::Both;
+        s.display.streams[0] = st.clone();
+        s.redraw();
+        let got = shown_trace(&s, 0);
+        same_lines(&whole_trace(&whole, &full, &st), &got, &cells, 1e-9 * diag).unwrap();
+
+        // Room for two blocks: the lines end at the third.
+        let one = (0..s
+            .mesh
+            .as_ref()
+            .unwrap()
+            .overview
+            .as_ref()
+            .unwrap()
+            .blocks
+            .len())
+            .map(|k| crate::blocks::bytes_for(&src.overview, &[k]))
+            .max()
+            .unwrap();
+        s.memory_budget = Some((8 * one + 4) as f64 / (1u64 << 30) as f64);
+        s.probe_blocks.stream_kept.clear();
+        st.count = 13;
+        s.display.streams[0] = st.clone();
+        s.redraw();
+        let cut = shown_trace(&s, 0);
+        assert!(cut.ends.unread > 0, "{:?}", cut.ends);
+        assert_eq!(
+            s.probe_blocks.stream_problem.as_ref().unwrap().code,
+            "BLOCK006"
+        );
+        assert!(s.probe_blocks.stream_kept.len() <= 2);
+        s.redraw();
+        assert!(Arc::ptr_eq(&cut, &shown_trace(&s, 0)), "not traced again");
+        s.memory_budget = None;
+        s.redraw();
+        let got = shown_trace(&s, 0);
+        assert_eq!(got.ends.unread, 0);
+        same_lines(&whole_trace(&whole, &full, &st), &got, &cells, 1e-9 * diag).unwrap();
+        s.close();
+        assert!(s.probe_blocks.stream_kept.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Invariant: with `defer_blocks` (the window), streamlines on an
+    /// overview are traced on a thread of their own: the call returns at
+    /// once, the overview shows without them meanwhile, and once traced
+    /// `poll_streams` puts the lines the whole mesh gives in place; a set
+    /// changed while traced takes the latest settings; one stopped is not
+    /// traced again until it changes. A trace stopped before it starts
+    /// reads no block and says so. Breaks when the trace blocks the call,
+    /// when an outdated trace is put in place, or when a stopped set is
+    /// traced again on the next redraw. The test above traces in the
+    /// call.
+    #[test]
+    fn streamlines_on_an_overview_trace_on_their_own_thread() {
+        let (dir, whole, full, mut s) = linear_overview("stream-thread");
+        s.defer_blocks = true;
+        let wait = |s: &Session| {
+            let t = Instant::now();
+            while s
+                .probe_blocks
+                .stream_job
+                .as_ref()
+                .is_some_and(|j| !j.is_done())
+            {
+                assert!(t.elapsed().as_secs() < 60, "traced in a minute");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        let mut st = crate::Stream::new(
+            "velocity",
+            crate::Seed::default_for("line", &whole).unwrap(),
+        );
+        st.count = 10;
+        s.display.streams.push(st.clone());
+        s.redraw();
+        assert!(s.probe_blocks.stream_job.is_some(), "traced on a thread");
+        assert!(
+            s.display
+                .stream_traces
+                .as_ref()
+                .is_none_or(|t| t.0[0].is_none())
+        );
+        wait(&s);
+        assert!(s.poll_streams());
+        assert!(s.probe_blocks.stream_job.is_none());
+        let want = whole_trace(&whole, &full, &st);
+        let got = shown_trace(&s, 0);
+        assert!(got.fits(&st));
+        assert_eq!((got.lines.len(), got.ends), (want.lines.len(), want.ends));
+
+        // Changed twice while traced: the latest settings win.
+        st.count = 11;
+        s.display.streams[0] = st.clone();
+        s.redraw();
+        st.count = 7;
+        s.display.streams[0] = st.clone();
+        s.redraw();
+        wait(&s);
+        s.poll_streams();
+        wait(&s);
+        s.poll_streams();
+        let got = shown_trace(&s, 0);
+        assert!(got.fits(&st));
+        assert_eq!(got.lines.len(), whole_trace(&whole, &full, &st).lines.len());
+
+        // Stopped: not traced again until it changes.
+        st.count = 9;
+        s.display.streams[0] = st.clone();
+        s.probe_blocks.stream_kept.clear();
+        s.redraw();
+        s.cancel_streams();
+        wait(&s);
+        s.poll_streams();
+        let stopped = shown_trace(&s, 0);
+        assert!(stopped.fits(&st));
+        if stopped.problem.is_some() {
+            assert_eq!(
+                stopped.problem.as_deref(),
+                Some(crate::stream_blocks::STOPPED)
+            );
+        }
+        assert!(!s.sync_streams());
+        assert!(s.probe_blocks.stream_job.is_none(), "not traced again");
+
+        // Stopped before it starts: no block read.
+        let m = s.mesh.as_ref().unwrap();
+        let src = crate::probe_blocks::source(m, s.budget_bytes()).unwrap();
+        let stop = Arc::new(murmel_mesh::profile::Progress::default());
+        stop.cancel();
+        let read = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let t = crate::stream_blocks::trace(&src, &m.mesh, &st, &[], stop, read.clone());
+        assert_eq!(read.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(t.used.is_empty() && t.traced.lines.is_empty());
+        assert_eq!(
+            t.traced.problem.as_deref(),
+            Some(crate::stream_blocks::STOPPED)
+        );
         s.close();
         std::fs::remove_dir_all(&dir).unwrap();
     }

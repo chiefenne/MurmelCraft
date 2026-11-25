@@ -243,6 +243,14 @@ works; MurmelCraft finds them once and keeps them in its cache folder.
   of their owned cells holds it (the engine's `probe_blocks.rs`). The
   last four blocks read stay for the next probes (docs/performance.md,
   "Probes on an overview").
+- Streamlines on an overview are traced through the blocks of the file
+  (the engine's `stream_blocks.rs`): a seed is looked for in the blocks
+  whose `BlockBounds` hold it, and a line walking into a halo cell goes
+  on from the same cell in the block that owns it, read then with its
+  halo. A trace reads at most as many blocks as a quarter of the memory
+  budget holds; a line that needs another ends there (`unread`, with
+  BLOCK006). The blocks gone through stay for the next trace
+  (docs/performance.md, "Streamlines on an overview").
 
 ## Writers
 

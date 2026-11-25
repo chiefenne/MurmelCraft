@@ -453,6 +453,15 @@ fn stream_rows(open: &OpenMesh, display: &Display, k: usize) -> Vec<Row> {
         if t.ends.lost > 0 {
             v.push(row("ended_lost", t.ends.lost));
         }
+        if t.ends.unread > 0 {
+            v.push(row("ended_unread", t.ends.unread));
+        }
+        if let Some(n) = t.blocks {
+            v.push(row("stream_blocks", n));
+        }
+    } else if st.enabled && open.overview.is_some() && open.blocks.is_none() {
+        // traced through the blocks of the file, on a thread of its own
+        v.push(row("tracing", true));
     }
     v.push(row("current_stream", display.current_stream() == Some(k)));
     v
