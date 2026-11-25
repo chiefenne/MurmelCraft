@@ -2,6 +2,8 @@
 covers = ["window.color_by", "display.color_by*", "display.set_color", "ui.color_by"]
 related = ["quality", "field-style", "render-mode"]
 chapter = "display"
+picture = "color-by.png"
+shot = "shots/color-by.json"
 +++
 Colour the mesh by one solid colour, by patch, by patch role, by cell type, by cell zone, or by a field of the results. Each item's colour can be changed in the model tree.
 

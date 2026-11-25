@@ -30,6 +30,7 @@ mod parcel;
 pub mod probe;
 mod region;
 pub mod series;
+pub mod shots;
 mod stream;
 mod tools;
 

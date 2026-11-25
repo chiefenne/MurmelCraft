@@ -2,6 +2,8 @@
 covers = ["display.render_mode*"]
 related = ["color-by", "mesh-look"]
 chapter = "display"
+picture = "render-mode.png"
+shot = "shots/render-mode.json"
 +++
 How faces are drawn: shaded with edges, shaded, wireframe, or feature edges only. Feature edges show the outline of the geometry without the mesh lines.
 

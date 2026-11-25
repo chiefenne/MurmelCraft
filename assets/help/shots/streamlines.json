@@ -1,0 +1,5 @@
+[
+  {"tool": "mesh.open", "input": {"path": "test-fixtures/vtkhdf/channel_fields.vtkhdf"}},
+  {"tool": "stream.set", "input": {"look": "tubes", "arrowheads": true, "count": 12}},
+  {"tool": "export.image", "input": {"legend": false, "axes": false}}
+]

@@ -2,6 +2,8 @@
 covers = ["slice.*"]
 related = ["iso", "arrows", "clip"]
 chapter = "results"
+picture = "slices.png"
+shot = "shots/slices.json"
 +++
 Slices cut through the mesh and show a field on the cut. Slice along X, Y or Z, along the view, as a single plane or a series of planes, and drag the handle to move it.
 

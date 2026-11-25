@@ -28,6 +28,7 @@ const USAGE: &str = "Usage: murmel COMMAND
                                         run one tool and print its result envelope
   murmel run --script FILE              run a JSON list of {\"tool\", \"input\"} calls
                                         in one session; stops at the first failure
+  murmel help shots [PAGE…]             render the help pages' pictures from their recipes
   murmel mcp --root DIR                 the MCP server for agents on stdio, confined
                                         to DIR (or --read-root DIR --write-root DIR);
                                         --live drives the open window instead;
@@ -184,6 +185,19 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         }
         ["call", id] => murmel_tools::call(id, json!({}), &mut s),
         ["call", id, "--input", input] => murmel_tools::call(id, read_input(Some(input))?, &mut s),
+        ["help", "shots", only @ ..] => {
+            let root = std::env::current_dir().map_err(|e| e.to_string())?;
+            if !root.join("assets/help").is_dir() {
+                return Ok(usage_error(
+                    "help shots runs in the repository's root (assets/help)",
+                ));
+            }
+            let written = murmel_tools::shots::render_all(&root, only)?;
+            print(
+                &json!({"format": "murmelcraft.help-shots", "format_version": "1.0", "pictures": written}),
+            );
+            return Ok(ExitCode::SUCCESS);
+        }
         ["run", "--script", file] => {
             let script = read_input(Some(file))?;
             let Some(calls) = script.as_array() else {

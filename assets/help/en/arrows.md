@@ -2,6 +2,8 @@
 covers = ["arrows.*", "glyph.*"]
 related = ["slices", "streamlines"]
 chapter = "results"
+picture = "arrows.png"
+shot = "shots/arrows.json"
 +++
 Vector arrows show the direction and size of a vector field, such as velocity, on slices or on the surface. Choose their density and length, and whether they lie in the slice's plane.
 

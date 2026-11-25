@@ -2,6 +2,8 @@
 covers = ["display.color_by:quality*", "display.threshold*", "inspect.quality", "ui.quality"]
 related = ["color-by", "clip"]
 chapter = "display"
+picture = "quality.png"
+shot = "shots/quality.json"
 +++
 Colour each cell by its worst value of a mesh quality metric: non-orthogonality, skewness, volume ratio or face count. A threshold hides the good cells, so only the worst remain.
 

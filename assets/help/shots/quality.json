@@ -1,0 +1,5 @@
+[
+  {"tool": "mesh.open", "input": {"path": "test-fixtures/channel/foehncraft.vtu"}},
+  {"tool": "display.color_by", "input": {"by": "quality", "metric": "non_orthogonality"}},
+  {"tool": "export.image", "input": {"legend": false, "axes": false}}
+]

@@ -2,6 +2,8 @@
 covers = ["clip.*", "select.item:next_clip", "ui.clip_handle", "ui.clip"]
 related = ["regions", "slices", "quality"]
 chapter = "display"
+picture = "clip.png"
+shot = "shots/clip.json"
 +++
 Cut the mesh open with clip planes to see inside. Clip along X, Y or Z, along the view direction, or anywhere with the handles: drag the arrow to slide the plane and the arcs to tilt it.
 

@@ -2,6 +2,8 @@
 covers = ["field.style*", "field.list", "field.catalogue", "ui.field_bar"]
 related = ["color-by", "derived"]
 chapter = "results"
+picture = "field-style.png"
+shot = "shots/field-style.json"
 +++
 How a field is coloured: flat per cell, smooth, or banded, with contour lines on or off. The colour map and its range (whole field, shown cells, symmetric about zero, fixed, or over all time steps) are chosen here.
 
