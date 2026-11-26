@@ -19,7 +19,7 @@ also [full-size stills](assets/readme/tour); how they were made is in
 
 [![CI](https://github.com/chiefenne/MurmelCraft/actions/workflows/ci.yml/badge.svg)](https://github.com/chiefenne/MurmelCraft/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/chiefenne/MurmelCraft)](https://github.com/chiefenne/MurmelCraft/releases)
-[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
+[![Rust 1.98+](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](#install)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## What works today
@@ -213,6 +213,65 @@ change, and [changelog.d](changelog.d) the changes since the release.
 - Keyboard and screen-reader use ([docs/accessibility.md](docs/accessibility.md)):
   F6 between the regions, a visible focus ring, AccessKit names for every
   pane and control, palettes checked for WCAG AA contrast.
+
+## Install
+
+### Download a release
+
+*Coming soon.* A ready-to-run MurmelCraft for macOS, Linux and Windows
+will be attached to the
+[releases](https://github.com/chiefenne/MurmelCraft/releases). Until then,
+build it from source as below.
+
+### Build from source
+
+You need:
+
+- Rust, installed with [rustup](https://rustup.rs). The repository's
+  `rust-toolchain.toml` makes rustup fetch and use the latest stable Rust
+  (1.98 or newer is needed) with rustfmt and clippy.
+- A C compiler and linker for Rust: on macOS the Xcode Command Line Tools
+  (`xcode-select --install`), on Linux (Ubuntu) `sudo apt install
+  build-essential`.
+- Git.
+- On Linux, an X11 or Wayland desktop and a Vulkan driver (on Ubuntu
+  `sudo apt install mesa-vulkan-drivers`, which CI uses). macOS draws
+  with Metal and needs nothing extra.
+- Optional: `ffmpeg` on the `PATH` for MP4 movies (`brew install ffmpeg`),
+  and [FoehnCraft](https://github.com/chiefenne/Foehncraft)'s `foehn` for
+  the fields only its models give.
+
+Then, in a terminal:
+
+```sh
+git clone https://github.com/chiefenne/MurmelCraft.git
+cd MurmelCraft
+cargo build --release --locked
+target/release/murmelcraft test-fixtures/channel/foehncraft.vtu
+```
+
+The first build takes a few minutes. It builds three programs into
+`target/release/`: `murmelcraft` (the window), `murmel` (the command line;
+`murmel mcp` is the MCP server) and `murmel-mcp` (the same server on its
+own). Fonts, icons, help pages and translations are built into the
+programs, so they run from any folder. To call them by name, install them
+into `~/.cargo/bin`, which rustup puts on your `PATH`:
+
+```sh
+cargo install --locked --path crates/murmel-app   # murmelcraft
+cargo install --locked --path crates/murmel-cli   # murmel
+murmelcraft
+```
+
+To update, pull and build again:
+
+```sh
+git checkout main && git pull --ff-only
+cargo build --release --locked   # and cargo install ... again if you installed them
+```
+
+CI builds and tests on Linux (Ubuntu, with Mesa's software Vulkan); macOS
+is tested by hand, and Windows is not checked yet.
 
 ## Build and run
 
