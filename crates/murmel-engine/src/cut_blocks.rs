@@ -4,7 +4,8 @@
 //! slice or an iso-surface shows on its preview grid at once
 //! ([`crate::preview`]); its exact faces are then cut through the blocks
 //! of the file, one block at a time, and take the grid's place. The
-//! next blocks are read on a thread of their own while one is cut.
+//! next blocks are read while one is cut, three at once ([`READERS`]),
+//! and cut in the order of the blocks.
 //!
 //! - **Which blocks.** A slice cuts the blocks whose box ([`BlockBounds`]
 //!   of the file) one of its planes crosses. An iso-surface cuts the
@@ -27,9 +28,10 @@
 //!   mesh read whole, as for the regions' blocks. Only the faces stay,
 //!   and the last blocks gone through, as many as an eighth of the
 //!   memory budget holds, for the next cut (a slice moved a little cuts
-//!   mostly the same blocks): a cut of a 100 M cell file holds one block
-//!   more than those at a time, and its faces at most a quarter of the
-//!   budget (BLOCK006 beyond).
+//!   mostly the same blocks): a cut of a 100 M cell file holds the
+//!   block being cut and at most three being read more than those at a
+//!   time (fewer when the kept share holds fewer), and its faces at most
+//!   a quarter of the budget (BLOCK006 beyond).
 //! - **Kept.** The faces stay with the display ([`Cuts`]) until what they
 //!   depend on changes ([`CutKey`]: the item, the field shown, colours,
 //!   clip planes, hidden zones and the surface's frame). Selecting an
@@ -43,9 +45,9 @@
 //!
 //! [`BlockBounds`]: murmel_mesh::vtkhdf::Overview
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use murmel_mesh::profile::{self, Progress};
@@ -459,6 +461,140 @@ pub(crate) fn keep_for(src: &Source) -> usize {
     (src.budget / 8 / largest) as usize
 }
 
+/// How many blocks a cut reads at once while it cuts one. A file over the
+/// network answers each read of a block after many round trips, most of
+/// them small, so one reader leaves the link idle between them: on the
+/// maintainer's iMac, with the 100 M cell file on a NAS over gigabit, one
+/// reader cut the middle slice in 274 s, its some 12 GB taking about two
+/// minutes on the link (docs/performance.md). Three keep it busy and hold
+/// three blocks besides the one being cut.
+const READERS: usize = 3;
+
+/// The blocks a cut's readers may take, in the order they are cut: the
+/// block `i` once the cut has reached the block `i - ahead`, so at most
+/// `ahead` blocks are read or wait while one is cut.
+struct Window {
+    ahead: usize,
+    len: usize,
+    turns: Mutex<Turns>,
+    moved: Condvar,
+}
+
+#[derive(Default)]
+struct Turns {
+    /// The next block to read, as an index into the blocks' order.
+    next: usize,
+    /// The block being cut, or waited for.
+    cutting: usize,
+    stop: bool,
+}
+
+impl Window {
+    fn new(ahead: usize, len: usize) -> Window {
+        Window {
+            ahead,
+            len,
+            turns: Mutex::new(Turns::default()),
+            moved: Condvar::new(),
+        }
+    }
+
+    fn turns(&self) -> std::sync::MutexGuard<'_, Turns> {
+        self.turns.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The next block to read, waiting while `ahead` blocks are ahead of
+    /// the cut; `None` once every block is taken or the cut ended.
+    fn take(&self) -> Option<usize> {
+        let mut t = self.turns();
+        loop {
+            if t.stop || t.next >= self.len {
+                return None;
+            }
+            if t.next <= t.cutting + self.ahead {
+                t.next += 1;
+                return Some(t.next - 1);
+            }
+            t = self.moved.wait(t).unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// The cut has reached the block `i`.
+    fn cut(&self, i: usize) {
+        self.turns().cutting = i;
+        self.moved.notify_all();
+    }
+
+    /// The cut ended: the readers take no more blocks.
+    fn stop(&self) {
+        self.turns().stop = true;
+        self.moved.notify_all();
+    }
+}
+
+/// Ends the readers of a [`Window`] when one of them or the cut ends,
+/// even by a panic, so the cut never waits for a block no reader will
+/// send and no reader waits for a turn that never comes.
+struct Ends<'a>(&'a Window);
+
+impl Drop for Ends<'_> {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
+
+/// Read `0..len` with `read` on `ahead` threads of their own and hand
+/// each to `each` in that order, whatever order the reads end in, until
+/// `each` says to stop (`false`). At most `ahead` are read or wait
+/// besides the one `each` has; once it stops, the readers end after the
+/// reads they are in.
+fn read_ahead<T: Send>(
+    len: usize,
+    ahead: usize,
+    read: impl Fn(usize) -> T + Sync,
+    mut each: impl FnMut(usize, T) -> bool,
+) {
+    let window = Window::new(ahead.max(1), len);
+    std::thread::scope(|scope| {
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, T)>();
+        for _ in 0..window.ahead {
+            let (tx, window, read) = (tx.clone(), &window, &read);
+            scope.spawn(move || {
+                let _ends = Ends(window);
+                // Every index taken is sent, so the one waited for comes.
+                while let Some(i) = window.take() {
+                    if tx.send((i, read(i))).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        // The cut ending, even by a panic, ends the readers.
+        let _ends = Ends(&window);
+        let mut waiting = BTreeMap::new();
+        for i in 0..len {
+            window.cut(i);
+            let x = loop {
+                if let Some(x) = waiting.remove(&i) {
+                    break Some(x);
+                }
+                match rx.recv() {
+                    Ok((j, x)) => {
+                        waiting.insert(j, x);
+                    }
+                    // Every reader ended (one panicked).
+                    Err(_) => break None,
+                }
+            };
+            let Some(x) = x else { break };
+            if !each(i, x) {
+                break;
+            }
+        }
+    });
+}
+
 /// Cut the items of `todo` through the blocks of `src`, taking those of
 /// `kept` without reading them; `done` counts the blocks gone through.
 /// The last [`keep_for`] blocks gone through are kept.
@@ -481,69 +617,58 @@ pub(crate) fn cut(src: &Source, todo: &[Want], kept: &[Arc<Kept>], done: &Atomic
     let mut problem = None;
     let order: Vec<usize> = blocks.iter().copied().collect();
     let watched = profile::watched();
-    std::thread::scope(|scope| {
-        // The next blocks are read on a thread of their own while this
-        // one cuts (one waiting, one being read), so a file over the
-        // network is read while the CPU cuts.
-        let (tx, rx) = std::sync::mpsc::sync_channel::<(usize, Result<Arc<Kept>, MeshError>)>(1);
-        scope.spawn(move || {
-            let read = || {
-                for &b in &order {
-                    if profile::check().is_err() {
-                        return;
-                    }
-                    let block = crate::probe_blocks::load(src, b, kept);
-                    let failed = block.is_err();
-                    if tx.send((b, block)).is_err() || failed {
-                        return;
-                    }
-                }
-            };
-            match watched {
-                Some(p) => profile::watch(p, read),
-                None => read(),
-            }
-        });
-        for (b, block) in rx.iter() {
-            if let Err(e) = profile::check() {
+    // The next blocks are read while this one cuts, so a file over the
+    // network is read while the CPU cuts, and the network is asked for
+    // several blocks at a time.
+    let read = |i: usize| {
+        let load = || {
+            profile::check()?;
+            crate::probe_blocks::load(src, order[i], kept)
+        };
+        match &watched {
+            Some(p) => profile::watch(p.clone(), load),
+            None => load(),
+        }
+    };
+    read_ahead(order.len(), keep.clamp(1, READERS), read, |i, block| {
+        let b = order[i];
+        if let Err(e) = profile::check() {
+            problem = Some(MeshError::new(e.code, STOPPED));
+            return false;
+        }
+        let block = match block {
+            Ok(x) => x,
+            Err(e) if e.code == "MESH019" => {
                 problem = Some(MeshError::new(e.code, STOPPED));
-                break;
+                return false;
             }
-            let block = match block {
-                Ok(x) => x,
-                Err(e) if e.code == "MESH019" => {
-                    problem = Some(MeshError::new(e.code, STOPPED));
-                    break;
-                }
-                Err(e) => {
-                    problem = Some(e);
-                    break;
-                }
-            };
-            let _c = profile::span("read.cut.faces");
-            for (i, w) in todo.iter().enumerate() {
-                if plans[i].binary_search(&b).is_ok() {
-                    cut_block(&mut faces[i], &block, &w.key.look, &w.tokens);
-                }
+            Err(e) => {
+                problem = Some(e);
+                return false;
             }
-            used.push(block);
-            let over = used.len().saturating_sub(keep);
-            used.drain(..over);
-            done.fetch_add(1, Ordering::Relaxed);
-            let taken: u64 = faces.iter().map(bytes).sum();
-            if taken > limit {
-                problem = Some(MeshError::new(
-                    "BLOCK006",
-                    format!(
-                        "the exact faces of the slices and iso-surfaces would take more than a quarter of the memory budget ({:.1} GB)",
-                        src.budget as f64 / 1e9
-                    ),
-                ));
-                break;
+        };
+        let _c = profile::span("read.cut.faces");
+        for (k, w) in todo.iter().enumerate() {
+            if plans[k].binary_search(&b).is_ok() {
+                cut_block(&mut faces[k], &block, &w.key.look, &w.tokens);
             }
         }
-        // A cut that ended early stops the reading after its block.
-        drop(rx);
+        used.push(block);
+        let over = used.len().saturating_sub(keep);
+        used.drain(..over);
+        done.fetch_add(1, Ordering::Relaxed);
+        let taken: u64 = faces.iter().map(bytes).sum();
+        if taken > limit {
+            problem = Some(MeshError::new(
+                "BLOCK006",
+                format!(
+                    "the exact faces of the slices and iso-surfaces would take more than a quarter of the memory budget ({:.1} GB)",
+                    src.budget as f64 / 1e9
+                ),
+            ));
+            return false;
+        }
+        true
     });
     // Stopped before the reading ended: as the loop above saw it.
     if problem.is_none() && profile::check().is_err() {
@@ -732,5 +857,99 @@ impl CutJob {
             v = ready.wait(v).ok()?;
         }
         v.take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering::SeqCst;
+
+    /// Invariant (the maintainer's card of 2026-11-26, "Read 3 blocks at
+    /// once"): a cut's blocks are read three at once and handed to the
+    /// cut in their order, whatever order the reads end in, with no more
+    /// than three read or waiting besides the one being cut; a cut that
+    /// stops ends the readers after the reads they are in, and a reader
+    /// or a cut that panics ends the others instead of leaving them
+    /// waiting. Breaks when blocks are cut in the order their reads end
+    /// (the faces would come in another order from one cut to the next),
+    /// when the readers run further ahead (memory), when they read one at
+    /// a time, or when a stopped or broken cut hangs. The session's cut
+    /// tests compare the faces in order too, but their small blocks are
+    /// read in about the order they are taken, and they never stop a cut
+    /// by a panic.
+    #[test]
+    fn blocks_are_read_three_at_once_and_cut_in_order() {
+        let live = AtomicUsize::new(0);
+        let most = AtomicUsize::new(0);
+        let reading = AtomicUsize::new(0);
+        let most_reading = AtomicUsize::new(0);
+        let ended = Mutex::new(Vec::new());
+        let read = |i: usize| {
+            most.fetch_max(live.fetch_add(1, SeqCst) + 1, SeqCst);
+            most_reading.fetch_max(reading.fetch_add(1, SeqCst) + 1, SeqCst);
+            // every third block slow, so the ones after it end first
+            let ms = if i.is_multiple_of(3) { 30 } else { 2 };
+            std::thread::sleep(Duration::from_millis(ms));
+            reading.fetch_sub(1, SeqCst);
+            ended.lock().unwrap().push(i);
+            i
+        };
+        let mut got = Vec::new();
+        read_ahead(24, READERS, read, |i, x| {
+            assert_eq!(i, x);
+            got.push(i);
+            std::thread::sleep(Duration::from_millis(1));
+            live.fetch_sub(1, SeqCst);
+            true
+        });
+        assert_eq!(got, (0..24).collect::<Vec<_>>(), "cut in order");
+        let ended = ended.into_inner().unwrap();
+        assert_ne!(ended, got, "the reads ended in another order");
+        assert!(most.load(SeqCst) <= READERS + 1, "{most:?} held at once");
+        assert_eq!(most_reading.load(SeqCst), READERS, "read at once");
+
+        // Stopped after the block 5: the readers take no more than the
+        // three after it.
+        let reads = AtomicUsize::new(0);
+        let mut seen = 0;
+        let read = |i: usize| {
+            reads.fetch_add(1, SeqCst);
+            std::thread::sleep(Duration::from_millis(1));
+            i
+        };
+        read_ahead(100, READERS, read, |i, _| {
+            seen += 1;
+            i < 5
+        });
+        assert_eq!(seen, 6);
+        assert!(reads.load(SeqCst) <= 6 + READERS, "{reads:?} read");
+
+        // A panic in a reader or in the cut ends the cut.
+        for broken in ["reader", "cut"] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let r = std::panic::catch_unwind(|| {
+                    read_ahead(
+                        50,
+                        READERS,
+                        |i| {
+                            assert!(!(broken == "reader" && i == 7), "a reader breaks");
+                            i
+                        },
+                        |i, _| {
+                            assert!(!(broken == "cut" && i == 4), "the cut breaks");
+                            true
+                        },
+                    )
+                });
+                let _ = tx.send(r.is_err());
+            });
+            assert_eq!(
+                rx.recv_timeout(Duration::from_secs(30)),
+                Ok(true),
+                "a broken {broken} ends the cut"
+            );
+        }
     }
 }

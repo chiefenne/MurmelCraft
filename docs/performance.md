@@ -1763,6 +1763,49 @@ instead of 570 MB, so the slice through the middle should take a
 minute or two (its blocks' rows, about 6 GB, at the network's speed,
 with the cutting alongside) instead of 19 minutes.
 
+### Three blocks read at once (2026-11-26)
+
+The iMac again, the file on the NAS, after #115 and #116 (main at
+a2b4653):
+
+| step | d6fdfb1 | a2b4653 |
+|---|---:|---:|
+| `mesh.open` again | 16.0 s | 18.3 s, 17.1 s |
+| colour by `pressure` | 6.0 s | 5.4 s |
+| slice across x through the middle | 1,135 s | 274 s |
+| the slice moved by 0.05 | 361 s | 109 s |
+| peak memory | 12.1 GB | 10.7 GB |
+
+The window opens the file now. The slice is still bound by the
+network: its blocks, about 290 of some 40 MB, about 12 GB (an
+estimate from the 10 M file), take about two minutes at gigabit, and
+one reader got about 44 MB/s out of the link, waiting for each answer
+before asking for the next. So a cut now reads three blocks at once
+while it cuts one (`READERS`, fewer when the eighth of the budget the
+kept blocks take holds fewer blocks), and cuts them in the order of
+the blocks, whatever order they come in, so the faces are the same as
+with one reader.
+
+On the 10 M file here (4 threads), against the same code with one
+reader; "over a link" puts a stand-in for the NAS in front of the
+file, a shim that makes every read of it wait as a 100 MB/s link with
+0.5 ms latency would (2 ms gave the same within 3 s):
+
+| | one reader | three readers |
+|---|---:|---:|
+| slice through the middle, from the page cache | 13.0 to 13.8 s | 11.5 to 11.7 s |
+| the slice moved by 0.05, from the page cache | 4.8 to 5.0 s | 4.6 to 4.9 s |
+| slice through the middle, over a link | 55.8 s | 47.5 s |
+| the slice moved by 0.05, over a link | 21.1 s | 18.1 s |
+| peak memory | 3.9 to 4.0 GB | 4.2 to 4.4 GB |
+| bytes read, open + slice + slice moved | 4.3 GB | 3.9 GB |
+
+Over the stand-in link three readers keep it busy all the time (the
+script took as long as its bytes at the link's speed), one about
+85 % of it. How much the NAS gains depends on how long SMB waits
+between reads, which the stand-in does not know: the iMac's one
+reader used less than half the link.
+
 ## Clip drag: a live cut in a thin layer (2026-11-25)
 
 The maintainer's report: at about 2 M polyhedral cells the clip drag was
