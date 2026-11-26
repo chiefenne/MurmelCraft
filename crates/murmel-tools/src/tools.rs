@@ -2660,6 +2660,10 @@ pub const NOT_JOURNALED: &[(&str, &str)] = &[
     ),
     ("field.catalogue", READS_ONLY),
     (
+        "field.foehn_derive",
+        "adds fields of the result from FoehnCraft's file; the view stays as it is",
+    ),
+    (
         "field.calculate",
         "adds or removes a field of the result; the view stays as it is",
     ),
@@ -3210,6 +3214,17 @@ pub static TOOLS: &[Tool] = &[
         reads: &[],
         input_schema: crate::derive::field_derive_schema,
         run: crate::derive::field_derive,
+    },
+    Tool {
+        id: "field.foehn_derive",
+        version: 1,
+        action: Action::WriteFiles,
+        label_key: "tool-field-foehn-derive",
+        summary: "Add FoehnCraft's own fields of the open result, the ones only its models give (y-plus, wall-shear-stress, turbulence-wall: friction_velocity, y_star, blending; turbulence-features: the 12 feature_* fields; wall-normal; curvature-correction: rotation_function), by running the foehn installed on the machine (MURMEL_FOEHN, else PATH, ~/.cargo/bin, /opt/homebrew/bin, /usr/local/bin; FIELD018 without one) as `foehn post derive <case> --restart <restart.h5> --fields … --file <output> --write-root <its folder>`, then reading the file in as the next step of the same mesh (the view, the derived fields and the items stay). The case is the one run.jsonl beside the result records (with its --set overrides), else case.resolved.toml there; the restart is restart.h5 (restart_<N>.h5 for fields_<N>.vtkhdf); FIELD019 when any is missing. output: the .vtkhdf foehn writes, left out derived.vtkhdf (derived_<N>.vtkhdf) beside the result (the MCP server needs output or file). file: a file foehn post derive already wrote, read in without running anything. Fields the result has already are not asked for again (ran false). added names the fields read in, not_written those FoehnCraft leaves out because the case has no model for them (the features without a turbulence model, the wall normal without elliptic blending). FIELD020 when foehn fails (with the last lines it printed), writes no file, or writes one of another mesh.",
+        outputs: &["output"],
+        reads: &["file"],
+        input_schema: crate::foehn::foehn_derive_schema,
+        run: crate::foehn::field_foehn_derive,
     },
     Tool {
         id: "field.catalogue",

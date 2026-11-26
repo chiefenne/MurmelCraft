@@ -34,6 +34,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
 | `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
 | `field.derive` | 1 | read | Compute a derived field from the open result's fields and add it to them, as if the file had it (colour by it, slice it, iso-surfaces, arrows and streamlines of it; saved in sessions as its recipe and computed again on loading). The quantities and fields are FoehnCraft's names and units; field.catalogue lists each with its formula, unit and inputs. Vortices: vorticity (vector, 1/s), q-criterion, lambda2, enstrophy (½ ω·ω), strain-rate (√(2 S:S)). Pressure: total-pressure (p + ½ ρ u·u), pressure-coefficient ((p − p_ref) / (½ ρ_ref U_ref²)), taken wherever the pressure is. Turbomachinery, in the cells, from the turning zones of rotation (zones: zone, origin, axis, rpm; frame): relative-velocity and frame-velocity (vectors w = c − u, u = Ω × (x − x0)), velocity-radial, velocity-circumferential, velocity-axial, velocity-meridional, relative-velocity-circumferential, flow-angle and relative-flow-angle (°), relative-total-pressure (p + ½ ρ w·w), rothalpy (p/ρ + ½ w·w − ½ u·u); each cell is seen in the frame of the first zone that holds it (the fixed frame outside them), or of frame in every cell. Turbulence, in the cells: dissipation-rate, specific-dissipation-rate, time-scale, length-scale (from k and ω or ε, with C_mu), viscosity-ratio (nu_t / ν), reynolds-stress-xx … -xz (Boussinesq). Wall: wall-distance (exact, from each cell centroid to the nearest face of walls). velocity, pressure, k, dissipation (ω or ε) and nu_t name the input fields; left out, they are found by name. A pressure in m²/s² is kinematic and takes no density; a density field (density, rho) wins over the reference density. reference: density, pressure, velocity, viscosity (kinematic, m²/s) and c_mu; rotation and walls: each left out is the field's own when it is made again, else FoehnCraft's (case.resolved.toml beside the result: [output.reference], [fluid], [turbulence.constants], [[mrf]], [[sliding]], [output] frame, boundaries of type wall), else your defaults (settings.set_default kinds reference and rotation), else built in (air at sea level, 0, the largest speed, C_mu 0.09; every cell about z at 0 rpm; the patches whose role is wall); reference_from and rotation_from say where they came from. Computing a field again replaces it. remove: true removes the derived field (refused while an iso-surface, the arrows or a streamline set is made from it). A field the file already has is not computed again. |
+| `field.foehn_derive` | 1 | write-files | Add FoehnCraft's own fields of the open result, the ones only its models give (y-plus, wall-shear-stress, turbulence-wall: friction_velocity, y_star, blending; turbulence-features: the 12 feature_* fields; wall-normal; curvature-correction: rotation_function), by running the foehn installed on the machine (MURMEL_FOEHN, else PATH, ~/.cargo/bin, /opt/homebrew/bin, /usr/local/bin; FIELD018 without one) as `foehn post derive <case> --restart <restart.h5> --fields … --file <output> --write-root <its folder>`, then reading the file in as the next step of the same mesh (the view, the derived fields and the items stay). The case is the one run.jsonl beside the result records (with its --set overrides), else case.resolved.toml there; the restart is restart.h5 (restart_<N>.h5 for fields_<N>.vtkhdf); FIELD019 when any is missing. output: the .vtkhdf foehn writes, left out derived.vtkhdf (derived_<N>.vtkhdf) beside the result (the MCP server needs output or file). file: a file foehn post derive already wrote, read in without running anything. Fields the result has already are not asked for again (ran false). added names the fields read in, not_written those FoehnCraft leaves out because the case has no model for them (the features without a turbulence model, the wall normal without elliptic blending). FIELD020 when foehn fails (with the last lines it printed), writes no file, or writes one of another mesh. |
 | `field.catalogue` | 1 | read | What can be derived from the open result (field.derive): for each quantity its group (vortices, pressure), field name, formula, unit, inputs (the field each reads now and the fields that could be it), the reference values it uses, the inputs missing, whether the file has the field already and the recipe of the field when it is derived; the reference values a new field starts from, with where each came from (case, defaults or built_in); your formulas (formulas, each with whether its field is computed now), the fields computed from formulas (calculated, with the fields each reads and whether it is kept among your formulas) and the calculator's functions (field.calculate). |
 | `field.calculate` | 1 | read | Compute the field of a formula of your own from the open result's fields and add it to them, as field.derive does (saved in sessions as its formula and computed again on loading). name: the field it makes (a letter or _ first, then letters, digits and _; not a field of the file or of a derived quantity). formula: numbers, pi, the coordinates x, y, z and the position vector pos (of each cell centroid, node or face centre), field names bare or quoted ("p rgh"; a field wins over a built-in name), + - * / ^, the comparisons < <= > >= (1 or 0), components U.x U.y U.z, vectors [a, b, c], and the functions sqrt abs exp log log10 sin cos tan asin acos atan atan2 sinh cosh tanh sign floor ceil min max if(c, a, b) mag dot cross grad curl div (field.catalogue lists them with their arguments). The result is a scalar or a vector; it sits wherever every field it reads is (cells, nodes, boundary faces), in the cells when it takes a derivative (grad, curl and div are least-squares gradients, exact for linear fields) or when no one place has every field (node fields then as each cell's mean). Values that are not finite are no value (no_value counts them). formula left out: your formula of that name (settings.keep_formula). Computing a field again replaces it and computes every field made from it again (made_again); a formula reading its own field, or one made from it, is refused. remove: true removes it (refused while an item or another field is made from it). Errors say the column. |
 | `field.style` | 1 | read | Set how a field is drawn (the one chosen now, or `field`): mode flat (one colour per cell, the solver's values), smooth (node values rebuilt from the cells' least-squares gradients, the default) or banded (bands steps, 2 to 64, default 12); contour lines on or off (lines) and how many (line_count, 1 to 64, default 12, splitting the range into line_count + 1 even steps); the colour map (map: an id of field.list or auto, which takes rainbow_desaturated, or rainbow_uniform for a range centred on zero) and reverse; the colour range (range: field, the whole field's min to max, the default; shown, what is drawn now; symmetric, -max|v| to +max|v|; fixed, min to max, a bound left out keeping the range shown now). reset starts from the default style. Each field keeps its own style. |
@@ -1121,6 +1122,42 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   },
   "required": [
     "quantity"
+  ],
+  "type": "object"
+}
+```
+
+### `field.foehn_derive`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "fields": {
+      "items": {
+        "enum": [
+          "y-plus",
+          "wall-shear-stress",
+          "turbulence-wall",
+          "turbulence-features",
+          "wall-normal",
+          "curvature-correction"
+        ]
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "file": {
+      "description": "a file foehn post derive already wrote for this result: read it in, run nothing",
+      "type": "string"
+    },
+    "output": {
+      "description": "the .vtkhdf to write; left out, derived.vtkhdf (derived_<N>.vtkhdf) beside the result",
+      "type": "string"
+    }
+  },
+  "required": [
+    "fields"
   ],
   "type": "object"
 }
@@ -3957,6 +3994,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `FIELD015` | error | The formula reads its own field, or a field made from it, so it would go round in a circle. | Read the fields it is made from instead, or remove the field made from it first. |
 | `FIELD016` | error | The turning zones of a turbomachinery quantity cannot be used: an axis of length 0, a speed or axis point that is not finite, a zone the mesh does not have, a frame that is not one of the zones, or more than 16 zones. | Give each zone a cell zone of the mesh (field.catalogue lists them under rotation.mesh_zones) or none for every cell, an axis that is not zero and a finite rpm. |
 | `FIELD017` | error | The wall distance has no wall face to measure to: no patch is a wall (by the result's case or the patch role), a named patch is not one of the mesh's, or the patches have no face. | Name the wall patches with walls (field.catalogue lists the mesh's patches under walls.mesh_patches). |
+| `FIELD018` | error | FoehnCraft's foehn was not found: MURMEL_FOEHN names no file, or there is no foehn on PATH, in ~/.cargo/bin, /opt/homebrew/bin or /usr/local/bin. | Install FoehnCraft (cargo install, or its release), or set MURMEL_FOEHN to the foehn program. |
+| `FIELD019` | error | The open result is not a FoehnCraft run that foehn post derive can take up: it is no fields(_N).vtkhdf or derived(_N).vtkhdf, or its restart file or its case is not beside it. | Open the fields.vtkhdf of a FoehnCraft run whose folder still has restart.h5 and run.jsonl (or case.resolved.toml). |
+| `FIELD020` | error | foehn post derive could not be started or failed, wrote no file, or wrote a file of another mesh. | Read the lines foehn printed (in the message); run the command shown in the Derived fields window yourself to see all of them. |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
 | `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a KoflCraft mesh or a FoehnCraft result (.vtu, .vtkhdf); other tools' meshes come in through File, Import (OpenFOAM polyMesh, VTK file). |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |

@@ -1815,6 +1815,10 @@ pub const NOT_IN_PALETTE: &[(&str, &str)] = &[
         "series.range",
         "the window reads it by itself while range mode steps colours a series",
     ),
+    (
+        "field.foehn_derive",
+        "the Derived fields window runs foehn in the background, with Cancel",
+    ),
     ("charts.data", "the chart panel draws it"),
     ("stats.at", "the statistics beside the chart show it"),
     (

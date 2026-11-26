@@ -558,6 +558,30 @@ const OWN: &[Code] = &[
             "Name the wall patches with walls (field.catalogue lists the mesh's patches under walls.mesh_patches).",
         ),
     },
+    Code {
+        code: "FIELD018",
+        severity: Severity::Error,
+        meaning: "FoehnCraft's foehn was not found: MURMEL_FOEHN names no file, or there is no foehn on PATH, in ~/.cargo/bin, /opt/homebrew/bin or /usr/local/bin.",
+        fix: Some(
+            "Install FoehnCraft (cargo install, or its release), or set MURMEL_FOEHN to the foehn program.",
+        ),
+    },
+    Code {
+        code: "FIELD019",
+        severity: Severity::Error,
+        meaning: "The open result is not a FoehnCraft run that foehn post derive can take up: it is no fields(_N).vtkhdf or derived(_N).vtkhdf, or its restart file or its case is not beside it.",
+        fix: Some(
+            "Open the fields.vtkhdf of a FoehnCraft run whose folder still has restart.h5 and run.jsonl (or case.resolved.toml).",
+        ),
+    },
+    Code {
+        code: "FIELD020",
+        severity: Severity::Error,
+        meaning: "foehn post derive could not be started or failed, wrote no file, or wrote a file of another mesh.",
+        fix: Some(
+            "Read the lines foehn printed (in the message); run the command shown in the Derived fields window yourself to see all of them.",
+        ),
+    },
 ];
 
 /// Every code: the tools' own, then the mesh and render codes.
