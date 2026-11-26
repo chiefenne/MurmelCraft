@@ -227,9 +227,11 @@ build it from source as below.
 
 You need:
 
-- Rust, installed with [rustup](https://rustup.rs). The repository's
-  `rust-toolchain.toml` makes rustup fetch and use the latest stable Rust
-  (1.98 or newer is needed) with rustfmt and clippy.
+- Rust 1.98 or newer, installed with [rustup](https://rustup.rs). The
+  repository's `rust-toolchain.toml` selects the stable channel, but rustup
+  does not update a stable it already has: if `rustc --version` shows an
+  older one, run `rustup update stable` first (older versions stop with
+  `use of unstable library feature atomic_from_mut`).
 - A C compiler and linker for Rust: on macOS the Xcode Command Line Tools
   (`xcode-select --install`), on Linux (Ubuntu) `sudo apt install
   build-essential`.
