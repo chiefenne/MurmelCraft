@@ -269,6 +269,7 @@ If it does not work:
 
 More in [docs/mcp.md](docs/mcp.md).
 
+Post-processing, step by step: [docs/post-processing.md](docs/post-processing.md).
 Rules for contributors and agents: [AGENTS.md](AGENTS.md). Tools:
 [docs/tools.md](docs/tools.md). MCP server: [docs/mcp.md](docs/mcp.md). Lessons: [docs/pitfalls.md](docs/pitfalls.md).
 
