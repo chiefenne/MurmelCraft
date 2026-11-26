@@ -1,1 +1,0 @@
-- Ranges centred on zero (the automatic map with a symmetric range) now take Rainbow Uniform, Colin Ware's map from ParaView, the same as FoehnCraft's signed-field plots: blue through green to a bright yellow at zero, then orange, red and magenta. Cool to warm stays in the list.

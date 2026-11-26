@@ -1,7 +1,0 @@
-### Added
-
-- Derived fields: vorticity, Q criterion, λ₂, total pressure and pressure coefficient, computed from the result's velocity and pressure (`field.derive`; `field.catalogue` lists what can be derived). The velocity gradient of each cell comes from the same least-squares fit as smooth colouring, so a velocity linear in space gives its exact vorticity, Q and λ₂ in every cell. The names and units are FoehnCraft's, and a field the file already has is not computed again. A derived field joins the file's fields for colouring, slices, iso-surfaces, arrows, streamlines and probes; session files (format 1.11) keep how each was made and compute it again on loading.
-- The Derived fields window (palette "Derived fields…", the colour-by menu and the field legend's menu): the quantities by group with formula, unit and inputs, the ones whose inputs are missing greyed, and Compute (which also shows the field), Show and Remove.
-- Reference values of the pressure quantities (density, pressure, velocity) come from FoehnCraft's `case.resolved.toml` beside the result, else your defaults, else air at sea level, 0 and the largest speed; each says where it came from, and a right-click keeps one as your default (`settings.set_default` kind `reference`).
-- A kinematic pressure (m²/s²) takes no density, and a density field of the file wins over the reference density.
-- The window draws Greek letters and sub- and superscripts (a subset of Inter of their own); a test checks that every string of the window has its glyphs.

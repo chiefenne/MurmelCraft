@@ -1,0 +1,135 @@
+# Release: creates the annotated Git tag v<version> on main and a GitHub
+# release whose notes are the changelog section of that version
+# (docs/release.md).
+# Started by hand (Actions tab, or by the assistant through the GitHub API)
+# after the version-bump pull request is merged.
+#
+# Checks before anything is written:
+# - CHANGELOG.md has a section "## <version> (YYYY-MM-DD) ..." on main;
+# - the tag does not exist yet, or already points at the requested commit
+#   (then only the missing GitHub release is created).
+# With dry_run = true it only prints what it would do.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the leading v, for example 0.1.0"
+        required: true
+        type: string
+      dry_run:
+        description: "Only check and print, create nothing"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Check version and changelog
+        id: check
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo "::error::version must look like 0.1 or 1.0.2, got '$VERSION'"; exit 1
+          fi
+          tag="v$VERSION"
+          # The workspace version in Cargo.toml must be the version released.
+          cargo_version=$(awk '/^\[workspace.package\]/{f=1;next} /^\[/{f=0} f && /^version/{gsub(/"/,"",$3); print $3; exit}' Cargo.toml)
+          if [ "$cargo_version" != "$VERSION" ]; then
+            echo "::error::Cargo.toml [workspace.package] version is '$cargo_version', not '$VERSION'"; exit 1
+          fi
+          # Changelog section of this version: from its "## " heading to the next one.
+          awk -v v="$VERSION" '
+            /^## / { if (found) exit; if (index($0, "## " v " ") == 1) { found = 1 } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section '## $VERSION (...)' on main"; exit 1
+          fi
+          # Prepend the summary table row of this version, if there is one.
+          row=$(grep -E "^\| *$VERSION[ (|]" CHANGELOG.md | head -1 || true)
+          if [ -n "$row" ]; then
+            { echo "| Version | Stage | Highlights |"; echo "|---|---|---|"; echo "$row"; echo; } | cat - notes.md > notes2.md
+            mv notes2.md notes.md
+          fi
+          head_sha=$(git rev-parse HEAD)
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tag_sha=$(git rev-list -n 1 "$tag")
+            echo "tag $tag exists at $tag_sha"
+            echo "create_tag=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag $tag will be created at $head_sha (main)"
+            echo "create_tag=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "----- release notes -----"; cat notes.md
+
+      - name: Create tag
+        if: ${{ !inputs.dry_run && steps.check.outputs.create_tag == 'true' }}
+        env:
+          TAG: ${{ steps.check.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "MurmelCraft $TAG"
+          git push origin "refs/tags/$TAG"
+
+      - name: Create GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.check.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG exists already"
+          else
+            gh release create "$TAG" --title "MurmelCraft $TAG" --notes-file notes.md --verify-tag
+          fi
+
+      # The README release badge is an image of img.shields.io that GitHub
+      # serves through its image proxy (camo), and both cache it: without
+      # this step the badge keeps the old version for hours to days. Wait
+      # until shields.io reports the new release, then purge the proxy copies
+      # of the README images. Never fails the release.
+      - name: Refresh the README badges
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.check.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS "https://img.shields.io/github/v/release/$REPO.json" | grep -q "\"$TAG\""; then
+              echo "shields.io reports $TAG"; break
+            fi
+            echo "shields.io does not report $TAG yet, waiting"; sleep 60
+          done
+          curl -fsS "https://github.com/$REPO" \
+            | grep -oE 'https://camo\.githubusercontent\.com/[0-9a-f]+/[0-9a-f]+' | sort -u \
+            | while read -r u; do
+                if curl -fsS -X PURGE "$u" >/dev/null; then echo "purged $u"; else echo "could not purge $u"; fi
+              done
+
+      - name: Dry run summary
+        if: ${{ inputs.dry_run }}
+        run: echo "dry run, nothing created (tag ${{ steps.check.outputs.tag }}, create_tag=${{ steps.check.outputs.create_tag }})"
