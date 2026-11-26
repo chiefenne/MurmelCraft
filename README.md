@@ -121,6 +121,10 @@ change, and [changelog.d](changelog.d) the changes since the release.
   file's fields for colouring, slices, iso-surfaces, arrows and
   streamlines, and sessions save how each was made. The reference values
   come from FoehnCraft's case beside the result, else your defaults.
+  FoehnCraft's own fields (y⁺, wall shear stress, u_τ, the turbulence
+  features, …) are computed by the `foehn` installed on the machine
+  (`field.foehn_derive`, in the background with Cancel) and read in as the
+  next step of the same result.
 - Field calculator (`field.calculate`, the Derived fields window's Your
   formulas tab, palette "Field calculator…"): your own formulas of the
   result's fields, such as `mag(velocity)`, `p - 101325`,

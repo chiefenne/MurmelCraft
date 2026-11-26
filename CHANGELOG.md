@@ -36,7 +36,9 @@ command line and the MCP server share, so an agent can do what a user can.
   vector arrows and streamlines (also as tubes); derived fields (vorticity,
   Q, λ₂, total pressure, c_p, turbomachinery, turbulence and wall
   quantities with FoehnCraft's names) and a field calculator with `grad`,
-  `curl` and `div`.
+  `curl` and `div`; FoehnCraft's own wall and turbulence fields (y⁺, wall
+  shear stress, u_τ, …) computed by the `foehn` installed on the machine. A
+  [post-processing guide](docs/post-processing.md) shows every step.
 - **Sprays and transient runs.** Spray parcels as shaded spheres sized and
   coloured by any parcel field, time series with a player bar and movies of
   the steps, and charts and statistics of a run (datum mass flows,
@@ -224,6 +226,8 @@ command line and the MCP server share, so an agent can do what a user can.
 - The window shows one group at a time (Vortices, Pressure, Turbomachinery, Turbulence, Wall), the values its quantities take above the rows.
 - `field.derive` takes `k`, `dissipation` (ω or ε), `nu_t`, `rotation` and `walls`; `field.catalogue` lists the rotation, the walls, the mesh's zones and patches. New refusals FIELD016 (turning zones) and FIELD017 (walls). Session files are format 1.17.
 - Colour range "All time steps" (`field.style` range `steps`): while a time series is open, the mesh's colours span the smallest to the largest value of the field over every step, so a colour means the same value at each step of a playing series and in a movie of it. It is the default while a series is open (fields coloured over their whole range at one step take it; shown, symmetric and fixed ranges stay); "Whole field" gives each step's own range back. The window reads the other steps in the background and the player bar shows how far it is; the legend widens as it reads. `series.range` reads it from the command line and for agents, and pictures and movies read it before their first frame (SERIES004). Session files keep it (format 1.17).
+- The Derived fields window lists FoehnCraft's own fields under Wall and Turbulence: y⁺, wall shear stress, the wall treatment's u_τ, y* and blending, the turbulence features, the wall normal and the curvature correction. One the result lacks is computed by the `foehn` installed on your machine (`foehn post derive`, in the background, with Cancel and Esc) and read in as the next step of the same result, so the view and your derived fields stay. The row is greyed with the reason when foehn, the restart file or the case is not found.
+- `field.foehn_derive` does the same for scripts and agents (over MCP it needs `output` or `file`). New codes FIELD018 to FIELD020.
 
 ### Sprays, time series and charts
 
@@ -380,7 +384,7 @@ command line and the MCP server share, so an agent can do what a user can.
   the header with the title, the date and the file. The page is kept in `[page]` of settings.toml;
   agents use export.pdf and settings.set_page. The PDF writer is MurmelCraft's own.
 
-### README, tests and CI
+### README, docs, tests and CI
 
 - The README opens with a slideshow of the window: eight screenshots of a FoehnCraft result on KoflCraft's Manifold mesh that change every four seconds. The same pictures, with captions, are in docs/gallery.md.
 - tools/readme-tour makes the slideshow again from any result, on Linux without a screen.
@@ -394,4 +398,8 @@ command line and the MCP server share, so an agent can do what a user can.
   threshold, so a control that stops calling its tool fails in CI.
 - The fast CI run takes a fraction of the time: cargo-nextest runs every test binary at once, the mesh and engine crates build with `opt-level = 1` for the tests (locally too), CI builds without debug info, and the Mesa packages come from a cache. It still runs the same checks and tests.
 - F6 now reaches the player bar while a series shows its first step; it did nothing there, because the disabled "First step" button was the one it tried to focus.
-
+- A post-processing guide ([docs/post-processing.md](docs/post-processing.md)): fields, slices,
+  iso-surfaces, arrows, streamlines, derived fields, the calculator,
+  probes, time series, spray parcels and charts, regions, export and
+  sessions, each step with where to click and the tool it calls. A test
+  runs its example script.
