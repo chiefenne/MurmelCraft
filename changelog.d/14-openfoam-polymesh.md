@@ -1,7 +1,0 @@
-### Added
-
-- OpenFOAM meshes open like a `.vtu` (UI spec V1.0): `mesh.open` (version 2) takes a case folder, its `constant` folder, the `polyMesh` folder, a `.foam` file in the case or one of the polyMesh files. The reader (`murmel-mesh` `polymesh`, written from the format documentation) reads `points`, `faces` (`faceList` or `faceCompactList`), `owner`, `neighbour`, `boundary` and `cellZones`, in ascii or binary (32 or 64 bit labels and scalars, either byte order) and gzip-compressed (`faces.gz`). Cell and face ids are OpenFOAM's own labels.
-- Cells, cell types, patches, zones, the clip plane, picking and quality colouring work on OpenFOAM meshes unchanged. Patch roles come from the OpenFOAM type (`wall`, `symmetry`, `symmetryPlane`), else from the name as KoflCraft names patches; the roles in `mesh-evidence.json` win. Cells in no cell zone join a zone `cells`.
-- The validity badge checks every file KoflCraft lists in the evidence of its OpenFOAM export (`kofl export … openfoam`); `mesh.open` and `mesh.info` return the files read with their SHA-256. The mesh properties show the format, the patch properties the OpenFOAM patch type.
-- The window opens a case folder with "Open OpenFOAM case folder…" (Ctrl+Shift+O, in the palette) or by dropping it; the Open dialog also offers `.foam` files.
-- New diagnostic codes MESH013 (no polyMesh in the folder), MESH014 (malformed OpenFOAM file) and MESH015 (patches do not cover the boundary faces).

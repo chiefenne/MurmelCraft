@@ -1,3 +1,0 @@
-### Added
-
-- Spray parcels (`parcels.open`, `parcels.set`, `parcels.clear`; D268, first part): the droplets of a FoehnCraft spray (`spray/parcels_<step>.vtkhdf`, or any VTKHDF PolyData of points) show with the mesh and its fields as small shaded spheres, all the same size or sized by droplet diameter, coloured by any parcel field (diameter, a velocity component, age, …) with a colour bar, colour map and range of their own, or in one solid colour. Filters keep a diameter range or one injector, and clip planes cut the parcels away with the cells. The model tree has a row with eye, settings and size factor, the Properties panel shows the file's time, step and counts, and session files keep the parcels (format 1.12).

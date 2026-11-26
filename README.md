@@ -18,14 +18,15 @@ also [full-size stills](assets/readme/tour); how they were made is in
 [tools/readme-tour](tools/readme-tour/README.md).</sub>
 
 [![CI](https://github.com/chiefenne/MurmelCraft/actions/workflows/ci.yml/badge.svg)](https://github.com/chiefenne/MurmelCraft/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/chiefenne/MurmelCraft)](https://github.com/chiefenne/MurmelCraft/releases)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## What works today
 
-Not released yet (version 0.1.0): the V0.2 to V0.6 milestones of the UI
-spec are done and V1.0 is in progress; [changelog.d](changelog.d) lists
-every change.
+Release 0.6.0 (tag `v0.6.0`): the V0.1 to V0.6 milestones of the UI spec
+are done and V1.0 is in progress; [CHANGELOG.md](CHANGELOG.md) lists every
+change, and [changelog.d](changelog.d) the changes since the release.
 
 - Opens KoflCraft's `foehncraft.vtu` and `foehncraft.vtkhdf` (VTK polyhedra,
   boundary polygons, zone and patch names and roles) and the

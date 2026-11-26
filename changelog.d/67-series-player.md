@@ -1,3 +1,0 @@
-### Added
-
-- Time series (`series.open`, `series.go`, `series.play`; D268, second part): the steps of one run from FoehnCraft's `series.json` or an output folder of `fields_<step>.vtkhdf` and `spray/parcels_<step>.vtkhdf`. Each step shows its fields and parcels with the slices, colouring, parcel settings, derived fields, camera and undo steps kept. A player bar below the view (first, back, play or pause, on, last, a step slider, speed and loop; Space, comma and full stop) and the time in the status bar; `export.movie` with motion `series` makes a movie of the steps; session files keep the series and the step (format 1.13).

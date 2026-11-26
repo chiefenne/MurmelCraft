@@ -1,4 +1,0 @@
-### Added
-
-- `murmel blocks make MESH --out FILE` (the tool `blocks.make`) writes a mesh and its fields as a blocked VTKHDF file (`docs/blocked-vtkhdf.md`): the cells sorted along a 3-D Hilbert curve and cut into blocks of 65,536 cells, each with its own points and one layer of ghost cells, global ids, the bounds and field ranges of every block, and the patches with their owner cells. It is the layout from which MurmelCraft will read a region of a mesh too large for memory; ParaView 5.13 and later open it as it is. A `.vtu`, an OpenFOAM `polyMesh` or a VTKHDF file converts; 1 million polyhedra take about 11 seconds.
-- Blocked VTKHDF files open whole, from MurmelCraft, KoflCraft or FoehnCraft: ghost cells are left out, the blocks join at their shared points, and zone names, patch roles and the file's digests are kept.
