@@ -225,23 +225,27 @@ build it from source as below.
 
 ### Build from source
 
-You need:
+You need Rust 1.98 or newer ([rustup](https://rustup.rs)), a C compiler
+and linker, Git and a GPU driver (Metal on macOS, Vulkan on Linux,
+DirectX 12 on Windows); no CMake, HDF5 or Gmsh. The repository's
+`rust-toolchain.toml` selects the stable channel, but rustup does not
+update a stable it already has: if `rustc --version` shows an older one,
+run `rustup update stable` first (older versions stop with
+`use of unstable library feature atomic_from_mut`).
 
-- Rust 1.98 or newer, installed with [rustup](https://rustup.rs). The
-  repository's `rust-toolchain.toml` selects the stable channel, but rustup
-  does not update a stable it already has: if `rustc --version` shows an
-  older one, run `rustup update stable` first (older versions stop with
-  `use of unstable library feature atomic_from_mut`).
-- A C compiler and linker for Rust: on macOS the Xcode Command Line Tools
-  (`xcode-select --install`), on Linux (Ubuntu) `sudo apt install
-  build-essential`.
-- Git.
-- On Linux, an X11 or Wayland desktop and a Vulkan driver (on Ubuntu
-  `sudo apt install mesa-vulkan-drivers`, which CI uses). macOS draws
-  with Metal and needs nothing extra.
-- Optional: `ffmpeg` on the `PATH` for MP4 movies (`brew install ffmpeg`),
-  and [FoehnCraft](https://github.com/chiefenne/Foehncraft)'s `foehn` for
-  the fields only its models give.
+| System | Commands |
+|---|---|
+| macOS | `xcode-select --install`, then rustup |
+| Ubuntu, Debian | `sudo apt install build-essential git curl mesa-vulkan-drivers`, then rustup |
+| Fedora | `sudo dnf install gcc make git curl mesa-vulkan-drivers`, then rustup |
+| Windows | Visual Studio C++ Build Tools, rustup and Git with `winget install --id ...` (the commands are in the guide) |
+
+The rustup command on macOS and Linux is
+`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`.
+On Linux you need an X11 or Wayland desktop. Optional: `ffmpeg` on the
+`PATH` for MP4 movies, and [FoehnCraft](https://github.com/chiefenne/Foehncraft)'s
+`foehn` for the fields only its models give. The step-by-step guide for
+each system is [docs/install.md](docs/install.md).
 
 Then, in a terminal:
 
