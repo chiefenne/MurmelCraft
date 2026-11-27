@@ -277,6 +277,13 @@ is loaded.
 Turbomachinery, turbulence and wall quantities come from FoehnCraft
 (`foehn post derive`); the window says so below the catalogue.
 
+FoehnCraft's own wall heat fields (FoehnCraft 2026-11-27 or later, a
+case with `[energy]`, a restart written by that version) are rows under
+Wall that run `foehn post derive`: `wall_heat_flux` (W/m², positive into
+the fluid) with `wall_temperature`, `heat_transfer_coefficient`
+q_w / (T_w − T_P), and `nusselt_number` h L / k(T_w), which also needs
+`[output.reference] length` in the case. They are on the wall faces.
+
 The Statistics group works on FoehnCraft's `statistics.vtkhdf`, which a
 transient run writes with `[output.statistics] fields = true`: the RMS
 `rms_velocity_x` … (read as the vector `rms_velocity`), the covariances
