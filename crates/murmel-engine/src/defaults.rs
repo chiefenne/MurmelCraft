@@ -62,10 +62,13 @@ pub enum Kind {
     /// How the player plays a time series newly opened: its speed and
     /// whether it loops.
     Player,
+    /// Whether a derived field is taken of the mean flow when the
+    /// result has the means.
+    Derived,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 12] = [
+    pub const ALL: [Kind; 13] = [
         Kind::Arrows,
         Kind::Slice,
         Kind::Iso,
@@ -78,6 +81,7 @@ impl Kind {
         Kind::Parcels,
         Kind::Rotation,
         Kind::Player,
+        Kind::Derived,
     ];
 
     pub fn key(self) -> &'static str {
@@ -94,6 +98,7 @@ impl Kind {
             Kind::Parcels => "parcels",
             Kind::Rotation => "rotation",
             Kind::Player => "player",
+            Kind::Derived => "derived",
         }
     }
 
@@ -125,6 +130,7 @@ impl Kind {
             Kind::Rotation => &["rpm", "axis"],
             Kind::Parcels => &["size", "scale", "map", "reverse"],
             Kind::Player => &["rate", "loop"],
+            Kind::Derived => &["mean"],
         }
     }
 
@@ -176,6 +182,7 @@ impl Kind {
             Kind::Parcels => serde_json::to_value(ParcelView::new("p".into())),
             Kind::Rotation => serde_json::to_value(crate::turbo::Turning::default()),
             Kind::Player => serde_json::to_value(Playback::default()),
+            Kind::Derived => serde_json::to_value(crate::derive::DerivedChoice::default()),
         };
         v.unwrap_or(Value::Null)
     }
@@ -221,6 +228,9 @@ impl Kind {
                 })
                 .map_err(serde::de::Error::custom),
             Kind::Player => serde_json::from_value::<Playback>(item).map(|_| ()),
+            Kind::Derived => {
+                serde_json::from_value::<crate::derive::DerivedChoice>(item).map(|_| ())
+            }
         };
         typed.map_err(|e| format!("{}.{key} = {value}: {e}", self.key()))?;
         let number = value.as_f64().unwrap_or(f64::NAN);

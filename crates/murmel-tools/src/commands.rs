@@ -2260,7 +2260,18 @@ mod tests {
             }
             match c.input(&s) {
                 Some((tool, input)) => {
+                    // The channel has no statistics (statistics.vtkhdf):
+                    // those quantities say which input they need; the
+                    // test statistics_quantities_from_a_file runs them.
+                    let statistics = input["quantity"]
+                        .as_str()
+                        .and_then(murmel_engine::derive::Quantity::parse)
+                        .is_some_and(|q| q.group() == murmel_engine::derive::Group::Statistics);
                     let e = crate::call(tool, input, &mut s);
+                    if statistics && tool == "field.derive" {
+                        assert_eq!(e.diagnostics[0].code, "FIELD005", "{}", c.id);
+                        continue;
+                    }
                     assert!(e.ok(), "{}: {:?}", c.id, e.diagnostics);
                 }
                 // Undo and redo apply only with a step to walk; the

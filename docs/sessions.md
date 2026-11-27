@@ -162,7 +162,14 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   turning zones `rotation` (turbomachinery quantities) and the wall
   patches `walls` (wall distance), and its `reference` takes the
   kinematic `viscosity` (m²/s) and `c_mu` (left out: air at sea level and
-  0.09, so a 1.11 to 1.16 file loads unchanged).
+  0.09, so a 1.11 to 1.16 file loads unchanged). From format 1.19 the
+  quantities include helicity, swirling strength, the two turbulence
+  intensities and the statistics group, whose recipes can name
+  `rms_velocity`, `covariance_xy`, `covariance_yz`, `covariance_xz`,
+  `mean_k` and `heat_flux_x`, `heat_flux_y`, `heat_flux_z` (each left
+  out: found by FoehnCraft's name in `statistics.vtkhdf`), and
+  `"mean": true` for a quantity of the mean flow (its field
+  `mean_<field>`), so a 1.18 file loads unchanged.
 - **Colours and the view cube** (`colors`, `view_cube`) are the user's
   settings when the session was saved. Loading applies them to this
   session only; `settings.toml` is not written (decided 2026-11-24). A

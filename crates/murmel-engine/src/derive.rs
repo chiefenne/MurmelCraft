@@ -14,6 +14,9 @@
 //! | `pressure-coefficient` | `pressure_coefficient` | (p − p_ref) / (½ ρ_ref U_ref²) | - |
 //! | `enstrophy` | `enstrophy` | ½ ω·ω | 1/s² |
 //! | `strain-rate` | `strain_rate` | √(2 S:S), the shear rate | 1/s |
+//! | `helicity` | `helicity` | H = u·ω | m/s² |
+//! | `normalized-helicity` | `normalized_helicity` | u·ω / (\|u\| \|ω\|), ±1 along a vortex core, the sign its sense of turning (Y. Levy, D. Degani and A. Seginer, "Graphical visualization of vortical flows by means of helicity", AIAA J. 28, 1990) | - |
+//! | `swirling-strength` | `swirling_strength` | λ_ci, the imaginary part of the complex eigenvalues of ∇u ([`swirling_strength`]) | 1/s |
 //! | `relative-velocity` | `relative_velocity` (vector) | **w** = **c** − **Ω** × (**x** − **x**₀) | m/s |
 //! | `frame-velocity` | `frame_velocity` (vector) | **u** = **Ω** × (**x** − **x**₀) | m/s |
 //! | `velocity-radial`, `-circumferential`, `-axial`, `-meridional` | `velocity_radial` … | c_r, c_u, c_a, c_m = (c_r² + c_a²)^½ about the axis of the cell's frame | m/s |
@@ -24,8 +27,15 @@
 //! | `dissipation-rate`, `specific-dissipation-rate` | `dissipation_rate`, `specific_dissipation_rate` | ε = C_μ k ω, ω = ε/(C_μ k) | m²/s³, 1/s |
 //! | `time-scale`, `length-scale` | `time_scale`, `length_scale` | T = k/ε = 1/(C_μ ω) (the bounded T of ζ-f where the file has it), L = k^{3/2}/ε | s, m |
 //! | `viscosity-ratio` | `viscosity_ratio` | ν_t/ν | - |
+//! | `turbulence-intensity` | `turbulence_intensity` | I = √(2k/3) / U_ref, against the reference velocity | - |
+//! | `local-turbulence-intensity` | `local_turbulence_intensity` | I = √(2k/3) / \|u\|, against the local speed (no value where the flow stands) | - |
 //! | `reynolds-stress-xx` … `-xz` | `reynolds_stress_xx` … | ⅔ k δᵢⱼ − 2 ν_t Sᵢⱼ (Boussinesq) | m²/s² |
 //! | `wall-distance` | `wall_distance` | the distance of the cell centroid to the nearest wall face ([`crate::walls`]) | m |
+//! | `resolved-kinetic-energy` | `resolved_kinetic_energy` | k_res = ½ (u′² + v′² + w′²) of the RMS of a transient run's statistics | m²/s² |
+//! | `total-kinetic-energy` | `total_kinetic_energy` | k_res + k̄, the resolved and the mean modelled k | m²/s² |
+//! | `resolved-reynolds-stress-xx` … `-xz` | `resolved_reynolds_stress_xx` … | ⟨u′ᵢu′ⱼ⟩: the squared RMS and the covariances | m²/s² |
+//! | `anisotropy-eta`, `anisotropy-xi` | `anisotropy_eta`, `anisotropy_xi` | η, ξ of the Lumley triangle ([`anisotropy`]) | - |
+//! | `turbulent-heat-flux` | `turbulent_heat_flux` (vector) | ⟨u′T′⟩, the covariances of the velocity and the temperature | K m/s |
 //!
 //! The turbomachinery quantities take the turning zones of
 //! [`crate::turbo`]; those, the turbulence ones and the wall distance
@@ -34,6 +44,12 @@
 //! the invariant features, the wall normal of elliptic blending and the
 //! curvature correction) belong to its turbulence model and come from
 //! `foehn post derive`.
+//!
+//! The statistics quantities read the moments FoehnCraft's transient
+//! runs write to `statistics.vtkhdf` (`[output.statistics]`): the RMS
+//! `rms_velocity_x` … (read as the vector `rms_velocity`), the
+//! covariances `covariance_velocity_xy` … and
+//! `covariance_velocity_x_temperature` …, and `mean_k`.
 //!
 //! The names and units are the ones FoehnCraft writes, so a result with
 //! FoehnCraft's own derived fields and one derived here read alike; a
@@ -101,6 +117,22 @@ pub enum Quantity {
     ReynoldsStressYz,
     ReynoldsStressXz,
     WallDistance,
+    ResolvedKineticEnergy,
+    TotalKineticEnergy,
+    ResolvedReynoldsStressXx,
+    ResolvedReynoldsStressYy,
+    ResolvedReynoldsStressZz,
+    ResolvedReynoldsStressXy,
+    ResolvedReynoldsStressYz,
+    ResolvedReynoldsStressXz,
+    AnisotropyEta,
+    AnisotropyXi,
+    TurbulentHeatFlux,
+    Helicity,
+    NormalizedHelicity,
+    SwirlingStrength,
+    TurbulenceIntensity,
+    LocalTurbulenceIntensity,
 }
 
 /// The groups of the catalogue.
@@ -117,15 +149,19 @@ pub enum Group {
     Turbulence,
     /// The distance to the walls.
     Wall,
+    /// The moments of a transient run's statistics (FoehnCraft's
+    /// `statistics.vtkhdf`): resolved turbulence.
+    Statistics,
 }
 
 impl Group {
-    pub const ALL: [Group; 5] = [
+    pub const ALL: [Group; 6] = [
         Group::Vortices,
         Group::Pressure,
         Group::Turbomachinery,
         Group::Turbulence,
         Group::Wall,
+        Group::Statistics,
     ];
 
     pub fn key(self) -> &'static str {
@@ -135,6 +171,7 @@ impl Group {
             Group::Turbomachinery => "turbomachinery",
             Group::Turbulence => "turbulence",
             Group::Wall => "wall",
+            Group::Statistics => "statistics",
         }
     }
 }
@@ -154,15 +191,40 @@ pub enum Input {
     Dissipation,
     /// The eddy viscosity ν_t (m²/s).
     NuT,
+    /// The RMS of the velocity's fluctuation, per component (m/s;
+    /// FoehnCraft's `rms_velocity_x` … of `statistics.vtkhdf`).
+    RmsVelocity,
+    /// ⟨u′v′⟩ (m²/s², `covariance_velocity_xy`).
+    CovarianceXy,
+    /// ⟨v′w′⟩ (m²/s², `covariance_velocity_yz`).
+    CovarianceYz,
+    /// ⟨u′w′⟩ (m²/s², `covariance_velocity_xz`).
+    CovarianceXz,
+    /// The time mean of the modelled k (m²/s², `mean_k`).
+    MeanK,
+    /// ⟨u′T′⟩ (K m/s, `covariance_velocity_x_temperature`).
+    HeatFluxX,
+    /// ⟨v′T′⟩ (K m/s, `covariance_velocity_y_temperature`).
+    HeatFluxY,
+    /// ⟨w′T′⟩ (K m/s, `covariance_velocity_z_temperature`).
+    HeatFluxZ,
 }
 
 impl Input {
-    pub const ALL: [Input; 5] = [
+    pub const ALL: [Input; 13] = [
         Input::Velocity,
         Input::Pressure,
         Input::K,
         Input::Dissipation,
         Input::NuT,
+        Input::RmsVelocity,
+        Input::CovarianceXy,
+        Input::CovarianceYz,
+        Input::CovarianceXz,
+        Input::MeanK,
+        Input::HeatFluxX,
+        Input::HeatFluxY,
+        Input::HeatFluxZ,
     ];
 
     pub fn key(self) -> &'static str {
@@ -172,6 +234,14 @@ impl Input {
             Input::K => "k",
             Input::Dissipation => "dissipation",
             Input::NuT => "nu_t",
+            Input::RmsVelocity => "rms_velocity",
+            Input::CovarianceXy => "covariance_xy",
+            Input::CovarianceYz => "covariance_yz",
+            Input::CovarianceXz => "covariance_xz",
+            Input::MeanK => "mean_k",
+            Input::HeatFluxX => "heat_flux_x",
+            Input::HeatFluxY => "heat_flux_y",
+            Input::HeatFluxZ => "heat_flux_z",
         }
     }
 
@@ -196,24 +266,47 @@ impl Input {
                 "eddy_viscosity",
                 "Nut",
             ],
+            Input::RmsVelocity => &["rms_velocity", "rms_U", "UPrime2Mean_rms"],
+            Input::CovarianceXy => &["covariance_velocity_xy"],
+            Input::CovarianceYz => &["covariance_velocity_yz"],
+            Input::CovarianceXz => &["covariance_velocity_xz"],
+            Input::MeanK => &["mean_k", "kMean"],
+            Input::HeatFluxX => &["covariance_velocity_x_temperature"],
+            Input::HeatFluxY => &["covariance_velocity_y_temperature"],
+            Input::HeatFluxZ => &["covariance_velocity_z_temperature"],
+        }
+    }
+
+    /// The names of its time mean in a transient run's statistics
+    /// (FoehnCraft's `statistics.vtkhdf`), for a quantity of the mean
+    /// flow; none for an input the statistics do not average.
+    fn mean_names(self) -> &'static [&'static str] {
+        match self {
+            Input::Velocity => &["mean_velocity", "UMean"],
+            Input::Pressure => &["mean_pressure", "pMean"],
+            Input::K => &["mean_k", "kMean"],
+            _ => &[],
         }
     }
 
     fn components(self) -> usize {
         match self {
-            Input::Velocity => 3,
+            Input::Velocity | Input::RmsVelocity => 3,
             _ => 1,
         }
     }
 }
 
 impl Quantity {
-    pub const ALL: [Quantity; 30] = [
+    pub const ALL: [Quantity; 46] = [
         Quantity::Vorticity,
         Quantity::QCriterion,
         Quantity::Lambda2,
         Quantity::Enstrophy,
         Quantity::StrainRate,
+        Quantity::Helicity,
+        Quantity::NormalizedHelicity,
+        Quantity::SwirlingStrength,
         Quantity::TotalPressure,
         Quantity::PressureCoefficient,
         Quantity::RelativeVelocity,
@@ -232,6 +325,8 @@ impl Quantity {
         Quantity::TimeScale,
         Quantity::LengthScale,
         Quantity::ViscosityRatio,
+        Quantity::TurbulenceIntensity,
+        Quantity::LocalTurbulenceIntensity,
         Quantity::ReynoldsStressXx,
         Quantity::ReynoldsStressYy,
         Quantity::ReynoldsStressZz,
@@ -239,6 +334,17 @@ impl Quantity {
         Quantity::ReynoldsStressYz,
         Quantity::ReynoldsStressXz,
         Quantity::WallDistance,
+        Quantity::ResolvedKineticEnergy,
+        Quantity::TotalKineticEnergy,
+        Quantity::ResolvedReynoldsStressXx,
+        Quantity::ResolvedReynoldsStressYy,
+        Quantity::ResolvedReynoldsStressZz,
+        Quantity::ResolvedReynoldsStressXy,
+        Quantity::ResolvedReynoldsStressYz,
+        Quantity::ResolvedReynoldsStressXz,
+        Quantity::AnisotropyEta,
+        Quantity::AnisotropyXi,
+        Quantity::TurbulentHeatFlux,
     ];
 
     /// The name in tools and session files: FoehnCraft's `[output]
@@ -276,6 +382,22 @@ impl Quantity {
             Quantity::ReynoldsStressYz => "reynolds-stress-yz",
             Quantity::ReynoldsStressXz => "reynolds-stress-xz",
             Quantity::WallDistance => "wall-distance",
+            Quantity::ResolvedKineticEnergy => "resolved-kinetic-energy",
+            Quantity::TotalKineticEnergy => "total-kinetic-energy",
+            Quantity::ResolvedReynoldsStressXx => "resolved-reynolds-stress-xx",
+            Quantity::ResolvedReynoldsStressYy => "resolved-reynolds-stress-yy",
+            Quantity::ResolvedReynoldsStressZz => "resolved-reynolds-stress-zz",
+            Quantity::ResolvedReynoldsStressXy => "resolved-reynolds-stress-xy",
+            Quantity::ResolvedReynoldsStressYz => "resolved-reynolds-stress-yz",
+            Quantity::ResolvedReynoldsStressXz => "resolved-reynolds-stress-xz",
+            Quantity::AnisotropyEta => "anisotropy-eta",
+            Quantity::AnisotropyXi => "anisotropy-xi",
+            Quantity::TurbulentHeatFlux => "turbulent-heat-flux",
+            Quantity::Helicity => "helicity",
+            Quantity::NormalizedHelicity => "normalized-helicity",
+            Quantity::SwirlingStrength => "swirling-strength",
+            Quantity::TurbulenceIntensity => "turbulence-intensity",
+            Quantity::LocalTurbulenceIntensity => "local-turbulence-intensity",
         }
     }
 
@@ -317,6 +439,22 @@ impl Quantity {
             Quantity::ReynoldsStressYz => "reynolds_stress_yz",
             Quantity::ReynoldsStressXz => "reynolds_stress_xz",
             Quantity::WallDistance => "wall_distance",
+            Quantity::ResolvedKineticEnergy => "resolved_kinetic_energy",
+            Quantity::TotalKineticEnergy => "total_kinetic_energy",
+            Quantity::ResolvedReynoldsStressXx => "resolved_reynolds_stress_xx",
+            Quantity::ResolvedReynoldsStressYy => "resolved_reynolds_stress_yy",
+            Quantity::ResolvedReynoldsStressZz => "resolved_reynolds_stress_zz",
+            Quantity::ResolvedReynoldsStressXy => "resolved_reynolds_stress_xy",
+            Quantity::ResolvedReynoldsStressYz => "resolved_reynolds_stress_yz",
+            Quantity::ResolvedReynoldsStressXz => "resolved_reynolds_stress_xz",
+            Quantity::AnisotropyEta => "anisotropy_eta",
+            Quantity::AnisotropyXi => "anisotropy_xi",
+            Quantity::TurbulentHeatFlux => "turbulent_heat_flux",
+            Quantity::Helicity => "helicity",
+            Quantity::NormalizedHelicity => "normalized_helicity",
+            Quantity::SwirlingStrength => "swirling_strength",
+            Quantity::TurbulenceIntensity => "turbulence_intensity",
+            Quantity::LocalTurbulenceIntensity => "local_turbulence_intensity",
         }
     }
 
@@ -342,6 +480,20 @@ impl Quantity {
             LengthScale | WallDistance => "m",
             ReynoldsStressXx | ReynoldsStressYy | ReynoldsStressZz | ReynoldsStressXy
             | ReynoldsStressYz | ReynoldsStressXz => "m²/s²",
+            ResolvedKineticEnergy
+            | TotalKineticEnergy
+            | ResolvedReynoldsStressXx
+            | ResolvedReynoldsStressYy
+            | ResolvedReynoldsStressZz
+            | ResolvedReynoldsStressXy
+            | ResolvedReynoldsStressYz
+            | ResolvedReynoldsStressXz => "m²/s²",
+            AnisotropyEta | AnisotropyXi => "-",
+            TurbulentHeatFlux => "K m/s",
+            Helicity => "m/s²",
+            NormalizedHelicity => "-",
+            SwirlingStrength => "1/s",
+            TurbulenceIntensity | LocalTurbulenceIntensity => "-",
         }
     }
 
@@ -379,13 +531,30 @@ impl Quantity {
             ReynoldsStressYz => "−2 ν_t S_yz",
             ReynoldsStressXz => "−2 ν_t S_xz",
             WallDistance => "d = distance to the nearest wall face",
+            ResolvedKineticEnergy => "k_res = ½ (u′² + v′² + w′²)",
+            TotalKineticEnergy => "k_res + k̄",
+            ResolvedReynoldsStressXx => "⟨u′u′⟩ = u′_rms²",
+            ResolvedReynoldsStressYy => "⟨v′v′⟩ = v′_rms²",
+            ResolvedReynoldsStressZz => "⟨w′w′⟩ = w′_rms²",
+            ResolvedReynoldsStressXy => "⟨u′v′⟩",
+            ResolvedReynoldsStressYz => "⟨v′w′⟩",
+            ResolvedReynoldsStressXz => "⟨u′w′⟩",
+            AnisotropyEta => "η = √(b:b / 6), b = ⟨u′u′⟩/(2k) − ⅓ I",
+            AnisotropyXi => "ξ = ∛(tr b³ / 6)",
+            TurbulentHeatFlux => "⟨u′T′⟩",
+            Helicity => "H = u·ω",
+            NormalizedHelicity => "u·ω / (|u| |ω|)",
+            SwirlingStrength => "λ_ci = imaginary part of the complex eigenvalues of ∇u",
+            TurbulenceIntensity => "I = √(2k/3) / U_ref",
+            LocalTurbulenceIntensity => "I = √(2k/3) / |u|",
         }
     }
 
     pub fn group(self) -> Group {
         use Quantity::*;
         match self {
-            Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate => Group::Vortices,
+            Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate | Helicity
+            | NormalizedHelicity | SwirlingStrength => Group::Vortices,
             TotalPressure | PressureCoefficient => Group::Pressure,
             RelativeVelocity
             | FrameVelocity
@@ -403,6 +572,8 @@ impl Quantity {
             | TimeScale
             | LengthScale
             | ViscosityRatio
+            | TurbulenceIntensity
+            | LocalTurbulenceIntensity
             | ReynoldsStressXx
             | ReynoldsStressYy
             | ReynoldsStressZz
@@ -410,13 +581,25 @@ impl Quantity {
             | ReynoldsStressYz
             | ReynoldsStressXz => Group::Turbulence,
             WallDistance => Group::Wall,
+            ResolvedKineticEnergy
+            | TotalKineticEnergy
+            | ResolvedReynoldsStressXx
+            | ResolvedReynoldsStressYy
+            | ResolvedReynoldsStressZz
+            | ResolvedReynoldsStressXy
+            | ResolvedReynoldsStressYz
+            | ResolvedReynoldsStressXz
+            | AnisotropyEta
+            | AnisotropyXi
+            | TurbulentHeatFlux => Group::Statistics,
         }
     }
 
     pub fn inputs(self) -> &'static [Input] {
         use Quantity::*;
         match self {
-            Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate => &[Input::Velocity],
+            Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate | Helicity
+            | NormalizedHelicity | SwirlingStrength => &[Input::Velocity],
             TotalPressure | RelativeTotalPressure | Rothalpy => &[Input::Pressure, Input::Velocity],
             PressureCoefficient => &[Input::Pressure],
             FrameVelocity | WallDistance => &[],
@@ -432,8 +615,25 @@ impl Quantity {
                 &[Input::K, Input::Dissipation]
             }
             ViscosityRatio => &[Input::NuT],
+            TurbulenceIntensity => &[Input::K],
+            LocalTurbulenceIntensity => &[Input::K, Input::Velocity],
             ReynoldsStressXx | ReynoldsStressYy | ReynoldsStressZz | ReynoldsStressXy
             | ReynoldsStressYz | ReynoldsStressXz => &[Input::Velocity, Input::K, Input::NuT],
+            ResolvedKineticEnergy
+            | ResolvedReynoldsStressXx
+            | ResolvedReynoldsStressYy
+            | ResolvedReynoldsStressZz => &[Input::RmsVelocity],
+            TotalKineticEnergy => &[Input::RmsVelocity, Input::MeanK],
+            ResolvedReynoldsStressXy => &[Input::CovarianceXy],
+            ResolvedReynoldsStressYz => &[Input::CovarianceYz],
+            ResolvedReynoldsStressXz => &[Input::CovarianceXz],
+            AnisotropyEta | AnisotropyXi => &[
+                Input::RmsVelocity,
+                Input::CovarianceXy,
+                Input::CovarianceYz,
+                Input::CovarianceXz,
+            ],
+            TurbulentHeatFlux => &[Input::HeatFluxX, Input::HeatFluxY, Input::HeatFluxZ],
         }
     }
 
@@ -445,6 +645,7 @@ impl Quantity {
             PressureCoefficient => &["density", "pressure", "velocity"],
             DissipationRate | SpecificDissipationRate | TimeScale | LengthScale => &["c_mu"],
             ViscosityRatio => &["viscosity"],
+            TurbulenceIntensity => &["velocity"],
             _ => &[],
         }
     }
@@ -459,9 +660,51 @@ impl Quantity {
         self == Quantity::WallDistance
     }
 
-    /// The quantity that makes field `name`, if one does.
+    /// The quantity that makes field `name`, if one does (its mean
+    /// flow's field `mean_<field>` too).
     pub fn of_field(name: &str) -> Option<Quantity> {
-        Quantity::ALL.into_iter().find(|q| q.field() == name)
+        Quantity::ALL
+            .into_iter()
+            .find(|q| q.field() == name || (q.averages() && q.mean_field() == name))
+    }
+
+    /// Whether it can be taken of the mean flow of a transient run's
+    /// statistics (the maintainer's card of 2026-11-27, "Mean switch in
+    /// Derived fields"): it reads only fields the statistics average
+    /// (velocity, pressure, k), and is not of the statistics itself.
+    pub fn averages(self) -> bool {
+        self.group() != Group::Statistics
+            && !self.inputs().is_empty()
+            && self
+                .inputs()
+                .iter()
+                .all(|i| matches!(i, Input::Velocity | Input::Pressure | Input::K))
+    }
+
+    /// The name of the field it makes of the mean flow: `mean_` before
+    /// [`Quantity::field`], as FoehnCraft names the means.
+    pub fn mean_field(self) -> &'static str {
+        static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            Quantity::ALL
+                .iter()
+                .map(|q| &*Box::leak(format!("mean_{}", q.field()).into_boxed_str()))
+                .collect()
+        });
+        Quantity::ALL
+            .iter()
+            .zip(names)
+            .find(|(q, _)| **q == self)
+            .map_or("", |(_, n)| n)
+    }
+
+    /// The field it makes: of the mean flow when `mean`.
+    pub fn field_of(self, mean: bool) -> &'static str {
+        if mean {
+            self.mean_field()
+        } else {
+            self.field()
+        }
     }
 }
 /// Built-in reference density: air at sea level in the ICAO standard
@@ -688,11 +931,74 @@ pub fn start_reference(s: &Session) -> (Reference, [Source; 5]) {
     (r, from)
 }
 
+/// The choices of a new derived field that can be your defaults
+/// (`[defaults.derived]`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DerivedChoice {
+    /// Take it of the mean flow when the result has the means.
+    pub mean: bool,
+}
+
+/// Whether the result of `s` has time means (`mean_velocity`,
+/// `mean_pressure` or `mean_k`), and if so whether the window's
+/// switch starts on the mean flow: by your default, or when the
+/// result has no instantaneous velocity or pressure.
+pub fn start_mean_switch(s: &Session) -> Option<bool> {
+    let set = s.fields()?;
+    let inputs = [Input::Velocity, Input::Pressure, Input::K];
+    if !inputs
+        .iter()
+        .any(|&i| find_input_of(set, i, true).is_some())
+    {
+        return None;
+    }
+    let instant = [Input::Velocity, Input::Pressure]
+        .iter()
+        .any(|&i| find_input_of(set, i, false).is_some());
+    Some(
+        s.defaults
+            .apply(Kind::Derived, DerivedChoice::default())
+            .mean
+            || !instant,
+    )
+}
+
+/// Whether a new field of `q` on `s` starts of the mean flow: when the
+/// result has the time means of its inputs and either your default says
+/// so or the instantaneous fields are not there (a `statistics.vtkhdf`
+/// holds only the means).
+pub fn start_mean(s: &Session, q: Quantity) -> bool {
+    let Some(set) = s.fields() else {
+        return false;
+    };
+    if !q.averages() {
+        return false;
+    }
+    let has = |mean: bool| {
+        q.inputs()
+            .iter()
+            .all(|&i| find_input_of(set, i, mean).is_some())
+    };
+    if !has(true) {
+        return false;
+    }
+    s.defaults
+        .apply(Kind::Derived, DerivedChoice::default())
+        .mean
+        || !has(false)
+}
+
 /// How to compute one derived field.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Recipe {
     pub quantity: Quantity,
+    /// Of the mean flow (since format 1.19): the inputs are the time
+    /// means of a transient run's statistics (`mean_velocity`,
+    /// `mean_pressure`, `mean_k`), and the field is `mean_<field>`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mean: bool,
     /// The velocity field; left out, found by its name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub velocity: Option<String>,
@@ -708,6 +1014,24 @@ pub struct Recipe {
     /// The eddy viscosity; left out, found by its name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nu_t: Option<String>,
+    /// The statistics' fields (since format 1.19); each left out, found
+    /// by FoehnCraft's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rms_velocity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covariance_xy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covariance_yz: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub covariance_xz: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mean_k: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heat_flux_x: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heat_flux_y: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heat_flux_z: Option<String>,
     /// The reference values and constants (pressure and turbulence
     /// quantities).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -730,11 +1054,20 @@ impl Recipe {
     pub fn new(quantity: Quantity) -> Recipe {
         Recipe {
             quantity,
+            mean: false,
             velocity: None,
             pressure: None,
             k: None,
             dissipation: None,
             nu_t: None,
+            rms_velocity: None,
+            covariance_xy: None,
+            covariance_yz: None,
+            covariance_xz: None,
+            mean_k: None,
+            heat_flux_x: None,
+            heat_flux_y: None,
+            heat_flux_z: None,
             reference: None,
             rotation: None,
             walls: None,
@@ -743,7 +1076,7 @@ impl Recipe {
 
     /// The field it makes.
     pub fn field(&self) -> &'static str {
-        self.quantity.field()
+        self.quantity.field_of(self.mean)
     }
 
     /// The field named for `input`, if one is.
@@ -754,6 +1087,14 @@ impl Recipe {
             Input::K => self.k.as_ref(),
             Input::Dissipation => self.dissipation.as_ref(),
             Input::NuT => self.nu_t.as_ref(),
+            Input::RmsVelocity => self.rms_velocity.as_ref(),
+            Input::CovarianceXy => self.covariance_xy.as_ref(),
+            Input::CovarianceYz => self.covariance_yz.as_ref(),
+            Input::CovarianceXz => self.covariance_xz.as_ref(),
+            Input::MeanK => self.mean_k.as_ref(),
+            Input::HeatFluxX => self.heat_flux_x.as_ref(),
+            Input::HeatFluxY => self.heat_flux_y.as_ref(),
+            Input::HeatFluxZ => self.heat_flux_z.as_ref(),
         }
     }
 
@@ -765,6 +1106,14 @@ impl Recipe {
             Input::K => &mut self.k,
             Input::Dissipation => &mut self.dissipation,
             Input::NuT => &mut self.nu_t,
+            Input::RmsVelocity => &mut self.rms_velocity,
+            Input::CovarianceXy => &mut self.covariance_xy,
+            Input::CovarianceYz => &mut self.covariance_yz,
+            Input::CovarianceXz => &mut self.covariance_xz,
+            Input::MeanK => &mut self.mean_k,
+            Input::HeatFluxX => &mut self.heat_flux_x,
+            Input::HeatFluxY => &mut self.heat_flux_y,
+            Input::HeatFluxZ => &mut self.heat_flux_z,
         };
         *slot = field;
     }
@@ -775,7 +1124,7 @@ impl Recipe {
         if let Some(n) = self.named(input) {
             return Some(n.clone());
         }
-        find_input(set, input)
+        find_input_of(set, input, self.mean)
     }
 
     /// The fields of `set` it reads: its inputs, the density fields the
@@ -807,7 +1156,7 @@ impl Recipe {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Made {
-    Quantity(Recipe),
+    Quantity(Box<Recipe>),
     Formula(crate::calc::Formula),
 }
 
@@ -841,17 +1190,28 @@ impl Made {
 /// with the right number of components, on cells or nodes (a field on
 /// the boundary faces alone does not do), and not itself derived.
 pub fn find_input(set: &FieldSet, input: Input) -> Option<String> {
+    find_input_of(set, input, false)
+}
+
+/// As [`find_input`]; with `mean`, among the names of the input's time
+/// mean ([`Input::mean_names`]).
+pub fn find_input_of(set: &FieldSet, input: Input, mean: bool) -> Option<String> {
+    let names = if mean {
+        input.mean_names()
+    } else {
+        input.names()
+    };
     let fits = |f: &Field| {
         f.components == input.components()
             && f.location != Location::Boundary
             && set.maker(&f.name).is_none()
     };
-    for name in input.names() {
+    for name in names {
         if set.fields().iter().any(|f| f.name == *name && fits(f)) {
             return Some((*name).to_string());
         }
     }
-    let lower: Vec<String> = input.names().iter().map(|n| n.to_lowercase()).collect();
+    let lower: Vec<String> = names.iter().map(|n| n.to_lowercase()).collect();
     set.fields()
         .iter()
         .find(|f| fits(f) && lower.contains(&f.name.to_lowercase()))
@@ -911,6 +1271,8 @@ pub enum Refusal {
     Rotation(String),
     /// No wall face to measure the distance to: why (FIELD017).
     Walls(String),
+    /// A quantity that is not taken of the mean flow (FIELD021).
+    NoMean(Quantity),
 }
 
 impl Refusal {
@@ -931,6 +1293,7 @@ impl Refusal {
             Refusal::Breaks(_, r) => r.code(),
             Refusal::Rotation(_) => "FIELD016",
             Refusal::Walls(_) => "FIELD017",
+            Refusal::NoMean(_) => "FIELD021",
         }
     }
 
@@ -958,6 +1321,10 @@ impl Refusal {
             | Refusal::Cycle(why)
             | Refusal::Rotation(why)
             | Refusal::Walls(why) => why.clone(),
+            Refusal::NoMean(q) => format!(
+                "{} is not taken of the mean flow: it reads fields the statistics do not average",
+                q.key()
+            ),
             Refusal::Breaks(n, r) => {
                 format!("{n} is made from it and would fail: {}", r.message())
             }
@@ -1028,7 +1395,10 @@ pub fn compute(mesh: &Mesh, set: &FieldSet, recipe: &Recipe) -> Result<Vec<Field
         return Err(Refusal::NoFields);
     }
     let q = recipe.quantity;
-    let name = q.field();
+    if recipe.mean && !q.averages() {
+        return Err(Refusal::NoMean(q));
+    }
+    let name = recipe.field();
     if set.fields().iter().any(|f| f.name == name) && set.recipe(name).is_none() {
         return Err(Refusal::InFile(name.into()));
     }
@@ -1061,7 +1431,8 @@ pub fn compute(mesh: &Mesh, set: &FieldSet, recipe: &Recipe) -> Result<Vec<Field
         values,
     };
     match q {
-        Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate => {
+        Vorticity | QCriterion | Lambda2 | Enstrophy | StrainRate | Helicity
+        | NormalizedHelicity | SwirlingStrength => {
             let g = gradient()?;
             let (components, values) = match q {
                 Vorticity => (3, g.iter().flat_map(|g| vorticity(*g)).collect()),
@@ -1073,7 +1444,27 @@ pub fn compute(mesh: &Mesh, set: &FieldSet, recipe: &Recipe) -> Result<Vec<Field
                         .map(|g| 0.5 * vorticity(*g).iter().map(|w| w * w).sum::<f64>())
                         .collect(),
                 ),
-                _ => (1, g.iter().map(|g| strain_rate(*g)).collect()),
+                StrainRate => (1, g.iter().map(|g| strain_rate(*g)).collect()),
+                SwirlingStrength => (1, g.iter().map(|g| swirling_strength(*g)).collect()),
+                _ => {
+                    let (u, _) = cell_input(mesh, set, Input::Velocity, &need(Input::Velocity)?)?;
+                    let values = g
+                        .iter()
+                        .enumerate()
+                        .map(|(c, g)| {
+                            let w = vorticity(*g);
+                            let v = [u[3 * c], u[3 * c + 1], u[3 * c + 2]];
+                            let h: f64 = (0..3).map(|k| v[k] * w[k]).sum();
+                            if q == Helicity {
+                                return h;
+                            }
+                            let norm = |a: [f64; 3]| a.iter().map(|x| x * x).sum::<f64>().sqrt();
+                            let d = norm(v) * norm(w);
+                            if d > 1e-300 { h / d } else { 0.0 }
+                        })
+                        .collect();
+                    (1, values)
+                }
             };
             Ok(vec![cell(components, values, None)])
         }
@@ -1203,6 +1594,28 @@ pub fn compute(mesh: &Mesh, set: &FieldSet, recipe: &Recipe) -> Result<Vec<Field
             let values = nt.iter().map(|v| v / reference.viscosity).collect();
             Ok(vec![cell(1, values, None)])
         }
+        TurbulenceIntensity | LocalTurbulenceIntensity => {
+            let (kv, _) = cell_input(mesh, set, Input::K, &need(Input::K)?)?;
+            let speed = if q == LocalTurbulenceIntensity {
+                let (u, _) = cell_input(mesh, set, Input::Velocity, &need(Input::Velocity)?)?;
+                Some(u)
+            } else {
+                None
+            };
+            let values = (0..kv.len())
+                .map(|c| {
+                    let u = match &speed {
+                        Some(u) => (u[3 * c] * u[3 * c]
+                            + u[3 * c + 1] * u[3 * c + 1]
+                            + u[3 * c + 2] * u[3 * c + 2])
+                            .sqrt(),
+                        None => reference.velocity,
+                    };
+                    intensity(kv[c], u)
+                })
+                .collect();
+            Ok(vec![cell(1, values, None)])
+        }
         ReynoldsStressXx | ReynoldsStressYy | ReynoldsStressZz | ReynoldsStressXy
         | ReynoldsStressYz | ReynoldsStressXz => {
             let g = gradient()?;
@@ -1257,6 +1670,63 @@ pub fn compute(mesh: &Mesh, set: &FieldSet, recipe: &Recipe) -> Result<Vec<Field
             })?;
             Ok(vec![cell(1, d, None)])
         }
+        _ if q.group() == Group::Statistics => {
+            let mut inputs = Vec::new();
+            for &i in q.inputs() {
+                inputs.push(cell_input(mesh, set, i, &need(i)?)?.0);
+            }
+            let n = mesh.cell_count();
+            let at = |input: Input, c: usize, k: usize| -> f64 {
+                let Some(v) = q
+                    .inputs()
+                    .iter()
+                    .position(|&i| i == input)
+                    .map(|s| &inputs[s])
+                else {
+                    return f64::NAN;
+                };
+                v.get(input.components() * c + k)
+                    .copied()
+                    .unwrap_or(f64::NAN)
+            };
+            let k = if q == TurbulentHeatFlux { 3 } else { 1 };
+            let mut values = Vec::with_capacity(n * k);
+            for c in 0..n {
+                let rms = |k: usize| at(Input::RmsVelocity, c, k);
+                match q {
+                    ResolvedKineticEnergy => {
+                        values.push(0.5 * (0..3).map(|k| rms(k) * rms(k)).sum::<f64>())
+                    }
+                    TotalKineticEnergy => values.push(
+                        0.5 * (0..3).map(|k| rms(k) * rms(k)).sum::<f64>() + at(Input::MeanK, c, 0),
+                    ),
+                    ResolvedReynoldsStressXx => values.push(rms(0) * rms(0)),
+                    ResolvedReynoldsStressYy => values.push(rms(1) * rms(1)),
+                    ResolvedReynoldsStressZz => values.push(rms(2) * rms(2)),
+                    ResolvedReynoldsStressXy => values.push(at(Input::CovarianceXy, c, 0)),
+                    ResolvedReynoldsStressYz => values.push(at(Input::CovarianceYz, c, 0)),
+                    ResolvedReynoldsStressXz => values.push(at(Input::CovarianceXz, c, 0)),
+                    AnisotropyEta | AnisotropyXi => {
+                        let r = [
+                            rms(0) * rms(0),
+                            rms(1) * rms(1),
+                            rms(2) * rms(2),
+                            at(Input::CovarianceXy, c, 0),
+                            at(Input::CovarianceYz, c, 0),
+                            at(Input::CovarianceXz, c, 0),
+                        ];
+                        let (eta, xi) = anisotropy(r);
+                        values.push(if q == AnisotropyEta { eta } else { xi });
+                    }
+                    _ => {
+                        for i in [Input::HeatFluxX, Input::HeatFluxY, Input::HeatFluxZ] {
+                            values.push(at(i, c, 0));
+                        }
+                    }
+                }
+            }
+            Ok(vec![cell(k, values, None)])
+        }
         _ => unreachable!("every quantity has its branch"),
     }
 }
@@ -1269,7 +1739,7 @@ fn pressure_fields<'a>(
     need: impl Fn(Input) -> Result<Vec<&'a Field>, Refusal>,
 ) -> Result<Vec<Field>, Refusal> {
     let q = recipe.quantity;
-    let name = q.field();
+    let name = recipe.field();
     let p = need(Input::Pressure)?;
     let u = if q == Quantity::TotalPressure {
         need(Input::Velocity)?
@@ -1397,6 +1867,15 @@ pub fn scales(k: f64, w: f64, epsilon: bool, bounded: Option<f64>, c_mu: f64) ->
     [eps, omega, t, k * k.sqrt() / eps.max(tiny)]
 }
 
+/// The turbulence intensity √(2k/3) / u of k and a speed `u`; no value
+/// (NaN) where the speed is 0 (a fluid at rest).
+pub fn intensity(k: f64, u: f64) -> f64 {
+    if u.is_nan() || u <= 1e-300 {
+        return f64::NAN;
+    }
+    (2.0 / 3.0 * k.max(0.0)).sqrt() / u
+}
+
 /// The Boussinesq Reynolds stress ⅔ k δᵢⱼ − 2 ν_t Sᵢⱼ of the velocity
 /// gradient `g`, components xx, yy, zz, xy, yz, xz.
 pub fn reynolds_stress(g: [[f64; 3]; 3], k: f64, nu_t: f64) -> [f64; 6] {
@@ -1410,6 +1889,69 @@ pub fn reynolds_stress(g: [[f64; 3]; 3], k: f64, nu_t: f64) -> [f64; 6] {
         -2.0 * nu_t * s(1, 2),
         -2.0 * nu_t * s(0, 2),
     ]
+}
+
+/// The invariants η and ξ of the anisotropy of the Reynolds stress `r`
+/// (⟨u′u′⟩, components xx, yy, zz, xy, yz, xz): b = r/tr r − ⅓ I,
+/// 6 η² = b:b, 6 ξ³ = tr b³, the coordinates of the Lumley triangle in
+/// S. B. Pope, "Turbulent Flows", Cambridge 2000, §11.3.2. Isotropic
+/// turbulence is (0, 0), one component (⅓, ⅓), two equal components
+/// (−⅙, ⅙). No value (NaN) where the stress has no trace.
+pub fn anisotropy(r: [f64; 6]) -> (f64, f64) {
+    let tr = r[0] + r[1] + r[2];
+    if tr.is_nan() || tr <= 1e-300 || r.iter().any(|x| !x.is_finite()) {
+        return (f64::NAN, f64::NAN);
+    }
+    let m = [[r[0], r[3], r[5]], [r[3], r[1], r[4]], [r[5], r[4], r[2]]];
+    let mut b = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            b[i][j] = m[i][j] / tr - if i == j { 1.0 / 3.0 } else { 0.0 };
+        }
+    }
+    let mut bb = 0.0;
+    let mut bbb = 0.0;
+    for i in 0..3 {
+        for j in 0..3 {
+            bb += b[i][j] * b[j][i];
+            for k in 0..3 {
+                bbb += b[i][j] * b[j][k] * b[k][i];
+            }
+        }
+    }
+    ((bb / 6.0).max(0.0).sqrt(), (bbb / 6.0).cbrt())
+}
+
+/// The swirling strength λ_ci of the velocity gradient `g`: the
+/// imaginary part of its complex eigenvalue pair, 0 where all three are
+/// real (J. Zhou, R. J. Adrian, S. Balachandar and T. M. Kendall,
+/// "Mechanisms for generating coherent packets of hairpin vortices in
+/// channel flow", J. Fluid Mech. 387, 1999). The characteristic
+/// polynomial λ³ − P λ² + Q λ − R, shifted by P/3 to μ³ + a μ + b, has
+/// a complex pair where (b/2)² + (a/3)³ > 0; Cardano's s₁, s₂ then give
+/// λ_ci = (√3/2) |s₁ − s₂|.
+pub fn swirling_strength(g: [[f64; 3]; 3]) -> f64 {
+    let p = g[0][0] + g[1][1] + g[2][2];
+    let mut tr2 = 0.0;
+    for i in 0..3 {
+        for j in 0..3 {
+            tr2 += g[i][j] * g[j][i];
+        }
+    }
+    let q = 0.5 * (p * p - tr2);
+    let r = g[0][0] * (g[1][1] * g[2][2] - g[1][2] * g[2][1])
+        - g[0][1] * (g[1][0] * g[2][2] - g[1][2] * g[2][0])
+        + g[0][2] * (g[1][0] * g[2][1] - g[1][1] * g[2][0]);
+    let a = q - p * p / 3.0;
+    let b = -2.0 * p * p * p / 27.0 + p * q / 3.0 - r;
+    let disc = 0.25 * b * b + a * a * a / 27.0;
+    if disc.is_nan() || disc <= 0.0 {
+        return 0.0;
+    }
+    let root = disc.sqrt();
+    let s1 = (-0.5 * b + root).cbrt();
+    let s2 = (-0.5 * b - root).cbrt();
+    0.5 * 3f64.sqrt() * (s1 - s2).abs()
 }
 
 /// √(2 S:S) of the velocity gradient `g`, the shear rate.
@@ -2104,5 +2646,217 @@ mod tests {
         ] {
             assert!(bad.check().is_err(), "{bad:?}");
         }
+    }
+
+    /// Invariant: for a velocity linear in space, helicity is u·ω with
+    /// the cell's velocity, its normalised form lies in [−1, 1], and
+    /// the swirling strength is the imaginary part of G's complex
+    /// eigenvalues (here checked against a rotation about z plus a
+    /// strain along z, whose eigenvalues are ±iΩ and the strain).
+    /// Breaks when λ_ci is taken from the real roots.
+    #[test]
+    fn helicity_and_swirling_strength() {
+        let (m, set) = polyhedra(|m| {
+            vec![Field {
+                name: "velocity".into(),
+                unit: Some("m/s".into()),
+                location: Location::Cell,
+                components: 3,
+                values: cells(m).iter().flat_map(|&x| linear(x)).collect(),
+            }]
+        });
+        let w = vorticity(G);
+        let x = cells(&m);
+        let h = compute(&m, &set, &Recipe::new(Quantity::Helicity)).unwrap();
+        let nh = compute(&m, &set, &Recipe::new(Quantity::NormalizedHelicity)).unwrap();
+        assert_eq!(h[0].unit.as_deref(), Some("m/s²"));
+        for c in 0..x.len() {
+            let u = linear(x[c]);
+            let want: f64 = (0..3).map(|k| u[k] * w[k]).sum();
+            assert!((h[0].values[c] - want).abs() < 1e-6, "{c}");
+            assert!(nh[0].values[c].abs() <= 1.0 + 1e-12);
+        }
+        // Rotation Ω about z plus a strain a along z: eigenvalues ±iΩ, a.
+        let g = [[0.0, -3.0, 0.0], [3.0, 0.0, 0.0], [0.0, 0.0, 0.5]];
+        assert!((swirling_strength(g) - 3.0).abs() < 1e-9);
+        // Pure strain: real eigenvalues, no swirl.
+        let s = [[1.0, 0.0, 0.0], [0.0, -0.5, 0.0], [0.0, 0.0, -0.5]];
+        assert_eq!(swirling_strength(s), 0.0);
+        // Simple shear: a repeated zero eigenvalue, no swirl either.
+        assert_eq!(
+            swirling_strength([[0.0, 1.0, 0.0], [0.0; 3], [0.0; 3]]),
+            0.0
+        );
+        let l = compute(&m, &set, &Recipe::new(Quantity::SwirlingStrength)).unwrap();
+        let want = swirling_strength(G);
+        assert!(l[0].values.iter().all(|v| (v - want).abs() < 1e-6));
+    }
+
+    /// Invariant: the turbulence intensity is √(2k/3) over the reference
+    /// velocity, the local one over the cell's speed, with no value
+    /// where the flow stands. Breaks when the 2/3 is lost.
+    #[test]
+    fn turbulence_intensities() {
+        let (m, set) = polyhedra(|m| {
+            let n = m.cell_count();
+            let mut u = vec![0.0; 3 * n];
+            for c in 1..n {
+                u[3 * c] = 2.0;
+            }
+            vec![
+                Field {
+                    name: "velocity".into(),
+                    unit: Some("m/s".into()),
+                    location: Location::Cell,
+                    components: 3,
+                    values: u,
+                },
+                scalar_cells("k", "m2/s2", vec![0.06; n]),
+            ]
+        });
+        let mut r = Recipe::new(Quantity::TurbulenceIntensity);
+        r.reference = Some(Reference {
+            velocity: 4.0,
+            ..Default::default()
+        });
+        let i = compute(&m, &set, &r).unwrap().remove(0);
+        assert!(i.values.iter().all(|v| (v - 0.2 / 4.0).abs() < 1e-12));
+        let l = compute(&m, &set, &Recipe::new(Quantity::LocalTurbulenceIntensity))
+            .unwrap()
+            .remove(0);
+        assert!(l.values[0].is_nan());
+        assert!(l.values[1..].iter().all(|v| (v - 0.1).abs() < 1e-12));
+    }
+
+    /// Invariant: from FoehnCraft's statistics (the RMS as the vector
+    /// `rms_velocity`, the covariances and `mean_k`), the resolved
+    /// Reynolds stress is the squared RMS and the covariances, k_res
+    /// half its trace, and the anisotropy invariants sit at the corners
+    /// of the Lumley triangle for one-component, axisymmetric
+    /// two-component and isotropic turbulence. Breaks when a covariance
+    /// lands in the wrong slot.
+    #[test]
+    fn statistics_quantities() {
+        let (m, set) = polyhedra(|m| {
+            let n = m.cell_count();
+            vec![
+                Field {
+                    name: "rms_velocity".into(),
+                    unit: Some("m/s".into()),
+                    location: Location::Cell,
+                    components: 3,
+                    values: (0..n).flat_map(|_| [1.0, 2.0, 3.0]).collect(),
+                },
+                scalar_cells("covariance_velocity_xy", "m2/s2", vec![0.5; n]),
+                scalar_cells("covariance_velocity_yz", "m2/s2", vec![-0.25; n]),
+                scalar_cells("covariance_velocity_xz", "m2/s2", vec![0.125; n]),
+                scalar_cells("mean_k", "m2/s2", vec![1.0; n]),
+                scalar_cells("covariance_velocity_x_temperature", "K m/s", vec![0.1; n]),
+                scalar_cells("covariance_velocity_y_temperature", "K m/s", vec![0.2; n]),
+                scalar_cells("covariance_velocity_z_temperature", "K m/s", vec![0.3; n]),
+            ]
+        });
+        let one = |q: Quantity| compute(&m, &set, &Recipe::new(q)).unwrap().remove(0);
+        for (q, want) in [
+            (Quantity::ResolvedKineticEnergy, 7.0),
+            (Quantity::TotalKineticEnergy, 8.0),
+            (Quantity::ResolvedReynoldsStressXx, 1.0),
+            (Quantity::ResolvedReynoldsStressYy, 4.0),
+            (Quantity::ResolvedReynoldsStressZz, 9.0),
+            (Quantity::ResolvedReynoldsStressXy, 0.5),
+            (Quantity::ResolvedReynoldsStressYz, -0.25),
+            (Quantity::ResolvedReynoldsStressXz, 0.125),
+        ] {
+            let f = one(q);
+            assert_eq!(f.unit.as_deref(), Some("m²/s²"));
+            assert!(f.values.iter().all(|v| (v - want).abs() < 1e-12), "{q:?}");
+        }
+        let (eta, xi) = anisotropy([1.0, 4.0, 9.0, 0.5, -0.25, 0.125]);
+        assert!((one(Quantity::AnisotropyEta).values[0] - eta).abs() < 1e-12);
+        assert!((one(Quantity::AnisotropyXi).values[0] - xi).abs() < 1e-12);
+        let q = one(Quantity::TurbulentHeatFlux);
+        assert!(q.is_vector());
+        assert_eq!(q.value(0).unwrap(), &[0.1, 0.2, 0.3]);
+        // The corners of the Lumley triangle.
+        let close =
+            |(a, b): (f64, f64), (c, d): (f64, f64)| (a - c).abs() < 1e-12 && (b - d).abs() < 1e-12;
+        assert!(close(
+            anisotropy([1.0, 1.0, 1.0, 0.0, 0.0, 0.0]),
+            (0.0, 0.0)
+        ));
+        assert!(close(
+            anisotropy([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            (1.0 / 3.0, 1.0 / 3.0)
+        ));
+        assert!(close(
+            anisotropy([1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+            (1.0 / 6.0, -1.0 / 6.0)
+        ));
+        assert!(anisotropy([0.0; 6]).0.is_nan());
+        // A result without statistics.
+        let (m, set) = polyhedra(|m| vec![scalar_cells("p", "Pa", vec![0.0; m.cell_count()])]);
+        assert_eq!(
+            compute(&m, &set, &Recipe::new(Quantity::ResolvedKineticEnergy)),
+            Err(Refusal::Missing(Input::RmsVelocity))
+        );
+    }
+
+    /// Invariant: a quantity of the mean flow reads the time means
+    /// (`mean_velocity`, `mean_pressure`), makes `mean_<field>`, and is
+    /// exact for a linear mean velocity; one that reads a field the
+    /// statistics do not average is refused (FIELD021). Breaks when the
+    /// mean recipe reads the instantaneous velocity.
+    #[test]
+    fn quantities_of_the_mean_flow() {
+        let (m, set) = polyhedra(|m| {
+            let n = m.cell_count();
+            vec![
+                Field {
+                    name: "mean_velocity".into(),
+                    unit: Some("m/s".into()),
+                    location: Location::Cell,
+                    components: 3,
+                    values: cells(m).iter().flat_map(|&x| linear(x)).collect(),
+                },
+                Field {
+                    name: "velocity".into(),
+                    unit: Some("m/s".into()),
+                    location: Location::Cell,
+                    components: 3,
+                    values: vec![0.0; 3 * n],
+                },
+                scalar_cells("mean_pressure", "Pa", vec![50.0; n]),
+            ]
+        });
+        let mut r = Recipe::new(Quantity::Vorticity);
+        r.mean = true;
+        assert_eq!(r.field(), "mean_vorticity");
+        let w = compute(&m, &set, &r).unwrap().remove(0);
+        assert_eq!(w.name, "mean_vorticity");
+        let want = vorticity(G);
+        for c in 0..m.cell_count() {
+            let v = w.value(c).unwrap();
+            assert!((0..3).all(|k| (v[k] - want[k]).abs() < 1e-6));
+        }
+        let mut r = Recipe::new(Quantity::PressureCoefficient);
+        r.mean = true;
+        r.reference = Some(Reference {
+            velocity: 10.0,
+            density: 1.0,
+            ..Default::default()
+        });
+        let cp = compute(&m, &set, &r).unwrap().remove(0);
+        assert_eq!(cp.name, "mean_pressure_coefficient");
+        assert!(cp.values.iter().all(|v| (v - 1.0).abs() < 1e-12));
+        assert_eq!(
+            Quantity::of_field("mean_q_criterion"),
+            Some(Quantity::QCriterion)
+        );
+        assert!(Quantity::Vorticity.averages() && Quantity::TurbulenceIntensity.averages());
+        assert!(!Quantity::DissipationRate.averages() && !Quantity::WallDistance.averages());
+        assert!(!Quantity::ResolvedKineticEnergy.averages());
+        let mut r = Recipe::new(Quantity::ViscosityRatio);
+        r.mean = true;
+        assert_eq!(compute(&m, &set, &r).map_err(|e| e.code()), Err("FIELD021"));
     }
 }

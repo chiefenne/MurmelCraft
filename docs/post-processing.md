@@ -249,6 +249,11 @@ streamlines of them.
 | λ₂ criterion | `lambda2` | the middle eigenvalue of S² + Ω², vortices where λ₂ < 0 | 1/s² |
 | Total pressure | `total_pressure` | p + ½ ρ u·u | Pa |
 | Pressure coefficient | `pressure_coefficient` | (p − p_ref) / (½ ρ_ref U_ref²) | 1 |
+| Helicity | `helicity` | H = u·ω | m/s² |
+| Normalised helicity | `normalized_helicity` | u·ω / (\|u\| \|ω\|), ±1 along a vortex core | 1 |
+| Swirling strength | `swirling_strength` | λ_ci, the imaginary part of the complex eigenvalues of ∇u | 1/s |
+| Turbulence intensity | `turbulence_intensity` | √(2k/3) / U_ref | 1 |
+| Local turbulence intensity | `local_turbulence_intensity` | √(2k/3) / \|u\| (no value where the flow stands) | 1 |
 
 S and Ω are the symmetric and antisymmetric parts of the velocity
 gradient, taken in each cell by least squares from the cells around it;
@@ -271,6 +276,34 @@ is loaded.
 
 Turbomachinery, turbulence and wall quantities come from FoehnCraft
 (`foehn post derive`); the window says so below the catalogue.
+
+The Statistics group works on FoehnCraft's `statistics.vtkhdf`, which a
+transient run writes with `[output.statistics] fields = true`: the RMS
+`rms_velocity_x` … (read as the vector `rms_velocity`), the covariances
+`covariance_velocity_xy` … and `covariance_velocity_x_temperature` …,
+and `mean_k`. Open that file, then derive:
+
+| Quantity | Field | Formula | Unit |
+|---|---|---|---|
+| Resolved kinetic energy | `resolved_kinetic_energy` | ½ (u′² + v′² + w′²) | m²/s² |
+| Total kinetic energy | `total_kinetic_energy` | resolved plus the mean modelled k | m²/s² |
+| Resolved Reynolds stress xx … xz | `resolved_reynolds_stress_xx` … | ⟨u′u′⟩ = u′_rms², …, ⟨u′v′⟩, … | m²/s² |
+| Anisotropy η, ξ | `anisotropy_eta`, `anisotropy_xi` | the Lumley triangle of b = ⟨u′u′⟩/(2k) − ⅓ I (Pope 2000, §11.3) | 1 |
+| Turbulent heat flux | `turbulent_heat_flux` (vector) | ⟨u′T′⟩ | K m/s |
+
+Isotropic turbulence sits at η = ξ = 0, one-component turbulence at
+(⅓, ⅓) and axisymmetric two-component turbulence at (⅙, −⅙).
+
+**Mean flow.** On a result with time means (`mean_velocity`,
+`mean_pressure`, `mean_k`), the window shows a switch "Of the
+instantaneous flow | mean flow". On the mean flow, every quantity of the
+velocity, the pressure and k is taken of the means and named
+`mean_<field>` (`mean_vorticity`, `mean_q_criterion`,
+`mean_pressure_coefficient`, …), so both can sit side by side. A file
+with only the means (`statistics.vtkhdf`) starts on the mean flow;
+right-click the switch to keep your choice as the default. The tool takes
+`"mean": true`; quantities of fields the statistics do not average (ω, ε,
+ν_t, the wall distance) are refused (FIELD021).
 
 ## 9. The field calculator
 

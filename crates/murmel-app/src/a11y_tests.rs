@@ -3062,3 +3062,88 @@ fn imported_files_are_tagged() {
             .is_some()
     );
 }
+
+/// Invariant: on a result with only time means (a FoehnCraft
+/// statistics file) the Derived fields window starts on the mean flow:
+/// its rows read "Mean Vorticity" and compute `mean_vorticity` from
+/// `mean_velocity`; the switch goes back to the instantaneous flow and
+/// a right-click keeps the choice as your default; the Statistics group
+/// lists its quantities. Every control is named. Breaks when the switch
+/// does not reach the recipe.
+#[test]
+fn mean_flow_and_statistics_from_the_window() {
+    use murmel_engine::defaults::Kind;
+    let dir = std::env::temp_dir().join(format!("murmel-window-means-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, mut results) = murmel_mesh::read_results(&plain).unwrap();
+    let n = mesh.cell_count();
+    results
+        .fields
+        .retain(|f| !f.name.starts_with("velocity") && f.name != "pressure");
+    for (name, v) in [
+        ("mean_velocity_x", 1.0),
+        ("mean_velocity_y", 0.0),
+        ("mean_velocity_z", 0.0),
+        ("rms_velocity_x", 0.2),
+        ("rms_velocity_y", 0.1),
+        ("rms_velocity_z", 0.1),
+    ] {
+        results.fields.push(murmel_mesh::field::Field {
+            name: name.into(),
+            unit: Some("m/s".into()),
+            location: murmel_mesh::Location::Cell,
+            components: 1,
+            values: vec![v; n],
+        });
+    }
+    let path = dir.join("statistics.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, n).unwrap();
+    let mut h = harness();
+    h.state_mut().session.config_dir = Some(dir.clone());
+    h.state_mut().open_path(path);
+    h.run_steps(3);
+    h.state_mut().open_derived();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "the mean flow");
+    assert_eq!(h.state().derived.mean, Some(true));
+    h.get_by_label("Compute Mean Vorticity").click();
+    h.run_steps(3);
+    let s = &h.state().session;
+    assert!(s.fields().unwrap().recipe("mean_vorticity").is_some());
+    assert_eq!(
+        s.display.field.as_ref().map(|c| c.name.as_str()),
+        Some("mean_vorticity"),
+        "computed and shown"
+    );
+    // The choice kept as your default.
+    h.get_by_label("mean flow (statistics)").click_secondary();
+    h.run_steps(2);
+    h.get_by_label("Save Of the mean flow as your default")
+        .click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().session.defaults.get(Kind::Derived, "mean"),
+        Some(&serde_json::json!(true))
+    );
+    h.get_by_label("instantaneous flow").click();
+    h.run_steps(3);
+    assert_eq!(h.state().derived.mean, Some(false));
+    assert!(named(&h, "Compute Vorticity"));
+    // The statistics group.
+    h.get_by_label("Statistics").click();
+    h.run_steps(3);
+    assert_eq!(problems(&h), Vec::<String>::new(), "statistics");
+    h.get_by_label("Compute Resolved kinetic energy").click();
+    h.run_steps(3);
+    assert!(
+        h.state()
+            .session
+            .fields()
+            .unwrap()
+            .recipe("resolved_kinetic_energy")
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

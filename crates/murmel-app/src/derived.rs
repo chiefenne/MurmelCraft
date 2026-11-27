@@ -64,6 +64,9 @@ pub struct DerivedWindow {
     pub foehn: Option<crate::foehn_rows::FoehnReady>,
     /// What the last foehn post derive did, or why it failed.
     pub foehn_note: Option<String>,
+    /// Of the mean flow (`Some(true)`) or instantaneous, when the
+    /// result has time means; `None` until the window looks.
+    pub mean: Option<bool>,
 }
 
 /// The units of [`REFERENCE_KEYS`], as the window shows them.
@@ -77,6 +80,7 @@ impl MurmelApp {
         self.derived.rotation = None;
         self.derived.walls = None;
         self.derived.foehn = None;
+        self.derived.mean = None;
     }
 
     /// Open the window with the keyboard in the formula field (the
@@ -194,6 +198,43 @@ impl MurmelApp {
                             .small()
                             .color(secondary),
                     );
+                    // Of the mean flow or instantaneous, when the result
+                    // has time means (the card of 2026-11-27).
+                    let has_means = derive::start_mean_switch(&self.session);
+                    if w.mean.is_none() {
+                        w.mean = has_means;
+                    }
+                    if has_means.is_none() {
+                        w.mean = None;
+                    }
+                    if let Some(mean) = w.mean {
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(self.i18n.tr("derived-of"));
+                            for (m, key) in [
+                                (false, "derived-of-instantaneous"),
+                                (true, "derived-of-mean"),
+                            ] {
+                                let r = ui.selectable_label(mean == m, self.i18n.tr(key));
+                                if r.clicked() && mean != m {
+                                    w.mean = Some(m);
+                                    // A field chosen for the other flow
+                                    // is not this one's.
+                                    w.inputs.clear();
+                                }
+                                r.context_menu(|ui| {
+                                    if let Some(a) = self.kind_default_entries(
+                                        ui,
+                                        Kind::Derived,
+                                        "mean",
+                                        json!({"kind": Kind::Derived.key(), "values": {"mean": m}}),
+                                    ) {
+                                        calls.push(a);
+                                    }
+                                });
+                            }
+                        });
+                    }
                     // One group at a time: thirty rows do not fit a
                     // window.
                     let group = w.group.unwrap_or(Group::Vortices);
@@ -231,12 +272,19 @@ impl MurmelApp {
                         Group::Turbulence => self.reference_block(
                             ui,
                             "derived-reference-turbulence",
-                            &[3, 4],
+                            &[2, 3, 4],
                             &mut w,
                             secondary,
                             &mut calls,
                         ),
                         Group::Wall => self.walls_block(ui, &mut w, secondary),
+                        Group::Statistics => {
+                            ui.label(
+                                RichText::new(self.i18n.tr("derived-statistics"))
+                                    .small()
+                                    .color(secondary),
+                            );
+                        }
                         Group::Vortices => {}
                     }
                     ui.add_space(6.0);
@@ -277,7 +325,7 @@ impl MurmelApp {
                 "field.derive" => input["quantity"]
                     .as_str()
                     .and_then(Quantity::parse)
-                    .map(|q| q.field().to_string()),
+                    .map(|q| q.field_of(input["mean"] == json!(true)).to_string()),
                 "field.calculate" => input["name"].as_str().map(str::to_string),
                 _ => None,
             };
@@ -309,9 +357,21 @@ impl MurmelApp {
         secondary: egui::Color32,
         calls: &mut Vec<(&'static str, Value)>,
     ) {
-        let title = self.i18n.tr(&format!("derived-{}", q.key()));
-        let recipe = set.recipe(q.field());
-        let in_file = recipe.is_none() && set.fields().iter().any(|f| f.name == q.field());
+        let mean = w.mean == Some(true) && q.averages();
+        let field = q.field_of(mean);
+        let title = if mean {
+            self.i18n.tr_args(
+                "derived-mean-of",
+                &[(
+                    "quantity",
+                    self.i18n.tr(&format!("derived-{}", q.key())).into(),
+                )],
+            )
+        } else {
+            self.i18n.tr(&format!("derived-{}", q.key()))
+        };
+        let recipe = set.recipe(field);
+        let in_file = recipe.is_none() && set.fields().iter().any(|f| f.name == field);
         // Its name, formula and unit on one line; its inputs, state and
         // buttons on the next.
         ui.horizontal(|ui| {
@@ -343,7 +403,7 @@ impl MurmelApp {
                     .or_else(|| {
                         recipe
                             .and_then(|r| r.named(input).cloned())
-                            .or_else(|| derive::find_input(set, input))
+                            .or_else(|| derive::find_input_of(set, input, mean))
                     });
                 let what = self.i18n.tr(&format!("derived-input-{}", input.key()));
                 if options.is_empty() {
@@ -406,6 +466,9 @@ impl MurmelApp {
                     r.widget_info(|| WidgetInfo::labeled(Role::Button, missing.is_empty(), &name));
                     if r.clicked() {
                         let mut input = json!({"quantity": q.key()});
+                        if mean {
+                            input["mean"] = json!(true);
+                        }
                         for (i, f) in &chosen {
                             if let Some(f) = f {
                                 input[i.key()] = json!(f);
@@ -435,10 +498,7 @@ impl MurmelApp {
                     let r = ui.button(self.i18n.tr("derived-show"));
                     r.widget_info(|| WidgetInfo::labeled(Role::Button, true, &name));
                     if r.clicked() {
-                        calls.push((
-                            "display.color_by",
-                            json!({"by": "field", "field": q.field()}),
-                        ));
+                        calls.push(("display.color_by", json!({"by": "field", "field": field})));
                     }
                 }
                 if recipe.is_some() {
@@ -446,7 +506,10 @@ impl MurmelApp {
                     let r = ui.button(self.i18n.tr("derived-remove"));
                     r.widget_info(|| WidgetInfo::labeled(Role::Button, true, &name));
                     if r.clicked() {
-                        calls.push(("field.derive", json!({"quantity": q.key(), "remove": true})));
+                        calls.push((
+                            "field.derive",
+                            json!({"quantity": q.key(), "remove": true, "mean": mean}),
+                        ));
                     }
                 }
             }

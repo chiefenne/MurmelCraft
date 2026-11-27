@@ -18,7 +18,8 @@
 //! hash in place of its SHA-256 (since 1.15), whether an overview's
 //! block boxes show (since 1.16), the colour range over every step of a
 //! series (range `steps`, since 1.17), the category field and the
-//! exploded view (since 1.18), the user's mesh
+//! exploded view (since 1.18), the statistics, vortex and
+//! intensity quantities of derived fields (since 1.19), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -50,7 +51,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.18";
+pub const SESSION_VERSION: &str = "1.19";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -899,9 +900,9 @@ mod tests {
                 camera: Camera::default(),
             }],
             derived: vec![
-                Made::Quantity(crate::derive::Recipe::new(
+                Made::Quantity(Box::new(crate::derive::Recipe::new(
                     crate::derive::Quantity::Vorticity,
-                )),
+                ))),
                 Made::Formula(crate::calc::Formula {
                     name: "speed".into(),
                     formula: "mag(U)".into(),
@@ -966,7 +967,9 @@ mod tests {
             }]))
             .is_err()
         );
-        assert!(with(&|v| v["derived"] = serde_json::json!([{"quantity": "helicity"}])).is_err());
+        assert!(
+            with(&|v| v["derived"] = serde_json::json!([{"quantity": "vortex-magic"}])).is_err()
+        );
         // A formula that cannot be read, or names a quantity's field
         // (1.14); a formula of fields the mesh lacks loads (they are
         // reported missing then).

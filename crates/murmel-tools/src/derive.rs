@@ -34,6 +34,27 @@ struct PartReference {
     c_mu: Option<f64>,
 }
 
+impl DeriveInput {
+    /// The fields named for the inputs, in the order of [`Input::ALL`].
+    fn inputs(&mut self) -> [(Input, Option<String>); 13] {
+        [
+            (Input::Velocity, self.velocity.take()),
+            (Input::Pressure, self.pressure.take()),
+            (Input::K, self.k.take()),
+            (Input::Dissipation, self.dissipation.take()),
+            (Input::NuT, self.nu_t.take()),
+            (Input::RmsVelocity, self.rms_velocity.take()),
+            (Input::CovarianceXy, self.covariance_xy.take()),
+            (Input::CovarianceYz, self.covariance_yz.take()),
+            (Input::CovarianceXz, self.covariance_xz.take()),
+            (Input::MeanK, self.mean_k.take()),
+            (Input::HeatFluxX, self.heat_flux_x.take()),
+            (Input::HeatFluxY, self.heat_flux_y.take()),
+            (Input::HeatFluxZ, self.heat_flux_z.take()),
+        ]
+    }
+}
+
 impl PartReference {
     fn get(&self, k: usize) -> Option<f64> {
         [
@@ -61,11 +82,29 @@ struct DeriveInput {
     #[serde(default)]
     nu_t: Option<String>,
     #[serde(default)]
+    rms_velocity: Option<String>,
+    #[serde(default)]
+    covariance_xy: Option<String>,
+    #[serde(default)]
+    covariance_yz: Option<String>,
+    #[serde(default)]
+    covariance_xz: Option<String>,
+    #[serde(default)]
+    mean_k: Option<String>,
+    #[serde(default)]
+    heat_flux_x: Option<String>,
+    #[serde(default)]
+    heat_flux_y: Option<String>,
+    #[serde(default)]
+    heat_flux_z: Option<String>,
+    #[serde(default)]
     reference: Option<PartReference>,
     #[serde(default)]
     rotation: Option<Rotation>,
     #[serde(default)]
     walls: Option<Vec<String>>,
+    #[serde(default)]
+    mean: Option<bool>,
     #[serde(default)]
     remove: bool,
 }
@@ -73,12 +112,20 @@ struct DeriveInput {
 pub(crate) fn field_derive_schema() -> Value {
     object(
         json!({
-            "quantity": {"enum": Quantity::ALL.map(Quantity::key)},
+            "quantity": {"enum": Quantity::ALL.map(Quantity::key).to_vec()},
             "velocity": {"type": "string", "description": "the velocity field (a vector); left out: found by its name"},
             "pressure": {"type": "string", "description": "the pressure field (a scalar); left out: found by its name"},
             "k": {"type": "string", "description": "the turbulent kinetic energy (a scalar); left out: found by its name"},
             "dissipation": {"type": "string", "description": "omega or epsilon (a scalar; epsilon by its name, else by the unit m2/s3); left out: found by its name"},
             "nu_t": {"type": "string", "description": "the eddy viscosity (a scalar); left out: found by its name"},
+            "rms_velocity": {"type": "string", "description": "the RMS of the velocity (a vector, statistics.vtkhdf rms_velocity); left out: found by its name"},
+            "covariance_xy": {"type": "string", "description": "<u'v'> (a scalar, covariance_velocity_xy); left out: found by its name"},
+            "covariance_yz": {"type": "string", "description": "<v'w'> (a scalar, covariance_velocity_yz); left out: found by its name"},
+            "covariance_xz": {"type": "string", "description": "<u'w'> (a scalar, covariance_velocity_xz); left out: found by its name"},
+            "mean_k": {"type": "string", "description": "the mean modelled k (a scalar, mean_k); left out: found by its name"},
+            "heat_flux_x": {"type": "string", "description": "<u'T'> (a scalar, covariance_velocity_x_temperature); left out: found by its name"},
+            "heat_flux_y": {"type": "string", "description": "<v'T'> (a scalar, covariance_velocity_y_temperature); left out: found by its name"},
+            "heat_flux_z": {"type": "string", "description": "<w'T'> (a scalar, covariance_velocity_z_temperature); left out: found by its name"},
             "reference": object(json!({
                 "density": {"type": "number", "exclusiveMinimum": 0},
                 "pressure": {"type": "number"},
@@ -96,6 +143,7 @@ pub(crate) fn field_derive_schema() -> Value {
                 "frame": {"type": "string", "description": "the zone whose frame every cell is seen in; left out: each cell in its own zone's"}
             }), &["zones"]),
             "walls": {"type": "array", "items": {"type": "string"}, "description": "the wall patches (wall distance); left out: the case's walls, else the patches whose role is wall"},
+            "mean": {"type": "boolean", "description": "of the mean flow of a transient run's statistics (mean_velocity, mean_pressure, mean_k), making mean_<field>; left out: when the result has the means and your default says so, or it has no instantaneous fields"},
             "remove": {"type": "boolean"}
         }),
         &["quantity"],
@@ -144,7 +192,8 @@ fn derived_json(s: &Session, name: &str) -> Value {
 }
 
 pub(crate) fn field_derive(input: Value, s: &mut Session) -> Run {
-    let i: DeriveInput = parse(input)?;
+    let mut i: DeriveInput = parse(input)?;
+    let named = i.inputs();
     let q = Quantity::parse(&i.quantity).ok_or_else(|| {
         Diagnostic::new(
             "TOOL002",
@@ -157,11 +206,7 @@ pub(crate) fn field_derive(input: Value, s: &mut Session) -> Run {
     })?;
     need_fields(s)?;
     if i.remove {
-        if i.velocity.is_some()
-            || i.pressure.is_some()
-            || i.k.is_some()
-            || i.dissipation.is_some()
-            || i.nu_t.is_some()
+        if named.iter().any(|(_, f)| f.is_some())
             || i.reference.is_some()
             || i.rotation.is_some()
             || i.walls.is_some()
@@ -171,34 +216,24 @@ pub(crate) fn field_derive(input: Value, s: &mut Session) -> Run {
                 "remove takes the quantity alone",
             ));
         }
-        s.underive(q.field()).map_err(refused)?;
-        return Ok(json!({"removed": q.field()}));
+        let name = q.field_of(i.mean.unwrap_or(false));
+        s.underive(name).map_err(refused)?;
+        return Ok(json!({"removed": name}));
     }
-    let own = s.fields().and_then(|f| f.recipe(q.field())).cloned();
+    let mean = i.mean.unwrap_or_else(|| derive::start_mean(s, q));
+    let own = s.fields().and_then(|f| f.recipe(q.field_of(mean))).cloned();
     let mut recipe = Recipe::new(q);
-    recipe.velocity = i.velocity;
-    recipe.pressure = i.pressure;
-    recipe.k = i.k;
-    recipe.dissipation = i.dissipation;
-    recipe.nu_t = i.nu_t;
+    recipe.mean = mean;
+    for (input, field) in named {
+        if field.is_some() && !q.inputs().contains(&input) {
+            return Err(Diagnostic::new(
+                "TOOL002",
+                format!("{} takes no {}", q.key(), input.key()),
+            ));
+        }
+        recipe.set_input(input, field);
+    }
     for (given, what) in [
-        (
-            recipe.velocity.is_some() && !q.inputs().contains(&Input::Velocity),
-            "velocity",
-        ),
-        (
-            recipe.pressure.is_some() && !q.inputs().contains(&Input::Pressure),
-            "pressure",
-        ),
-        (recipe.k.is_some() && !q.inputs().contains(&Input::K), "k"),
-        (
-            recipe.dissipation.is_some() && !q.inputs().contains(&Input::Dissipation),
-            "dissipation",
-        ),
-        (
-            recipe.nu_t.is_some() && !q.inputs().contains(&Input::NuT),
-            "nu_t",
-        ),
         (i.rotation.is_some() && !q.turns(), "rotation"),
         (i.walls.is_some() && !q.walls(), "walls"),
     ] {
@@ -441,10 +476,13 @@ pub(crate) fn field_catalogue(_: Value, s: &mut Session) -> Run {
     let quantities: Vec<Value> = Quantity::ALL
         .into_iter()
         .map(|q| {
-            let recipe = set
-                .recipe(q.field())
-                .cloned()
-                .unwrap_or_else(|| Recipe::new(q));
+            let mean = derive::start_mean(s, q);
+            let field = q.field_of(mean);
+            let recipe = set.recipe(field).cloned().unwrap_or_else(|| {
+                let mut r = Recipe::new(q);
+                r.mean = mean;
+                r
+            });
             let missing: Vec<&str> = q
                 .inputs()
                 .iter()
@@ -452,11 +490,13 @@ pub(crate) fn field_catalogue(_: Value, s: &mut Session) -> Run {
                 .map(|i| i.key())
                 .collect();
             let in_file =
-                set.recipe(q.field()).is_none() && set.fields().iter().any(|f| f.name == q.field());
+                set.recipe(field).is_none() && set.fields().iter().any(|f| f.name == field);
             json!({
                 "quantity": q.key(),
                 "group": q.group(),
-                "field": q.field(),
+                "field": field,
+                "mean": mean,
+                "averages": q.averages(),
                 "formula": q.formula(),
                 "unit": q.unit(),
                 "inputs": q.inputs().iter().map(|&i| input_json(s, &recipe, i)).collect::<Vec<_>>(),
@@ -466,7 +506,7 @@ pub(crate) fn field_catalogue(_: Value, s: &mut Session) -> Run {
                 "missing": missing,
                 "available": missing.is_empty() && !in_file,
                 "in_file": in_file,
-                "derived": set.recipe(q.field()),
+                "derived": set.recipe(field),
             })
         })
         .collect();
