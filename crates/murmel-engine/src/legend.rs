@@ -116,6 +116,9 @@ impl Legend {
         if d.color_by == ColorBy::Field {
             return field(s);
         }
+        if d.color_by == ColorBy::Category {
+            return category(s);
+        }
         let entries = categories(&m.mesh, d, &s.tokens);
         (!entries.is_empty()).then(|| Legend {
             title: Label::Key(format!("color-by-{}", d.color_by.key())),
@@ -301,9 +304,33 @@ fn categories(mesh: &Mesh, d: &Display, t: &Tokens) -> Vec<Entry> {
         ColorBy::Patch | ColorBy::CellType | ColorBy::Zone => {
             all_items(mesh).into_iter().filter_map(shown).collect()
         }
-        ColorBy::Quality | ColorBy::Field => Vec::new(),
+        ColorBy::Quality | ColorBy::Field | ColorBy::Category => Vec::new(),
     }
 }
+
+/// The values of the category field, one swatch each ("BlockId 3"), at
+/// most [`MAX_CATEGORIES`] of them.
+fn category(s: &Session) -> Option<Legend> {
+    let m = s.mesh.as_ref()?;
+    let name = s.display.category.as_deref()?;
+    let values = crate::surface::integer_cells(&m.mesh, &m.fields, name)?;
+    let distinct: std::collections::BTreeSet<u32> = values.into_iter().collect();
+    let entries: Vec<Entry> = distinct
+        .into_iter()
+        .take(MAX_CATEGORIES)
+        .map(|k| Entry {
+            label: Label::Text(format!("{name} {k}")),
+            color: s.tokens.patch_color(k as usize),
+        })
+        .collect();
+    (!entries.is_empty()).then(|| Legend {
+        title: Label::Text(name.to_string()),
+        body: Body::Categories(entries),
+    })
+}
+
+/// The most swatches a category legend lists.
+pub const MAX_CATEGORIES: usize = 64;
 
 /// The name of an item: translated for the mesh and the cell types, as in
 /// the file for patches and zones.

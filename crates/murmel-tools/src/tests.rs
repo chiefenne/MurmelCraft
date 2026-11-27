@@ -4408,3 +4408,92 @@ fn post_processing_guide_script_runs() {
     assert!(m.surface.arrows > 0, "arrows on the slice");
     assert_eq!(s.display.probes.len(), 1, "the probe");
 }
+
+/// The box (`test-fixtures/box`, 4 cells) with a cell field `BlockId` of
+/// `0, 1, 2, 3` and a field `half` of `0.5` in every cell.
+fn box_blocks() -> PathBuf {
+    let dir = scratch("blocks");
+    let vtu = std::fs::read_to_string(root().join("test-fixtures/box/foehncraft.vtu")).unwrap();
+    let array = |name: &str, f: &dyn Fn(usize) -> String| {
+        let values: Vec<String> = (0..20)
+            .map(|k| if k < 4 { f(k) } else { "nan".into() })
+            .collect();
+        format!(
+            "        <DataArray type=\"Float64\" Name=\"{name}\" format=\"ascii\">\n{}\n        </DataArray>\n",
+            values.join("\n")
+        )
+    };
+    let arrays = array("BlockId", &|k| k.to_string()) + &array("half", &|_| "0.5".into());
+    std::fs::write(
+        dir.join("blocks.vtu"),
+        vtu.replacen("      </CellData>", &(arrays + "      </CellData>"), 1),
+    )
+    .unwrap();
+    dir.join("blocks.vtu")
+}
+
+/// Invariant: colour mode category paints every cell by its whole-number
+/// value of a cell field (BlockId found by itself), and display.explode
+/// draws the parts apart, each closed by the faces between them, moved
+/// out from the centre (the surface's bounds grow), and back in place at
+/// factor 0; a field that is not whole numbers and a factor out of range
+/// are refused; a session file keeps both. Breaks if the faces between
+/// blocks stayed hidden (open pieces) or the shift were lost.
+#[test]
+fn category_colours_and_exploded_blocks() {
+    let mut s = session();
+    let e = call("display.explode", json!({"factor": 0.3}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let path = box_blocks();
+    assert!(call("mesh.open", json!({ "path": path }), &mut s).ok());
+    let e = call("display.color_by", json!({"by": "category"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["category"], "BlockId");
+    let e = call(
+        "display.color_by",
+        json!({"by": "category", "field": "half"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "FIELD002");
+    let surface = |s: &Session| s.mesh.as_ref().unwrap().surface.clone();
+    let before = surface(&s);
+    assert_eq!(before.open_faces, 0);
+    let e = call("display.explode", json!({"factor": 0.5}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["explode"]["field"], "BlockId");
+    let after = surface(&s);
+    // Every face between two of the four blocks, drawn on both sides.
+    assert!(after.open_faces > 0);
+    let extent = |v: &murmel_engine::surface::Surface| {
+        let (lo, hi) = v
+            .positions
+            .iter()
+            .fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| {
+                (
+                    [0, 1, 2].map(|k| lo[k].min(p[k])),
+                    [0, 1, 2].map(|k| hi[k].max(p[k])),
+                )
+            });
+        [0, 1, 2].map(|k| hi[k] - lo[k]).iter().sum::<f32>()
+    };
+    assert!(extent(&after) > extent(&before) * 1.05);
+    let e = call("display.explode", json!({"factor": 9}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "TOOL002");
+    let e = call(
+        "display.explode",
+        json!({"factor": 0.3, "field": "half"}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "FIELD002");
+    // A session file keeps the category and the explosion.
+    let file = path.with_extension("murmel");
+    assert!(call("session.save", json!({ "path": file }), &mut s).ok());
+    let mut t = session();
+    let e = call("session.load", json!({ "path": file }), &mut t);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(t.display.category.as_deref(), Some("BlockId"));
+    assert_eq!(t.display.explode, s.display.explode);
+    let e = call("display.explode", json!({"factor": 0}), &mut s);
+    assert!(e.result["explode"].is_null());
+    assert_eq!(surface(&s).open_faces, 0);
+}

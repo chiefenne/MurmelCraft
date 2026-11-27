@@ -1010,3 +1010,27 @@ fn iso_preview_ray_casts_the_grid() {
         );
     }
 }
+
+/// Colour by category and the exploded view (KoflCraft's block meshes):
+/// the tetrahedron of four hexahedral blocks, each block in its own
+/// patch-palette colour by `BlockId` and moved out from the centre, its
+/// faces to the other blocks drawn, so four closed pieces show apart.
+/// A lost shift, an open piece or a wrong category colour moves pixels
+/// here and nowhere else.
+#[test]
+fn blocks_exploded_by_category() {
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.viewport = [480.0, 320.0];
+    s.open(&root().join("test-fixtures/blocks/tetrahedron.vtu"))
+        .unwrap();
+    s.display.color_by = ColorBy::Category;
+    s.display.category = Some("BlockId".into());
+    s.display.explode = Some(murmel_engine::display::Explode {
+        factor: 0.5,
+        field: Some("BlockId".into()),
+    });
+    s.camera.set_standard(StandardView::ISO);
+    s.redraw();
+    s.fit();
+    check_session("blocks-exploded", &s);
+}

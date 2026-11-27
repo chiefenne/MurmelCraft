@@ -67,6 +67,7 @@ pages!(
     "saved-views",
     "render-mode",
     "color-by",
+    "explode",
     "quality",
     "visibility",
     "selection",

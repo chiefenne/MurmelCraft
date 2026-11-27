@@ -149,6 +149,11 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   the boxes of an overview's blocks show (the eye of `blocks` in the
   model tree); left out otherwise. Like the render mode, it is kept with
   no mesh open and applies to the next overview.
+- **Category and exploded view** (format 1.18): `display.category`
+  names the cell field colour mode `category` shows (such as KoflCraft's
+  `BlockId`); `display.explode` is `{"factor": 0.3, "field": "BlockId"}`
+  while the view is exploded (no `field`: by cell zone). Both are left
+  out otherwise, so a 1.17 file loads unchanged.
 - **Derived fields** (`derived`) keep how each was made, re-derived
   first on loading: `{"quantity": "flow-angle", "rotation": {"zones":
   [{"zone": "rotor", "origin": [0, 0, 0], "axis": [0, 0, 1], "rpm":

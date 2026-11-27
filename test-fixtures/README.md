@@ -8,6 +8,7 @@ on 2026-11-23. Nothing here was edited by hand.
 |---|---|---|
 | `box/` | `kofl generate test-fixtures/box-4.json box.mesh.json`, then `kofl export box.mesh.json foehncraft foehncraft.vtu` | 4 Voronoi polyhedra, 6 named patches with role `unspecified`, the digests as field data |
 | `channel/` | `kofl generate-channel test-fixtures/straight-channel.json channel` (`foehncraft.vtu` and `mesh-evidence.json` of the bundle) | 776 cells with prism layers, patches `inlet`, `outlet`, `walls` with roles, the evidence beside the mesh |
+| `blocks/tetrahedron.vtu` | KoflCraft at commit `193b555` (2026-11-27): `kofl call block.template` with `{"config": {"template": "tetrahedron", "cells": [6, 6, 6, 6]}}`, then `kofl call block.grid`; the `volume.vtu` of the output | a regular tetrahedron as four hexahedral blocks (864 cells), cell fields `BlockId`, `I`, `J`, `K`: colour by category and the exploded view |
 
 ## FoehnCraft results (`vtkhdf/`)
 

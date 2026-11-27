@@ -44,15 +44,20 @@ pub enum ColorBy {
     Quality,
     /// A field of the results (`Display::field`), on a colour map.
     Field,
+    /// The whole-number values of a cell field (`Display::category`,
+    /// such as KoflCraft's `BlockId`), one colour of the patch palette
+    /// per value.
+    Category,
 }
 
 impl ColorBy {
-    pub const ALL: [ColorBy; 7] = [
+    pub const ALL: [ColorBy; 8] = [
         ColorBy::Solid,
         ColorBy::Patch,
         ColorBy::Role,
         ColorBy::CellType,
         ColorBy::Zone,
+        ColorBy::Category,
         ColorBy::Quality,
         ColorBy::Field,
     ];
@@ -66,6 +71,7 @@ impl ColorBy {
             ColorBy::Zone => "zone",
             ColorBy::Quality => "quality",
             ColorBy::Field => "field",
+            ColorBy::Category => "category",
         }
     }
 }
@@ -398,6 +404,25 @@ pub struct Display {
     /// ([`crate::cut_blocks`], `Session::sync_cuts`); `None` unless the
     /// open mesh is an overview.
     pub block_cuts: Option<Arc<crate::cut_blocks::Cuts>>,
+    /// The cell field colour mode category shows (`display.color_by`),
+    /// kept when another mode is chosen.
+    pub category: Option<String>,
+    /// The exploded view (`display.explode`); `None` draws the cells in
+    /// place.
+    pub explode: Option<Explode>,
+}
+
+/// An exploded view: the cells fall into parts by the whole-number
+/// values of a cell field (`field`, such as KoflCraft's `BlockId`), or
+/// by their cell zone when there is none, and each part moves away from
+/// the centre of all cells by `factor` times the way from that centre to
+/// its own. A 2-D mesh extruded one cell deep stays in its plane.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Explode {
+    pub factor: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
 }
 
 /// A named camera (UI spec, model tree: "saved views"). The viewport
@@ -717,6 +742,8 @@ impl Display {
             // The GPU colours faces with a value; this is the colour of
             // those without.
             ColorBy::Field => tokens.mesh.field.none,
+            // The surface colours each face by its cell's value.
+            ColorBy::Category => tokens.mesh.role.unspecified,
         }
     }
 

@@ -955,6 +955,7 @@ impl MurmelApp {
         if open_derived {
             self.open_derived();
         }
+        self.explode_control(ui);
         ui.separator();
         self.clip_group(ui, secondary);
         ui.separator();
@@ -976,8 +977,44 @@ impl MurmelApp {
                 Some(v) => format!("{by}: {}", v.choice.title(v.vector)),
                 None => by,
             },
+            murmel_engine::ColorBy::Category => match &d.category {
+                Some(n) => format!("{by}: {n}"),
+                None => by,
+            },
             _ => by,
         }
+    }
+
+    /// The Explode toggle beside the colouring, with the factor while
+    /// it is on: the blocks (a whole-number cell field such as BlockId)
+    /// or the zones drawn apart.
+    fn explode_control(&mut self, ui: &mut Ui) {
+        let has_mesh = self.session.mesh.is_some();
+        let current = self.session.display.explode.as_ref().map(|e| e.factor);
+        let name = self.i18n.tr("toolbar-explode");
+        let line = self.i18n.tr("toolbar-explode-tip");
+        ui.add_enabled_ui(has_mesh, |ui| {
+            let b = ui.add(egui::Button::new(name.clone()).selected(current.is_some()));
+            let b = self.tip_as(b, "display.explode:on", Some(name.clone()), Some(line));
+            b.widget_info(|| WidgetInfo::labeled(Role::Button, true, name.clone()));
+            if b.clicked() {
+                let factor = if current.is_some() { 0.0 } else { 0.3 };
+                self.call("display.explode", json!({ "factor": factor }));
+            }
+            if let Some(f) = current {
+                let mut v = f;
+                let r = ui.add(
+                    egui::DragValue::new(&mut v)
+                        .range(0.05..=4.0)
+                        .speed(0.01)
+                        .max_decimals(2),
+                );
+                r.widget_info(|| WidgetInfo::labeled(Role::SpinButton, true, name.clone()));
+                if r.changed() && (v - f).abs() > 1e-9 {
+                    self.call("display.explode", json!({ "factor": v }));
+                }
+            }
+        });
     }
 
     /// The Clip group of the toolbar: the axis buttons (X, Y, Z), the
