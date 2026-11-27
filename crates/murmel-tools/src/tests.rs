@@ -2694,7 +2694,8 @@ fn derived_field_tools() {
             json!({"quantity": "vorticity", "reference": {"density": 1.0}}),
             "TOOL002",
         ),
-        (json!({"quantity": "helicity"}), "TOOL002"),
+        (json!({"quantity": "vortex-magic"}), "TOOL002"),
+        (json!({"quantity": "helicity", "mean_k": "k"}), "TOOL002"),
         (
             json!({"quantity": "q-criterion", "remove": true}),
             "FIELD009",
@@ -4496,4 +4497,157 @@ fn category_colours_and_exploded_blocks() {
     let e = call("display.explode", json!({"factor": 0}), &mut s);
     assert!(e.result["explode"].is_null());
     assert_eq!(surface(&s).open_faces, 0);
+}
+
+/// Invariant: a FoehnCraft statistics file (its RMS as `rms_velocity_x`
+/// …, the covariances and `mean_k`) gives the statistics group through
+/// `field.derive`, each input found by FoehnCraft's name, and the
+/// catalogue lists those quantities as available; on the plain channel
+/// they need the RMS. Breaks when an input is not found by its name or
+/// a covariance lands in the wrong component.
+#[test]
+fn statistics_quantities_from_a_file() {
+    let dir = std::env::temp_dir().join(format!("murmel-statistics-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plain = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let (mesh, mut results) = murmel_mesh::read_results(&plain).unwrap();
+    let n = mesh.cell_count();
+    let scalar = |name: &str, unit: &str, v: f64| murmel_mesh::field::Field {
+        name: name.into(),
+        unit: Some(unit.into()),
+        location: murmel_mesh::Location::Cell,
+        components: 1,
+        values: vec![v; n],
+    };
+    results.fields.extend([
+        scalar("rms_velocity_x", "m/s", 0.3),
+        scalar("rms_velocity_y", "m/s", 0.2),
+        scalar("rms_velocity_z", "m/s", 0.1),
+        scalar("covariance_velocity_xy", "m2/s2", -0.02),
+        scalar("covariance_velocity_yz", "m2/s2", 0.0),
+        scalar("covariance_velocity_xz", "m2/s2", 0.01),
+        scalar("mean_k", "m2/s2", 0.05),
+        scalar("covariance_velocity_x_temperature", "K m/s", 0.4),
+        scalar("covariance_velocity_y_temperature", "K m/s", 0.5),
+        scalar("covariance_velocity_z_temperature", "K m/s", 0.6),
+    ]);
+    let path = dir.join("statistics.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &results, n).unwrap();
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = None;
+    let e = call("mesh.open", json!({"path": path}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let e = call("field.catalogue", json!({}), &mut s);
+    let stats: Vec<&serde_json::Value> = e.result["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|q| q["group"] == "statistics")
+        .collect();
+    assert_eq!(stats.len(), 11);
+    assert!(stats.iter().all(|q| q["available"] == true), "{stats:?}");
+    let range = |s: &Session, name: &str| {
+        s.fields()
+            .unwrap()
+            .get(name)
+            .unwrap()
+            .range(murmel_mesh::Component::Magnitude)
+            .unwrap()
+    };
+    for (q, field, want) in [
+        ("resolved-kinetic-energy", "resolved_kinetic_energy", 0.07),
+        ("total-kinetic-energy", "total_kinetic_energy", 0.12),
+        (
+            "resolved-reynolds-stress-yy",
+            "resolved_reynolds_stress_yy",
+            0.04,
+        ),
+        (
+            "resolved-reynolds-stress-xy",
+            "resolved_reynolds_stress_xy",
+            -0.02,
+        ),
+        (
+            "resolved-reynolds-stress-xz",
+            "resolved_reynolds_stress_xz",
+            0.01,
+        ),
+    ] {
+        let e = call("field.derive", json!({"quantity": q}), &mut s);
+        assert!(e.ok(), "{q}: {:?}", e.diagnostics);
+        let (lo, hi) = range(&s, field);
+        assert!(
+            (lo - want).abs() < 1e-12 && (hi - want).abs() < 1e-12,
+            "{q}: {lo} {hi}"
+        );
+    }
+    let e = call(
+        "field.derive",
+        json!({"quantity": "turbulent-heat-flux"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let f = s.fields().unwrap().get("turbulent_heat_flux").unwrap();
+    assert_eq!(f.components, 3);
+    assert_eq!(f.value(0).unwrap(), &[0.4, 0.5, 0.6]);
+    let e = call(
+        "field.derive",
+        json!({"quantity": "anisotropy-eta"}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let (eta, _) = murmel_engine::derive::anisotropy([0.09, 0.04, 0.01, -0.02, 0.0, 0.01]);
+    assert!((range(&s, "anisotropy_eta").0 - eta).abs() < 1e-12);
+    // The mean flow: a statistics file with only the means starts the
+    // vortex quantities on them.
+    let mut means = results.clone();
+    means
+        .fields
+        .retain(|f| !f.name.starts_with("velocity") && f.name != "pressure");
+    for c in ["x", "y", "z"] {
+        means
+            .fields
+            .push(scalar(&format!("mean_velocity_{c}"), "m/s", 1.0));
+    }
+    means.fields.push(scalar("mean_pressure", "Pa", 7.0));
+    let path = dir.join("means.vtkhdf");
+    murmel_mesh::blocks::write_blocked(&path, &mesh, &means, n).unwrap();
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = None;
+    assert!(call("mesh.open", json!({"path": path}), &mut s).ok());
+    let e = call("field.catalogue", json!({}), &mut s);
+    let vort = e.result["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|q| q["quantity"] == "vorticity")
+        .unwrap()
+        .clone();
+    assert_eq!(vort["mean"], true);
+    assert_eq!(vort["field"], "mean_vorticity");
+    assert_eq!(vort["available"], true);
+    let e = call("field.derive", json!({"quantity": "vorticity"}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["field"], "mean_vorticity");
+    assert_eq!(e.result["recipe"]["mean"], true);
+    let e = call(
+        "field.derive",
+        json!({"quantity": "dissipation-rate", "mean": true}),
+        &mut s,
+    );
+    assert_eq!(e.diagnostics[0].code, "FIELD021");
+    let e = call(
+        "field.derive",
+        json!({"quantity": "vorticity", "mean": true, "remove": true}),
+        &mut s,
+    );
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert!(s.fields().unwrap().get("mean_vorticity").is_none());
+    // The plain channel has no statistics.
+    let mut s = Session::new(Tokens::builtin().unwrap());
+    s.config_dir = None;
+    assert!(call("mesh.open", json!({"path": plain}), &mut s).ok());
+    let e = call("field.derive", json!({"quantity": "anisotropy-xi"}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "FIELD005");
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -2567,7 +2567,7 @@ impl Session {
         recipe: crate::derive::Recipe,
     ) -> Result<&'static str, crate::derive::Refusal> {
         let name = recipe.field();
-        self.make(crate::derive::Made::Quantity(recipe))?;
+        self.make(crate::derive::Made::Quantity(Box::new(recipe)))?;
         Ok(name)
     }
 

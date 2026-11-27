@@ -1003,12 +1003,44 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 {
   "additionalProperties": false,
   "properties": {
+    "covariance_xy": {
+      "description": "<u'v'> (a scalar, covariance_velocity_xy); left out: found by its name",
+      "type": "string"
+    },
+    "covariance_xz": {
+      "description": "<u'w'> (a scalar, covariance_velocity_xz); left out: found by its name",
+      "type": "string"
+    },
+    "covariance_yz": {
+      "description": "<v'w'> (a scalar, covariance_velocity_yz); left out: found by its name",
+      "type": "string"
+    },
     "dissipation": {
       "description": "omega or epsilon (a scalar; epsilon by its name, else by the unit m2/s3); left out: found by its name",
       "type": "string"
     },
+    "heat_flux_x": {
+      "description": "<u'T'> (a scalar, covariance_velocity_x_temperature); left out: found by its name",
+      "type": "string"
+    },
+    "heat_flux_y": {
+      "description": "<v'T'> (a scalar, covariance_velocity_y_temperature); left out: found by its name",
+      "type": "string"
+    },
+    "heat_flux_z": {
+      "description": "<w'T'> (a scalar, covariance_velocity_z_temperature); left out: found by its name",
+      "type": "string"
+    },
     "k": {
       "description": "the turbulent kinetic energy (a scalar); left out: found by its name",
+      "type": "string"
+    },
+    "mean": {
+      "description": "of the mean flow of a transient run's statistics (mean_velocity, mean_pressure, mean_k), making mean_<field>; left out: when the result has the means and your default says so, or it has no instantaneous fields",
+      "type": "boolean"
+    },
+    "mean_k": {
+      "description": "the mean modelled k (a scalar, mean_k); left out: found by its name",
       "type": "string"
     },
     "nu_t": {
@@ -1026,6 +1058,9 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "lambda2",
         "enstrophy",
         "strain-rate",
+        "helicity",
+        "normalized-helicity",
+        "swirling-strength",
         "total-pressure",
         "pressure-coefficient",
         "relative-velocity",
@@ -1044,13 +1079,26 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "time-scale",
         "length-scale",
         "viscosity-ratio",
+        "turbulence-intensity",
+        "local-turbulence-intensity",
         "reynolds-stress-xx",
         "reynolds-stress-yy",
         "reynolds-stress-zz",
         "reynolds-stress-xy",
         "reynolds-stress-yz",
         "reynolds-stress-xz",
-        "wall-distance"
+        "wall-distance",
+        "resolved-kinetic-energy",
+        "total-kinetic-energy",
+        "resolved-reynolds-stress-xx",
+        "resolved-reynolds-stress-yy",
+        "resolved-reynolds-stress-zz",
+        "resolved-reynolds-stress-xy",
+        "resolved-reynolds-stress-yz",
+        "resolved-reynolds-stress-xz",
+        "anisotropy-eta",
+        "anisotropy-xi",
+        "turbulent-heat-flux"
       ]
     },
     "reference": {
@@ -1083,6 +1131,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
     },
     "remove": {
       "type": "boolean"
+    },
+    "rms_velocity": {
+      "description": "the RMS of the velocity (a vector, statistics.vtkhdf rms_velocity); left out: found by its name",
+      "type": "string"
     },
     "rotation": {
       "additionalProperties": false,
@@ -1169,7 +1221,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
           "turbulence-wall",
           "turbulence-features",
           "wall-normal",
-          "curvature-correction"
+          "curvature-correction",
+          "solid-fraction"
         ]
       },
       "minItems": 1,
@@ -3149,7 +3202,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "reference",
         "parcels",
         "rotation",
-        "player"
+        "player",
+        "derived"
       ]
     },
     "values": {
@@ -3183,7 +3237,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "reference",
         "parcels",
         "rotation",
-        "player"
+        "player",
+        "derived"
       ]
     }
   },
@@ -4025,6 +4080,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `FIELD018` | error | FoehnCraft's foehn was not found: MURMEL_FOEHN names no file, or there is no foehn on PATH, in ~/.cargo/bin, /opt/homebrew/bin or /usr/local/bin. | Install FoehnCraft (cargo install, or its release), or set MURMEL_FOEHN to the foehn program. |
 | `FIELD019` | error | The open result is not a FoehnCraft run that foehn post derive can take up: it is no fields(_N).vtkhdf or derived(_N).vtkhdf, or its restart file or its case is not beside it. | Open the fields.vtkhdf of a FoehnCraft run whose folder still has restart.h5 and run.jsonl (or case.resolved.toml). |
 | `FIELD020` | error | foehn post derive could not be started or failed, wrote no file, or wrote a file of another mesh. | Read the lines foehn printed (in the message); run the command shown in the Derived fields window yourself to see all of them. |
+| `FIELD021` | error | A derived quantity asked of the mean flow (mean = true) reads a field the statistics do not average: only the quantities of the velocity, the pressure and k are taken of the mean flow. | Leave out mean, or pick a quantity field.catalogue lists with averages = true. |
 | `MESH001` | error | The mesh file cannot be read (missing, unreadable or not a file). | Check the path and the file permissions. |
 | `MESH002` | error | The file is not a VTK XML UnstructuredGrid. | Open a KoflCraft mesh or a FoehnCraft result (.vtu, .vtkhdf); other tools' meshes come in through File, Import (OpenFOAM polyMesh, VTK file). |
 | `MESH003` | error | The XML of the file is malformed or an expected element is missing. | Write the file again; it may be truncated. |

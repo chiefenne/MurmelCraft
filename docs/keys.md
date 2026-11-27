@@ -164,6 +164,9 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Derive λ₂ | `field.derive` `{"quantity":"lambda2"}` |
 | palette | Derive enstrophy | `field.derive` `{"quantity":"enstrophy"}` |
 | palette | Derive strain rate | `field.derive` `{"quantity":"strain-rate"}` |
+| palette | Derive helicity | `field.derive` `{"quantity":"helicity"}` |
+| palette | Derive normalised helicity | `field.derive` `{"quantity":"normalized-helicity"}` |
+| palette | Derive swirling strength | `field.derive` `{"quantity":"swirling-strength"}` |
 | palette | Derive total pressure | `field.derive` `{"quantity":"total-pressure"}` |
 | palette | Derive pressure coefficient | `field.derive` `{"quantity":"pressure-coefficient"}` |
 | palette | Derive relative velocity | `field.derive` `{"quantity":"relative-velocity"}` |
@@ -182,6 +185,8 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Derive turbulence time scale | `field.derive` `{"quantity":"time-scale"}` |
 | palette | Derive turbulence length scale | `field.derive` `{"quantity":"length-scale"}` |
 | palette | Derive viscosity ratio | `field.derive` `{"quantity":"viscosity-ratio"}` |
+| palette | Derive turbulence intensity | `field.derive` `{"quantity":"turbulence-intensity"}` |
+| palette | Derive local turbulence intensity | `field.derive` `{"quantity":"local-turbulence-intensity"}` |
 | palette | Derive Reynolds stress xx | `field.derive` `{"quantity":"reynolds-stress-xx"}` |
 | palette | Derive Reynolds stress yy | `field.derive` `{"quantity":"reynolds-stress-yy"}` |
 | palette | Derive Reynolds stress zz | `field.derive` `{"quantity":"reynolds-stress-zz"}` |
@@ -189,6 +194,17 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Derive Reynolds stress yz | `field.derive` `{"quantity":"reynolds-stress-yz"}` |
 | palette | Derive Reynolds stress xz | `field.derive` `{"quantity":"reynolds-stress-xz"}` |
 | palette | Derive wall distance | `field.derive` `{"quantity":"wall-distance"}` |
+| palette | Derive resolved kinetic energy | `field.derive` `{"quantity":"resolved-kinetic-energy"}` |
+| palette | Derive total kinetic energy | `field.derive` `{"quantity":"total-kinetic-energy"}` |
+| palette | Derive resolved Reynolds stress xx | `field.derive` `{"quantity":"resolved-reynolds-stress-xx"}` |
+| palette | Derive resolved Reynolds stress yy | `field.derive` `{"quantity":"resolved-reynolds-stress-yy"}` |
+| palette | Derive resolved Reynolds stress zz | `field.derive` `{"quantity":"resolved-reynolds-stress-zz"}` |
+| palette | Derive resolved Reynolds stress xy | `field.derive` `{"quantity":"resolved-reynolds-stress-xy"}` |
+| palette | Derive resolved Reynolds stress yz | `field.derive` `{"quantity":"resolved-reynolds-stress-yz"}` |
+| palette | Derive resolved Reynolds stress xz | `field.derive` `{"quantity":"resolved-reynolds-stress-xz"}` |
+| palette | Derive anisotropy η | `field.derive` `{"quantity":"anisotropy-eta"}` |
+| palette | Derive anisotropy ξ | `field.derive` `{"quantity":"anisotropy-xi"}` |
+| palette | Derive turbulent heat flux | `field.derive` `{"quantity":"turbulent-heat-flux"}` |
 | palette | Colour by: quality, non-orthogonality | `display.color_by` `{"by":"quality","metric":"non_orthogonality"}` |
 | palette | Colour by: quality, skewness | `display.color_by` `{"by":"quality","metric":"skewness"}` |
 | palette | Colour by: quality, volume ratio | `display.color_by` `{"by":"quality","metric":"volume_ratio"}` |

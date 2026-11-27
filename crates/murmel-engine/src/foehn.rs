@@ -17,6 +17,7 @@
 //! | `turbulence-features` | `feature_lambda1` … `feature_curvature` | the invariant features of FoehnCraft's D166 | - |
 //! | `wall-normal` | `wall_normal` (vector) | n = ∇α/\|∇α\| of the elliptic-blending k-ε | - |
 //! | `curvature-correction` | `rotation_function` | f_r1 of SST's curvature correction | - |
+//! | `solid-fraction` | `solid_fraction` | χ, the share of each cell inside the case's immersed bodies (`[immersed]`) | - |
 //!
 //! Where the run is: the restart file of the result's step beside it
 //! (`restart.h5` for `fields.vtkhdf`, `restart_<N>.h5` for
@@ -40,16 +41,18 @@ pub enum Model {
     TurbulenceFeatures,
     WallNormal,
     CurvatureCorrection,
+    SolidFraction,
 }
 
 impl Model {
-    pub const ALL: [Model; 6] = [
+    pub const ALL: [Model; 7] = [
         Model::YPlus,
         Model::WallShearStress,
         Model::TurbulenceWall,
         Model::TurbulenceFeatures,
         Model::WallNormal,
         Model::CurvatureCorrection,
+        Model::SolidFraction,
     ];
 
     /// FoehnCraft's name (`[output] derived`, `foehn post derive
@@ -62,6 +65,7 @@ impl Model {
             Model::TurbulenceFeatures => "turbulence-features",
             Model::WallNormal => "wall-normal",
             Model::CurvatureCorrection => "curvature-correction",
+            Model::SolidFraction => "solid-fraction",
         }
     }
 
@@ -92,6 +96,7 @@ impl Model {
             ],
             Model::WallNormal => &["wall_normal"],
             Model::CurvatureCorrection => &["rotation_function"],
+            Model::SolidFraction => &["solid_fraction"],
         }
     }
 
@@ -108,13 +113,17 @@ impl Model {
     pub fn group(self) -> Group {
         match self {
             Model::YPlus | Model::WallShearStress | Model::TurbulenceWall => Group::Wall,
+            Model::SolidFraction => Group::Wall,
             _ => Group::Turbulence,
         }
     }
 
     /// Whether its fields are on the walls (the boundary faces).
     pub fn on_walls(self) -> bool {
-        self.group() == Group::Wall
+        matches!(
+            self,
+            Model::YPlus | Model::WallShearStress | Model::TurbulenceWall
+        )
     }
 }
 
@@ -167,7 +176,7 @@ impl Plan {
 /// reads them: `foehn post derive` writes only the fields it is asked
 /// for beside the solution, so a file that replaces the open result
 /// asks again for those the result has.
-pub const FOEHN_FIELDS: [(&str, &str); 21] = [
+pub const FOEHN_FIELDS: [(&str, &str); 22] = [
     ("vorticity", "vorticity"),
     ("q-criterion", "q_criterion"),
     ("lambda2", "lambda2"),
@@ -189,6 +198,7 @@ pub const FOEHN_FIELDS: [(&str, &str); 21] = [
     ("wall-normal", "wall_normal"),
     ("turbulence-wall", "friction_velocity"),
     ("curvature-correction", "rotation_function"),
+    ("solid-fraction", "solid_fraction"),
 ];
 
 /// The FoehnCraft keys of the fields among `file_fields` (the fields the

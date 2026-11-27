@@ -786,6 +786,22 @@ cmd-derive-reynolds-stress-xy = Derive Reynolds stress xy
 cmd-derive-reynolds-stress-yz = Derive Reynolds stress yz
 cmd-derive-reynolds-stress-xz = Derive Reynolds stress xz
 cmd-derive-wall-distance = Derive wall distance
+cmd-derive-helicity = Derive helicity
+cmd-derive-normalized-helicity = Derive normalised helicity
+cmd-derive-swirling-strength = Derive swirling strength
+cmd-derive-turbulence-intensity = Derive turbulence intensity
+cmd-derive-local-turbulence-intensity = Derive local turbulence intensity
+cmd-derive-resolved-kinetic-energy = Derive resolved kinetic energy
+cmd-derive-total-kinetic-energy = Derive total kinetic energy
+cmd-derive-resolved-reynolds-stress-xx = Derive resolved Reynolds stress xx
+cmd-derive-resolved-reynolds-stress-yy = Derive resolved Reynolds stress yy
+cmd-derive-resolved-reynolds-stress-zz = Derive resolved Reynolds stress zz
+cmd-derive-resolved-reynolds-stress-xy = Derive resolved Reynolds stress xy
+cmd-derive-resolved-reynolds-stress-yz = Derive resolved Reynolds stress yz
+cmd-derive-resolved-reynolds-stress-xz = Derive resolved Reynolds stress xz
+cmd-derive-anisotropy-eta = Derive anisotropy η
+cmd-derive-anisotropy-xi = Derive anisotropy ξ
+cmd-derive-turbulent-heat-flux = Derive turbulent heat flux
 cmd-color-by-quality-non_orthogonality = Colour by: quality, non-orthogonality
 cmd-color-by-quality-skewness = Colour by: quality, skewness
 cmd-color-by-quality-volume_ratio = Colour by: quality, volume ratio
@@ -1171,6 +1187,7 @@ defaults-kind-reference = Reference values
 defaults-kind-parcels = Parcels
 defaults-kind-rotation = Rotation
 defaults-kind-player = Time series player
+defaults-kind-derived = Derived fields
 default-arrows-surface = On the surface too
 default-arrows-in_plane = Only the part in the slice
 default-arrows-density = Arrows across
@@ -1209,6 +1226,7 @@ default-reference-viscosity = Kinematic viscosity
 default-reference-c_mu = Turbulence constant C_μ
 default-rotation-rpm = Speed of rotation
 default-rotation-axis = Axis of rotation
+default-derived-mean = Of the mean flow
 
 ## Derived fields window
 derived-title = Derived fields
@@ -1219,6 +1237,7 @@ derived-group-pressure = Pressure
 derived-group-turbomachinery = Turbomachinery
 derived-group-turbulence = Turbulence
 derived-group-wall = Wall
+derived-group-statistics = Statistics
 derived-vorticity = Vorticity
 derived-q-criterion = Q criterion
 derived-lambda2 = λ₂ criterion
@@ -1249,6 +1268,22 @@ derived-reynolds-stress-xy = Reynolds stress xy
 derived-reynolds-stress-yz = Reynolds stress yz
 derived-reynolds-stress-xz = Reynolds stress xz
 derived-wall-distance = Wall distance
+derived-helicity = Helicity
+derived-normalized-helicity = Normalised helicity
+derived-swirling-strength = Swirling strength λ_ci
+derived-turbulence-intensity = Turbulence intensity
+derived-local-turbulence-intensity = Local turbulence intensity
+derived-resolved-kinetic-energy = Resolved kinetic energy
+derived-total-kinetic-energy = Total kinetic energy
+derived-resolved-reynolds-stress-xx = Resolved Reynolds stress xx
+derived-resolved-reynolds-stress-yy = Resolved Reynolds stress yy
+derived-resolved-reynolds-stress-zz = Resolved Reynolds stress zz
+derived-resolved-reynolds-stress-xy = Resolved Reynolds stress xy
+derived-resolved-reynolds-stress-yz = Resolved Reynolds stress yz
+derived-resolved-reynolds-stress-xz = Resolved Reynolds stress xz
+derived-anisotropy-eta = Anisotropy η (Lumley triangle)
+derived-anisotropy-xi = Anisotropy ξ (Lumley triangle)
+derived-turbulent-heat-flux = Turbulent heat flux
 derived-formula-vorticity = ω = curl u
 derived-formula-q-criterion = Q = ½ (‖Ω‖² − ‖S‖²), vortices where Q > 0
 derived-formula-lambda2 = λ₂ of S² + Ω², vortices where λ₂ < 0
@@ -1279,6 +1314,22 @@ derived-formula-reynolds-stress-xy = −2 ν_t S_xy (Boussinesq)
 derived-formula-reynolds-stress-yz = −2 ν_t S_yz (Boussinesq)
 derived-formula-reynolds-stress-xz = −2 ν_t S_xz (Boussinesq)
 derived-formula-wall-distance = d, from each cell centre to the nearest wall face
+derived-formula-helicity = H = u·ω
+derived-formula-normalized-helicity = u·ω / (|u| |ω|), ±1 along a vortex core, the sign its sense of turning
+derived-formula-swirling-strength = λ_ci, the imaginary part of the complex eigenvalues of grad u; vortices where λ_ci > 0
+derived-formula-turbulence-intensity = I = √(2k/3) / U_ref
+derived-formula-local-turbulence-intensity = I = √(2k/3) / |u|, no value where the flow stands
+derived-formula-resolved-kinetic-energy = k_res = ½ (u′² + v′² + w′²), from the RMS
+derived-formula-total-kinetic-energy = k_res + mean k, resolved plus the mean modelled k
+derived-formula-resolved-reynolds-stress-xx = <u′u′> = u′_rms²
+derived-formula-resolved-reynolds-stress-yy = <v′v′> = v′_rms²
+derived-formula-resolved-reynolds-stress-zz = <w′w′> = w′_rms²
+derived-formula-resolved-reynolds-stress-xy = <u′v′>, the covariance
+derived-formula-resolved-reynolds-stress-yz = <v′w′>, the covariance
+derived-formula-resolved-reynolds-stress-xz = <u′w′>, the covariance
+derived-formula-anisotropy-eta = η = √(b:b / 6), b = <u′u′> / (2k) − 1/3 I; 0 isotropic, 1/3 one component
+derived-formula-anisotropy-xi = ξ = cbrt(tr b³ / 6); above 0 rod-like, below 0 disc-like
+derived-formula-turbulent-heat-flux = <u′T′>, the covariances of velocity and temperature
 derived-input-velocity = Velocity
 derived-input-pressure = Pressure
 derived-no-velocity = No velocity field
@@ -1289,6 +1340,27 @@ derived-input-nu_t = ν_t
 derived-no-k = No k field
 derived-no-dissipation = No ω or ε field
 derived-no-nu_t = No ν_t field
+derived-input-rms_velocity = RMS velocity
+derived-no-rms_velocity = No RMS velocity (statistics.vtkhdf)
+derived-input-covariance_xy = <u′v′>
+derived-no-covariance_xy = No <u′v′> field
+derived-input-covariance_yz = <v′w′>
+derived-no-covariance_yz = No <v′w′> field
+derived-input-covariance_xz = <u′w′>
+derived-no-covariance_xz = No <u′w′> field
+derived-input-mean_k = Mean k
+derived-no-mean_k = No mean k field
+derived-input-heat_flux_x = <u′T′>
+derived-no-heat_flux_x = No <u′T′> field
+derived-input-heat_flux_y = <v′T′>
+derived-no-heat_flux_y = No <v′T′> field
+derived-input-heat_flux_z = <w′T′>
+derived-no-heat_flux_z = No <w′T′> field
+derived-of = Of the
+derived-of-instantaneous = instantaneous flow
+derived-of-mean = mean flow (statistics)
+derived-mean-of = Mean { $quantity }
+derived-statistics = The moments of a transient run: open FoehnCraft's statistics.vtkhdf ([output.statistics] fields = true).
 derived-in-file = In the file
 derived-computed = Computed
 derived-needs = Needs { $inputs }
@@ -1307,7 +1379,7 @@ derived-ref-velocity = Velocity U_ref
 derived-ref-viscosity = Kinematic viscosity ν
 derived-ref-c_mu = C_μ (β* of SST)
 derived-reference-rotor = Density of the relative total pressure and rothalpy (right-click to keep it as your default)
-derived-reference-turbulence = Fluid and model constants (right-click one to keep it as your default)
+derived-reference-turbulence = Reference velocity, fluid and model constants (right-click one to keep it as your default)
 derived-rotation = Turning zones: each cell is seen in the frame of its zone, the fixed frame outside them. Right-click a speed or an axis to keep it as your default
 derived-zone-all = Every cell
 derived-zone-name = Turning zone { $zone }
@@ -1326,7 +1398,7 @@ derived-from-case = from the FoehnCraft case
 derived-from-defaults = your default
 derived-from-built_in = built in
 derived-from-edited = typed here
-derived-foehncraft = y⁺, wall shear stress and the turbulence model's own fields come from FoehnCraft: their rows, under the Wall and Turbulence groups, run foehn post derive.
+derived-foehncraft = y⁺, wall shear stress, the solid fraction and the turbulence model's own fields come from FoehnCraft: their rows, under the Wall and Turbulence groups, run foehn post derive.
 derived-foehn-heading = FoehnCraft's own fields (foehn post derive)
 derived-foehn-y-plus = y⁺ on the walls
 derived-foehn-wall-shear-stress = Wall shear stress
@@ -1334,6 +1406,7 @@ derived-foehn-turbulence-wall = Wall treatment (u_τ, y*, blending)
 derived-foehn-turbulence-features = Turbulence features
 derived-foehn-wall-normal = Wall normal (elliptic blending)
 derived-foehn-curvature-correction = Curvature correction (f_r1)
+derived-foehn-solid-fraction = Solid fraction χ (immersed bodies)
 derived-foehn-compute = Compute with FoehnCraft
 derived-foehn-compute-name = Compute { $quantity } with FoehnCraft
 derived-foehn-running = foehn post derive is running ({ $seconds } s)

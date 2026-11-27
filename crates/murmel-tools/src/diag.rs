@@ -582,6 +582,12 @@ const OWN: &[Code] = &[
             "Read the lines foehn printed (in the message); run the command shown in the Derived fields window yourself to see all of them.",
         ),
     },
+    Code {
+        code: "FIELD021",
+        severity: Severity::Error,
+        meaning: "A derived quantity asked of the mean flow (mean = true) reads a field the statistics do not average: only the quantities of the velocity, the pressure and k are taken of the mean flow.",
+        fix: Some("Leave out mean, or pick a quantity field.catalogue lists with averages = true."),
+    },
 ];
 
 /// Every code: the tools' own, then the mesh and render codes.
