@@ -26,3 +26,24 @@ The minor version follows the milestone of the UI spec that is done
 
 Tags cannot be pushed from the cloud sessions; the workflow creates them.
 Locally, after the release: `git checkout main && git pull --tags`.
+
+## Executables
+
+After it creates the release, the Release workflow starts **Executables**
+(`.github/workflows/executables.yml`), which builds the programs and
+attaches them to the release in about 15 minutes:
+
+| File | Contents |
+|---|---|
+| `murmelcraft-<version>-macos-universal.dmg` | `MurmelCraft.app` (Apple silicon and Intel) with `murmel` and `murmel-mcp` inside it |
+| `murmelcraft-<version>-macos-universal.tar.gz` | `murmelcraft`, `murmel`, `murmel-mcp` |
+| `murmelcraft-<version>-linux-x86_64.tar.gz` | the same three programs |
+| `murmelcraft-<version>-windows-x86_64.zip` | the same three programs (`.exe`) |
+| `SHA256SUMS.txt` | the SHA-256 of each file |
+
+To attach them to a release that exists already, run Executables by hand
+with `tag` = `v<version>` and *upload* checked (unchecked, it only builds,
+and the files are an artifact of the run). A pull request that changes
+`executables.yml` builds everything without uploading. The Mac builds are
+signed ad hoc only, not with an Apple Developer ID, so macOS asks once
+before the first start (README, "Download a release").

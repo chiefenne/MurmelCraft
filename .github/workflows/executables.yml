@@ -1,0 +1,240 @@
+name: Executables
+
+# Builds the ready-to-run programs of a release and attaches them, with
+# SHA256SUMS.txt, to its GitHub release (docs/release.md):
+# - macOS, one universal build for Apple silicon and Intel Macs:
+#   MurmelCraft.app in a .dmg, and the three programs in a .tar.gz;
+# - Linux x86-64: the three programs in a .tar.gz;
+# - Windows x86-64: the three programs in a .zip.
+# The three programs are murmelcraft (the window), murmel (the command
+# line) and murmel-mcp (the MCP server on its own).
+#
+# Started by the Release workflow right after it creates a release, or by
+# hand for a release that exists already (Actions > Executables > Run
+# workflow, tag = v0.6.0, upload checked). A pull request that changes this
+# file builds everything without uploading, so a change is tested before it
+# is merged; nothing here runs on other pull requests or pushes, so the fast
+# CI stays as it is.
+#
+# The Mac builds are not signed with an Apple Developer ID (only ad hoc, so
+# they run on Apple silicon): macOS asks once before the first start
+# (README, "Download a release").
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      upload:
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, for example v0.6.0"
+        required: true
+        type: string
+      upload:
+        description: "Attach the files to the release (unchecked: build only)"
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/executables.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: executables-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # empty on pull requests: then the files are named after the commit
+  TAG: ${{ inputs.tag }}
+  # the oldest macOS the Mac build runs on
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+  PACKAGES: -p murmel-app -p murmel-cli -p murmel-mcp
+
+jobs:
+  linux:
+    name: Linux x86-64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - name: Select stable Rust
+        run: rustup update stable && rustup default stable
+      - name: Build
+        run: cargo build --release --locked $PACKAGES
+      - name: Package
+        run: |
+          set -euo pipefail
+          v="${TAG:-dev-${GITHUB_SHA::7}}"; v="${v#v}"
+          name="murmelcraft-$v-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/murmelcraft target/release/murmel target/release/murmel-mcp \
+             README.md LICENSE "dist/$name/"
+          "dist/$name/murmel" help > /dev/null
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86-64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      # the C runtime linked in: no Visual C++ redistributable needed
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - name: Select stable Rust
+        run: rustup update stable && rustup default stable
+      - name: Build
+        run: cargo build --release --locked $PACKAGES
+      - name: Package
+        run: |
+          set -euo pipefail
+          v="${TAG:-dev-${GITHUB_SHA::7}}"; v="${v#v}"
+          name="murmelcraft-$v-windows-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/murmelcraft.exe target/release/murmel.exe target/release/murmel-mcp.exe \
+             README.md LICENSE "dist/$name/"
+          "dist/$name/murmel.exe" help > /dev/null
+          (cd dist && 7z a -tzip -bso0 "$name.zip" "$name")
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      # the app icon comes from the branch this workflow runs on, so that
+      # older tags get it too
+      - uses: actions/checkout@v4
+        with:
+          path: pkg
+          sparse-checkout: assets/logo
+      - name: Select stable Rust and both Mac targets
+        run: |
+          rustup update stable && rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build for Apple silicon
+        run: cargo build --release --locked --target aarch64-apple-darwin $PACKAGES
+      - name: Build for Intel
+        run: cargo build --release --locked --target x86_64-apple-darwin $PACKAGES
+      - name: Package
+        run: |
+          set -euo pipefail
+          v="${TAG:-dev-${GITHUB_SHA::7}}"; v="${v#v}"
+          echo "version=$v"
+          mkdir -p dist universal
+          for b in murmelcraft murmel murmel-mcp; do
+            lipo -create -output "universal/$b" \
+              "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
+            codesign --force --sign - "universal/$b"
+            lipo -info "universal/$b"
+          done
+          universal/murmel help > /dev/null
+          arch -x86_64 universal/murmel help > /dev/null || echo "no Rosetta on this runner, Intel slice not started"
+
+          # the programs on their own
+          name="murmelcraft-$v-macos-universal"
+          mkdir -p "dist/$name"
+          cp universal/* README.md LICENSE "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -rf "dist/$name"
+
+          # MurmelCraft.app: the window starts on a double click; murmel and
+          # murmel-mcp are in Contents/MacOS beside it
+          app=stage/MurmelCraft.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp universal/* "$app/Contents/MacOS/"
+          icon=pkg/assets/logo/murmelcraft-macos-1024.png
+          set=icon.iconset; mkdir -p "$set"
+          for s in 16 32 128 256 512; do
+            sips -z $s $s "$icon" --out "$set/icon_${s}x${s}.png" > /dev/null
+            sips -z $((2*s)) $((2*s)) "$icon" --out "$set/icon_${s}x${s}@2x.png" > /dev/null
+          done
+          iconutil -c icns "$set" -o "$app/Contents/Resources/MurmelCraft.icns"
+          cat > "$app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>MurmelCraft</string>
+            <key>CFBundleDisplayName</key><string>MurmelCraft</string>
+            <key>CFBundleIdentifier</key><string>io.github.chiefenne.murmelcraft</string>
+            <key>CFBundleExecutable</key><string>murmelcraft</string>
+            <key>CFBundleIconFile</key><string>MurmelCraft</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>$v</string>
+            <key>CFBundleVersion</key><string>$v</string>
+            <key>LSMinimumSystemVersion</key><string>$MACOSX_DEPLOYMENT_TARGET</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>NSHumanReadableCopyright</key><string>MurmelCraft, MIT licence; logo all rights reserved by the maintainer</string>
+          </dict>
+          </plist>
+          PLIST
+          plutil -lint "$app/Contents/Info.plist"
+          cp README.md LICENSE stage/
+          ln -s /Applications stage/Applications
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          hdiutil create -volname "MurmelCraft $v" -srcfolder stage -ov -format UDZO \
+            "dist/murmelcraft-$v-macos-universal.dmg"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-macos
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Checksums and upload
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          { echo "| File | Size |"; echo "|---|---|"
+            for f in *; do echo "| $f | $(du -h -- "$f" | cut -f1) |"; done; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: dist/*
+      - name: Attach to the release
+        if: ${{ inputs.upload && inputs.tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
