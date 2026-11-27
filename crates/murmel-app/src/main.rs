@@ -5,6 +5,10 @@
 //! with a session file (`.murmel`). While agents are allowed (Settings),
 //! `murmel mcp --live` drives the window.
 
+// Windows: a release build is a window program, so starting it from the
+// Explorer opens no console window beside it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 #[cfg(test)]
 mod a11y_tests;
 mod agents;

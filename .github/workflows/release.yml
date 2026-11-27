@@ -8,7 +8,8 @@
 # - CHANGELOG.md has a section "## <version> (YYYY-MM-DD) ..." on main;
 # - the tag does not exist yet, or already points at the requested commit
 #   (then only the missing GitHub release is created).
-# With dry_run = true it only prints what it would do.
+# With dry_run = true it only prints what it would do. After the release
+# the job `executables` builds the programs and attaches them to it.
 name: Release
 
 on:
@@ -36,6 +37,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -133,3 +136,15 @@ jobs:
       - name: Dry run summary
         if: ${{ inputs.dry_run }}
         run: echo "dry run, nothing created (tag ${{ steps.check.outputs.tag }}, create_tag=${{ steps.check.outputs.create_tag }})"
+
+  # The ready-to-run programs for macOS, Linux and Windows, attached to the
+  # release just created (.github/workflows/executables.yml).
+  executables:
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/executables.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      upload: true

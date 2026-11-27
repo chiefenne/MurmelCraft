@@ -218,10 +218,36 @@ change, and [changelog.d](changelog.d) the changes since the release.
 
 ### Download a release
 
-*Coming soon.* A ready-to-run MurmelCraft for macOS, Linux and Windows
-will be attached to the
-[releases](https://github.com/chiefenne/MurmelCraft/releases). Until then,
-build it from source as below.
+Ready-to-run programs are attached to each
+[release](https://github.com/chiefenne/MurmelCraft/releases/latest), with
+`SHA256SUMS.txt` to check them:
+
+| System | File | Then |
+|---|---|---|
+| macOS 11 or newer, Apple silicon and Intel | `murmelcraft-<version>-macos-universal.dmg` | drag MurmelCraft into Applications |
+| Linux x86-64 (glibc 2.39 or newer: Ubuntu 24.04, Debian 13, Fedora 40) | `murmelcraft-<version>-linux-x86_64.tar.gz` | unpack, run `./murmelcraft` |
+| Windows 10 or 11, x86-64 | `murmelcraft-<version>-windows-x86_64.zip` | unpack, run `murmelcraft.exe` |
+
+Each one holds the three programs: `murmelcraft` (the window), `murmel`
+(the command line; `murmel mcp` is the MCP server) and `murmel-mcp`. On the
+Mac they are inside the app, in `MurmelCraft.app/Contents/MacOS/`; the
+same three without the app are in `murmelcraft-<version>-macos-universal.tar.gz`.
+
+The Mac app is not signed with an Apple Developer ID, so macOS stops it the
+first time ("cannot be opened" or "cannot verify the developer"). Open it
+once with a right-click on MurmelCraft in Applications ▸ **Open** ▸
+**Open** (on macOS 15: try to open it, then System Settings ▸ Privacy &
+Security ▸ **Open Anyway**), or in a terminal:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/MurmelCraft.app
+```
+
+Windows SmartScreen may warn the same way: **More info** ▸ **Run anyway**.
+Linux needs an X11 or Wayland desktop and a Vulkan driver
+(`mesa-vulkan-drivers`). To check a download: `shasum -a 256 -c
+SHA256SUMS.txt --ignore-missing` (macOS), `sha256sum -c SHA256SUMS.txt
+--ignore-missing` (Linux), `certutil -hashfile <file> SHA256` (Windows).
 
 ### Build from source
 
