@@ -31,7 +31,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `export.pdf` | 1 | write-files | Export the view as a one-page PDF at path for reports and for print: the view rendered to fill the page inside its margins (with the legend and axes of export.image, and the time of an open series), and above it a title (the mesh's file name unless given) and a line naming MurmelCraft, the date and the file. paper, orientation, margin_mm, header, dpi and theme come from [page] in settings.toml (settings.set_page: A4 landscape, 12 mm, header, 200 dpi, light) unless given. A page that would need more than the renderer's largest picture gets a lower resolution (dpi in the result). The text is Helvetica; characters outside Latin-1 print as ?. |
 | `export.movie` | 1 | write-files | Export a movie at path (.mp4, .gif, or a folder of PNG frames) with the look of export.image (size, scale, legend, axes, lines): the camera turning about its target (orbit; a whole turn loops), a clip plane sweeping through the mesh (clip), or a flight through saved views that eases into each and holds there (views). MP4 is H.264 made by the ffmpeg installed on the machine (EXPORT002 without one); GIF and PNG are written by MurmelCraft. The view stays as it was. |
 | `display.render_mode` | 1 | read | Draw the mesh shaded with edges (the default), shaded, as a wireframe of every edge, or as feature edges only (creases over 30 degrees, patch borders, open borders). |
-| `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
+| `display.color_by` | 3 | read | Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z), or by category: the whole-number values of a cell field, one patch-palette colour each (field: its name, default the one chosen before, else BlockId, else the first such field; KoflCraft's block meshes carry BlockId in volume.vtu). Changing the metric clears the threshold. A field is drawn in its style (field.style). |
+| `display.explode` | 1 | read | Draw the mesh exploded: the cells fall into parts by the whole-number values of a cell field (field, such as KoflCraft's BlockId; left out: the one chosen before, else BlockId or the first such field, else the cell zones; by_zone: true takes the zones) and each part moves away from the centre of all cells by factor (0 to 4) times the way from that centre to its own, with its faces to the other parts drawn, so every block or zone shows as a closed piece. A 2-D mesh extruded one cell deep stays in its plane. factor 0 draws the cells in place again. Clip planes, colours and render modes apply as usual. |
 | `field.list` | 1 | read | The fields of the open mesh (name, location cell, point or boundary, components, unit, count, range per component, style), the result's time, step or iteration and file attributes, the colour maps, and the field colouring shown now (colour range, map, style). |
 | `field.derive` | 1 | read | Compute a derived field from the open result's fields and add it to them, as if the file had it (colour by it, slice it, iso-surfaces, arrows and streamlines of it; saved in sessions as its recipe and computed again on loading). The quantities and fields are FoehnCraft's names and units; field.catalogue lists each with its formula, unit and inputs. Vortices: vorticity (vector, 1/s), q-criterion, lambda2, enstrophy (½ ω·ω), strain-rate (√(2 S:S)). Pressure: total-pressure (p + ½ ρ u·u), pressure-coefficient ((p − p_ref) / (½ ρ_ref U_ref²)), taken wherever the pressure is. Turbomachinery, in the cells, from the turning zones of rotation (zones: zone, origin, axis, rpm; frame): relative-velocity and frame-velocity (vectors w = c − u, u = Ω × (x − x0)), velocity-radial, velocity-circumferential, velocity-axial, velocity-meridional, relative-velocity-circumferential, flow-angle and relative-flow-angle (°), relative-total-pressure (p + ½ ρ w·w), rothalpy (p/ρ + ½ w·w − ½ u·u); each cell is seen in the frame of the first zone that holds it (the fixed frame outside them), or of frame in every cell. Turbulence, in the cells: dissipation-rate, specific-dissipation-rate, time-scale, length-scale (from k and ω or ε, with C_mu), viscosity-ratio (nu_t / ν), reynolds-stress-xx … -xz (Boussinesq). Wall: wall-distance (exact, from each cell centroid to the nearest face of walls). velocity, pressure, k, dissipation (ω or ε) and nu_t name the input fields; left out, they are found by name. A pressure in m²/s² is kinematic and takes no density; a density field (density, rho) wins over the reference density. reference: density, pressure, velocity, viscosity (kinematic, m²/s) and c_mu; rotation and walls: each left out is the field's own when it is made again, else FoehnCraft's (case.resolved.toml beside the result: [output.reference], [fluid], [turbulence.constants], [[mrf]], [[sliding]], [output] frame, boundaries of type wall), else your defaults (settings.set_default kinds reference and rotation), else built in (air at sea level, 0, the largest speed, C_mu 0.09; every cell about z at 0 rpm; the patches whose role is wall); reference_from and rotation_from say where they came from. Computing a field again replaces it. remove: true removes the derived field (refused while an iso-surface, the arrows or a streamline set is made from it). A field the file already has is not computed again. |
 | `field.foehn_derive` | 1 | write-files | Add FoehnCraft's own fields of the open result, the ones only its models give (y-plus, wall-shear-stress, turbulence-wall: friction_velocity, y_star, blending; turbulence-features: the 12 feature_* fields; wall-normal; curvature-correction: rotation_function), by running the foehn installed on the machine (MURMEL_FOEHN, else PATH, ~/.cargo/bin, /opt/homebrew/bin, /usr/local/bin; FIELD018 without one) as `foehn post derive <case> --restart <restart.h5> --fields … --file <output> --write-root <its folder>`, then reading the file in as the next step of the same mesh (the view, the derived fields and the items stay). The case is the one run.jsonl beside the result records (with its --set overrides), else case.resolved.toml there; the restart is restart.h5 (restart_<N>.h5 for fields_<N>.vtkhdf); FIELD019 when any is missing. output: the .vtkhdf foehn writes, left out derived.vtkhdf (derived_<N>.vtkhdf) beside the result (the MCP server needs output or file). file: a file foehn post derive already wrote, read in without running anything. Fields the result has already are not asked for again (ran false). added names the fields read in, not_written those FoehnCraft leaves out because the case has no model for them (the features without a turbulence model, the wall normal without elliptic blending). FIELD020 when foehn fails (with the last lines it printed), writes no file, or writes one of another mesh. |
@@ -926,7 +927,8 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
         "cell_type",
         "zone",
         "quality",
-        "field"
+        "field",
+        "category"
       ]
     },
     "component": {
@@ -939,7 +941,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
       ]
     },
     "field": {
-      "description": "A field name (field.list); with by: field",
+      "description": "A field name (field.list); with by: field or category",
       "type": "string"
     },
     "metric": {
@@ -953,6 +955,32 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
   },
   "required": [
     "by"
+  ],
+  "type": "object"
+}
+```
+
+### `display.explode`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "by_zone": {
+      "type": "boolean"
+    },
+    "factor": {
+      "maximum": 4,
+      "minimum": 0,
+      "type": "number"
+    },
+    "field": {
+      "description": "A cell field of whole numbers (field.list), such as BlockId",
+      "type": "string"
+    }
+  },
+  "required": [
+    "factor"
   ],
   "type": "object"
 }

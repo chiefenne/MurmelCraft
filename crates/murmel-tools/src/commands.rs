@@ -520,6 +520,20 @@ pub fn commands() -> Vec<Command> {
             Tool("display.color_by", json!({"by": c})),
         ));
     }
+    v.push(cmd(
+        "display.explode:on",
+        "cmd-explode-on",
+        "display",
+        &[],
+        Tool("display.explode", json!({"factor": 0.3})),
+    ));
+    v.push(cmd(
+        "display.explode:off",
+        "cmd-explode-off",
+        "display",
+        &[],
+        Tool("display.explode", json!({"factor": 0.0})),
+    ));
     // Fields: the colouring one key away (B cycles flat, smooth and
     // banded; L turns the contour lines on and off), the rest in the
     // palette. They act on the field shown now.
@@ -2174,6 +2188,14 @@ mod tests {
                 let e = crate::call("select.item", json!({"item": item, "add": true}), s);
                 assert!(e.ok(), "{item}: {:?}", e.diagnostics);
             }
+            // A whole-number cell field, as KoflCraft's BlockId, for
+            // colour by category and the exploded view.
+            let e = crate::call(
+                "field.calculate",
+                json!({"name": "BlockId", "formula": "(x > 0.5) + 0 * pressure"}),
+                s,
+            );
+            assert!(e.ok(), "{:?}", e.diagnostics);
             // A saved view, so the commands that step through them apply.
             assert!(crate::call("views.save", json!({}), s).ok());
             // Two clip planes, so removing the current one leaves one for

@@ -17,7 +17,8 @@
 //! formulas beside the derived ones (since 1.14), the mesh's BLAKE3
 //! hash in place of its SHA-256 (since 1.15), whether an overview's
 //! block boxes show (since 1.16), the colour range over every step of a
-//! series (range `steps`, since 1.17), the user's mesh
+//! series (range `steps`, since 1.17), the category field and the
+//! exploded view (since 1.18), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -36,7 +37,7 @@ use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
 use crate::derive::Made;
-use crate::display::{ColorBy, Item, PickTarget, RenderMode, SavedView};
+use crate::display::{ColorBy, Explode, Item, PickTarget, RenderMode, SavedView};
 use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, RangeMode};
 use crate::glyph::Arrows;
@@ -49,7 +50,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.17";
+pub const SESSION_VERSION: &str = "1.18";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -155,6 +156,12 @@ pub struct DisplayState {
     /// Whether the boxes of an overview's blocks show (1.16).
     #[serde(skip_serializing_if = "is_false")]
     pub show_blocks: bool,
+    /// The cell field colour mode category shows (1.18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// The exploded view (1.18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explode: Option<Explode>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -299,6 +306,8 @@ impl SessionFile {
                     Vec::new()
                 },
                 field: d.field.clone(),
+                category: d.category.clone(),
+                explode: d.explode.clone(),
                 field_styles: d.field_styles.clone(),
                 slices: if s.mesh.is_some() {
                     d.slices.clone()
@@ -679,6 +688,8 @@ impl Session {
         d.parcel_data = None;
         d.mesh_look = s.mesh_look;
         d.show_blocks = s.show_blocks;
+        d.category = s.category;
+        d.explode = s.explode;
         if let Some(m) = &self.mesh {
             let mut find = |id: &String| {
                 let i = Item::parse(id, &m.mesh);
@@ -840,7 +851,9 @@ impl Session {
                 _ => true,
             });
         }
-        if self.display.color_by == ColorBy::Field && self.display.field.is_none() {
+        if (self.display.color_by == ColorBy::Field && self.display.field.is_none())
+            || (self.display.color_by == ColorBy::Category && self.display.category.is_none())
+        {
             self.display.color_by = ColorBy::Solid;
         }
         self.journal.clear();

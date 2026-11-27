@@ -132,7 +132,10 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Colour by: patch role | `display.color_by` `{"by":"role"}` |
 | palette | Colour by: cell type | `display.color_by` `{"by":"cell_type"}` |
 | palette | Colour by: cell zone | `display.color_by` `{"by":"zone"}` |
+| palette | Colour by: category (block) | `display.color_by` `{"by":"category"}` |
 | palette | Colour by: field | `display.color_by` `{"by":"field"}` |
+| palette | Explode the blocks or zones | `display.explode` `{"factor":0.3}` |
+| palette | Put the exploded parts back | `display.explode` `{"factor":0.0}` |
 | palette | Field: flat colours per cell | `field.style` `{"mode":"flat"}` |
 | palette | Field: smooth colours | `field.style` `{"mode":"smooth"}` |
 | palette | Field: banded colours | `field.style` `{"mode":"banded"}` |

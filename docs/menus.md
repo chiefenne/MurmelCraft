@@ -95,6 +95,7 @@ in the command palette (Ctrl + K) and keeps its keys ([keys.md](keys.md)). On ma
   - Colour by: patch role → `display.color_by`
   - Colour by: cell type → `display.color_by`
   - Colour by: cell zone → `display.color_by`
+  - Colour by: category (block) → `display.color_by`
   - Colour by: field → `display.color_by`
   - Colour by: quality, non-orthogonality → `display.color_by`
   - Colour by: quality, skewness → `display.color_by`

@@ -771,9 +771,31 @@ impl Surface {
         let cutter = Cutter::new(mesh, display);
         let shown = display.shown_cells(mesh);
         s.cells = shown.iter().filter(|&&v| v).count();
-        let polys = polygons(mesh, tokens, display, &shown, cutter.as_ref());
+        let explosion = Explosion::of(mesh, fields, display);
+        let mut polys = polygons(
+            mesh,
+            tokens,
+            display,
+            &shown,
+            cutter.as_ref(),
+            explosion.as_ref(),
+        );
+        if let Some(cats) = categories(mesh, fields, display) {
+            for p in &mut polys {
+                if let Some(&k) = cats.get(p.cell as usize) {
+                    p.color = tokens.patch_color(k as usize);
+                }
+            }
+        }
         drop(phase);
-        s.mesh_faces(mesh, tokens, display, &polys, cutter.as_ref());
+        s.mesh_faces(
+            mesh,
+            tokens,
+            display,
+            &polys,
+            cutter.as_ref(),
+            explosion.as_ref(),
+        );
         let extras = display.extracts_shown() || display.arrows_shown();
         let sel = tokens.mesh.selection;
         let _phase = murmel_mesh::profile::span("surface.extras");
@@ -926,7 +948,15 @@ impl Surface {
                         for k in mesh.cell_face_range(c as usize) {
                             let u = mesh.cell_face_id[k] as usize;
                             face_polys(
-                                mesh, tokens, display, &shown, slicing, &cut_by, u, &mut keep,
+                                mesh,
+                                tokens,
+                                display,
+                                &shown,
+                                slicing,
+                                &cut_by,
+                                &|_, _| false,
+                                u,
+                                &mut keep,
                             );
                         }
                     }
@@ -953,7 +983,7 @@ impl Surface {
             sections(mesh, tokens, display, cutter, &sliced, &mut polys);
         }
         drop(_phase);
-        s.mesh_faces(mesh, tokens, display, &polys, cutter.as_ref());
+        s.mesh_faces(mesh, tokens, display, &polys, cutter.as_ref(), None);
         s
     }
 
@@ -969,6 +999,7 @@ impl Surface {
         display: &Display,
         polys: &[Poly],
         cutter: Option<&Cutter<'_>>,
+        explosion: Option<&Explosion>,
     ) {
         let phase = murmel_mesh::profile::span("surface.points");
         let origin = self.origin;
@@ -998,7 +1029,16 @@ impl Surface {
         self.open_faces = polys.len() - self.faces;
         let pts: Vec<Vec<[f64; 3]>> = polys
             .iter()
-            .map(|p| p.verts.iter().map(|&v| pos(v)).collect())
+            .map(|p| {
+                let d = explosion.map_or([0.0; 3], |e| e.shift_of(p.cell));
+                p.verts
+                    .iter()
+                    .map(|&v| {
+                        let q = pos(v);
+                        [q[0] + d[0], q[1] + d[1], q[2] + d[2]]
+                    })
+                    .collect()
+            })
             .collect();
         let normals: Vec<[f32; 3]> = pts.iter().map(|p| newell(p)).collect();
         // While slices or iso-surfaces show, the mesh is a faint outline
@@ -1196,6 +1236,7 @@ impl Surface {
             pts: &pts,
             looks: &looks,
             features: features.as_ref(),
+            explosion,
         };
         let edges = lines.draw(&ranges);
         (self.edge_positions, self.edge_colors) = edges;
@@ -1618,15 +1659,19 @@ struct Lines<'a> {
     pts: &'a [Vec<[f64; 3]>],
     looks: &'a [Look],
     features: Option<&'a Features>,
+    explosion: Option<&'a Explosion>,
 }
 
 impl Lines<'_> {
     /// The edge from corner `j` of the polygon at `o` in draw order, its
     /// ends in increasing order.
-    fn key(&self, o: usize, j: usize) -> (V, V) {
-        let vs = &self.polys[self.order[o].2].verts;
+    fn key(&self, o: usize, j: usize) -> (V, V, u32) {
+        let poly = &self.polys[self.order[o].2];
+        let vs = &poly.verts;
         let (a, b) = (vs[j], vs[(j + 1) % vs.len()]);
-        (a.min(b), a.max(b))
+        // Exploded, each part draws its own edges.
+        let part = self.explosion.map_or(0, |e| e.part_of(poly.cell));
+        (a.min(b), a.max(b), part)
     }
 
     /// The edge lines, two vertices per edge, each edge once, in the
@@ -1637,7 +1682,7 @@ impl Lines<'_> {
     /// threads too: each shard walks its edges in draw order, run by run.
     fn draw(&self, runs: &[std::ops::Range<usize>]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
         let shards = runs.len().max(1);
-        let shard = |k: (V, V)| shard_of(k, shards);
+        let shard = |k: (V, V, u32)| shard_of((k.0, k.1), shards);
         // The edges of each run that are drawn at all, by shard, as the
         // polygon (its place in draw order) and the corner they start at.
         let by_run: Vec<Vec<Vec<(u32, u32)>>> = on_threads(runs.to_vec(), |r| {
@@ -1646,7 +1691,11 @@ impl Lines<'_> {
                 let vs = &self.polys[self.order[o].2].verts;
                 for j in 0..vs.len() {
                     let key = self.key(o, j);
-                    if key.0 == key.1 || self.features.is_some_and(|fe| !fe.contains(&key)) {
+                    if key.0 == key.1
+                        || self
+                            .features
+                            .is_some_and(|fe| !fe.contains(&(key.0, key.1)))
+                    {
                         continue;
                     }
                     out[shard(key)].push((o as u32, j as u32));
@@ -1657,7 +1706,7 @@ impl Lines<'_> {
         // The first of each edge in draw order, shard by shard.
         let firsts: Vec<Vec<(u32, u32)>> = on_threads((0..shards).collect(), |k| {
             let n: usize = by_run.iter().map(|r| r[k].len()).sum();
-            let mut seen: FastSet<(V, V)> = set_with_capacity(n / 2 + 16);
+            let mut seen: FastSet<(V, V, u32)> = set_with_capacity(n / 2 + 16);
             let mut first = Vec::with_capacity(n / 2 + 16);
             for run in &by_run {
                 for &(o, j) in &run[k] {
@@ -1730,6 +1779,7 @@ fn polygons(
     display: &Display,
     shown: &[bool],
     cutter: Option<&Cutter<'_>>,
+    explosion: Option<&Explosion>,
 ) -> Vec<Poly> {
     let flat = cutter.filter(|c| c.slices());
     let mut polys: Vec<Poly> = Vec::new();
@@ -1789,8 +1839,11 @@ fn polygons(
             .unwrap_or(NOT_CUT)
     };
     let shown_at = |c: u32| shown[c as usize];
+    let apart = |a: u32, b: u32| explosion.is_some_and(|e| e.part_of(a) != e.part_of(b));
     let between = |u: usize, add: &mut dyn FnMut(Vec<V>, u32, u32, u32, Rgb, u32)| {
-        face_polys(mesh, tokens, display, &shown_at, slicing, &cut_by, u, add);
+        face_polys(
+            mesh, tokens, display, &shown_at, slicing, &cut_by, &apart, u, add,
+        );
     };
     let faces = mesh.face_owner.len().min(mesh.face_neighbour.len());
     // When something cuts flat, the threads also tell which polygons a
@@ -1966,6 +2019,7 @@ fn face_polys(
     shown: &impl Fn(u32) -> bool,
     slicing: bool,
     cut_by: &impl Fn(u32) -> u8,
+    apart: &dyn Fn(u32, u32) -> bool,
     u: usize,
     add: &mut dyn FnMut(Vec<V>, u32, u32, u32, Rgb, u32),
 ) {
@@ -2012,7 +2066,9 @@ fn face_polys(
         // whole or by another region): each side draws the face as
         // its own clip keeps it, so where one side is cut away the
         // other's face closes the surface (the rest lies inside).
-        if slicing && cut_by(o) != cut_by(n) {
+        // Two cells of parts drawn apart (an exploded view): each part
+        // closes its own surface.
+        if (slicing && cut_by(o) != cut_by(n)) || apart(o, n) {
             for c in [o, n] {
                 add(
                     nodes(mesh.face_nodes(u)),
@@ -2204,6 +2260,118 @@ fn newell(p: &[[f64; 3]]) -> [f32; 3] {
     } else {
         [0.0, 0.0, 1.0]
     }
+}
+
+/// An exploded view ([`crate::display::Explode`]): the part of every
+/// cell (the values of an integer cell field, such as KoflCraft's
+/// `BlockId`, else the cell zones) and how far each part moves, the
+/// explode factor times the way from the centre of all cells to the
+/// part's centre. Faces between two parts are drawn on both sides.
+pub(crate) struct Explosion {
+    part: Vec<u32>,
+    shift: Vec<[f64; 3]>,
+}
+
+impl Explosion {
+    pub(crate) fn of(mesh: &Mesh, fields: Option<&FieldSet>, display: &Display) -> Option<Self> {
+        let e = display.explode.as_ref()?;
+        if e.factor.is_nan() || e.factor <= 0.0 || mesh.cell_count() == 0 {
+            return None;
+        }
+        let raw: Vec<u32> = match &e.field {
+            Some(name) => integer_cells(mesh, fields?, name)?,
+            None => mesh.cell_zone.clone(),
+        };
+        let mut ids: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+        for &r in &raw {
+            let n = ids.len() as u32;
+            ids.entry(r).or_insert(n);
+        }
+        // Parts numbered in the order of their values.
+        for (i, v) in ids.values_mut().enumerate() {
+            *v = i as u32;
+        }
+        let part: Vec<u32> = raw.iter().map(|r| ids[r]).collect();
+        let mut sum = vec![[0.0f64; 3]; ids.len()];
+        let mut count = vec![0usize; ids.len()];
+        let mut all = [0.0f64; 3];
+        for (c, &k) in part.iter().enumerate() {
+            let p = cell_mean(mesh, c);
+            for d in 0..3 {
+                sum[k as usize][d] += p[d];
+                all[d] += p[d];
+            }
+            count[k as usize] += 1;
+        }
+        let n = part.len() as f64;
+        let centre = all.map(|x| x / n);
+        let shift = sum
+            .iter()
+            .zip(&count)
+            .map(|(s, &k)| {
+                let k = k.max(1) as f64;
+                [0, 1, 2].map(|d| e.factor * (s[d] / k - centre[d]))
+            })
+            .collect();
+        Some(Explosion { part, shift })
+    }
+
+    fn part_of(&self, cell: u32) -> u32 {
+        self.part.get(cell as usize).copied().unwrap_or(u32::MAX)
+    }
+
+    fn shift_of(&self, cell: u32) -> [f64; 3] {
+        self.part
+            .get(cell as usize)
+            .and_then(|&k| self.shift.get(k as usize))
+            .copied()
+            .unwrap_or([0.0; 3])
+    }
+}
+
+/// The mean of cell `c`'s points.
+fn cell_mean(mesh: &Mesh, c: usize) -> [f64; 3] {
+    let mut sum = [0.0; 3];
+    let mut n = 0.0f64;
+    for i in mesh.cell_points(c) {
+        let q = mesh.points[i as usize];
+        for d in 0..3 {
+            sum[d] += q[d];
+        }
+        n += 1.0;
+    }
+    sum.map(|x| x / n.max(1.0))
+}
+
+/// The values of the cell field `name` as whole numbers (rounded; a
+/// value that is not finite or below zero gives 0); `None` when the
+/// open result has no such cell field.
+pub(crate) fn integer_cells(mesh: &Mesh, fields: &FieldSet, name: &str) -> Option<Vec<u32>> {
+    let f = fields.at(name, murmel_mesh::field::Location::Cell)?;
+    if !FieldSet::fits(f, mesh) || f.components > 1 {
+        return None;
+    }
+    Some(
+        f.values
+            .iter()
+            .map(|&v| {
+                if v.is_finite() && v > 0.0 {
+                    v.round() as u32
+                } else {
+                    0
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Colour mode category: the value of every cell, its colour the patch
+/// palette's of that value.
+fn categories(mesh: &Mesh, fields: Option<&FieldSet>, display: &Display) -> Option<Vec<u32>> {
+    if display.color_by != crate::display::ColorBy::Category {
+        return None;
+    }
+    integer_cells(mesh, fields?, display.category.as_deref()?)
 }
 
 #[cfg(test)]
@@ -2475,7 +2643,7 @@ mod tests {
         let shown = d.shown_cells(mesh);
         let cutter = Cutter::new(mesh, d);
         let mut uses = HashMap::new();
-        for p in polygons(mesh, &t, d, &shown, cutter.as_ref()) {
+        for p in polygons(mesh, &t, d, &shown, cutter.as_ref(), None) {
             for i in 0..p.verts.len() {
                 let (a, b) = (p.verts[i], p.verts[(i + 1) % p.verts.len()]);
                 if a != b {
@@ -2553,7 +2721,7 @@ mod tests {
             let t = Tokens::builtin().unwrap();
             let shown = d.shown_cells(&m);
             let cutter = Cutter::new(&m, &d).expect("a flat region cuts");
-            let polys = polygons(&m, &t, &d, &shown, Some(&cutter));
+            let polys = polygons(&m, &t, &d, &shown, Some(&cutter), None);
             assert!(
                 polys.iter().any(|p| p.group == GROUP_SECTION),
                 "{shape:?} draws sections"

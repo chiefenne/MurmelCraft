@@ -676,6 +676,8 @@ pub(crate) fn display_json(s: &Session) -> Value {
     json!({
         "color_by": d.color_by,
         "render_mode": d.render_mode,
+        "category": d.category,
+        "explode": d.explode,
         "clip": clip_json(s),
         "clips": (0..d.clips.len()).map(|k| plane_json(s, k)).collect::<Vec<_>>(),
         "hidden": d.hidden.iter().map(|i| i.id(&m.mesh)).collect::<Vec<_>>(),
@@ -742,10 +744,16 @@ fn display_color_by(input: Value, s: &mut Session) -> Run {
         let choice = field_choice(s, i.field.as_deref(), i.component)?;
         crate::defaults::adopt_style(s, &choice.name);
         s.display.field = Some(choice);
+    } else if i.by == ColorBy::Category {
+        if i.component.is_some() {
+            return Err(Diagnostic::new("TOOL002", "component goes with by: field"));
+        }
+        let name = category_field(s, i.field.as_deref())?;
+        s.display.category = Some(name);
     } else if i.field.is_some() || i.component.is_some() {
         return Err(Diagnostic::new(
             "TOOL002",
-            "field and component go with by: field",
+            "field goes with by: field or category, component with by: field",
         ));
     }
     s.display.color_by = i.by;
@@ -756,6 +764,109 @@ fn display_color_by(input: Value, s: &mut Session) -> Run {
             s.display.threshold = None;
         }
         s.display.metric = m;
+    }
+    s.redraw();
+    Ok(display_json(s))
+}
+
+/// The cell field of colour mode category or of an exploded view:
+/// `name`, else the one chosen before, else `BlockId`, else the first
+/// scalar cell field whose values are all whole numbers.
+fn category_field(s: &Session, name: Option<&str>) -> Result<String, Diagnostic> {
+    let set = need_fields(s)?;
+    let Some(m) = &s.mesh else {
+        return Err(Diagnostic::new("VIEW001", "no mesh is open"));
+    };
+    let whole = |n: &str| {
+        set.at(n, murmel_mesh::Location::Cell).is_some_and(|f| {
+            f.components == 1
+                && murmel_engine::field::FieldSet::fits(f, &m.mesh)
+                && f.values
+                    .iter()
+                    .all(|v| v.is_finite() && *v >= 0.0 && v.fract() == 0.0)
+        })
+    };
+    let found = match name {
+        Some(n) => Some(n.to_string()),
+        None => s
+            .display
+            .category
+            .clone()
+            .filter(|n| whole(n))
+            .or_else(|| whole("BlockId").then(|| "BlockId".to_string()))
+            .or_else(|| {
+                set.names()
+                    .into_iter()
+                    .find(|n| whole(n))
+                    .map(str::to_string)
+            }),
+    };
+    match found {
+        Some(n) if whole(&n) => Ok(n),
+        Some(n) => Err(Diagnostic::new(
+            "FIELD002",
+            format!("{n} is not a cell field of whole numbers 0 or above (such as BlockId)"),
+        )),
+        None => Err(Diagnostic::new(
+            "FIELD002",
+            "the open mesh has no cell field of whole numbers (such as BlockId)",
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExplodeInput {
+    /// How far each part moves, times the way from the centre of all
+    /// cells to its own; 0 draws the cells in place again.
+    factor: f64,
+    /// The cell field whose values give the parts; left out: the one
+    /// chosen before, else the cell zones.
+    #[serde(default)]
+    field: Option<String>,
+    /// Group by the cell zones even when a field was chosen before.
+    #[serde(default)]
+    by_zone: bool,
+}
+
+/// The largest explode factor.
+const EXPLODE_MAX: f64 = 4.0;
+
+fn display_explode(input: Value, s: &mut Session) -> Run {
+    let i: ExplodeInput = parse(input)?;
+    need_mesh(s)?;
+    if !i.factor.is_finite() || !(0.0..=EXPLODE_MAX).contains(&i.factor) {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            format!("factor must be between 0 and {EXPLODE_MAX}"),
+        ));
+    }
+    if i.by_zone && i.field.is_some() {
+        return Err(Diagnostic::new(
+            "TOOL002",
+            "give field or by_zone, not both",
+        ));
+    }
+    if i.factor == 0.0 {
+        s.display.explode = None;
+    } else {
+        let field = if i.by_zone {
+            None
+        } else {
+            match i.field.as_deref() {
+                Some(n) => Some(category_field(s, Some(n))?),
+                None => s
+                    .display
+                    .explode
+                    .as_ref()
+                    .and_then(|e| e.field.clone())
+                    .or_else(|| category_field(s, None).ok()),
+            }
+        };
+        s.display.explode = Some(murmel_engine::display::Explode {
+            factor: i.factor,
+            field,
+        });
     }
     s.redraw();
     Ok(display_json(s))
@@ -2588,6 +2699,7 @@ pub const JOURNALED: &[&str] = &[
     "views.delete",
     "display.render_mode",
     "display.color_by",
+    "display.explode",
     "display.threshold",
     "field.style",
     "slice.set",
@@ -3177,21 +3289,41 @@ pub static TOOLS: &[Tool] = &[
         version: 3,
         action: Action::Read,
         label_key: "tool-display-color-by",
-        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z). Changing the metric clears the threshold. A field is drawn in its style (field.style).",
+        summary: "Colour the boundary faces in one colour (solid, the default), by patch, by patch role, by the type of their cell, by the cell zone of their cell (zone; on the patch palette, zone colours set with display.set_color win), by the quality of their cell (metric: non_orthogonality in degrees, skewness, volume_ratio or face_count; worst over the cell's faces, on a ramp over the metric's range), or by a field of the results (field: its name, default the one chosen before or the file's first; component of a vector: magnitude, x, y or z), or by category: the whole-number values of a cell field, one patch-palette colour each (field: its name, default the one chosen before, else BlockId, else the first such field; KoflCraft's block meshes carry BlockId in volume.vtu). Changing the metric clears the threshold. A field is drawn in its style (field.style).",
         outputs: &[],
         reads: &[],
         input_schema: || {
             object(
                 json!({
-                    "by": {"enum": ["solid", "patch", "role", "cell_type", "zone", "quality", "field"]},
+                    "by": {"enum": ["solid", "patch", "role", "cell_type", "zone", "quality", "field", "category"]},
                     "metric": {"enum": ["non_orthogonality", "skewness", "volume_ratio", "face_count"]},
-                    "field": {"type": "string", "description": "A field name (field.list); with by: field"},
+                    "field": {"type": "string", "description": "A field name (field.list); with by: field or category"},
                     "component": {"enum": ["magnitude", "x", "y", "z"], "description": "The scalar of a vector field; with by: field"}
                 }),
                 &["by"],
             )
         },
         run: display_color_by,
+    },
+    Tool {
+        id: "display.explode",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-display-explode",
+        summary: "Draw the mesh exploded: the cells fall into parts by the whole-number values of a cell field (field, such as KoflCraft's BlockId; left out: the one chosen before, else BlockId or the first such field, else the cell zones; by_zone: true takes the zones) and each part moves away from the centre of all cells by factor (0 to 4) times the way from that centre to its own, with its faces to the other parts drawn, so every block or zone shows as a closed piece. A 2-D mesh extruded one cell deep stays in its plane. factor 0 draws the cells in place again. Clip planes, colours and render modes apply as usual.",
+        outputs: &[],
+        reads: &[],
+        input_schema: || {
+            object(
+                json!({
+                    "factor": {"type": "number", "minimum": 0, "maximum": 4},
+                    "field": {"type": "string", "description": "A cell field of whole numbers (field.list), such as BlockId"},
+                    "by_zone": {"type": "boolean"}
+                }),
+                &["factor"],
+            )
+        },
+        run: display_explode,
     },
     Tool {
         id: "field.list",
