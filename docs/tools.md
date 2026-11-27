@@ -1222,7 +1222,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
           "turbulence-features",
           "wall-normal",
           "curvature-correction",
-          "solid-fraction"
+          "solid-fraction",
+          "wall-heat-flux",
+          "heat-transfer-coefficient",
+          "nusselt-number"
         ]
       },
       "minItems": 1,

@@ -17,6 +17,9 @@
 //! | `turbulence-features` | `feature_lambda1` … `feature_curvature` | the invariant features of FoehnCraft's D166 | - |
 //! | `wall-normal` | `wall_normal` (vector) | n = ∇α/\|∇α\| of the elliptic-blending k-ε | - |
 //! | `curvature-correction` | `rotation_function` | f_r1 of SST's curvature correction | - |
+//! | `wall-heat-flux` | `wall_heat_flux`, `wall_temperature` (walls) | q_w, positive into the fluid, and T_w (needs `[energy]`) | W/m², K |
+//! | `heat-transfer-coefficient` | `heat_transfer_coefficient` (walls) | h = q_w / (T_w − T_P), T_P of the wall-adjacent cell | W/(m² K) |
+//! | `nusselt-number` | `nusselt_number` (walls) | Nu = h L / k(T_w), L from `[output.reference] length` | - |
 //! | `solid-fraction` | `solid_fraction` | χ, the share of each cell inside the case's immersed bodies (`[immersed]`) | - |
 //!
 //! Where the run is: the restart file of the result's step beside it
@@ -42,10 +45,13 @@ pub enum Model {
     WallNormal,
     CurvatureCorrection,
     SolidFraction,
+    WallHeatFlux,
+    HeatTransferCoefficient,
+    NusseltNumber,
 }
 
 impl Model {
-    pub const ALL: [Model; 7] = [
+    pub const ALL: [Model; 10] = [
         Model::YPlus,
         Model::WallShearStress,
         Model::TurbulenceWall,
@@ -53,6 +59,9 @@ impl Model {
         Model::WallNormal,
         Model::CurvatureCorrection,
         Model::SolidFraction,
+        Model::WallHeatFlux,
+        Model::HeatTransferCoefficient,
+        Model::NusseltNumber,
     ];
 
     /// FoehnCraft's name (`[output] derived`, `foehn post derive
@@ -66,6 +75,9 @@ impl Model {
             Model::WallNormal => "wall-normal",
             Model::CurvatureCorrection => "curvature-correction",
             Model::SolidFraction => "solid-fraction",
+            Model::WallHeatFlux => "wall-heat-flux",
+            Model::HeatTransferCoefficient => "heat-transfer-coefficient",
+            Model::NusseltNumber => "nusselt-number",
         }
     }
 
@@ -97,6 +109,9 @@ impl Model {
             Model::WallNormal => &["wall_normal"],
             Model::CurvatureCorrection => &["rotation_function"],
             Model::SolidFraction => &["solid_fraction"],
+            Model::WallHeatFlux => &["wall_heat_flux", "wall_temperature"],
+            Model::HeatTransferCoefficient => &["heat_transfer_coefficient"],
+            Model::NusseltNumber => &["nusselt_number"],
         }
     }
 
@@ -105,6 +120,8 @@ impl Model {
         match self {
             Model::WallShearStress => "Pa",
             Model::TurbulenceWall => "m/s, -, -",
+            Model::WallHeatFlux => "W/m², K",
+            Model::HeatTransferCoefficient => "W/(m² K)",
             _ => "-",
         }
     }
@@ -113,7 +130,10 @@ impl Model {
     pub fn group(self) -> Group {
         match self {
             Model::YPlus | Model::WallShearStress | Model::TurbulenceWall => Group::Wall,
-            Model::SolidFraction => Group::Wall,
+            Model::SolidFraction
+            | Model::WallHeatFlux
+            | Model::HeatTransferCoefficient
+            | Model::NusseltNumber => Group::Wall,
             _ => Group::Turbulence,
         }
     }
@@ -122,7 +142,12 @@ impl Model {
     pub fn on_walls(self) -> bool {
         matches!(
             self,
-            Model::YPlus | Model::WallShearStress | Model::TurbulenceWall
+            Model::YPlus
+                | Model::WallShearStress
+                | Model::TurbulenceWall
+                | Model::WallHeatFlux
+                | Model::HeatTransferCoefficient
+                | Model::NusseltNumber
         )
     }
 }
@@ -176,7 +201,7 @@ impl Plan {
 /// reads them: `foehn post derive` writes only the fields it is asked
 /// for beside the solution, so a file that replaces the open result
 /// asks again for those the result has.
-pub const FOEHN_FIELDS: [(&str, &str); 22] = [
+pub const FOEHN_FIELDS: [(&str, &str); 25] = [
     ("vorticity", "vorticity"),
     ("q-criterion", "q_criterion"),
     ("lambda2", "lambda2"),
@@ -199,6 +224,9 @@ pub const FOEHN_FIELDS: [(&str, &str); 22] = [
     ("turbulence-wall", "friction_velocity"),
     ("curvature-correction", "rotation_function"),
     ("solid-fraction", "solid_fraction"),
+    ("wall-heat-flux", "wall_heat_flux"),
+    ("heat-transfer-coefficient", "heat_transfer_coefficient"),
+    ("nusselt-number", "nusselt_number"),
 ];
 
 /// The FoehnCraft keys of the fields among `file_fields` (the fields the
@@ -348,6 +376,32 @@ mod tests {
     /// with its overrides, else case.resolved.toml, and writes the
     /// derived file of the same step; what is missing is said. Breaks
     /// when a relative case file is looked for in the wrong folder.
+    /// Invariant: FoehnCraft's wall heat fields are on the walls, under
+    /// the Wall group, and a result that has them asks for them again.
+    #[test]
+    fn wall_heat_fields() {
+        for m in [
+            Model::WallHeatFlux,
+            Model::HeatTransferCoefficient,
+            Model::NusseltNumber,
+        ] {
+            assert!(m.on_walls() && m.group() == Group::Wall, "{m:?}");
+            assert_eq!(Model::parse(m.key()), Some(m));
+        }
+        assert!(!Model::SolidFraction.on_walls());
+        let keep = kept(["wall_heat_flux", "wall_temperature", "nusselt_number"]);
+        assert_eq!(keep, ["wall-heat-flux", "nusselt-number"]);
+    }
+
+    /// Invariant: every FoehnCraft field the runner can ask for is in
+    /// [`FOEHN_FIELDS`], so a result's fields are asked for again.
+    #[test]
+    fn every_model_is_kept() {
+        for m in Model::ALL {
+            assert!(FOEHN_FIELDS.iter().any(|(k, _)| *k == m.key()), "{m:?}");
+        }
+    }
+
     #[test]
     fn plan_of_a_run() {
         let root = std::env::temp_dir().join(format!("murmel-foehn-{}", std::process::id()));
