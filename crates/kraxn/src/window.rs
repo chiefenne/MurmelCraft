@@ -15,6 +15,8 @@ use kraxn_core::{Origin, Plan, Scope, Want};
 use serde_json::{Value, json};
 
 use crate::i18n::I18n;
+use crate::kit;
+use crate::logos::Logos;
 use crate::runner::Runner;
 use crate::style::{self, Tokens, icon};
 use crate::text::{done_source, file_types_list, tool_line};
@@ -122,6 +124,7 @@ pub struct KraxnApp {
     manage_job: Option<Job>,
     note: Option<String>,
     pub plan_file: String,
+    logos: Option<Logos>,
 }
 
 impl KraxnApp {
@@ -171,6 +174,7 @@ impl KraxnApp {
             manage_job: None,
             note: None,
             plan_file: String::new(),
+            logos: None,
         })
     }
 
@@ -411,36 +415,82 @@ impl KraxnApp {
         })
     }
 
-    fn header(&self, ui: &mut egui::Ui) {
+    /// The side panel: Kraxn's logo and name, the wizard's steps, the
+    /// theme switch.
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(20.0);
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(icon::BOX)
-                    .size(22.0)
-                    .color(ui.visuals().hyperlink_color),
-            );
-            ui.heading(self.t.tr("app-title"));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let dark = ui.visuals().dark_mode;
-                let (glyph, key) = if dark {
-                    (icon::SUN, "win-theme-light")
-                } else {
-                    (icon::MOON, "win-theme-dark")
-                };
-                let r = ui.button(glyph).on_hover_text(self.t.tr(key));
-                let name = self.t.tr(key);
-                r.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &name)
-                });
-                if r.clicked() {
-                    ui.ctx().set_theme(if dark {
-                        egui::Theme::Light
-                    } else {
-                        egui::Theme::Dark
-                    });
-                }
+            kit::logo(ui, self.logos.as_ref().map(|l| &l.kraxn), 44.0, "Kraxn");
+            ui.vertical(|ui| {
+                ui.label(kit::bold(self.t.tr("app-title")).size(22.0));
+                ui.label(RichText::new(self.t.tr("win-installer")).color(kit::secondary_text(ui)));
             });
         });
-        ui.separator();
+        ui.add_space(28.0);
+        let steps = [
+            (Page::Scope, "win-step-scope"),
+            (Page::Source, "win-step-source"),
+            (Page::Products, "win-step-products"),
+            (Page::Options, "win-step-options"),
+            (Page::Review, "win-step-review"),
+            (Page::Running, "win-step-running"),
+        ];
+        let now = steps.iter().position(|(p, _)| *p == self.page);
+        if let Some(now) = now {
+            for (i, (_, key)) in steps.iter().enumerate() {
+                let finished = self.page == Page::Running && self.run_finished();
+                let mark = if i < now || finished {
+                    kit::Mark::Done
+                } else if i == now {
+                    kit::Mark::Now
+                } else {
+                    kit::Mark::Later
+                };
+                kit::step_row(ui, i + 1, &self.t.tr(key), mark);
+            }
+        } else {
+            for (id, title) in self.product_titles() {
+                ui.horizontal(|ui| {
+                    let tex = self.logos.as_ref().and_then(|l| l.products.get(&id));
+                    kit::logo(ui, tex, 28.0, &title);
+                    ui.label(&title);
+                });
+                ui.add_space(4.0);
+            }
+        }
+        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            ui.add_space(16.0);
+            ui.label(
+                RichText::new(format!("Kraxn {}", env!("CARGO_PKG_VERSION")))
+                    .small()
+                    .color(kit::secondary_text(ui)),
+            );
+            let dark = ui.visuals().dark_mode;
+            let (glyph, key) = if dark {
+                (icon::SUN, "win-theme-light")
+            } else {
+                (icon::MOON, "win-theme-dark")
+            };
+            let name = self.t.tr(key);
+            let r = ui
+                .button(format!("{glyph}  {name}"))
+                .on_hover_text(name.clone());
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::accesskit::Role::Button, true, &name));
+            if r.clicked() {
+                ui.ctx().set_theme(if dark {
+                    egui::Theme::Light
+                } else {
+                    egui::Theme::Dark
+                });
+            }
+        });
+    }
+
+    fn product_titles(&self) -> Vec<(String, String)> {
+        self.rows
+            .iter()
+            .map(|r| (r.id.clone(), r.title.clone()))
+            .collect()
     }
 
     fn welcome(&mut self, ui: &mut egui::Ui) {
@@ -448,85 +498,136 @@ impl KraxnApp {
             let r = self.lock();
             (r.platform.label(), r.platform.asset_key().to_string())
         };
-        ui.label(
-            self.t
-                .tr_args("app-line", &[("version", env!("CARGO_PKG_VERSION").into())]),
+        ui.add_space(8.0);
+        kit::title(
+            ui,
+            &self.t.tr("win-welcome-title"),
+            Some(&self.t.tr("win-welcome-text")),
         );
+        let products = self.product_titles();
+        let logos = self.logos.as_ref();
+        ui.columns(products.len().max(1), |cols| {
+            for ((id, title), ui) in products.iter().zip(cols.iter_mut()) {
+                ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                    kit::card(ui, false, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.set_min_height(212.0);
+                        let tex = logos.and_then(|l| l.products.get(id));
+                        kit::logo(ui, tex, 72.0, title);
+                        ui.add_space(10.0);
+                        ui.label(kit::bold(title).size(17.0));
+                        ui.label(
+                            RichText::new(self.t.tr(&format!("win-role-{id}")))
+                                .color(kit::accent(ui)),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(self.t.tr(&format!("win-about-{id}")))
+                                .color(kit::secondary_text(ui)),
+                        );
+                    });
+                });
+            }
+        });
+        ui.add_space(24.0);
+        ui.horizontal(|ui| {
+            if kit::primary(ui, true, &self.t.tr("menu-install")).clicked() {
+                self.go(ui.ctx(), Page::Scope);
+            }
+            ui.add_space(8.0);
+            if kit::secondary(ui, true, &self.t.tr("win-manage")).clicked() {
+                self.go(ui.ctx(), Page::Manage);
+            }
+        });
+        ui.add_space(20.0);
         ui.label(
             RichText::new(
                 self.t
                     .tr_args("app-system", &[("system", label), ("files", files)]),
             )
-            .color(ui.visuals().widgets.noninteractive.fg_stroke.color),
+            .small()
+            .color(kit::secondary_text(ui)),
         );
-        ui.add_space(16.0);
-        for k in [
-            "product-murmelcraft",
-            "product-koflcraft",
-            "product-foehncraft",
-        ] {
-            ui.label(format!("•  {}", self.t.tr(k)));
-        }
-        ui.add_space(24.0);
-        ui.horizontal(|ui| {
-            if ui.button(self.t.tr("menu-install")).clicked() {
-                self.go(ui.ctx(), Page::Scope);
-            }
-            if ui.button(self.t.tr("win-manage")).clicked() {
-                self.go(ui.ctx(), Page::Manage);
-            }
-        });
     }
 
     fn scope_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.t.tr("scope-title"));
+        kit::title(
+            ui,
+            &self.t.tr("scope-title"),
+            Some(&self.t.tr("win-sub-scope")),
+        );
         let (ru, rs) = (
             self.default_root(Scope::User),
             self.default_root(Scope::System),
         );
-        ui.radio_value(
+        kit::choice(
+            ui,
             &mut self.scope,
             Scope::User,
-            self.t.tr_args("scope-user", &[("root", ru.clone())]),
+            &self.t.tr("win-scope-user-title"),
+            &self
+                .t
+                .tr_args("win-scope-user-text", &[("root", ru.clone())]),
         );
-        ui.radio_value(
+        kit::choice(
+            ui,
             &mut self.scope,
             Scope::System,
-            self.t.tr_args("scope-system", &[("root", rs.clone())]),
+            &self.t.tr("win-scope-system-title"),
+            &self
+                .t
+                .tr_args("win-scope-system-text", &[("root", rs.clone())]),
         );
-        ui.add_space(12.0);
+        ui.add_space(8.0);
         let root = if self.scope == Scope::User { ru } else { rs };
-        ui.label(self.t.tr_args("folder-ask", &[("root", root.clone())]));
+        let label = ui.label(kit::bold(self.t.tr("win-folder")));
         ui.horizontal(|ui| {
-            let name = self.t.tr("win-folder");
             ui.add(
                 egui::TextEdit::singleline(&mut self.folder)
                     .hint_text(root)
-                    .desired_width(420.0),
+                    .desired_width(420.0)
+                    .margin(egui::vec2(8.0, 6.0)),
             )
-            .labelled_by(ui.label(name).id);
-            if ui.button(self.t.tr("win-choose")).clicked()
+            .labelled_by(label.id);
+            if kit::secondary(ui, true, &self.t.tr("win-choose")).clicked()
                 && let Some(d) = rfd::FileDialog::new().pick_folder()
             {
                 self.folder = d.display().to_string();
             }
         });
-        if self.scope == Scope::System {
-            ui.label(RichText::new(self.t.tr("win-admin-note")).color(ui.visuals().warn_fg_color));
-        }
     }
 
     fn source_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.t.tr("source-title"));
-        ui.radio_value(&mut self.offline, false, self.t.tr("source-online"));
-        ui.radio_value(&mut self.offline, true, self.t.tr("source-folder"));
+        kit::title(
+            ui,
+            &self.t.tr("source-title"),
+            Some(&self.t.tr("win-sub-source")),
+        );
+        kit::choice(
+            ui,
+            &mut self.offline,
+            false,
+            &self.t.tr("source-online"),
+            &self.t.tr("win-source-online-text"),
+        );
+        kit::choice(
+            ui,
+            &mut self.offline,
+            true,
+            &self.t.tr("source-folder"),
+            &self.t.tr("win-source-folder-text"),
+        );
         if self.offline {
             ui.add_space(8.0);
+            let label = ui.label(kit::bold(self.t.tr("source-folder-ask")));
             ui.horizontal(|ui| {
-                let name = self.t.tr("source-folder-ask");
-                ui.add(egui::TextEdit::singleline(&mut self.offline_dir).desired_width(420.0))
-                    .labelled_by(ui.label(name).id);
-                if ui.button(self.t.tr("win-choose")).clicked()
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.offline_dir)
+                        .desired_width(420.0)
+                        .margin(egui::vec2(8.0, 6.0)),
+                )
+                .labelled_by(label.id);
+                if kit::secondary(ui, true, &self.t.tr("win-choose")).clicked()
                     && let Some(d) = rfd::FileDialog::new().pick_folder()
                 {
                     self.offline_dir = d.display().to_string();
@@ -544,7 +645,11 @@ impl KraxnApp {
     }
 
     fn products_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.t.tr("products-title"));
+        kit::title(
+            ui,
+            &self.t.tr("products-title"),
+            Some(&self.t.tr("win-sub-products")),
+        );
         if self.loading() {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -554,92 +659,117 @@ impl KraxnApp {
         let latest_word = self.t.tr("win-latest");
         let default_word = self.t.tr("win-make-default");
         let source_word = self.t.tr("win-from-source");
+        let logos = self.logos.as_ref();
         for row in &mut self.rows {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            let selected = row.chosen;
+            kit::card(ui, selected, |ui| {
                 ui.set_width(ui.available_width());
                 let has_file = !row.versions.is_empty();
                 let can_build = row.buildable && !row.all_versions.is_empty();
                 let enabled = has_file || can_build;
-                ui.add_enabled_ui(enabled, |ui| {
-                    ui.checkbox(&mut row.chosen, RichText::new(&row.title).strong());
-                });
-                ui.label(self.t.tr(&format!("product-{}", row.id)));
-                if let Some(e) = &row.error {
-                    ui.label(RichText::new(e).color(ui.visuals().error_fg_color));
-                } else if row.job.is_none() && !has_file {
-                    let text = if can_build {
-                        self.t.tr_args(
-                            "products-buildable",
-                            &[(
-                                "version",
-                                row.all_versions.first().cloned().unwrap_or_default(),
-                            )],
-                        )
-                    } else {
-                        self.t.tr("products-no-file")
-                    };
-                    ui.label(RichText::new(text).color(ui.visuals().warn_fg_color));
-                }
-                if row.chosen && can_build && has_file {
-                    ui.checkbox(&mut row.from_source, source_word.clone());
-                }
-                let source = row.from_source && can_build;
-                if row.chosen && source {
-                    for (f, on) in &mut row.features {
-                        let about = self.t.tr(&format!("feature-{f}"));
-                        ui.checkbox(on, format!("{f}: {about}"));
-                    }
-                }
-                if !row.installed.is_empty() {
-                    ui.label(
-                        self.t
-                            .tr_args("win-installed", &[("versions", row.installed.join(", "))]),
+                ui.horizontal_top(|ui| {
+                    kit::logo(
+                        ui,
+                        logos.and_then(|l| l.products.get(&row.id)),
+                        56.0,
+                        &row.title,
                     );
-                }
-                if row.chosen && enabled {
-                    let list = if source {
-                        row.all_versions.clone()
-                    } else {
-                        row.versions.clone()
-                    };
-                    if row.version != "latest" && !list.contains(&row.version) {
-                        row.version = "latest".into();
-                    }
-                    ui.horizontal(|ui| {
-                        let shown = if row.version == "latest" {
-                            format!(
-                                "{latest_word} ({})",
-                                list.first().cloned().unwrap_or_default()
-                            )
-                        } else {
-                            row.version.clone()
-                        };
-                        let label = ui.label(self.t.tr("win-version"));
-                        egui::ComboBox::from_id_salt(format!("version-{}", row.id))
-                            .selected_text(shown)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut row.version,
-                                    "latest".to_string(),
-                                    latest_word.clone(),
-                                );
-                                for v in &list {
-                                    ui.selectable_value(&mut row.version, v.clone(), v.clone());
-                                }
-                            })
-                            .response
-                            .labelled_by(label.id);
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.add_enabled_ui(enabled, |ui| {
+                            ui.checkbox(&mut row.chosen, kit::bold(&row.title).size(16.0));
+                        });
+                        ui.label(
+                            RichText::new(self.t.tr(&format!("win-about-{}", row.id)))
+                                .color(kit::secondary_text(ui)),
+                        );
+                        if let Some(e) = &row.error {
+                            ui.label(RichText::new(e).color(ui.visuals().error_fg_color));
+                        } else if row.job.is_none() && !has_file {
+                            let text = if can_build {
+                                self.t.tr_args(
+                                    "products-buildable",
+                                    &[(
+                                        "version",
+                                        row.all_versions.first().cloned().unwrap_or_default(),
+                                    )],
+                                )
+                            } else {
+                                self.t.tr("products-no-file")
+                            };
+                            ui.label(RichText::new(text).color(ui.visuals().warn_fg_color));
+                        }
+                        if row.chosen && can_build && has_file {
+                            ui.checkbox(&mut row.from_source, source_word.clone());
+                        }
+                        let source = row.from_source && can_build;
+                        if row.chosen && source {
+                            for (f, on) in &mut row.features {
+                                let about = self.t.tr(&format!("feature-{f}"));
+                                ui.checkbox(on, format!("{f}: {about}"));
+                            }
+                        }
                         if !row.installed.is_empty() {
-                            ui.checkbox(&mut row.make_default, default_word.clone());
+                            ui.label(self.t.tr_args(
+                                "win-installed",
+                                &[("versions", row.installed.join(", "))],
+                            ));
+                        }
+                        if row.chosen && enabled {
+                            let list = if source {
+                                row.all_versions.clone()
+                            } else {
+                                row.versions.clone()
+                            };
+                            if row.version != "latest" && !list.contains(&row.version) {
+                                row.version = "latest".into();
+                            }
+                            ui.horizontal(|ui| {
+                                let shown = if row.version == "latest" {
+                                    format!(
+                                        "{latest_word} ({})",
+                                        list.first().cloned().unwrap_or_default()
+                                    )
+                                } else {
+                                    row.version.clone()
+                                };
+                                let label = ui.label(self.t.tr("win-version"));
+                                egui::ComboBox::from_id_salt(format!("version-{}", row.id))
+                                    .selected_text(shown)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut row.version,
+                                            "latest".to_string(),
+                                            latest_word.clone(),
+                                        );
+                                        for v in &list {
+                                            ui.selectable_value(
+                                                &mut row.version,
+                                                v.clone(),
+                                                v.clone(),
+                                            );
+                                        }
+                                    })
+                                    .response
+                                    .labelled_by(label.id);
+                                if !row.installed.is_empty() {
+                                    ui.checkbox(&mut row.make_default, default_word.clone());
+                                }
+                            });
                         }
                     });
-                }
+                });
             });
+            ui.add_space(10.0);
         }
     }
 
     fn options_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.t.tr("win-options"));
+        kit::title(
+            ui,
+            &self.t.tr("win-options"),
+            Some(&self.t.tr("win-sub-options")),
+        );
         ui.checkbox(&mut self.path, self.t.tr("path-ask"));
         if self.any_source() {
             ui.checkbox(&mut self.native, self.t.tr("win-native"));
@@ -685,10 +815,9 @@ impl KraxnApp {
             .show(ui, |ui| {
                 for s in steps.as_array().into_iter().flatten() {
                     let title = s["title"].as_str().unwrap_or("");
-                    let mut head = RichText::new(title).strong();
+                    let mut head = kit::bold(title);
                     if s["admin"].as_bool().unwrap_or(false) {
-                        head = RichText::new(format!("{title}  {admin}"))
-                            .strong()
+                        head = kit::bold(format!("{title}  {admin}"))
                             .color(ui.visuals().warn_fg_color);
                     }
                     egui::CollapsingHeader::new(head)
@@ -704,7 +833,11 @@ impl KraxnApp {
     }
 
     fn review_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.t.tr("steps-title"));
+        kit::title(
+            ui,
+            &self.t.tr("steps-title"),
+            Some(&self.t.tr("win-sub-review")),
+        );
         let Some(job) = &self.preview else { return };
         let Some(e) = job.done.clone() else {
             ui.horizontal(|ui| {
@@ -727,7 +860,7 @@ impl KraxnApp {
             return;
         }
         if let Some(tools) = e.result["tools"].as_array().filter(|t| !t.is_empty()) {
-            ui.label(RichText::new(self.t.tr("tools-title")).strong());
+            ui.label(kit::bold(self.t.tr("tools-title")));
             for t in tools {
                 let mut rt = RichText::new(tool_line(&self.t, t));
                 if !t["ok"].as_bool().unwrap_or(false) && !t["fix"].is_object() {
@@ -802,18 +935,22 @@ impl KraxnApp {
             }
         }
         match &job.done {
-            None => {
-                ui.heading(self.t.tr("win-running"));
-            }
+            None => kit::title(
+                ui,
+                &self.t.tr("win-running"),
+                Some(&self.t.tr("win-sub-running")),
+            ),
             Some(e) if e.ok() => {
-                ui.heading(
-                    RichText::new(self.t.tr("win-done")).color(ui.visuals().hyperlink_color),
-                );
+                kit::title(ui, &self.t.tr("win-done"), Some(&self.t.tr("win-sub-done")))
             }
             Some(_) => {
-                ui.heading(
-                    RichText::new(self.t.tr("win-failed")).color(ui.visuals().error_fg_color),
+                ui.label(
+                    kit::bold(self.t.tr("win-failed"))
+                        .size(26.0)
+                        .color(ui.visuals().error_fg_color),
                 );
+                ui.label(RichText::new(self.t.tr("win-sub-failed")).color(kit::secondary_text(ui)));
+                ui.add_space(16.0);
             }
         }
         for (file, done, total) in &downloads {
@@ -828,14 +965,18 @@ impl KraxnApp {
                     .show_percentage(),
             );
         }
-        egui::ScrollArea::vertical()
-            .max_height(220.0)
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for i in &infos {
-                    ui.label(i);
-                }
-            });
+        kit::card(ui, false, |ui| {
+            ui.set_width(ui.available_width());
+            egui::ScrollArea::vertical()
+                .max_height(200.0)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for i in &infos {
+                        ui.label(RichText::new(i).color(kit::secondary_text(ui)));
+                    }
+                });
+        });
+        ui.add_space(8.0);
         if !log.is_empty() {
             let building = job.done.is_none();
             egui::CollapsingHeader::new(self.t.tr("win-build-log"))
@@ -873,17 +1014,14 @@ impl KraxnApp {
                 );
                 continue;
             }
-            ui.label(
-                RichText::new(self.t.tr_args(
-                    "done-version",
-                    &[
-                        ("title", title),
-                        ("version", v),
-                        ("dir", p["dir"].as_str().unwrap_or("").into()),
-                    ],
-                ))
-                .strong(),
-            );
+            ui.label(kit::bold(self.t.tr_args(
+                "done-version",
+                &[
+                    ("title", title),
+                    ("version", v),
+                    ("dir", p["dir"].as_str().unwrap_or("").into()),
+                ],
+            )));
             ui.label(format!("    {}", done_source(&self.t, p)));
             if let Some(c) = p["check"].as_object() {
                 let ok = c["ok"].as_bool().unwrap_or(false);
@@ -919,16 +1057,22 @@ impl KraxnApp {
     }
 
     fn manage_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.t.tr("win-manage"));
+        kit::title(
+            ui,
+            &self.t.tr("win-manage"),
+            Some(&self.t.tr("win-sub-manage")),
+        );
         let before = self.scope;
         ui.horizontal(|ui| {
-            ui.radio_value(&mut self.scope, Scope::User, self.t.tr("list-scope-user"));
-            ui.radio_value(
-                &mut self.scope,
-                Scope::System,
-                self.t.tr("list-scope-system"),
-            );
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (sc, key) in [
+                (Scope::User, "win-manage-user"),
+                (Scope::System, "win-manage-system"),
+            ] {
+                kit::segment(ui, &mut self.scope, sc, &self.t.tr(key));
+            }
         });
+        ui.add_space(12.0);
         if before != self.scope {
             self.installed = Some(self.installed_list());
         }
@@ -960,11 +1104,22 @@ impl KraxnApp {
             ui.label(self.t.tr("list-none"));
         }
         let mut action: Option<(&str, Value)> = None;
+        let logos = self.logos.as_ref();
         for p in &list {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            kit::card(ui, false, |ui| {
                 ui.set_width(ui.available_width());
                 let title = p["title"].as_str().unwrap_or("").to_string();
-                ui.label(RichText::new(&title).strong());
+                ui.horizontal(|ui| {
+                    kit::logo(
+                        ui,
+                        logos.and_then(|l| l.products.get(p["product"].as_str().unwrap_or(""))),
+                        40.0,
+                        &title,
+                    );
+                    ui.add_space(6.0);
+                    ui.label(kit::bold(&title).size(17.0));
+                });
+                ui.add_space(6.0);
                 for v in p["versions"].as_array().into_iter().flatten() {
                     let ver = v["version"].as_str().unwrap_or("").to_string();
                     let is_default = v["default"].as_bool().unwrap_or(false);
@@ -1010,10 +1165,14 @@ impl KraxnApp {
                         });
                     });
                 }
+                ui.add_space(4.0);
                 ui.add_enabled_ui(!busy, |ui| {
-                    if ui
-                        .button(self.t.tr_args("remove-all", &[("title", title.clone())]))
-                        .clicked()
+                    if kit::secondary(
+                        ui,
+                        true,
+                        &self.t.tr_args("remove-all", &[("title", title.clone())]),
+                    )
+                    .clicked()
                     {
                         action = Some(("version.remove", json!({"product": p["product"]})));
                     }
@@ -1036,9 +1195,7 @@ impl KraxnApp {
         ui.horizontal(|ui| {
             let running = self.run.as_ref().is_some_and(|j| j.done.is_none());
             if let Some(b) = self.back_page()
-                && ui
-                    .add_enabled(!running, egui::Button::new(self.t.tr("win-back")))
-                    .clicked()
+                && kit::secondary(ui, !running, &self.t.tr("win-back")).clicked()
             {
                 self.go(ui.ctx(), b);
             }
@@ -1050,16 +1207,13 @@ impl KraxnApp {
                         "win-next"
                     };
                     let ok = self.can_next() && (n != Page::Running || self.review_ok());
-                    if ui
-                        .add_enabled(ok, egui::Button::new(self.t.tr(key)))
-                        .clicked()
-                    {
+                    if kit::primary(ui, ok, &self.t.tr(key)).clicked() {
                         self.go(ui.ctx(), n);
                     }
                 }
                 if self.page == Page::Running
                     && self.run.as_ref().is_some_and(|j| j.done.is_some())
-                    && ui.button(self.t.tr("win-close")).clicked()
+                    && kit::primary(ui, true, &self.t.tr("win-close")).clicked()
                 {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -1073,25 +1227,46 @@ impl KraxnApp {
     /// The window's content, also for tests.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.poll();
-        egui::Panel::bottom("footer").show(ui, |ui| {
-            ui.add_space(8.0);
-            self.footer(ui);
-            ui.add_space(8.0);
-        });
-        egui::CentralPanel::default().show(ui, |ui| {
-            self.header(ui);
-            ui.add_space(8.0);
-            egui::ScrollArea::vertical().show(ui, |ui| match self.page {
-                Page::Welcome => self.welcome(ui),
-                Page::Scope => self.scope_page(ui),
-                Page::Source => self.source_page(ui),
-                Page::Products => self.products_page(ui),
-                Page::Options => self.options_page(ui),
-                Page::Review => self.review_page(ui),
-                Page::Running => self.running_page(ui),
-                Page::Manage => self.manage_page(ui),
+        if self.logos.is_none() {
+            self.logos = Logos::load(ui.ctx()).ok();
+        }
+        let side = ui.visuals().extreme_bg_color;
+        egui::Panel::left("steps")
+            .exact_size(220.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(side)
+                    .inner_margin(egui::Margin::symmetric(20, 0)),
+            )
+            .show(ui, |ui| self.sidebar(ui));
+        if self.page != Page::Welcome {
+            egui::Panel::bottom("footer")
+                .frame(
+                    egui::Frame::new()
+                        .fill(ui.visuals().panel_fill)
+                        .inner_margin(egui::Margin::symmetric(28, 14)),
+                )
+                .show(ui, |ui| self.footer(ui));
+        }
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(ui.visuals().panel_fill)
+                    .inner_margin(egui::Margin::symmetric(28, 20)),
+            )
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| match self.page {
+                    Page::Welcome => self.welcome(ui),
+                    Page::Scope => self.scope_page(ui),
+                    Page::Source => self.source_page(ui),
+                    Page::Products => self.products_page(ui),
+                    Page::Options => self.options_page(ui),
+                    Page::Review => self.review_page(ui),
+                    Page::Running => self.running_page(ui),
+                    Page::Manage => self.manage_page(ui),
+                });
             });
-        });
     }
 }
 
@@ -1103,11 +1278,15 @@ impl eframe::App for KraxnApp {
 
 /// Opens the window.
 pub fn run(runner: Runner) -> Result<(), String> {
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Some(i) = crate::logos::icon() {
+        viewport = viewport.with_icon(i);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             .with_title("Kraxn")
-            .with_inner_size([820.0, 640.0])
-            .with_min_inner_size([640.0, 480.0]),
+            .with_inner_size([980.0, 700.0])
+            .with_min_inner_size([820.0, 560.0]),
         ..Default::default()
     };
     eframe::run_native(

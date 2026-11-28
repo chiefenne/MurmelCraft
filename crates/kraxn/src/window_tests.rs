@@ -18,7 +18,7 @@ fn harness(home: &Path) -> Harness<'static, KraxnApp> {
 fn harness_with(r: crate::runner::Runner) -> Harness<'static, KraxnApp> {
     let mut slot = Some(r);
     let mut h = Harness::builder()
-        .with_size(egui::vec2(820.0, 640.0))
+        .with_size(egui::vec2(980.0, 700.0))
         .build_eframe(move |cc| KraxnApp::new(cc, slot.take().unwrap()).unwrap());
     h.run_steps(2);
     h
@@ -230,5 +230,11 @@ fn shots() {
     snap(&mut h, "7-done");
     h.ctx.set_theme(egui::Theme::Light);
     snap(&mut h, "8-done-light");
+    h.ctx.set_theme(egui::Theme::Dark);
+    h.state_mut().page = Page::Welcome;
+    h.run_steps(2);
+    click(&mut h, "Manage what is installed");
+    wait(&mut h, |a| !a.manage_busy());
+    snap(&mut h, "9-manage");
     let _ = std::fs::remove_dir_all(&d);
 }
