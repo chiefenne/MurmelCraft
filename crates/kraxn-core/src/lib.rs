@@ -9,6 +9,7 @@
 
 pub mod actions;
 pub mod archive;
+pub mod build;
 pub mod catalogue;
 pub mod diag;
 pub mod envfiles;
@@ -24,5 +25,5 @@ pub mod tools;
 pub use catalogue::{Catalogue, Product};
 pub use diag::{Diagnostic, Res};
 pub use layout::{Env, Layout, Scope};
-pub use plan::{Plan, Want};
+pub use plan::{Origin, Plan, Want};
 pub use platform::Platform;

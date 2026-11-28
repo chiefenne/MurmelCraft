@@ -8,14 +8,18 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use kraxn_core::Scope;
 
-use crate::tests::{kofl_release, runner, tmp};
+use crate::tests::{kofl_release, runner, source_runner, tmp};
 use crate::window::{KraxnApp, Page};
 
 fn harness(home: &Path) -> Harness<'static, KraxnApp> {
-    let home = home.to_path_buf();
+    harness_with(runner(home))
+}
+
+fn harness_with(r: crate::runner::Runner) -> Harness<'static, KraxnApp> {
+    let mut slot = Some(r);
     let mut h = Harness::builder()
         .with_size(egui::vec2(820.0, 640.0))
-        .build_eframe(move |cc| KraxnApp::new(cc, runner(&home)).unwrap());
+        .build_eframe(move |cc| KraxnApp::new(cc, slot.take().unwrap()).unwrap());
     h.run_steps(2);
     h
 }
@@ -90,7 +94,7 @@ fn wizard_installs_from_a_folder() {
     assert_eq!(problems(&h), Vec::<String>::new(), "source");
     click(&mut h, "Next");
     wait(&mut h, |a| {
-        a.page == Page::Products && a.plan().installs.len() == 1
+        a.page == Page::Products && !a.products_loading() && a.plan().installs.len() == 1
     });
     assert_eq!(h.state().plan().installs[0].product, "koflcraft");
     assert!(shows(&h, "(no release for this computer)"));
@@ -107,6 +111,47 @@ fn wizard_installs_from_a_folder() {
     assert!(shows(&h, "started and ended without an error"));
     assert!(home.join(".local/opt/KoflCraft/0.3.1/bin/kofl").is_file());
     assert_eq!(problems(&h), Vec::<String>::new(), "result");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Invariant: online, a program without a release file for this
+/// computer can be chosen as a source build: the steps page lists the
+/// tools, Install builds it with cargo (the output under "Build output")
+/// and the result says it was built here. Breaks if such a program
+/// stays disabled, the plan loses `from = "source"`, or the build's
+/// output or result is not shown.
+#[cfg(unix)]
+#[test]
+fn wizard_builds_from_source() {
+    let d = tmp("window-source");
+    let home = d.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let mut h = harness_with(source_runner(&d, &home));
+    click(&mut h, "Install or update programs");
+    click(&mut h, "Next");
+    click(&mut h, "Next");
+    wait(&mut h, |a| {
+        a.page == Page::Products && !a.products_loading()
+    });
+    assert!(shows(&h, "Kraxn can build 0.3.1 from the source"));
+    click(&mut h, "KoflCraft");
+    assert_eq!(
+        h.state().plan().installs[0].from,
+        kraxn_core::Origin::Source
+    );
+    assert_eq!(problems(&h), Vec::<String>::new(), "products");
+    click(&mut h, "Next");
+    assert!(shows(&h, "Tune source builds"));
+    click(&mut h, "Next");
+    wait(&mut h, |a| a.page == Page::Review && !a.review_busy());
+    assert!(shows(&h, "Tools for the build:"), "review");
+    assert!(shows(&h, "Build KoflCraft 0.3.1 with cargo"), "review");
+    assert_eq!(problems(&h), Vec::<String>::new(), "review");
+    click(&mut h, "Install");
+    wait(&mut h, |a| a.page == Page::Running && a.run_finished());
+    assert!(shows(&h, "built here from the source"), "result");
+    assert!(shows(&h, "Build output"), "result");
+    assert!(home.join(".local/opt/KoflCraft/0.3.1/bin/kofl").is_file());
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -172,7 +217,7 @@ fn shots() {
     snap(&mut h, "3-where-from");
     click(&mut h, "Next");
     wait(&mut h, |a| {
-        a.page == Page::Products && a.plan().installs.len() == 1
+        a.page == Page::Products && !a.products_loading() && a.plan().installs.len() == 1
     });
     snap(&mut h, "4-programs");
     click(&mut h, "Next");

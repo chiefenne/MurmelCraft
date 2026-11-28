@@ -13,6 +13,8 @@
 //! [[install]]
 //! product = "foehncraft"
 //! version = "latest"            # or 1.3.0
+//! # from = "source"             # build with cargo instead of the release
+//! # features = ["mpi"]          # cargo features of a source build
 //! ```
 
 use std::path::PathBuf;
@@ -39,6 +41,23 @@ fn format_version() -> String {
     "1.0".into()
 }
 
+/// Where a product's programs come from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    /// The release archive (GitHub or the offline folder).
+    #[default]
+    Release,
+    /// The release's source, built here with cargo.
+    Source,
+}
+
+impl Origin {
+    fn is_release(&self) -> bool {
+        *self == Origin::Release
+    }
+}
+
 /// One product to install.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +72,16 @@ pub struct Want {
     /// Install again over the same version.
     #[serde(default)]
     pub replace: bool,
+    /// The release archive (default) or a build from the source.
+    #[serde(default, skip_serializing_if = "Origin::is_release")]
+    pub from: Origin,
+    /// Cargo features of a source build (the catalogue's `features`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    /// A source build for this computer's processor only
+    /// (`-C target-cpu=native`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native: bool,
 }
 
 impl Want {
@@ -62,6 +91,9 @@ impl Want {
             version: latest(),
             make_default: true,
             replace: false,
+            from: Origin::Release,
+            features: Vec::new(),
+            native: false,
         }
     }
 }
@@ -140,7 +172,39 @@ impl Plan {
             ));
         }
         for (i, w) in self.installs.iter().enumerate() {
-            c.get(&w.product)?;
+            let p = c.get(&w.product)?;
+            if w.from == Origin::Release && (!w.features.is_empty() || w.native) {
+                return Err(diag(
+                    "KRX010",
+                    format!(
+                        "{}: features and native need from = \"source\" (the release is built already)",
+                        w.product
+                    ),
+                ));
+            }
+            if let Some(f) = w.features.iter().find(|f| !p.features.contains(f)) {
+                return Err(diag(
+                    "KRX010",
+                    format!(
+                        "{} has no feature {f} (it has: {})",
+                        w.product,
+                        if p.features.is_empty() {
+                            "none".to_string()
+                        } else {
+                            p.features.join(", ")
+                        }
+                    ),
+                ));
+            }
+            if w.from == Origin::Source && self.offline_dir.is_some() {
+                return Err(diag(
+                    "KRX010",
+                    format!(
+                        "{}: a source build needs the internet (cargo downloads the crates); install the release, or leave out offline_dir",
+                        w.product
+                    ),
+                ));
+            }
             if self.installs[..i].iter().any(|o| o.product == w.product) {
                 return Err(diag(
                     "KRX010",
@@ -184,5 +248,36 @@ mod tests {
         let q = Plan::parse("[[install]]\nproduct = \"solid\"\n").unwrap();
         assert_eq!(q.check(&c).unwrap_err().code, "KRX001");
         assert_eq!(Plan::default().check(&c).unwrap_err().code, "KRX010");
+    }
+
+    /// Invariant: a source build round-trips with its features, a feature
+    /// the product lacks, features on a release and a source build from
+    /// the offline folder are refused. Breaks if a plan could ask for a
+    /// build cargo would refuse later, after the tools were installed.
+    #[test]
+    fn source_builds_are_checked() {
+        let c = Catalogue::builtin().unwrap();
+        let p = Plan::parse(
+            "[[install]]\nproduct = \"foehncraft\"\nfrom = \"source\"\nfeatures = [\"mpi\"]\nnative = true\n",
+        )
+        .unwrap();
+        p.check(&c).unwrap();
+        assert_eq!(p.installs[0].from, Origin::Source);
+        assert_eq!(Plan::parse(&p.to_toml()).unwrap(), p);
+        let bad = |t: &str| Plan::parse(t).unwrap().check(&c).unwrap_err().code;
+        assert_eq!(
+            bad("[[install]]\nproduct = \"koflcraft\"\nfrom = \"source\"\nfeatures = [\"mpi\"]\n"),
+            "KRX010"
+        );
+        assert_eq!(
+            bad("[[install]]\nproduct = \"foehncraft\"\nfeatures = [\"mpi\"]\n"),
+            "KRX010"
+        );
+        assert_eq!(
+            bad(
+                "offline_dir = \"/srv\"\n[[install]]\nproduct = \"koflcraft\"\nfrom = \"source\"\n"
+            ),
+            "KRX010"
+        );
     }
 }

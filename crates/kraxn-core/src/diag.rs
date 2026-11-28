@@ -62,4 +62,12 @@ pub const CODES: &[(&str, &str)] = &[
     ),
     ("KRX013", "the version is installed already"),
     ("KRX014", "this system is not supported"),
+    (
+        "KRX015",
+        "a tool the source build needs is missing and Kraxn cannot install it",
+    ),
+    (
+        "KRX016",
+        "a command failed (a tool install, the download of the source or cargo)",
+    ),
 ];

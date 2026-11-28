@@ -34,6 +34,15 @@ pub struct Receipt {
     /// Whether a SHA256SUMS.txt confirmed the file.
     #[serde(default)]
     pub verified: bool,
+    /// The cargo features of a build.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    /// A build for this computer's processor only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native: bool,
+    /// The compiler of a build (`rustc --version`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rustc: String,
     pub kraxn: String,
 }
 
@@ -48,6 +57,9 @@ impl Receipt {
             file: String::new(),
             sha256: String::new(),
             verified: false,
+            features: Vec::new(),
+            native: false,
+            rustc: String::new(),
             kraxn: env!("CARGO_PKG_VERSION").into(),
         }
     }

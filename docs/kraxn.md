@@ -6,8 +6,8 @@ releases or from a folder of downloaded files, with several versions side
 by side. *Kraxn* is Tyrolean for the carrying frame on your back: it
 carries the three up the hill.
 
-This page describes the core, the window and the text mode. Source
-builds, extras (menu entries, file types, Python and Gmsh, ffmpeg,
+This page describes the core, the window, the text mode and source
+builds. Extras (menu entries, file types, Python and Gmsh, ffmpeg,
 examples) and the AI assistant set-up follow in the next pull requests.
 
 ## Start it
@@ -83,6 +83,39 @@ unless the plan says `require_checksums = false`, and then the report says
 "not checked". Archives may hold only plain files below their one top
 folder; a link or a path outside it is refused (`KRX006`).
 
+## Build from the source
+
+When a release has no file for your computer (an older Linux, a system
+the releases do not cover yet), or you want FoehnCraft's MPI or GPU
+backend, Kraxn builds the release from its source: choose "Build from
+the source" for a program in the window, answer `s` in the text mode, or
+write `from = "source"` in a plan.
+
+Kraxn first checks the tools the build needs and lists them on the steps
+page:
+
+| Tool | Needed by | When it is missing, Kraxn… |
+|---|---|---|
+| Rust (at least the product's `min_rust`) | all three | updates it with `rustup`, or downloads `rustup-init` (checked against its `.sha256`) and installs Rust into your `~/.cargo` |
+| C compiler and linker (and C++ for FoehnCraft) | all three | Linux: `apt-get install build-essential` or `dnf install gcc gcc-c++ make` (administrator); Windows: the Visual Studio C++ Build Tools with `winget`; macOS: asks you to run `xcode-select --install` |
+| CMake 3.10 or newer | FoehnCraft (HDF5 and METIS) | `apt`/`dnf`, `brew install cmake`, `winget install Kitware.CMake` |
+| Open MPI and libclang | FoehnCraft with `mpi` | `apt`/`dnf` (`libopenmpi-dev openmpi-bin libclang-dev` or `openmpi-devel clang-devel`), `brew install open-mpi`; not on Windows |
+
+The steps that install tools show before anything runs, like every other
+step; a tool only you can install (Apple's Command Line Tools, or a Linux
+without `apt` or `dnf`) stops the plan with `KRX015` and a note what to
+do, and "Check again" looks once more. Then Kraxn downloads GitHub's
+archive of the release's tag, runs `cargo install --locked` for each of
+the product's programs (with `--features`, and `-C target-cpu=native`
+when you ask for a build tuned for this computer), shows cargo's output
+as it comes and puts the programs into place like a release's. The
+build runs as you; only the copy into system folders asks for
+administrator rights. The receipt (`kraxn.toml`) says `source = "build"`
+with the tag, the features and `rustc --version`. A build needs the
+internet (cargo downloads the crates), so it does not combine with a
+folder of downloads. The build folder (several GB for FoehnCraft) is in
+Kraxn's temporary work folder and is removed when Kraxn ends.
+
 ## Without internet
 
 Put the release archives of your system and their `SHA256SUMS.txt` in a
@@ -109,6 +142,9 @@ product = "foehncraft"
 version = "1.3.0"           # default: latest
 make_default = true         # default
 # replace = true            # install the same version again
+# from = "source"           # build here instead of the release file
+# features = ["mpi"]        # with from = "source": mpi, cuda
+# native = true             # with from = "source": for this CPU only
 
 [[install]]
 product = "koflcraft"

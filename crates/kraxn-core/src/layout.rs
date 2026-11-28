@@ -42,6 +42,9 @@ pub struct Env {
     pub program_files: Option<PathBuf>,
     /// `PATH`, split.
     pub path: Vec<PathBuf>,
+    /// Where tools often are besides the PATH (Homebrew, CMake on
+    /// Windows): a program started from the Dock gets a short PATH.
+    pub tool_dirs: Vec<PathBuf>,
 }
 
 impl Env {
@@ -58,12 +61,38 @@ impl Env {
             path: std::env::var_os("PATH")
                 .map(|p| std::env::split_paths(&p).collect())
                 .unwrap_or_default(),
+            tool_dirs: default_tool_dirs(),
         }
     }
 
     pub fn on_path(&self, dir: &Path) -> bool {
         self.path.iter().any(|p| p == dir)
     }
+}
+
+fn default_tool_dirs() -> Vec<PathBuf> {
+    let fixed: &[&str] = if cfg!(target_os = "macos") {
+        &["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+    } else if cfg!(windows) {
+        &[]
+    } else {
+        &[
+            "/usr/local/bin",
+            "/usr/bin",
+            "/usr/lib64/openmpi/bin",
+            "/usr/lib/x86_64-linux-gnu/openmpi/bin",
+            "/usr/lib/aarch64-linux-gnu/openmpi/bin",
+        ]
+    };
+    let mut v: Vec<PathBuf> = fixed.iter().map(PathBuf::from).collect();
+    if let Some(pf) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
+        v.push(pf.join("CMake").join("bin"));
+        v.push(pf.join("Git").join("cmd"));
+    }
+    if let Some(l) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+        v.push(l.join("Microsoft").join("WindowsApps"));
+    }
+    v
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +209,7 @@ mod tests {
             local_app_data: Some(r"C:\Users\ann\AppData\Local".into()),
             program_files: Some(r"C:\Program Files".into()),
             path: vec![],
+            tool_dirs: vec![],
         }
     }
 

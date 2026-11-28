@@ -296,6 +296,12 @@ fn serve_with_list(mut responses: Vec<(String, Vec<u8>)>) -> String {
     if let Some(last) = responses.last_mut() {
         last.1 = list.into_bytes();
     }
+    spawn_server(l, responses);
+    base
+}
+
+/// Answers each request on `l` with the body of its path (404 otherwise).
+fn spawn_server(l: TcpListener, responses: Vec<(String, Vec<u8>)>) {
     std::thread::spawn(move || {
         for s in l.incoming() {
             let Ok(mut s) = s else { continue };
@@ -323,7 +329,6 @@ fn serve_with_list(mut responses: Vec<(String, Vec<u8>)>) -> String {
             let _ = s.write_all(&body);
         }
     });
-    base
 }
 
 /// Invariant: the preview of a system install marks the copy as needing
@@ -355,7 +360,7 @@ fn preview_marks_admin_steps() {
         files: vec![],
     };
     let kofl = c.get("koflcraft").unwrap();
-    let steps = preview(&ctx, &p, &[(kofl, r)]).unwrap();
+    let steps = preview(&ctx, &p, &ctx.source(&p), &[(kofl, r)], &[]).unwrap();
     assert!(steps[0].admin && steps[0].title.starts_with("Install KoflCraft 0.3.1"));
     let shown: Vec<String> = steps[0]
         .actions
@@ -374,4 +379,134 @@ fn preview_marks_admin_steps() {
             .iter()
             .all(|a| !matches!(a, Action::ShellBlock { .. }))
     }));
+}
+
+/// A folder of stand-ins for the build tools: `cc`, a `rustc` of
+/// `rust`, and a `cargo` that "builds" KoflCraft's programs (scripts
+/// that exit 0) into `--root` and prints a Compiling line.
+#[cfg(unix)]
+fn fake_build_tools(dir: &Path, rust: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let cargo = r#"root=""; feat=""
+while [ $# -gt 0 ]; do case "$1" in --root) root="$2"; shift;; --features) feat="$2"; shift;; esac; shift; done
+echo "   Compiling kofl v0.3.1 $feat" >&2
+mkdir -p "$root/bin"
+for p in kofl mesh-mcp; do printf '#!/bin/sh\nexit 0\n' > "$root/bin/$p"; chmod 755 "$root/bin/$p"; done"#;
+    std::fs::create_dir_all(dir).unwrap();
+    for (name, body) in [
+        ("cc", "exit 0".to_string()),
+        ("rustc", format!("echo 'rustc {rust} (fake 2026-11-01)'")),
+        ("cargo", cargo.to_string()),
+    ] {
+        let f = dir.join(name);
+        std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// Invariant: a source build (from = "source") takes the release's tag
+/// even when the release has no file for this system, downloads GitHub's
+/// archive of the tag, runs cargo with its output reported line by line,
+/// installs the built programs with a receipt that says "build", and
+/// starts the check; a Rust older than the product needs gets rustup
+/// offered. Breaks if a build went through the release path, cargo's
+/// output were lost, or the build ran with a Rust too old for it.
+#[cfg(unix)]
+#[test]
+fn source_build_installs_the_built_programs() {
+    let t = Tmp::new("source");
+    let (root, home, tools) = (t.0.join("root"), t.0.join("home"), t.0.join("tools"));
+    std::fs::create_dir_all(&home).unwrap();
+    fake_build_tools(&tools, "1.99.0");
+    let tar = t.0.join("src.tar.gz");
+    make_tar(
+        &tar,
+        "chiefenne-KoflCraft-abc1234",
+        &[
+            ("Cargo.toml", b"[workspace]", 0o644),
+            ("README.md", b"r", 0o644),
+            ("LICENSE", b"l", 0o644),
+        ],
+    );
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    // the release has only a Windows file: nothing for Linux
+    let list = format!(
+        r#"[{{"tag_name": "v0.3.1", "prerelease": false, "assets": [
+            {{"name": "koflcraft-0.3.1-windows-x86_64.zip", "browser_download_url": "{base}/dl/w", "size": 0}}]}}]"#
+    );
+    spawn_server(
+        l,
+        vec![
+            (
+                "/repos/chiefenne/KoflCraft/releases?per_page=50".into(),
+                list.into_bytes(),
+            ),
+            (
+                "/repos/chiefenne/KoflCraft/tarball/v0.3.1".into(),
+                std::fs::read(&tar).unwrap(),
+            ),
+        ],
+    );
+    let c = Catalogue::builtin().unwrap();
+    let e = Env {
+        home: Some(home.clone()),
+        path: vec![tools.clone(), "/usr/bin".into(), "/bin".into()],
+        ..Env::default()
+    };
+    let ctx = Ctx {
+        catalogue: &c,
+        platform: linux(),
+        env: &e,
+    };
+    let plan = Plan {
+        prefix: Some(root.clone()),
+        path: false,
+        installs: vec![Want {
+            from: crate::plan::Origin::Source,
+            ..Want::new("koflcraft")
+        }],
+        ..Plan::default()
+    };
+    let source = Source::Online {
+        api: base,
+        token: None,
+    };
+    let work = t.0.join("work");
+    let tools_now = super::tools(&ctx, &plan, &work).unwrap();
+    assert!(tools_now.iter().all(|t| t.ok), "{tools_now:?}");
+    let resolved = resolve(&ctx, &plan, &source).unwrap();
+    let shown = preview(&ctx, &plan, &source, &resolved, &tools_now).unwrap();
+    assert!(
+        shown[1]
+            .title
+            .starts_with("Build KoflCraft 0.3.1 with cargo"),
+        "{shown:?}"
+    );
+    let mut log = Vec::new();
+    let r = apply(&ctx, &plan, &source, &work, &mut NoElevation, &mut |ev| {
+        if let Event::Log { line } = ev {
+            log.push(line);
+        }
+    })
+    .unwrap();
+    assert!(r.ok, "{r:?}");
+    assert!(r.products[0].built && r.products[0].check.as_ref().unwrap().ok);
+    assert!(log.iter().any(|l| l.contains("Compiling kofl")), "{log:?}");
+    let v = root.join("KoflCraft/0.3.1");
+    assert!(v.join("bin/kofl").is_file() && v.join("bin/mesh-mcp").is_file());
+    assert!(v.join("README.md").is_file() && v.join("LICENSE").is_file());
+    let receipt = std::fs::read_to_string(v.join(RECEIPT)).unwrap();
+    assert!(receipt.contains("source = \"build\""), "{receipt}");
+    assert!(receipt.contains("chiefenne/KoflCraft@v0.3.1"), "{receipt}");
+    assert!(receipt.contains("rustc 1.99.0"), "{receipt}");
+
+    // an old Rust without rustup: rustup-init is offered
+    fake_build_tools(&tools, "1.80.0");
+    let tools_old = super::tools(&ctx, &plan, &work).unwrap();
+    let rust = tools_old.iter().find(|t| t.id == "rust").unwrap();
+    assert!(
+        !rust.ok && rust.fix.is_some(),
+        "rustup-init is offered: {rust:?}"
+    );
 }

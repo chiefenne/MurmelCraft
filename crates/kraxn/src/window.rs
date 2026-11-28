@@ -11,12 +11,13 @@ use std::sync::{Arc, Mutex};
 use egui::{Align, Layout, RichText};
 use kraxn_core::install::Event;
 use kraxn_core::tools::Envelope;
-use kraxn_core::{Plan, Scope, Want};
+use kraxn_core::{Origin, Plan, Scope, Want};
 use serde_json::{Value, json};
 
 use crate::i18n::I18n;
 use crate::runner::Runner;
 use crate::style::{self, Tokens, icon};
+use crate::text::{done_source, tool_line};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -87,6 +88,13 @@ struct Row {
     chosen: bool,
     /// Versions with a file for this system, newest first.
     versions: Vec<String>,
+    /// Every version that is not a pre-release (for a source build).
+    all_versions: Vec<String>,
+    /// Can be built from the source (online, with build paths).
+    buildable: bool,
+    from_source: bool,
+    /// The catalogue's features and whether each is chosen.
+    features: Vec<(String, bool)>,
     version: String,
     make_default: bool,
     installed: Vec<String>,
@@ -104,6 +112,8 @@ pub struct KraxnApp {
     pub offline_dir: String,
     rows: Vec<Row>,
     pub path: bool,
+    /// Source builds for this computer's processor.
+    pub native: bool,
     preview: Option<Job>,
     run: Option<Job>,
     installed: Option<Value>,
@@ -129,6 +139,10 @@ impl KraxnApp {
                 title: p.title.clone(),
                 chosen: true,
                 versions: Vec::new(),
+                all_versions: Vec::new(),
+                buildable: false,
+                from_source: false,
+                features: p.features.iter().map(|f| (f.clone(), false)).collect(),
                 version: "latest".into(),
                 make_default: true,
                 installed: Vec::new(),
@@ -146,6 +160,7 @@ impl KraxnApp {
             offline_dir: String::new(),
             rows,
             path: true,
+            native: false,
             preview: None,
             run: None,
             installed: None,
@@ -185,10 +200,28 @@ impl KraxnApp {
                 .rows
                 .iter()
                 .filter(|r| r.chosen)
-                .map(|r| Want {
-                    version: r.version.clone(),
-                    make_default: r.make_default,
-                    ..Want::new(&r.id)
+                .map(|r| {
+                    let source = r.from_source && r.buildable;
+                    Want {
+                        version: r.version.clone(),
+                        make_default: r.make_default,
+                        from: if source {
+                            Origin::Source
+                        } else {
+                            Origin::Release
+                        },
+                        features: if source {
+                            r.features
+                                .iter()
+                                .filter(|f| f.1)
+                                .map(|f| f.0.clone())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        },
+                        native: source && self.native,
+                        ..Want::new(&r.id)
+                    }
                 })
                 .collect(),
             ..Plan::default()
@@ -207,7 +240,12 @@ impl KraxnApp {
     fn load_products(&mut self, ctx: &egui::Context) {
         let have = self.installed_list();
         let offline = self.offline.then(|| self.offline_dir.trim().to_string());
+        let catalogue = self.lock().catalogue.clone();
         for row in &mut self.rows {
+            row.buildable = offline.is_none()
+                && catalogue
+                    .get(&row.id)
+                    .is_ok_and(|p| !p.build_paths.is_empty());
             row.installed = have["products"]
                 .as_array()
                 .into_iter()
@@ -233,15 +271,22 @@ impl KraxnApp {
             let Some(e) = job.done.take() else { continue };
             row.job = None;
             if e.ok() {
-                row.versions = e.result["releases"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
+                let rels = e.result["releases"].as_array().cloned().unwrap_or_default();
+                let version = |r: &Value| r["version"].as_str().map(str::to_string);
+                row.versions = rels
+                    .iter()
                     .filter(|r| r["file"].is_string())
-                    .filter_map(|r| r["version"].as_str().map(str::to_string))
+                    .filter_map(version)
+                    .collect();
+                row.all_versions = rels
+                    .iter()
+                    .filter(|r| !r["prerelease"].as_bool().unwrap_or(false))
+                    .filter_map(version)
                     .collect();
                 if row.versions.is_empty() {
+                    // nothing to download: only a build, and only if asked
                     row.chosen = false;
+                    row.from_source = true;
                 }
             } else {
                 row.chosen = false;
@@ -281,6 +326,26 @@ impl KraxnApp {
 
     fn loading(&self) -> bool {
         self.rows.iter().any(|r| r.job.is_some())
+    }
+
+    /// The release lists are still being fetched.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn products_loading(&self) -> bool {
+        self.loading()
+    }
+
+    /// The steps' check is done, fine, and no tool blocks the build.
+    fn review_ok(&self) -> bool {
+        self.preview
+            .as_ref()
+            .and_then(|j| j.done.as_ref())
+            .is_some_and(|e| e.ok() && !e.result["blocked"].as_bool().unwrap_or(false))
+    }
+
+    fn any_source(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|r| r.chosen && r.from_source && r.buildable)
     }
 
     fn can_next(&self) -> bool {
@@ -482,21 +547,42 @@ impl KraxnApp {
         }
         let latest_word = self.t.tr("win-latest");
         let default_word = self.t.tr("win-make-default");
+        let source_word = self.t.tr("win-from-source");
         for row in &mut self.rows {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let enabled = !row.versions.is_empty();
+                let has_file = !row.versions.is_empty();
+                let can_build = row.buildable && !row.all_versions.is_empty();
+                let enabled = has_file || can_build;
                 ui.add_enabled_ui(enabled, |ui| {
                     ui.checkbox(&mut row.chosen, RichText::new(&row.title).strong());
                 });
                 ui.label(self.t.tr(&format!("product-{}", row.id)));
                 if let Some(e) = &row.error {
                     ui.label(RichText::new(e).color(ui.visuals().error_fg_color));
-                } else if row.job.is_none() && row.versions.is_empty() {
-                    ui.label(
-                        RichText::new(self.t.tr("products-no-file"))
-                            .color(ui.visuals().warn_fg_color),
-                    );
+                } else if row.job.is_none() && !has_file {
+                    let text = if can_build {
+                        self.t.tr_args(
+                            "products-buildable",
+                            &[(
+                                "version",
+                                row.all_versions.first().cloned().unwrap_or_default(),
+                            )],
+                        )
+                    } else {
+                        self.t.tr("products-no-file")
+                    };
+                    ui.label(RichText::new(text).color(ui.visuals().warn_fg_color));
+                }
+                if row.chosen && can_build && has_file {
+                    ui.checkbox(&mut row.from_source, source_word.clone());
+                }
+                let source = row.from_source && can_build;
+                if row.chosen && source {
+                    for (f, on) in &mut row.features {
+                        let about = self.t.tr(&format!("feature-{f}"));
+                        ui.checkbox(on, format!("{f}: {about}"));
+                    }
                 }
                 if !row.installed.is_empty() {
                     ui.label(
@@ -505,11 +591,19 @@ impl KraxnApp {
                     );
                 }
                 if row.chosen && enabled {
+                    let list = if source {
+                        row.all_versions.clone()
+                    } else {
+                        row.versions.clone()
+                    };
+                    if row.version != "latest" && !list.contains(&row.version) {
+                        row.version = "latest".into();
+                    }
                     ui.horizontal(|ui| {
                         let shown = if row.version == "latest" {
                             format!(
                                 "{latest_word} ({})",
-                                row.versions.first().cloned().unwrap_or_default()
+                                list.first().cloned().unwrap_or_default()
                             )
                         } else {
                             row.version.clone()
@@ -523,7 +617,7 @@ impl KraxnApp {
                                     "latest".to_string(),
                                     latest_word.clone(),
                                 );
-                                for v in &row.versions {
+                                for v in &list {
                                     ui.selectable_value(&mut row.version, v.clone(), v.clone());
                                 }
                             })
@@ -541,6 +635,9 @@ impl KraxnApp {
     fn options_page(&mut self, ui: &mut egui::Ui) {
         ui.heading(self.t.tr("win-options"));
         ui.checkbox(&mut self.path, self.t.tr("path-ask"));
+        if self.any_source() {
+            ui.checkbox(&mut self.native, self.t.tr("win-native"));
+        }
         ui.label(
             RichText::new(self.t.tr("win-more-later"))
                 .color(ui.visuals().widgets.noninteractive.fg_stroke.color),
@@ -595,6 +692,26 @@ impl KraxnApp {
             );
             return;
         }
+        if let Some(tools) = e.result["tools"].as_array().filter(|t| !t.is_empty()) {
+            ui.label(RichText::new(self.t.tr("tools-title")).strong());
+            for t in tools {
+                let mut rt = RichText::new(tool_line(&self.t, t));
+                if !t["ok"].as_bool().unwrap_or(false) && !t["fix"].is_object() {
+                    rt = rt.color(ui.visuals().error_fg_color);
+                }
+                ui.label(rt);
+            }
+            if e.result["blocked"].as_bool().unwrap_or(false) {
+                ui.label(
+                    RichText::new(self.t.tr("tools-blocked")).color(ui.visuals().warn_fg_color),
+                );
+                if ui.button(self.t.tr("win-check-again")).clicked() {
+                    self.go(ui.ctx(), Page::Review);
+                    return;
+                }
+            }
+            ui.add_space(8.0);
+        }
         self.steps_ui(ui, &e.result["steps"]);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -626,6 +743,7 @@ impl KraxnApp {
         let Some(job) = &self.run else { return };
         let mut downloads: Vec<(String, u64, u64)> = Vec::new();
         let mut infos: Vec<String> = Vec::new();
+        let mut log: Vec<&str> = Vec::new();
         for e in &job.events {
             match e {
                 Event::Download { file, done, total } => {
@@ -638,6 +756,7 @@ impl KraxnApp {
                     }
                 }
                 Event::Info { text } => infos.push(text.clone()),
+                Event::Log { line } => log.push(line),
                 Event::Step { title, ok } => infos.push(self.t.tr_args(
                     if *ok {
                         "run-step-ok"
@@ -683,6 +802,22 @@ impl KraxnApp {
                     ui.label(i);
                 }
             });
+        if !log.is_empty() {
+            let building = job.done.is_none();
+            egui::CollapsingHeader::new(self.t.tr("win-build-log"))
+                .default_open(building)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("build-log")
+                        .max_height(180.0)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for l in &log[log.len().saturating_sub(500)..] {
+                                ui.monospace(*l);
+                            }
+                        });
+                });
+        }
         let Some(e) = &job.done else {
             ui.spinner();
             return;
@@ -715,12 +850,7 @@ impl KraxnApp {
                 ))
                 .strong(),
             );
-            let k = if p["verified"].as_bool().unwrap_or(false) {
-                "done-checked"
-            } else {
-                "done-unchecked"
-            };
-            ui.label(format!("    {}", self.t.tr(k)));
+            ui.label(format!("    {}", done_source(&self.t, p)));
             if let Some(c) = p["check"].as_object() {
                 let ok = c["ok"].as_bool().unwrap_or(false);
                 let text = self.t.tr_args(
@@ -885,13 +1015,7 @@ impl KraxnApp {
                     } else {
                         "win-next"
                     };
-                    let ok = self.can_next()
-                        && (n != Page::Running
-                            || self
-                                .preview
-                                .as_ref()
-                                .and_then(|j| j.done.as_ref())
-                                .is_some_and(|e| e.ok()));
+                    let ok = self.can_next() && (n != Page::Running || self.review_ok());
                     if ui
                         .add_enabled(ok, egui::Button::new(self.t.tr(key)))
                         .clicked()

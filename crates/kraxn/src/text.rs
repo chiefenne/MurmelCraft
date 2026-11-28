@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use kraxn_core::install::Event;
 use kraxn_core::tools::Envelope;
-use kraxn_core::{Layout, Plan, Scope, Want};
+use kraxn_core::{Layout, Origin, Plan, Scope, Want};
 use serde_json::{Value, json};
 
 use crate::i18n::I18n;
@@ -189,6 +189,8 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
         let have = self.installed(scope, &prefix);
         let products = self.runner.catalogue.products.clone();
         let mut latest: Vec<Option<String>> = Vec::new();
+        // the newest release to build from source, when there is no file
+        let mut buildable: Vec<Option<String>> = Vec::new();
         let mut rows = Vec::new();
         for p in &products {
             let mut input = json!({"product": p.id});
@@ -201,6 +203,14 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                     .find(|r| !r["prerelease"].as_bool().unwrap_or(false) && r["file"].is_string())
                     .and_then(|r| r["version"].as_str().map(str::to_string))
             });
+            let b = e.result["releases"]
+                .as_array()
+                .and_then(|rs| {
+                    rs.iter()
+                        .find(|r| !r["prerelease"].as_bool().unwrap_or(false))
+                        .and_then(|r| r["version"].as_str().map(str::to_string))
+                })
+                .filter(|_| offline.is_none() && !p.build_paths.is_empty());
             let versions: Vec<String> = have["products"]
                 .as_array()
                 .into_iter()
@@ -209,9 +219,12 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                 .flat_map(|i| i["versions"].as_array().cloned().unwrap_or_default())
                 .filter_map(|v| v["version"].as_str().map(str::to_string))
                 .collect();
-            let latest_s = match &l {
-                Some(v) => self.t.tr_args("products-latest", &[("version", v.clone())]),
-                None => self.t.tr("products-no-file"),
+            let latest_s = match (&l, &b) {
+                (Some(v), _) => self.t.tr_args("products-latest", &[("version", v.clone())]),
+                (None, Some(v)) => self
+                    .t
+                    .tr_args("products-buildable", &[("version", v.clone())]),
+                (None, None) => self.t.tr("products-no-file"),
             };
             let inst = if versions.is_empty() {
                 String::new()
@@ -233,6 +246,7 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                 line
             ));
             latest.push(l);
+            buildable.push(b);
         }
         let title = self.t.tr("products-title");
         self.say(&format!("\n{title}"))?;
@@ -262,9 +276,39 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
             offline_dir: offline,
             ..Plan::default()
         };
+        let mut any_source = false;
         for i in chosen {
             let p = &products[i];
-            let l = latest[i].clone().unwrap_or_else(|| "latest".into());
+            let source = match (&latest[i], &buildable[i]) {
+                (None, None) => {
+                    let m = format!("{}: {}", p.title, self.t.tr("products-no-file"));
+                    self.say(&m)?;
+                    continue;
+                }
+                (None, Some(v)) => {
+                    let q = self.t.tr_args(
+                        "build-ask",
+                        &[("title", p.title.clone()), ("version", v.clone())],
+                    );
+                    if !self.yes(&q, true)? {
+                        continue;
+                    }
+                    true
+                }
+                (Some(_), Some(_)) => {
+                    let q = self.t.tr_args("from-ask", &[("title", p.title.clone())]);
+                    self.line(&format!("{q} [r]"))?
+                        .to_lowercase()
+                        .starts_with('s')
+                }
+                (Some(_), None) => false,
+            };
+            let l = if source {
+                buildable[i].clone()
+            } else {
+                latest[i].clone()
+            }
+            .unwrap_or_else(|| "latest".into());
             let q = self.t.tr_args(
                 "version-ask",
                 &[("title", p.title.clone()), ("latest", l.clone())],
@@ -273,6 +317,24 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
             let mut w = Want::new(&p.id);
             if !v.is_empty() {
                 w.version = v.trim_start_matches('v').to_string();
+            }
+            if source {
+                any_source = true;
+                w.from = Origin::Source;
+                for f in &p.features {
+                    let about = self.t.tr(&format!("feature-{f}"));
+                    let q = self.t.tr_args(
+                        "feature-ask",
+                        &[
+                            ("title", p.title.clone()),
+                            ("feature", f.clone()),
+                            ("about", about),
+                        ],
+                    );
+                    if self.yes(&q, false)? {
+                        w.features.push(f.clone());
+                    }
+                }
             }
             let others = have["products"]
                 .as_array()
@@ -292,6 +354,21 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                 w.make_default = self.yes(&q, true)?;
             }
             plan.installs.push(w);
+        }
+        if plan.installs.is_empty() {
+            let m = self.t.tr("products-none");
+            return self.say(&m);
+        }
+        if any_source {
+            let q = self.t.tr("native-ask");
+            let native = self.yes(&q, false)?;
+            for w in plan
+                .installs
+                .iter_mut()
+                .filter(|w| w.from == Origin::Source)
+            {
+                w.native = native;
+            }
         }
         let q = self.t.tr("path-ask");
         plan.path = self.yes(&q, true)?;
@@ -322,6 +399,18 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
         let e = self.runner.quiet("plan.check", &input);
         if !e.ok() {
             return self.fail(&e);
+        }
+        if let Some(tools) = e.result["tools"].as_array().filter(|t| !t.is_empty()) {
+            let title = self.t.tr("tools-title");
+            self.say(&format!("\n{title}"))?;
+            for t in tools {
+                let line = tool_line(&self.t, t);
+                self.say(&format!("  {line}"))?;
+            }
+            if e.result["blocked"].as_bool().unwrap_or(false) {
+                let m = self.t.tr("tools-blocked");
+                return self.say(&m);
+            }
         }
         let steps = e.result["steps"].clone();
         self.show_steps(&steps)?;
@@ -378,6 +467,9 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                 let k = if ok { "run-step-ok" } else { "run-step-failed" };
                 lines.push(t.tr_args(k, &[("title", title)]))
             }
+            Event::Log { line } => {
+                let _ = writeln!(out, "    {line}");
+            }
         });
         for l in lines {
             self.say(&l)?;
@@ -408,12 +500,7 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                 ],
             );
             self.say(&s)?;
-            let k = if p["verified"].as_bool().unwrap_or(false) {
-                "done-checked"
-            } else {
-                "done-unchecked"
-            };
-            let s = format!("  {}", self.t.tr(k));
+            let s = format!("  {}", done_source(&self.t, p));
             self.say(&s)?;
             if let Some(c) = p["check"].as_object() {
                 let s = self.t.tr_args(
@@ -573,4 +660,41 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
         }
         self.run_steps_tool("version.remove", input)
     }
+}
+
+/// One tool of a source build, as a line: there, installed by Kraxn, or
+/// what you do.
+pub fn tool_line(t: &I18n, tool: &Value) -> String {
+    let s = |k: &str| tool[k].as_str().unwrap_or("").to_string();
+    if tool["ok"].as_bool().unwrap_or(false) {
+        t.tr_args("tools-ok", &[("need", s("need")), ("found", s("found"))])
+    } else if tool["fix"].is_object() {
+        let found = if s("found").is_empty() {
+            t.tr("tools-missing")
+        } else {
+            s("found")
+        };
+        t.tr_args("tools-fix", &[("need", s("need")), ("found", found)])
+    } else {
+        t.tr_args(
+            "tools-manual",
+            &[("need", s("need")), ("manual", s("manual"))],
+        )
+    }
+}
+
+/// Where an installed product came from: built, or the release file and
+/// whether its SHA-256 was checked.
+pub fn done_source(t: &I18n, p: &Value) -> String {
+    if p["built"].as_bool().unwrap_or(false) {
+        return t.tr_args(
+            "done-built",
+            &[("file", p["file"].as_str().unwrap_or("").into())],
+        );
+    }
+    t.tr(if p["verified"].as_bool().unwrap_or(false) {
+        "done-checked"
+    } else {
+        "done-unchecked"
+    })
 }

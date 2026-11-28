@@ -106,6 +106,31 @@ pub fn sort_newest_first(releases: &mut [Release]) {
     releases.sort_by(|a, b| compare_versions(&b.version, &a.version));
 }
 
+/// The release that `wanted` names for a source build: any release, with
+/// or without a file for this system (`latest` = the newest that is not
+/// a pre-release).
+pub fn pick_source<'a>(
+    releases: &'a [Release],
+    product: &Product,
+    wanted: &str,
+) -> Res<&'a Release> {
+    let wanted_v = wanted.trim_start_matches('v');
+    let found = if wanted == "latest" {
+        releases
+            .iter()
+            .filter(|r| !r.prerelease)
+            .max_by(|a, b| compare_versions(&a.version, &b.version))
+    } else {
+        releases.iter().find(|r| r.version == wanted_v)
+    };
+    found.ok_or_else(|| {
+        diag(
+            "KRX002",
+            format!("{} has no release {wanted} to build", product.title),
+        )
+    })
+}
+
 /// The release that `wanted` names (`latest` = the newest that is not a
 /// pre-release and has a file for `platform`).
 pub fn pick<'a>(
