@@ -70,4 +70,12 @@ pub const CODES: &[(&str, &str)] = &[
         "KRX016",
         "a command failed (a tool install, the download of the source or cargo)",
     ),
+    (
+        "KRX017",
+        "an AI assistant named in the plan is not on this computer",
+    ),
+    (
+        "KRX018",
+        "an AI assistant's settings file cannot be read or changed",
+    ),
 ];

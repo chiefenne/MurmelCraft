@@ -38,6 +38,16 @@ dnf_runtime = ["mesa-vulkan-drivers", "vulkan-loader"]
 # MP4 movies call the system's ffmpeg (Kraxn offers to install it)
 ffmpeg = true
 
+# the MCP server the AI assistants start (README "Connect an AI assistant"):
+# it drives the open window; Windows has no live bridge yet
+[product.mcp]
+name = "murmelcraft-live"
+program = "murmel"
+args = ["mcp", "--live", "--root", "{dir}"]
+windows_name = "murmelcraft"
+windows_args = ["mcp", "--root", "{dir}"]
+dir = "murmel-work"
+
 # the files the window opens; `own` types become MurmelCraft's by
 # default, the others only offer it ("Open with")
 [[product.file_types]]
@@ -70,6 +80,12 @@ dnf_runtime = []
 # the folder of the source copied next to the programs
 examples = "examples"
 
+[product.mcp]
+name = "koflcraft"
+program = "kofl"
+args = ["mcp", "--read-root", "{dir}", "--write-root", "{dir}"]
+dir = "kofl-work"
+
 [[product]]
 id = "foehncraft"
 title = "Foehncraft"
@@ -85,6 +101,12 @@ needs_cmake = true
 apt_runtime = []
 dnf_runtime = []
 examples = "examples"
+
+[product.mcp]
+name = "foehn"
+program = "foehn"
+args = ["mcp", "--read-root", "{dir}", "--write-root", "{dir}"]
+dir = "foehn-work"
 
 # Python for the example scripts and Gmsh (install-shared.sh: PIP_PACKAGES,
 # APT_PACKAGES, DNF_PACKAGES, APT_GMSH_LIBS, DNF_GMSH_LIBS)

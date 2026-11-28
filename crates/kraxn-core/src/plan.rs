@@ -14,6 +14,9 @@
 //! python = "venv"               # FoehnCraft's Python: venv, system or none
 //! ffmpeg = true                 # ffmpeg for MurmelCraft's MP4 movies
 //! examples = true               # KoflCraft's and FoehnCraft's examples
+//! assistants = ["claude-code"]  # register the MCP servers with these
+//! # assistant_dir = "/home/me/cfd"  # the folder they may use (default:
+//! #                                 # ~/murmel-work, ~/kofl-work, ~/foehn-work)
 //!
 //! [[install]]
 //! product = "foehncraft"
@@ -152,6 +155,14 @@ pub struct Plan {
     /// The examples from the release's source (default: yes).
     #[serde(default = "yes")]
     pub examples: bool,
+    /// The AI assistants that get the programs' MCP servers (default:
+    /// none): claude-code, claude-desktop, codex, gemini.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assistants: Vec<crate::assist::HostId>,
+    /// The folder the assistants may read and write (default: one per
+    /// program in the home folder).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_dir: Option<PathBuf>,
     #[serde(default, rename = "install")]
     pub installs: Vec<Want>,
 }
@@ -171,6 +182,8 @@ impl Default for Plan {
             python: PyMode::Venv,
             ffmpeg: true,
             examples: true,
+            assistants: Vec::new(),
+            assistant_dir: None,
             installs: Vec::new(),
         }
     }

@@ -128,14 +128,14 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             id: "plan.check",
-            summary: "Checks a plan and returns its steps, with the ones that need administrator rights marked, and for source builds the tools found and how each missing one gets installed (`blocked` when only you can), without running anything.",
+            summary: "Checks a plan and returns its steps, with the ones that need administrator rights marked, the tools found (a source build's, Python, ffmpeg) and how each missing one gets installed (`blocked` when only you can), and `notes` on what an offline install leaves out, without running anything.",
             input: &["plan: the plan (as in a plan file)"],
             reads_only: true,
             run: plan_check,
         },
         Tool {
             id: "plan.apply",
-            summary: "Runs a plan: download, SHA-256 check (or, for a source build, the missing tools, the source and cargo, with cargo's output as events), install, default version, PATH, and a start check of each program.",
+            summary: "Runs a plan: the missing tools, download, SHA-256 check (or, for a source build, the source and cargo, with cargo's output as events), install with the Python venv and examples, default version, PATH, the AI assistants' MCP servers, and a start check of each program and server.",
             input: &["plan: the plan (as in a plan file)"],
             reads_only: false,
             run: plan_apply,
@@ -169,6 +169,13 @@ pub fn tools() -> Vec<Tool> {
             ],
             reads_only: false,
             run: version_remove,
+        },
+        Tool {
+            id: "assistants.detect",
+            summary: "The AI assistants Kraxn can register the programs' MCP servers with (Claude Code, Claude Desktop, ChatGPT's Codex, Gemini CLI), whether each is on this computer, its settings file and the servers registered there.",
+            input: &[],
+            reads_only: true,
+            run: assistants_detect,
         },
         Tool {
             id: "diag.codes",
@@ -311,6 +318,24 @@ fn system_detect(h: &mut Host, _: &Value) -> Out {
         "user": user,
         "system": system,
     }))
+}
+
+fn assistants_detect(h: &mut Host, _: &Value) -> Out {
+    let hosts = crate::assist::detect(&h.platform, h.env);
+    Ok(Value::Array(
+        hosts
+            .iter()
+            .map(|x| {
+                json!({
+                    "id": x.id,
+                    "title": x.title,
+                    "found": x.found,
+                    "config": x.config,
+                    "servers": crate::assist::names(x),
+                })
+            })
+            .collect(),
+    ))
 }
 
 fn catalogue_list(h: &mut Host, _: &Value) -> Out {

@@ -43,6 +43,25 @@ pub struct PythonSpec {
     pub check: String,
 }
 
+/// A product's MCP server, as the AI assistants start it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpSpec {
+    /// Its name in the assistants (the README's).
+    pub name: String,
+    /// The program that serves it.
+    pub program: String,
+    /// Its arguments; `{dir}` is the folder it may use.
+    pub args: Vec<String>,
+    /// Another name and arguments on Windows (MurmelCraft has no live
+    /// window bridge there).
+    #[serde(default)]
+    pub windows_name: Option<String>,
+    #[serde(default)]
+    pub windows_args: Vec<String>,
+    /// The folder below the home folder it may use by default.
+    pub dir: String,
+}
+
 /// One program of the family.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Product {
@@ -84,6 +103,9 @@ pub struct Product {
     /// Python for its scripts.
     #[serde(default)]
     pub python: Option<PythonSpec>,
+    /// Its MCP server for AI assistants.
+    #[serde(default)]
+    pub mcp: Option<McpSpec>,
 }
 
 impl Product {

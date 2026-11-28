@@ -125,6 +125,10 @@ pub struct KraxnApp {
     pub ffmpeg: bool,
     /// KoflCraft's and FoehnCraft's examples.
     pub examples: bool,
+    /// The AI assistants on this computer (`assistants.detect`), once
+    /// looked for, and those that get the MCP servers.
+    hosts: Option<Vec<(kraxn_core::assist::HostId, String, bool)>>,
+    pub assistants: Vec<kraxn_core::assist::HostId>,
     preview: Option<Job>,
     run: Option<Job>,
     installed: Option<Value>,
@@ -178,6 +182,8 @@ impl KraxnApp {
             python: PyMode::Venv,
             ffmpeg: true,
             examples: true,
+            hosts: None,
+            assistants: Vec::new(),
             preview: None,
             run: None,
             installed: None,
@@ -219,6 +225,11 @@ impl KraxnApp {
             python: self.python,
             ffmpeg: self.ffmpeg,
             examples: self.examples,
+            assistants: if self.any_mcp() {
+                self.assistants.clone()
+            } else {
+                Vec::new()
+            },
             installs: self
                 .rows
                 .iter()
@@ -401,9 +412,37 @@ impl KraxnApp {
                 ));
             }
             Page::Manage => self.installed = Some(self.installed_list()),
+            Page::Options if self.hosts.is_none() => {
+                let e = self.lock().quiet("assistants.detect", &json!({}));
+                let hosts: Vec<(kraxn_core::assist::HostId, String, bool)> = e
+                    .result
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|h| {
+                        Some((
+                            serde_json::from_value(h["id"].clone()).ok()?,
+                            h["title"].as_str()?.to_string(),
+                            h["found"].as_bool()?,
+                        ))
+                    })
+                    .collect();
+                // the ones found are ticked (the card: detect and register)
+                self.assistants = hosts.iter().filter(|h| h.2).map(|h| h.0).collect();
+                self.hosts = Some(hosts);
+            }
             _ => {}
         }
         self.page = page;
+    }
+
+    /// A chosen program has an MCP server.
+    fn any_mcp(&self) -> bool {
+        let r = self.lock();
+        self.rows
+            .iter()
+            .filter(|row| row.chosen)
+            .any(|row| r.catalogue.get(&row.id).is_ok_and(|p| p.mcp.is_some()))
     }
 
     fn next_page(&self) -> Option<Page> {
@@ -863,8 +902,47 @@ impl KraxnApp {
             };
             ui.label(RichText::new(text).color(kit::secondary_text(ui)));
         }
-        ui.add_space(8.0);
-        ui.label(RichText::new(self.t.tr("win-more-later")).color(kit::secondary_text(ui)));
+        let servers: Vec<String> = chosen
+            .iter()
+            .filter_map(|p| p.mcp.as_ref().map(|m| m.name.clone()))
+            .collect();
+        if !servers.is_empty() {
+            ui.add_space(8.0);
+            ui.label(kit::bold(self.t.tr("win-assistants")));
+            ui.label(
+                RichText::new(
+                    self.t
+                        .tr_args("win-assistants-text", &[("servers", servers.join(", "))]),
+                )
+                .color(kit::secondary_text(ui)),
+            );
+            let hosts = self.hosts.clone().unwrap_or_default();
+            let mut missing = Vec::new();
+            for (id, title, found) in &hosts {
+                if !found {
+                    missing.push(title.clone());
+                    continue;
+                }
+                let mut on = self.assistants.contains(id);
+                if ui.checkbox(&mut on, title).changed() {
+                    self.assistants.retain(|a| a != id);
+                    if on {
+                        self.assistants.push(*id);
+                    }
+                }
+            }
+            if !missing.is_empty() {
+                let key = if missing.len() == hosts.len() {
+                    "win-assistants-none"
+                } else {
+                    "win-assistants-missing"
+                };
+                ui.label(
+                    RichText::new(self.t.tr_args(key, &[("hosts", missing.join(", "))]))
+                        .color(kit::secondary_text(ui)),
+                );
+            }
+        }
     }
 
     fn steps_ui(&self, ui: &mut egui::Ui, steps: &Value) {
@@ -1104,6 +1182,20 @@ impl KraxnApp {
                 }
                 ui.label(rt);
             }
+        }
+        for a in report["assistants"].as_array().into_iter().flatten() {
+            let ok = a["ok"].as_bool().unwrap_or(false);
+            let mut rt = RichText::new(self.t.tr_args(
+                "done-mcp",
+                &[
+                    ("name", a["name"].as_str().unwrap_or("").into()),
+                    ("message", a["message"].as_str().unwrap_or("").into()),
+                ],
+            ));
+            if !ok {
+                rt = rt.color(ui.visuals().error_fg_color);
+            }
+            ui.label(rt);
         }
         for n in report["notes"].as_array().into_iter().flatten() {
             ui.label(n.as_str().unwrap_or(""));
