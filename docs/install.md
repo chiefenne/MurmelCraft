@@ -110,7 +110,7 @@ murmelcraft
 ```
 
 To build a release instead of `main`, check out its tag first (`git tag`
-lists them, for example `git checkout v0.6.0`).
+lists them, for example `git checkout v0.7.0`).
 
 ## Optional: ffmpeg and Foehncraft
 
