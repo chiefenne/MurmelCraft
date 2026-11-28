@@ -178,7 +178,6 @@ pub fn install(ctx: &egui::Context, tokens: &Tokens) {
 
 /// Lucide glyphs (lucide-static 0.460.0, in `assets/icons/lucide-subset.ttf`).
 pub mod icon {
-    pub const BOX: &str = "\u{E065}";
     pub const SUN: &str = "\u{E17C}";
     pub const MOON: &str = "\u{E122}";
 }

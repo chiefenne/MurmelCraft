@@ -1914,6 +1914,7 @@ dependencies = [
  "flate2",
  "fluent-bundle",
  "kraxn-core",
+ "png",
  "rfd",
  "serde",
  "serde_json",

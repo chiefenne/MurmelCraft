@@ -27,7 +27,11 @@ need administrator rights marked. Install runs them on a thread and shows
 each step's result, the SHA-256 check and the start check. "Save as plan
 file" writes the answers for `kraxn apply`. "Manage what is installed"
 lists the versions for you or for every user, makes one the default and
-removes one version or all of a program. The window follows the system's
+removes one version or all of a program. The window opens on the three programs,
+each with its logo and what it does; a side bar shows Kraxn's logo and the
+steps of the install (done ones checked), or the programs on the other
+pages. Choices are cards, the main button of a page is in the accent, and
+the window and its icon carry Kraxn's logo. The window follows the system's
 dark or light theme (the sun and moon button switches it) and uses
 MurmelCraft's design tokens; every control has a name for screen readers.
 

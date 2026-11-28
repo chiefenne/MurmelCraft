@@ -10,6 +10,7 @@ name = "kraxn"
 path = "src/main.rs"
 
 [dependencies]
+png.workspace = true
 eframe.workspace = true
 egui.workspace = true
 rfd = "0.18"

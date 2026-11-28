@@ -4,6 +4,8 @@
 
 mod elevate;
 mod i18n;
+mod kit;
+mod logos;
 mod runner;
 mod style;
 mod text;
