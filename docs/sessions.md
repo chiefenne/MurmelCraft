@@ -113,6 +113,14 @@ saved, shared and opened again (UI spec, viewer tools: `session.save`,
   `diameter`, `scale` above 0 up to 100. The parcels are read from their
   file again on loading, never stored; a file that cannot be read is
   skipped as `parcels:<path>`.
+- **Injector devices** (format 1.20) are `display.devices`: `{"path":
+  "spray/devices.vtu", "enabled": true, "surface": true, "axes": true,
+  "cones": true}`, FoehnCraft's device file (`devices.open`, or the
+  `static.devices` of a series), its path relative to the session file's
+  folder with `display.devices_absolute` beside, as the parcels'. An own
+  surface colour is in `colors` as `devices`. The devices are read from
+  their file again on loading; a file that cannot be read is skipped as
+  `devices:<path>`. A 1.19 file has none and loads unchanged.
 - **Time series** (format 1.13) are `series`: `{"path":
   "output/spray_duct", "absolute": "/runs/output/spray_duct", "step":
   150, "rate": 4.0, "loop": true}`, the manifest (`series.json`) or the

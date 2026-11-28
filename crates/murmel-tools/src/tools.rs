@@ -1963,6 +1963,11 @@ fn session_load(input: Value, s: &mut Session) -> Run {
     {
         v.path = p;
     }
+    if let Some(p) = f.devices_path(&i.path)
+        && let Some(v) = f.display.devices.as_mut()
+    {
+        v.path = p;
+    }
     let series = f.series.clone().zip(f.series_path(&i.path));
     let mut missing = s.restore(f);
     // The series walked, at the step shown (its files are open already).
@@ -2714,6 +2719,9 @@ pub const JOURNALED: &[&str] = &[
     "parcels.open",
     "parcels.set",
     "parcels.clear",
+    "devices.open",
+    "devices.set",
+    "devices.clear",
     "region.set",
     "region.clear",
     "display.mesh_look",
@@ -3664,11 +3672,44 @@ pub static TOOLS: &[Tool] = &[
         run: crate::parcel::parcels_clear,
     },
     Tool {
+        id: "devices.open",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-devices-open",
+        summary: "Show the injector and nozzle devices of a spray run with the open mesh: FoehnCraft's spray/devices.vtu (ASCII VTK XML UnstructuredGrid, D343 to D345: the placed surface of each device as triangles, one line per hole from its exit along its axis, the outline of each injector's cone; cell fields device, part 0 surface, 1 hole axis, 2 cone, hole and injector). The surface is shaded and lit like the mesh (corners within 35 degrees share their normal), the axes and cones draw as lines; the parcels draw over them. A series whose series.json lists static.devices opens them itself (series.open) and keeps them at every step. While devices show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's devices gives the file, the number of devices, triangles, holes and cones, their box and what was drawn.",
+        outputs: &[],
+        reads: &["path"],
+        input_schema: crate::device::devices_open_schema,
+        run: crate::device::devices_open,
+    },
+    Tool {
+        id: "devices.set",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-devices-set",
+        summary: "Change which parts of the devices show: surface (the placed tip), axes (the hole axes) and cones (the injectors' cone outlines), each true or false; enabled false keeps the settings and draws nothing. Their colours: display.set_color on devices (the surface), settings.set_colors field device and device_line. Faces and line pieces on the cut-away side of a clip plane are left out, so a clip through the tip shows its holes.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::device::devices_set_schema,
+        run: crate::device::devices_set,
+    },
+    Tool {
+        id: "devices.clear",
+        version: 1,
+        action: Action::Read,
+        label_key: "tool-devices-clear",
+        summary: "Remove the devices and their settings.",
+        outputs: &[],
+        reads: &[],
+        input_schema: crate::device::devices_clear_schema,
+        run: crate::device::devices_clear,
+    },
+    Tool {
         id: "series.open",
         version: 1,
         action: Action::Read,
         label_key: "tool-series-open",
-        summary: "Open a time series of one run and show its first step (or step): FoehnCraft's series.json (format foehncraft.series 1: entries of step, time and files fields and parcels, relative to its folder; other keys ignored) or an output folder (its series.json, else its fields_<step>.vtkhdf and spray/parcels_<step>.vtkhdf, matched by step). Each step opens its fields file as the next time step of the open mesh (same cells: the display, derived fields, camera and journal stay, only the values change) and its parcel file with the parcel settings kept; a step without a fields file keeps the mesh shown, one without parcels draws none. The result's series gives the count, the index, step and time shown, its files, the first and last step and time, and the playback. Opening another mesh ends the series.",
+        summary: "Open a time series of one run and show its first step (or step): FoehnCraft's series.json (format foehncraft.series 1: entries of step, time and files fields and parcels, relative to its folder; other keys ignored) or an output folder (its series.json, else its fields_<step>.vtkhdf and spray/parcels_<step>.vtkhdf, matched by step). Each step opens its fields file as the next time step of the open mesh (same cells: the display, derived fields, camera and journal stay, only the values change) and its parcel file with the parcel settings kept; the run's injector devices (static.devices of series.json, else the folder's spray/devices.vtu) open with the series and stay at every step (devices.open; a file that cannot be read is reported as devices_problem); a step without a fields file keeps the mesh shown, one without parcels draws none. The result's series gives the count, the index, step and time shown, its files, the first and last step and time, and the playback. Opening another mesh ends the series.",
         outputs: &[],
         reads: &["path"],
         input_schema: crate::series::series_open_schema,

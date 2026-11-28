@@ -95,6 +95,13 @@ stream = "#36B7C4"
 # Spray parcels drawn in a solid colour: a warm amber, apart from the
 # streamlines' cyan and the arrows' grey, readable on both viewports.
 parcel = "#E8A33D"
+# Injector devices (FoehnCraft's spray/devices.vtu): the tip a light
+# steel grey, lit like the mesh, apart from the parcels' colour maps and
+# amber; the hole axes and the cones of the injectors a clear blue
+# (OKLCH 0.62 0.17 255) that reads on the dark and the light viewport
+# and over the grey of the tip.
+device = "#AAB0B8"
+device_line = "#3F86E0"
 # The boxes of an overview's blocks: a muted violet, apart from the
 # mesh's grey outline inside which they lie; the blocks the regions read
 # take a clear yellow that stands out from the others on both viewports.

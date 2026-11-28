@@ -19,7 +19,8 @@
 //! block boxes show (since 1.16), the colour range over every step of a
 //! series (range `steps`, since 1.17), the category field and the
 //! exploded view (since 1.18), the statistics, vortex and
-//! intensity quantities of derived fields (since 1.19), the user's mesh
+//! intensity quantities of derived fields (since 1.19), the injector
+//! devices shown, their file read again on loading (since 1.20), the user's mesh
 //! colours and the view cube
 //! placement. Loading puts all of it back; the colours and the
 //! view cube apply to the session only and are not written to
@@ -38,6 +39,7 @@ use crate::camera::Camera;
 use crate::clip::Clip;
 use crate::cube::CubeSettings;
 use crate::derive::Made;
+use crate::device::DeviceView;
 use crate::display::{ColorBy, Explode, Item, PickTarget, RenderMode, SavedView};
 use crate::extract::{Iso, MeshLook, Slice};
 use crate::field::{FieldChoice, FieldStyle, RangeMode};
@@ -51,7 +53,7 @@ use crate::stream::Stream;
 use crate::theme::{MeshColors, Rgb, Tokens};
 
 pub const SESSION_FORMAT: &str = "murmelcraft.session";
-pub const SESSION_VERSION: &str = "1.19";
+pub const SESSION_VERSION: &str = "1.20";
 /// The extension of session files (JSON inside).
 pub const EXTENSION: &str = "murmel";
 
@@ -154,6 +156,12 @@ pub struct DisplayState {
     pub parcels: Option<ParcelView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parcels_absolute: Option<PathBuf>,
+    /// The injector devices shown (1.20): their path relative to the
+    /// session file's folder, the absolute one beside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices: Option<DeviceView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices_absolute: Option<PathBuf>,
     /// Whether the boxes of an overview's blocks show (1.16).
     #[serde(skip_serializing_if = "is_false")]
     pub show_blocks: bool,
@@ -346,6 +354,18 @@ impl SessionFile {
                 }),
                 parcels_absolute: d
                     .parcels
+                    .as_ref()
+                    .filter(|_| s.mesh.is_some())
+                    .map(|v| absolute(&v.path)),
+                devices: d.devices.clone().filter(|_| s.mesh.is_some()).map(|v| {
+                    let abs = absolute(&v.path);
+                    DeviceView {
+                        path: relative(&dir, &abs).unwrap_or(abs),
+                        ..v
+                    }
+                }),
+                devices_absolute: d
+                    .devices
                     .as_ref()
                     .filter(|_| s.mesh.is_some())
                     .map(|v| absolute(&v.path)),
@@ -600,6 +620,19 @@ impl SessionFile {
         })
     }
 
+    /// The device file to read: relative to `file`'s folder if that
+    /// exists, else the absolute path saved.
+    pub fn devices_path(&self, file: &Path) -> Option<PathBuf> {
+        let v = self.display.devices.as_ref()?;
+        let dir = absolute(file).parent().map(Path::to_path_buf)?;
+        let rel = absolute(&dir.join(&v.path));
+        let abs = self.display.devices_absolute.clone();
+        Some(match abs {
+            Some(a) if !rel.exists() && a.exists() => a,
+            _ => rel,
+        })
+    }
+
     /// The series manifest or folder to read: relative to `file`'s folder
     /// if that exists, else the absolute path saved.
     pub fn series_path(&self, file: &Path) -> Option<PathBuf> {
@@ -687,6 +720,8 @@ impl Session {
         d.stream_traces = None;
         d.parcels = None;
         d.parcel_data = None;
+        d.devices = None;
+        d.device_data = None;
         d.mesh_look = s.mesh_look;
         d.show_blocks = s.show_blocks;
         d.category = s.category;
@@ -839,6 +874,21 @@ impl Session {
             if d.parcels.is_none() {
                 d.selection.retain(|&i| i != Item::Parcels);
                 d.colors.remove(&Item::Parcels);
+            }
+            // The devices, their file read again (the caller put the
+            // path to read in place, `SessionFile::devices_path`).
+            if let Some(v) = s.devices {
+                match murmel_mesh::read_devices(&v.path) {
+                    Ok(x) => {
+                        d.device_data = Some(std::sync::Arc::new(x));
+                        d.devices = Some(v);
+                    }
+                    Err(_) => missing.push(format!("devices:{}", v.path.display())),
+                }
+            }
+            if d.devices.is_none() {
+                d.selection.retain(|&i| i != Item::Devices);
+                d.colors.remove(&Item::Devices);
             }
             let (ns, ni) = (d.slices.len(), d.isos.len());
             d.selection.retain(|&i| match i {

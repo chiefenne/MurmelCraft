@@ -89,6 +89,7 @@ impl MurmelApp {
                 | Item::Iso(_)
                 | Item::Arrows
                 | Item::Parcels
+                | Item::Devices
                 | Item::Blocks
                 | Item::Stream(_)
                 | Item::Region(_) => {}
@@ -275,6 +276,7 @@ impl MurmelApp {
                 self.open_color_edit(&field("item"), &field("label"));
             }
             Some(("window.parcels_open", _)) => self.parcels_open_dialog(),
+            Some(("window.devices_open", _)) => self.devices_open_dialog(),
             Some(("window.open_whole", _)) => {
                 if let Some(path) = self.session.mesh.as_ref().map(|m| m.path.clone()) {
                     self.open_path_as(path, murmel_engine::OpenMode::Whole);

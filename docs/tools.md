@@ -57,7 +57,10 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `parcels.open` | 1 | read | Show the spray parcels of a parcel file with the open mesh: FoehnCraft's spray/parcels_<step>.vtkhdf (VTKHDF PolyData: points with velocity, diameter, droplets, age, parcel_id and later temperature and injector as point data; time and step as attributes) or any VTKHDF PolyData of points. Each parcel is a small shaded sphere. A file opened while parcels show keeps their settings (the next file of a run looks the same); the first one is coloured by diameter (else its first field) with a colour bar of its own. While parcels show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's parcels lists the file's time, step, count, the parcels drawn and each field's range. |
 | `parcels.set` | 1 | read | Change how the parcels show. color: a parcel field (component: magnitude, x, y or z of a vector) or solid (display.set_color on parcels); its colour bar keeps its own map (map: a colour map id or auto), reverse and range (field: all parcels of the file, the default; shown: the parcels drawn; symmetric; fixed with min and max), apart from the gas field of the same name. size: fixed (every parcel 1/400 of the mesh diagonal times scale) or diameter (the largest droplet diameter that size, the others in proportion); scale above 0 up to 100. Filters: diameter [min, max] in metres and injector (a number, needs the file's injector field), null for all. Parcels on the cut-away side of a clip plane are left out. At most 200 000 are drawn, thinned evenly beyond (capped in the result). enabled false keeps the settings and draws none. A field the file lacks is refused with the list of its fields. |
 | `parcels.clear` | 1 | read | Remove the parcels and their settings. |
-| `series.open` | 1 | read | Open a time series of one run and show its first step (or step): FoehnCraft's series.json (format foehncraft.series 1: entries of step, time and files fields and parcels, relative to its folder; other keys ignored) or an output folder (its series.json, else its fields_<step>.vtkhdf and spray/parcels_<step>.vtkhdf, matched by step). Each step opens its fields file as the next time step of the open mesh (same cells: the display, derived fields, camera and journal stay, only the values change) and its parcel file with the parcel settings kept; a step without a fields file keeps the mesh shown, one without parcels draws none. The result's series gives the count, the index, step and time shown, its files, the first and last step and time, and the playback. Opening another mesh ends the series. |
+| `devices.open` | 1 | read | Show the injector and nozzle devices of a spray run with the open mesh: FoehnCraft's spray/devices.vtu (ASCII VTK XML UnstructuredGrid, D343 to D345: the placed surface of each device as triangles, one line per hole from its exit along its axis, the outline of each injector's cone; cell fields device, part 0 surface, 1 hole axis, 2 cone, hole and injector). The surface is shaded and lit like the mesh (corners within 35 degrees share their normal), the axes and cones draw as lines; the parcels draw over them. A series whose series.json lists static.devices opens them itself (series.open) and keeps them at every step. While devices show, the mesh draws as its faint outline unless display.mesh_look asks for faces. The result's devices gives the file, the number of devices, triangles, holes and cones, their box and what was drawn. |
+| `devices.set` | 1 | read | Change which parts of the devices show: surface (the placed tip), axes (the hole axes) and cones (the injectors' cone outlines), each true or false; enabled false keeps the settings and draws nothing. Their colours: display.set_color on devices (the surface), settings.set_colors field device and device_line. Faces and line pieces on the cut-away side of a clip plane are left out, so a clip through the tip shows its holes. |
+| `devices.clear` | 1 | read | Remove the devices and their settings. |
+| `series.open` | 1 | read | Open a time series of one run and show its first step (or step): FoehnCraft's series.json (format foehncraft.series 1: entries of step, time and files fields and parcels, relative to its folder; other keys ignored) or an output folder (its series.json, else its fields_<step>.vtkhdf and spray/parcels_<step>.vtkhdf, matched by step). Each step opens its fields file as the next time step of the open mesh (same cells: the display, derived fields, camera and journal stay, only the values change) and its parcel file with the parcel settings kept; the run's injector devices (static.devices of series.json, else the folder's spray/devices.vtu) open with the series and stay at every step (devices.open; a file that cannot be read is reported as devices_problem); a step without a fields file keeps the mesh shown, one without parcels draws none. The result's series gives the count, the index, step and time shown, its files, the first and last step and time, and the playback. Opening another mesh ends the series. |
 | `series.go` | 1 | read | Show another step of the open series: index (from 0), step, time (the nearest entry with a time), by (entries on, negative back; wraps round while the player loops, else holds at the ends) or to first or last; exactly one. A step the series lacks is refused with the steps it has. |
 | `series.range` | 1 | read | Read the colour range of a field (field and component; left out: the field shown) over every step of the open series, as range mode steps of field.style colours with: each step's fields file is read (the step shown is not read again), the derived and calculated fields are made again of its values, and the smallest and largest value over the cells (points, boundary faces) is taken. Steps without a fields file or with another mesh add nothing. The range is kept until the series or the derived fields change, so playing and movies read nothing again. The result gives field, component, range [lo, hi], read and total steps. Changes nothing. |
 | `series.play` | 1 | read | Play or pause the open series in the window (playing), at rate steps a second (0.1 to 60, default 4), looping or stopping at the last step (loop, default on). The window's player bar and the status bar show it; on the command line and for scripts the setting is kept and steps are made with series.go, and export.movie with motion series writes a movie of the steps. |
@@ -2086,6 +2089,63 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 }
 ```
 
+### `devices.open`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "A device file: FoehnCraft's spray/devices.vtu (ASCII VTK XML UnstructuredGrid of triangles and lines, cell fields device, part, hole, injector)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+### `devices.set`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "axes": {
+      "description": "one line per hole along its axis",
+      "type": "boolean"
+    },
+    "cones": {
+      "description": "the outline of each injector's cone",
+      "type": "boolean"
+    },
+    "enabled": {
+      "description": "false keeps the settings and draws nothing",
+      "type": "boolean"
+    },
+    "surface": {
+      "description": "the placed surface of each device",
+      "type": "boolean"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+### `devices.clear`
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {},
+  "required": [],
+  "type": "object"
+}
+```
+
 ### `series.open`
 
 ```json
@@ -4025,6 +4085,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `PARCEL001` | error | No parcels are open. | Open a parcel file (FoehnCraft's spray/parcels_<step>.vtkhdf) with parcels.open. |
 | `PARCEL002` | error | The parcel file has no field of this name (to colour by, to size by diameter or to filter by diameter or injector). | The message lists the fields of the file; parcels.open's result lists them too. |
 | `PARCEL003` | error | A parcel setting is out of range: a scale not above 0 or above 100, a diameter range not 0 <= min <= max, an unknown colour map or a fixed range not min < max. | Give a scale above 0 up to 100, diameters in metres with min <= max, a map of field.style's list or auto, and min < max. |
+| `DEVICE001` | error | No injector devices are open. | Open FoehnCraft's spray/devices.vtu with devices.open, or a series whose series.json lists it under static.devices (series.open). |
 | `SERIES001` | error | The time series cannot be read: the path does not exist, the manifest is not foehncraft.series 1 or names a step twice or a step without files, or the folder holds no numbered files. | Give FoehnCraft's series.json or its output folder (fields_<step>.vtkhdf, spray/parcels_<step>.vtkhdf). |
 | `SERIES002` | error | No time series is open. | Open a series.json or an output folder with series.open. |
 | `SERIES003` | error | The series has no such step, index or time, or the rate is outside 0.1 to 60 steps a second. | series.open's result gives the count, the first and last step and the times. |
@@ -4102,6 +4163,7 @@ runs the same ids. Each call returns a `murmelcraft.tool-result` envelope.
 | `MESH017` | error | The file uses an HDF5 feature the reader does not support (a chunk index, filter or storage kind). | Write the file with contiguous or chunked datasets and the deflate or shuffle filters, as FoehnCraft and VTK do. |
 | `MESH018` | error | The file is not a VTKHDF file, or its VTKHDF layout is broken (a block, dataset or count is missing or wrong). | Open a .vtkhdf file written by FoehnCraft or VTK (VTKHDF 2.x, UnstructuredGrid or PartitionedDataSetCollection). |
 | `MESH019` | error | Opening the mesh was cancelled. | Open it again when you want it. |
+| `MESH020` | error | The device file (FoehnCraft's spray/devices.vtu) cannot be read: not an ASCII VTK XML UnstructuredGrid of one Piece, a count or index out of range, a cell type other than faces and lines, or a part that does not fit its cell. | Open the spray/devices.vtu a FoehnCraft run or its spray.place tool wrote; write it again if it was cut short or edited by hand. |
 | `BLOCK001` | error | The blocked VTKHDF file cannot be written: the folder is missing or read-only, the disk is full, or the output is the mesh being converted. | Write to another path with room for about the size of the mesh file; the output must not be the input. |
 | `BLOCK002` | error | The block size is outside 16,384 to 1,048,576 cells. | Leave it out for the default of 65,536 cells per block. |
 | `BLOCK003` | error | The mesh has no volume cells to put in blocks. | Convert a volume mesh: a .vtu, an OpenFOAM polyMesh or a VTKHDF file. |

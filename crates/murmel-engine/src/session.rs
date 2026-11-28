@@ -370,6 +370,7 @@ pub(crate) fn same_display(a: &Display, b: &Display) -> bool {
         region_cells: None,
         stream_traces: None,
         parcel_data: None,
+        device_data: None,
         block_cuts: None,
         ..d.clone()
     };
@@ -378,6 +379,7 @@ pub(crate) fn same_display(a: &Display, b: &Display) -> bool {
         && same(&a.region_cells, &b.region_cells)
         && same(&a.stream_traces, &b.stream_traces)
         && same(&a.parcel_data, &b.parcel_data)
+        && same(&a.device_data, &b.device_data)
         && same(&a.block_cuts, &b.block_cuts)
         && bare(a) == bare(b)
 }
@@ -857,6 +859,8 @@ fn display_for_new_mesh(old: &Display, fields: &FieldSet) -> Display {
     d.stream_traces = None;
     d.parcels = None;
     d.parcel_data = None;
+    d.devices = None;
+    d.device_data = None;
     d.field_values = None;
     d.regions.clear();
     d.region_cells = None;
@@ -1776,6 +1780,8 @@ impl Session {
         self.display.probe_findings = None;
         self.display.parcels = None;
         self.display.parcel_data = None;
+        self.display.devices = None;
+        self.display.device_data = None;
         self.series = None;
         self.surface_revision += 1;
     }

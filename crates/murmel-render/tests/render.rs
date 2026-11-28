@@ -656,6 +656,86 @@ fn spray_parcels_by_diameter() {
     check_shot("spray-parcels-by-diameter", &shot);
 }
 
+/// Injector devices (FoehnCraft D345, plan stage ID2m): a nozzle in the
+/// upper wall of the duct pointing down, drawn as FoehnCraft's
+/// devices.vtu holds it: a cylinder of 24 facets with a flat end
+/// (triangles, shaded round on the side by the crease angle, sharp at
+/// the rim), five hole axes 30 degrees from its axis and the cone of one
+/// injector, inside the mesh's faint outline. Facets shaded flat, a soft
+/// rim, a lost line or a wrong colour moves pixels here.
+#[test]
+fn spray_device_nozzle() {
+    use murmel_mesh::devices::{DeviceCell, Devices, Part};
+    let mut s = field_session("pressure", murmel_mesh::Component::Magnitude);
+    s.display.color_by = ColorBy::Solid;
+    let b = s.mesh.as_ref().unwrap().mesh.bounds();
+    let at = |t: [f64; 3]| [0, 1, 2].map(|k| b.min[k] + t[k] * (b.max[k] - b.min[k]));
+    let size = b.radius();
+    let tip = at([0.35, 0.8, 0.5]);
+    let (r, h) = (0.06 * size, 0.25 * size);
+    let ring = |y: f64, k: usize| {
+        let a = std::f64::consts::TAU * k as f64 / 24.0;
+        [tip[0] + r * a.cos(), y, tip[2] + r * a.sin()]
+    };
+    let mut points = Vec::new();
+    let mut cells = Vec::new();
+    let mut add = |pts: &[[f64; 3]], part: Part, hole: i64, points: &mut Vec<[f64; 3]>| {
+        let start = points.len();
+        points.extend_from_slice(pts);
+        cells.push(DeviceCell {
+            part,
+            device: 0,
+            hole,
+            injector: if part == Part::Cone { 0 } else { -1 },
+            points: start..points.len(),
+        });
+    };
+    for k in 0..24 {
+        let (a, b2) = (ring(tip[1], k), ring(tip[1], k + 1));
+        let (c, d) = (ring(tip[1] + h, k), ring(tip[1] + h, k + 1));
+        // The side, facing out; the end, facing down (-y).
+        add(&[a, c, b2], Part::Surface, -1, &mut points);
+        add(&[b2, c, d], Part::Surface, -1, &mut points);
+        add(&[tip, a, b2], Part::Surface, -1, &mut points);
+    }
+    let len = 0.3 * size;
+    let polar = 30f64.to_radians();
+    let mut axis_end = tip;
+    for k in 0..5 {
+        let a = std::f64::consts::TAU * (k as f64 + 0.3) / 5.0;
+        let n = [polar.sin() * a.cos(), -polar.cos(), polar.sin() * a.sin()];
+        let e = [0, 1, 2].map(|i| tip[i] + 0.5 * r * [a.cos(), 0.0, a.sin()][i]);
+        let end = [0, 1, 2].map(|i| e[i] + len * n[i]);
+        if k == 0 {
+            axis_end = end;
+        }
+        add(&[e, end], Part::Axis, k, &mut points);
+    }
+    let cone: Vec<[f64; 3]> = (0..=36)
+        .map(|k| {
+            let a = std::f64::consts::TAU * k as f64 / 36.0;
+            [
+                axis_end[0] + 0.05 * size * a.cos(),
+                axis_end[1],
+                axis_end[2] + 0.05 * size * a.sin(),
+            ]
+        })
+        .collect();
+    add(&cone, Part::Cone, 0, &mut points);
+    let d = Devices {
+        points,
+        cells,
+        ..Default::default()
+    };
+    s.display.devices = Some(murmel_engine::device::DeviceView::new("devices.vtu".into()));
+    s.display.device_data = Some(std::sync::Arc::new(d));
+    s.redraw();
+    let sf = &s.mesh.as_ref().unwrap().surface;
+    assert_eq!(sf.device_triangles, 72);
+    assert_eq!(sf.device_segments, 5 + 36);
+    check_session("spray-device-nozzle", &s);
+}
+
 /// Export (the maintainer's cards of 2026-11-24, "same look as on
 /// screen"): the channel coloured by patch at 1.5 times a 320 x 213
 /// viewport, edges 1.5 pixels wide, with the patch legend top left and

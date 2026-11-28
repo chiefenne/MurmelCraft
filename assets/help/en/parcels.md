@@ -1,6 +1,6 @@
 +++
 covers = ["window.parcels_open", "parcels.*"]
-related = ["series", "charts"]
+related = ["series", "charts", "devices"]
 chapter = "results"
 +++
 Spray parcels from a FoehnCraft run: points coloured by diameter, velocity or temperature, sized by diameter. They follow the time series.

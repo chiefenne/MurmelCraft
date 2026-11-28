@@ -4651,3 +4651,71 @@ fn statistics_quantities_from_a_file() {
     assert_eq!(e.diagnostics[0].code, "FIELD005");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Invariant: devices.open needs a mesh (VIEW001) and reads FoehnCraft's
+/// spray/devices.vtu (the fixture: spray.place of the five-hole nozzle,
+/// FoehnCraft 1957bdb): 5 hole axes and 5 cones, drawn as lines;
+/// devices.set hides a part (fewer lines drawn) and refuses without
+/// devices (DEVICE001); a series whose series.json lists static.devices
+/// opens them and keeps them when it steps; a session file brings them
+/// back with their parts; devices.clear removes them. Breaks if the
+/// time player lost the injector between steps (ID2m) or a front end's
+/// call drew nothing and reported success.
+#[test]
+fn device_tools() {
+    let mut s = session();
+    let fixture = root().join("test-fixtures/spray-device/devices.vtu");
+    let e = call("devices.open", json!({ "path": fixture }), &mut s);
+    assert_eq!(e.diagnostics[0].code, "VIEW001");
+    let mesh = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    assert!(call("mesh.open", json!({ "path": mesh }), &mut s).ok());
+    let e = call("devices.set", json!({"cones": false}), &mut s);
+    assert_eq!(e.diagnostics[0].code, "DEVICE001");
+    let e = call("devices.open", json!({ "path": fixture }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    let d = &e.result["devices"];
+    assert_eq!(
+        (d["devices"].clone(), d["holes"].clone(), d["cones"].clone()),
+        (json!(1), json!(5), json!(5))
+    );
+    assert_eq!(d["triangles"], 0);
+    // Each axis is one piece, each cone a closed ring of 36.
+    assert_eq!(d["drawn"]["segments"], 5 + 5 * 36);
+    assert!(s.display.outline_mesh(), "the mesh shows as its outline");
+    let e = call("devices.set", json!({"cones": false}), &mut s);
+    assert_eq!(e.result["devices"]["drawn"]["segments"], 5);
+    let bad = root().join("test-fixtures/vtkhdf/channel_fields.vtkhdf");
+    let e = call("devices.open", json!({ "path": bad }), &mut s);
+    assert_eq!(e.diagnostics[0].code, "MESH020");
+    // A session file keeps them with their parts.
+    let file = std::env::temp_dir().join(format!("murmel-devices-{}.murmel", std::process::id()));
+    assert!(call("session.save", json!({ "path": file }), &mut s).ok());
+    assert!(call("devices.clear", json!({}), &mut s).ok());
+    assert!(s.display.devices.is_none());
+    let e = call("session.load", json!({ "path": file }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(crate::device::devices_json(&s)["drawn"]["segments"], 5);
+    assert!(s.display.devices.as_ref().is_some_and(|v| !v.cones));
+    let _ = std::fs::remove_file(&file);
+    call("devices.clear", json!({}), &mut s);
+    // A series that lists them opens them and keeps them at every step.
+    let dir = series_run(&mut s, "devices", true);
+    std::fs::copy(&fixture, dir.join("spray/devices.vtu")).unwrap();
+    let mut m: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("series.json")).unwrap()).unwrap();
+    m["static"] = json!({"devices": "spray/devices.vtu"});
+    std::fs::write(dir.join("series.json"), m.to_string()).unwrap();
+    let e = call("series.open", json!({ "path": dir }), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["devices"]["holes"], 5);
+    assert_eq!(
+        e.result["series"]["devices"],
+        json!(dir.join("spray/devices.vtu"))
+    );
+    let e = call("series.go", json!({"step": 20}), &mut s);
+    assert!(e.ok(), "{:?}", e.diagnostics);
+    assert_eq!(e.result["devices"]["holes"], 5, "the devices stay");
+    let e = call("devices.clear", json!({}), &mut s);
+    assert!(e.result["devices"].is_null());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1110,6 +1110,60 @@ pub fn commands() -> Vec<Command> {
             s.display.parcels.as_ref().map(|_| json!({}))
         }),
     ));
+    // Injector devices (FoehnCraft D345, ID2m): open a device file, show
+    // or hide them or their parts, remove them.
+    v.push(cmd(
+        "window.devices_open",
+        "cmd-devices-open",
+        "file",
+        &[],
+        Window(Some("devices.open")),
+    ));
+    v.push(cmd(
+        "devices.set:toggle",
+        "cmd-devices-toggle",
+        "slice",
+        &[],
+        Dynamic("devices.set", |s| {
+            s.display
+                .devices
+                .as_ref()
+                .map(|d| json!({"enabled": !d.enabled}))
+        }),
+    ));
+    v.push(cmd(
+        "devices.set:surface",
+        "cmd-devices-surface",
+        "slice",
+        &[],
+        Dynamic("devices.set", |s| {
+            s.display
+                .devices
+                .as_ref()
+                .map(|d| json!({"surface": !d.surface}))
+        }),
+    ));
+    v.push(cmd(
+        "devices.set:lines",
+        "cmd-devices-lines",
+        "slice",
+        &[],
+        Dynamic("devices.set", |s| {
+            s.display.devices.as_ref().map(|d| {
+                let on = !(d.axes || d.cones);
+                json!({"axes": on, "cones": on})
+            })
+        }),
+    ));
+    v.push(cmd(
+        "devices.clear",
+        "cmd-devices-clear",
+        "slice",
+        &[],
+        Dynamic("devices.clear", |s| {
+            s.display.devices.as_ref().map(|_| json!({}))
+        }),
+    ));
     // Time series (D268): open one, play or pause it (Space), step on
     // and back (. and ,), go to the first or the last step.
     v.push(cmd(

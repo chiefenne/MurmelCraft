@@ -53,6 +53,7 @@ pub fn menus() -> Vec<Menu> {
                 Sub("menu-recent", vec![Entry::Recent, S, C("recent.clear")]),
                 C("window.series_open"),
                 C("window.parcels_open"),
+                C("window.devices_open"),
                 C("window.charts_open"),
                 S,
                 // Other tools' formats; Open is for our own files.
@@ -266,6 +267,15 @@ pub fn menus() -> Vec<Menu> {
                         C("parcels.set:toggle"),
                         C("parcels.set:size"),
                         C("parcels.clear"),
+                    ],
+                ),
+                Sub(
+                    "menu-devices",
+                    vec![
+                        C("devices.set:toggle"),
+                        C("devices.set:surface"),
+                        C("devices.set:lines"),
+                        C("devices.clear"),
                     ],
                 ),
                 S,

@@ -13,6 +13,7 @@
 
 pub mod blocks;
 mod boundary;
+pub mod devices;
 pub mod estimate;
 pub mod evidence;
 pub mod fasthash;
@@ -38,6 +39,7 @@ use std::sync::OnceLock;
 use serde::Serialize;
 
 pub use boundary::NO_CELL;
+pub use devices::{Devices, read_devices};
 pub use evidence::{Evidence, EvidencePatch};
 pub use field::{Component, Field, Location, Results};
 pub use hash::FileHash;
@@ -163,6 +165,11 @@ pub const CODES: &[(&str, &str, &str)] = &[
         "MESH019",
         "Opening the mesh was cancelled.",
         "Open it again when you want it.",
+    ),
+    (
+        "MESH020",
+        "The device file (FoehnCraft's spray/devices.vtu) cannot be read: not an ASCII VTK XML UnstructuredGrid of one Piece, a count or index out of range, a cell type other than faces and lines, or a part that does not fit its cell.",
+        "Open the spray/devices.vtu a FoehnCraft run or its spray.place tool wrote; write it again if it was cut short or edited by hand.",
     ),
     (
         "BLOCK001",

@@ -45,6 +45,7 @@ pub(crate) fn series_json(s: &Session) -> Value {
         "step": e.step,
         "time": shown_time(s),
         "files": {"fields": e.fields, "parcels": e.parcels},
+        "devices": r.devices,
         "steps": [first.step, last.step],
         "times": r.times().map(|(a, b)| [a, b]),
         "playback": {"playing": r.playback.playing, "rate": r.playback.rate, "loop": r.playback.looping},
@@ -104,6 +105,7 @@ fn done(s: &Session) -> Run {
     let mut out = display_json(s);
     out["series"] = series_json(s);
     out["parcels"] = crate::parcel::parcels_json(s);
+    out["devices"] = crate::device::devices_json(s);
     if let Some(m) = &s.mesh {
         out["mesh"] = json!(m.path);
     }
@@ -130,10 +132,23 @@ pub fn go_to(s: &mut Session, k: usize) -> Result<(), Diagnostic> {
         .iter()
         .chain(r.entries[..k].iter().rev())
         .find_map(|e| e.fields.clone());
+    let devices = r.devices.clone();
     let series = s.series.take();
+    let had = s.display.devices.is_some();
     let made = step(s, &e, near);
     s.series = series;
-    made
+    made?;
+    // A mesh of other cells opens afresh, without the devices: the run's
+    // devices come back (a file that cannot be read now stays away; the
+    // step is shown all the same).
+    if had
+        && s.display.devices.is_none()
+        && let Some(p) = devices
+        && crate::device::open_devices(s, p).is_ok()
+    {
+        s.redraw();
+    }
+    Ok(())
 }
 
 fn step(
@@ -226,10 +241,23 @@ pub(crate) fn series_open(input: Value, s: &mut Session) -> Run {
         return Err(d);
     }
     steps_by_default(s);
+    // The run's injector devices (`static.devices`, FoehnCraft D345),
+    // drawn under the parcels at every step; a file that cannot be read
+    // is reported and the series opens without it.
+    let mut problem = Value::Null;
+    if let Some(p) = s.series.as_ref().and_then(|r| r.devices.clone()) {
+        match crate::device::open_devices(s, p) {
+            Ok(()) => s.redraw(),
+            Err(d) => problem = json!({"code": d.code, "message": d.message}),
+        }
+    }
     // The charts of the run's tables, when its folder has them (D268).
     crate::charts::open_beside(s, &opened);
     let mut out = done(s)?;
     out["charts"] = crate::charts::charts_json(s);
+    if !problem.is_null() {
+        out["devices_problem"] = problem;
+    }
     Ok(out)
 }
 
