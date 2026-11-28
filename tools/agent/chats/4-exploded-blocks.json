@@ -1,0 +1,7 @@
+[["mesh.open", {"path": "blocks/tetrahedron.vtu"}],
+ ["field.list", {}],
+ ["display.color_by", {"by": "category", "field": "BlockId"}],
+ ["display.explode", {"factor": 0.6, "field": "BlockId"}],
+ ["view.standard", {"view": "iso"}],
+ ["view.zoom", {"factor": 0.7}],
+ ["export.image", {"path": "chats/tetrahedron-exploded.png", "width": 1600, "height": 900}]]

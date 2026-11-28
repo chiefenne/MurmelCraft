@@ -1,0 +1,9 @@
+[["mesh.open", {"path": "manifold-mesh/foehncraft.vtkhdf"}],
+ ["inspect.quality", {"metric": "non_orthogonality", "above": 70}],
+ ["inspect.quality", {"metric": "skewness", "above": 0.9}],
+ ["probe.at", {"at": {"point": [0, 30, 24.96]}}],
+ ["probe.at", {"at": {"point": [0, 30, 0]}}],
+ ["display.threshold", {"metric": "non_orthogonality", "value": 70}],
+ ["view.standard", {"view": "iso"}],
+ ["view.zoom", {"factor": 0.6}],
+ ["export.image", {"path": "chats/manifold-worst-cells.png", "width": 1600, "height": 900}]]
