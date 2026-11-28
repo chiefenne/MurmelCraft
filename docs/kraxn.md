@@ -6,20 +6,32 @@ releases or from a folder of downloaded files, with several versions side
 by side. *Kraxn* is Tyrolean for the carrying frame on your back: it
 carries the three up the hill.
 
-This page describes the first part: the core and the text mode. The
-window, source builds, extras (menu entries, file types, Python and Gmsh,
-ffmpeg, examples) and the AI assistant set-up follow in the next pull
-requests of the thread "Build GUI installer for all three".
+This page describes the core, the window and the text mode. Source
+builds, extras (menu entries, file types, Python and Gmsh, ffmpeg,
+examples) and the AI assistant set-up follow in the next pull requests.
 
 ## Start it
 
 ```sh
-cargo run --release -p kraxn            # the questions in this terminal
+cargo run --release -p kraxn            # the window (the text mode without a desktop)
+cargo run --release -p kraxn -- text    # the questions in this terminal
 cargo run --release -p kraxn -- apply plan.toml
 cargo run --release -p kraxn -- call installed.list --input '{"scope": "user"}'
 ```
 
-`kraxn` asks: what to do (install, change the default version, remove,
+The window walks through the same questions as the text mode, one page
+each: for you or for every user (and the folder), the GitHub releases or a
+folder of downloads, which programs and versions (a program with no file
+for this computer says so), the PATH, then every step with those that
+need administrator rights marked. Install runs them on a thread and shows
+each step's result, the SHA-256 check and the start check. "Save as plan
+file" writes the answers for `kraxn apply`. "Manage what is installed"
+lists the versions for you or for every user, makes one the default and
+removes one version or all of a program. The window follows the system's
+dark or light theme (the sun and moon button switches it) and uses
+MurmelCraft's design tokens; every control has a name for screen readers.
+
+The text mode asks: what to do (install, change the default version, remove,
 list), for whom, where from, which programs and versions, and whether to
 put them on the PATH. It then shows every step, marks those that need
 administrator rights, offers to save the answers as a plan file, and runs

@@ -11,7 +11,7 @@ use crate::i18n::I18n;
 use crate::runner::Runner;
 use crate::text::Text;
 
-fn tmp(name: &str) -> PathBuf {
+pub(crate) fn tmp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("kraxn-bin-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -19,7 +19,7 @@ fn tmp(name: &str) -> PathBuf {
 }
 
 /// A KoflCraft release in `dir` whose `kofl` exits 0.
-fn kofl_release(dir: &Path, v: &str) {
+pub(crate) fn kofl_release(dir: &Path, v: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let top = format!("koflcraft-{v}-linux-x86_64");
     let name = format!("{top}.tar.gz");
@@ -42,7 +42,7 @@ fn kofl_release(dir: &Path, v: &str) {
     std::fs::write(dir.join("SHA256SUMS.txt"), format!("{sum}  {name}\n")).unwrap();
 }
 
-fn runner(home: &Path) -> Runner {
+pub(crate) fn runner(home: &Path) -> Runner {
     Runner {
         catalogue: Catalogue::builtin().unwrap(),
         platform: Platform::parse("linux", "x86_64").unwrap(),

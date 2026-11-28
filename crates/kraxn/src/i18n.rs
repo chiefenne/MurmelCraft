@@ -59,7 +59,11 @@ mod tests {
     fn every_key_is_translated() {
         let t = I18n::english().unwrap();
         let mut seen = 0;
-        for s in [include_str!("text.rs"), include_str!("main.rs")] {
+        for s in [
+            include_str!("text.rs"),
+            include_str!("main.rs"),
+            include_str!("window.rs"),
+        ] {
             for part in s
                 .split("tr(\"")
                 .skip(1)

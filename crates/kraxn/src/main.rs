@@ -5,7 +5,9 @@
 mod elevate;
 mod i18n;
 mod runner;
+mod style;
 mod text;
+mod window;
 
 use std::io::{BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -19,7 +21,8 @@ use crate::runner::Runner;
 const USAGE: &str = "\
 kraxn: installs MurmelCraft, KoflCraft and FoehnCraft
 
-  kraxn                     the questions in this terminal (the window comes next)
+  kraxn                     the window (in a terminal without a desktop: the questions there)
+  kraxn window              the window
   kraxn text                the questions in this terminal
   kraxn apply PLAN [--yes] [--dry-run]
                             install what a plan file says (--yes: no question)
@@ -94,6 +97,14 @@ fn main() -> ExitCode {
         ExitCode::from(1)
     };
     match a.as_slice() {
+        [] | ["window"]
+            if a == ["window"] || Platform::this().is_ok_and(|p| tools::has_desktop(&p)) =>
+        {
+            match runner(true).and_then(window::run) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => fail(e),
+            }
+        }
         [] | ["text"] => {
             if !std::io::stdin().is_terminal() && a.is_empty() {
                 // piped input still works, but say what this is
@@ -182,3 +193,5 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod window_tests;
