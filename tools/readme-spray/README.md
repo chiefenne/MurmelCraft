@@ -32,3 +32,20 @@ the side panels. The same charts without a window:
 
 in the run folder writes `mass_flow.png`, `penetration.png`,
 `diameters.png`, `histogram_outlet.png` and `statistics` in the result.
+
+`assets/readme/spray-device.png` is FoehnCraft's ECN Spray G case with
+the device form of its injector file (`spray_g_device_injectors.toml`,
+the standard gasoline tip, FoehnCraft gallery 343), FoehnCraft main
+`b7955a3`, run to 0.4 ms (about 10 minutes on 4 threads). In
+`examples/cases/flow` of FoehnCraft:
+
+    foehn flow spray_g_g1.toml --set spray.include="spray_g_device_injectors.toml" \
+      --set time.end_time=4e-4 --set spray.write_every=25 \
+      --set output.fields_interval=1e-4 --out output/spray_g_device
+    murmel run --script /path/to/MurmelCraft/tools/readme-spray/spray-device.json
+
+`series.open` reads the devices from `static.devices` of the run's
+`series.json`; the picture is step 400, the parcels coloured by their own
+|velocity| (inferno), seen obliquely so the ring of eight holes does not
+face the viewer. The case is a 22.5° sector, so one half plume shows
+beside the whole tip.
