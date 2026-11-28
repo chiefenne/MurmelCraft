@@ -1,0 +1,63 @@
+# What Kraxn installs: the three programs of the family and how each one is
+# released, checked and built. Kraxn reads only this file to learn about a
+# product, so a new program of the family is one more [[product]] here.
+#
+# The fields mirror the settings block at the top of each repository's
+# tools/install-shared.sh (the shared install on Linux under /opt), so that
+# Kraxn and that script lay out the same folders and see each other's
+# installs. A test checks MurmelCraft's entry against its own script.
+
+format = "kraxn.catalogue"
+format_version = "1.0"
+
+[[product]]
+id = "murmelcraft"
+# the folder under the install root (install-shared.sh: TITLE)
+title = "MurmelCraft"
+# the start of the release file names (install-shared.sh: NAME)
+archive = "murmelcraft"
+repo = "chiefenne/MurmelCraft"
+# the programs in the release archive's folder
+programs = ["murmelcraft", "murmel", "murmel-mcp"]
+# the program with a window, if any (menu entries and file types)
+window = "murmelcraft"
+# the smoke test after an install (install-shared.sh: CHECK)
+check = ["murmel", "help"]
+# source build (install-shared.sh: BUILD_PATHS, BUILD_FEATURES)
+build_paths = ["crates/murmel-app", "crates/murmel-cli", "crates/murmel-mcp"]
+features = []
+min_rust = "1.98"
+needs_cmake = false
+# Linux packages the programs need at run time (install-shared.sh:
+# APT_RUNTIME, DNF_RUNTIME): the GPU (wgpu) through Vulkan
+apt_runtime = ["mesa-vulkan-drivers", "libvulkan1"]
+dnf_runtime = ["mesa-vulkan-drivers", "vulkan-loader"]
+
+[[product]]
+id = "koflcraft"
+title = "KoflCraft"
+archive = "koflcraft"
+repo = "chiefenne/KoflCraft"
+programs = ["kofl", "mesh-mcp"]
+check = ["kofl", "commands"]
+build_paths = ["crates/mesh-cli", "crates/mesh-mcp"]
+features = []
+min_rust = "1.88"
+needs_cmake = false
+apt_runtime = []
+dnf_runtime = []
+
+[[product]]
+id = "foehncraft"
+title = "Foehncraft"
+archive = "foehncraft"
+repo = "chiefenne/Foehncraft"
+programs = ["foehn"]
+check = ["foehn", "info"]
+build_paths = ["crates/foehncraft-cli"]
+# features a source build may add (docs/install.md, "Optional: MPI and GPU")
+features = ["mpi", "cuda"]
+min_rust = "1.89"
+needs_cmake = true
+apt_runtime = []
+dnf_runtime = []

@@ -166,6 +166,8 @@ the same code path in the fast run.
 | `crates/murmel-cli` | `murmel`, the command line of the registry; `murmel mcp` starts the MCP server |
 | `crates/murmel-mcp` | the MCP server (stdio, MCP 2025-11-25): the registry for agents on one headless session, paths confined to read and write roots, screenshots returned as images ([docs/mcp.md](docs/mcp.md)) |
 | `crates/murmel-app` | `murmelcraft`, the egui + eframe window: panels, viewport, view cube, command palette, shortcut sheet, keyboard focus (F6 regions, focus ring), large meshes read on their own thread with progress and Cancel (`opening.rs`), window tests with egui_kittest |
+| `crates/kraxn-core` | Kraxn, the installer of MurmelCraft, KoflCraft and FoehnCraft, without a window: catalogue (`assets/kraxn/catalogue.toml`), folders per system and scope, release lists (GitHub or a folder), downloads with the SHA-256 check, unpacking, install steps, versions side by side, removal, its tool registry ([docs/kraxn.md](docs/kraxn.md), [docs/kraxn-tools.md](docs/kraxn-tools.md)); none of the viewer's crates (a test checks) |
+| `crates/kraxn` | `kraxn`: the text mode, plan files, `kraxn call`, and the steps that need administrator rights (`kraxn admin-run`) |
 | `assets/` | tokens, fonts, icons, translations, with provenance |
 | `test-fixtures/` | KoflCraft meshes and OpenFOAM polyMesh cases, with provenance |
 

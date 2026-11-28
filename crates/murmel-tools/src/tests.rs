@@ -534,6 +534,21 @@ fn engine_has_no_window_or_gpu() {
             "murmel-mcp",
             &["egui", "eframe", "wgpu", "murmel-render"][..],
         ),
+        // Kraxn, the installer, stands apart from the viewer: no window
+        // in its core, and none of the viewer's crates (it must build
+        // and run where MurmelCraft does not)
+        (
+            "kraxn-core",
+            &[
+                "egui",
+                "eframe",
+                "wgpu",
+                "murmel-mesh",
+                "murmel-engine",
+                "murmel-render",
+                "murmel-tools",
+            ][..],
+        ),
     ] {
         let toml =
             std::fs::read_to_string(root().join(format!("crates/{krate}/Cargo.toml"))).unwrap();
