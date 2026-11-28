@@ -43,7 +43,7 @@ make; nobody clicked.
 137,682 polyhedra. Four recorded chats, with every call and what came
 back: check a mesh, see the flow, read the pressure drop, pull the blocks
 of a block mesh apart, in [docs/chats.md](docs/chats.md). Connect your
-own assistant: [below](#let-claude-drive-murmelcraft-macos-copy-and-paste).</sub>
+own assistant: [below](#connect-an-ai-assistant-claude-chatgpt-others).</sub>
 
 ## What works today
 
@@ -348,54 +348,152 @@ cargo run -p murmel-cli -- commands --markdown   # docs/tools.md
 cargo run --release -p murmel-cli -- mcp --root .  # the MCP server on stdio
 ```
 
-## Let Claude drive MurmelCraft (macOS, copy and paste)
+## Connect an AI assistant (Claude, ChatGPT, others)
 
-`cargo build --release` builds three programs into `target/release/`:
-`murmelcraft` (the window), `murmel` (the command line; `murmel mcp` is
-the MCP server) and `murmel-mcp` (the same server on its own). Claude
-Code needs the server's full path, so run these lines **in the
+The chat mode is an AI assistant on your own computer that starts
+MurmelCraft's MCP server and calls its tools, the same ones the window's
+buttons call. Any assistant that can start a local MCP server (a "stdio"
+server) can do it; the server is the same for all of them. It has been
+tested with Claude Code; the other entries below start the same command
+and have not been tested yet. ChatGPT and Claude in a web browser or on a
+phone cannot start a program on your computer, so they cannot connect.
+
+The server runs in one of two ways:
+
+| Command | What the assistant drives |
+|---|---|
+| `murmel mcp --live --root DIR` | your open window: you watch every step, Undo works, **Stop** in the status bar ends it (macOS and Linux; Windows has no bridge yet) |
+| `murmel mcp --root DIR` | a session of its own without a window; screenshots come back to the assistant as pictures |
+
+`DIR` is the folder the assistant may read and write; it must exist
+(`--read-root DIR` adds a folder it may only read). Details:
+[docs/mcp.md](docs/mcp.md).
+
+### 1. The program and a work folder
+
+`murmel` is one of the three programs of [Install](#install): after a
+build from source it is `target/release/murmel` in the MurmelCraft folder;
+from a release it is `/Applications/MurmelCraft.app/Contents/MacOS/murmel`
+on the Mac and `murmel` (`murmel.exe`) in the unpacked folder on Linux and
+Windows. The assistant needs its full path. In a terminal **in the
 MurmelCraft folder** (`$PWD` fills the path in for you):
 
 ```sh
 cargo build --release
+MURMEL="$PWD/target/release/murmel"          # or the release path above
 mkdir -p ~/murmel-work                       # the folder the agent may read and write
-claude mcp add --scope user murmelcraft-live -- \
-  "$PWD/target/release/murmel" mcp --live --root ~/murmel-work
+```
+
+### 2. Register it with your assistant
+
+**Claude Code** (the `claude` command):
+
+```sh
+claude mcp add --scope user murmelcraft-live -- "$MURMEL" mcp --live --root ~/murmel-work
 claude mcp list                              # murmelcraft-live: ... ✓ Connected
 ```
 
-Then start the window (`target/release/murmelcraft`, or with a mesh:
-`target/release/murmelcraft test-fixtures/channel/foehncraft.vtu`),
-start `claude` in any folder and ask, for example, *"Use murmelcraft-live:
-clip the mesh along x and show me a screenshot"*. Meshes the agent opens
-must lie in `~/murmel-work` (or give it more folders with
-`--read-root DIR`). For a session of its own without a window, add the
-server without `--live` under another name:
+For a session of its own without a window, add the server without
+`--live` under another name:
 
 ```sh
-claude mcp add --scope user murmelcraft -- \
-  "$PWD/target/release/murmel" mcp --root ~/murmel-work
+claude mcp add --scope user murmelcraft -- "$MURMEL" mcp --root ~/murmel-work
 ```
 
-If it does not work:
+**Claude Desktop** (the Claude app on macOS or Windows): Settings ▸
+Developer ▸ **Edit Config** opens `claude_desktop_config.json`. Add the
+server with full paths (no `~`; `echo "$MURMEL" ~/murmel-work` prints
+them), save and restart the app:
 
-- *`claude: command not found`*: Claude Code is not installed in this
-  shell; install it, or open a new terminal after installing.
+```json
+{
+  "mcpServers": {
+    "murmelcraft-live": {
+      "command": "/Users/me/MurmelCraft/target/release/murmel",
+      "args": ["mcp", "--live", "--root", "/Users/me/murmel-work"]
+    }
+  }
+}
+```
+
+On Windows the paths look like `"C:\\Users\\me\\MurmelCraft\\target\\release\\murmel.exe"`,
+and the args are `["mcp", "--root", "C:\\Users\\me\\murmel-work"]`
+(no `--live` on Windows yet).
+
+**ChatGPT** (OpenAI's Codex: the `codex` command, the ChatGPT desktop app
+and the Codex IDE extension share one list of servers):
+
+```sh
+codex mcp add murmelcraft-live -- "$MURMEL" mcp --live --root ~/murmel-work
+codex mcp list
+```
+
+or by hand in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.murmelcraft-live]
+command = "/Users/me/MurmelCraft/target/release/murmel"
+args = ["mcp", "--live", "--root", "/Users/me/murmel-work"]
+```
+
+**Gemini CLI** (the `gemini` command):
+
+```sh
+gemini mcp add --scope user murmelcraft-live "$MURMEL" -- mcp --live --root ~/murmel-work
+gemini mcp list
+```
+
+**Other assistants** (Cursor, VS Code, LM Studio and others) take the same
+entry in their own MCP settings: the command is the full path of `murmel`,
+the arguments are `mcp --live --root /full/path/to/murmel-work` (or
+without `--live`). Most use the `"mcpServers"` JSON of Claude Desktop
+above.
+
+Then start the window (`target/release/murmelcraft`, or with a mesh:
+`target/release/murmelcraft test-fixtures/channel/foehncraft.vtu`),
+start the assistant in any folder and ask. Meshes the agent opens must lie
+in `~/murmel-work` (or give it more folders with `--read-root DIR`).
+
+### 3. Things to ask
+
+Copy two of the test meshes into the work folder:
+
+```sh
+cp test-fixtures/channel/foehncraft.vtu ~/murmel-work/channel.vtu
+cp test-fixtures/vtkhdf/channel_fields.vtkhdf ~/murmel-work/
+```
+
+and ask, for example:
+
+> *"Use murmelcraft-live: open channel.vtu. Is the mesh good enough for
+> FoehnCraft, and where are the worst cells? Show me a screenshot."*
+
+> *"Open channel_fields.vtkhdf, cut it along the channel, colour the cut
+> by speed, put arrows on it and tell me the pressure drop from the inlet
+> to the outlet."*
+
+The assistant picks the tools (open, quality, slice, colour, arrows,
+probes, screenshot), reads what comes back and answers in a few lines.
+Four recorded chats, with every call and what came back, are in
+[docs/chats.md](docs/chats.md).
+
+### If it does not work
+
+- *`claude: command not found`* (or `codex`, `gemini`): the assistant is
+  not installed in this shell; install it, or open a new terminal after
+  installing.
 - *`MCP server murmelcraft-live already exists`*: remove the old entry
   first, `claude mcp remove murmelcraft-live --scope user` (or
   `--scope local` if it was added without `--scope`), and add it again.
 - *Not listed in another folder*: without `--scope user` the server is
   added for the current folder only.
-- *`✗ Failed to connect`*: the path is wrong or the program is not
-  built; `ls "$PWD/target/release/murmel"` must show the file, and
-  `target/release/murmel mcp --live --root ~/murmel-work` must print
-  nothing and wait (Ctrl + C ends it). A root that does not exist stops
-  it with a message.
+- *`✗ Failed to connect`*, or the tools do not show up: the path is wrong
+  or the program is not built; `ls "$MURMEL"` must show the file, and
+  `"$MURMEL" mcp --live --root ~/murmel-work` must print nothing and wait
+  (Ctrl + C ends it). A root that does not exist stops it with a message.
+  Claude Desktop needs full paths and a restart after each change.
 - *`LIVE001`* in a call: no MurmelCraft window is open; *`LIVE003`* in
   Settings: a second window is open. Settings > Agents must be on.
-
-More in [docs/mcp.md](docs/mcp.md); example chats in
-[docs/chats.md](docs/chats.md).
 
 Post-processing, step by step: [docs/post-processing.md](docs/post-processing.md).
 Rules for contributors and agents: [AGENTS.md](AGENTS.md). Tools:
