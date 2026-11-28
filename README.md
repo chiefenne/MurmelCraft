@@ -22,6 +22,29 @@ also [full-size stills](assets/readme/tour); how they were made is in
 [![Rust 1.98+](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](#install)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+## Ask in a chat
+
+> *"Open the FoehnCraft result of the Manifold and show me how the air
+> moves through the box. Is there a recirculation?"*
+
+An AI assistant connected to MurmelCraft's MCP server (`murmel mcp`)
+opened the result, cut it through the middle, coloured it by speed, put
+arrows on the cut and probed two points, then answered: *"Yes, two. The
+bend delivers a jet that crosses the box and reaches the far wall; there
+it splits and turns back along both sides at about 0.01 m/s, a fifth of
+the inlet speed."* Eleven tool calls, the same ones the window's buttons
+make; nobody clicked.
+
+<p align="center">
+  <a href="docs/chats.md#2-where-does-the-air-go"><img src="assets/readme/chats/manifold-box-flow.jpg" width="800" alt="Top view of the Manifold cut through its middle, coloured by speed with white arrows: the air comes up the inlet pipe, turns through the bend, crosses the box as a jet to the far wall and turns back along both sides to the outlet pipe"></a>
+</p>
+
+<sub>FoehnCraft's laminar run (Re = 167) on KoflCraft's Manifold mesh,
+137,682 polyhedra. Four recorded chats, with every call and what came
+back: check a mesh, see the flow, read the pressure drop, pull the blocks
+of a block mesh apart, in [docs/chats.md](docs/chats.md). Connect your
+own assistant: [below](#let-claude-drive-murmelcraft-macos-copy-and-paste).</sub>
+
 ## What works today
 
 Release 0.6.0 (tag `v0.6.0`): the V0.1 to V0.6 milestones of the UI spec
@@ -371,7 +394,8 @@ If it does not work:
 - *`LIVE001`* in a call: no MurmelCraft window is open; *`LIVE003`* in
   Settings: a second window is open. Settings > Agents must be on.
 
-More in [docs/mcp.md](docs/mcp.md).
+More in [docs/mcp.md](docs/mcp.md); example chats in
+[docs/chats.md](docs/chats.md).
 
 Post-processing, step by step: [docs/post-processing.md](docs/post-processing.md).
 Rules for contributors and agents: [AGENTS.md](AGENTS.md). Tools:

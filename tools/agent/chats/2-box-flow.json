@@ -1,0 +1,11 @@
+[["mesh.open", {"path": "run/fields.vtkhdf"}],
+ ["field.list", {}],
+ ["display.color_by", {"by": "field", "field": "velocity", "component": "magnitude"}],
+ ["slice.set", {"axis": "z", "new": true}],
+ ["display.render_mode", {"mode": "shaded"}],
+ ["arrows.set", {"density": 50, "in_plane": true, "color": "solid", "scale": 1.5}],
+ ["probe.at", {"at": {"point": [0.3, 0.35, 0.02]}}],
+ ["probe.at", {"at": {"point": [0.3, 0.255, 0.02]}}],
+ ["view.standard", {"view": "top"}],
+ ["view.zoom", {"factor": 0.95}],
+ ["export.image", {"path": "chats/manifold-box-flow.png", "width": 1600, "height": 900}]]

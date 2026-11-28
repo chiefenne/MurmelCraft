@@ -15,6 +15,8 @@ as an MCP image, so the agent sees what it set up. With `--live` the same
 server drives the person's open window instead
 ([Drive the open window](#drive-the-open-window)).
 
+Four recorded chats, with every call and what came back: [chats.md](chats.md).
+
 ## Start it
 
 ```sh

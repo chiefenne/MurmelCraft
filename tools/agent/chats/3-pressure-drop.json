@@ -1,0 +1,10 @@
+[["mesh.open", {"path": "run/fields.vtkhdf"}],
+ ["probe.add", {"at": {"point": [0, 0.002, 0]}, "name": "inlet"}],
+ ["probe.add", {"at": {"point": [-0.118, 0.36, 0.04]}, "name": "outlet"}],
+ ["display.color_by", {"by": "field", "field": "pressure"}],
+ ["field.style", {"lines": true, "line_count": 16}],
+ ["slice.set", {"axis": "z", "new": true}],
+ ["display.render_mode", {"mode": "shaded"}],
+ ["view.standard", {"view": "top"}],
+ ["view.zoom", {"factor": 0.95}],
+ ["export.image", {"path": "chats/manifold-pressure.png", "width": 1600, "height": 900}]]
