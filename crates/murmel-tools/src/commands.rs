@@ -2299,6 +2299,10 @@ mod tests {
             let e = crate::call("series.open", json!({"path": dir}), s);
             assert!(e.ok(), "{:?}", e.diagnostics);
             assert!(s.display.parcels.is_some());
+            // FoehnCraft's devices of a nozzle, for the device commands.
+            let devices = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../test-fixtures/spray-device/devices.vtu");
+            assert!(crate::call("devices.open", json!({"path": devices}), s).ok());
             // A run's tables, for the chart commands.
             let run = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../test-fixtures/spray-run");
