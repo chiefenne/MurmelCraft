@@ -149,6 +149,8 @@ pub enum Item {
     Stream(u32),
     /// The spray parcels (`parcels`), when `Display::parcels` is set.
     Parcels,
+    /// The injector devices (`devices`), when `Display::devices` is set.
+    Devices,
     /// The boxes of the blocks of a mesh open as an overview (`blocks`),
     /// when `Display::block_boxes` is set.
     Blocks,
@@ -181,6 +183,7 @@ impl Item {
             Item::Region(i) => format!("region:{}", i + 1),
             Item::Stream(i) => format!("stream:{}", i + 1),
             Item::Parcels => "parcels".into(),
+            Item::Devices => "devices".into(),
             Item::Blocks => "blocks".into(),
         }
     }
@@ -197,6 +200,9 @@ impl Item {
         }
         if id == "parcels" {
             return Some(Item::Parcels);
+        }
+        if id == "devices" {
+            return Some(Item::Devices);
         }
         if id == "arrows" {
             return Some(Item::Arrows);
@@ -386,6 +392,11 @@ pub struct Display {
     /// The parcels of its file, read once and shared by every copy of
     /// the display.
     pub parcel_data: Option<Arc<murmel_mesh::Parcels>>,
+    /// The injector devices shown (`devices.open`, `devices.set`, the
+    /// series' `static.devices`).
+    pub devices: Option<crate::device::DeviceView>,
+    /// The devices of its file, read once and shared.
+    pub device_data: Option<Arc<murmel_mesh::Devices>>,
     /// Whether the boxes of an overview's blocks show (the eye of
     /// `blocks` in the model tree); kept from mesh to mesh, as the
     /// render mode is.
@@ -530,6 +541,11 @@ impl Display {
                         p.enabled = on;
                     }
                 }
+                (Item::Devices, Some(on)) => {
+                    if let Some(p) = &mut self.devices {
+                        p.enabled = on;
+                    }
+                }
                 (Item::Blocks, Some(on)) => self.show_blocks = on,
                 (Item::Region(k), Some(on)) => {
                     if let Some(r) = self.regions.get_mut(k as usize) {
@@ -575,6 +591,7 @@ impl Display {
                         | Item::Iso(_)
                         | Item::Arrows
                         | Item::Parcels
+                        | Item::Devices
                         | Item::Blocks
                         | Item::Region(_)
                         | Item::Stream(_)
@@ -821,6 +838,7 @@ impl Display {
             Item::Iso(k) => (k as usize) < self.isos.len(),
             Item::Arrows => self.arrows.is_some(),
             Item::Parcels => self.parcels.is_some(),
+            Item::Devices => self.devices.is_some(),
             Item::Blocks => self.block_boxes.is_some(),
             Item::Region(k) => (k as usize) < self.regions.len(),
             Item::Stream(k) => (k as usize) < self.streams.len(),
@@ -1052,6 +1070,7 @@ impl Display {
             || self.isos.iter().any(|i| i.enabled)
             || self.streams_shown()
             || self.parcels_shown()
+            || self.devices_shown()
             || self.blocks_shown()
     }
 
@@ -1068,6 +1087,11 @@ impl Display {
             return None;
         }
         self.probe_findings.as_ref()?.get(at.point)
+    }
+
+    /// Whether injector devices are drawn.
+    pub fn devices_shown(&self) -> bool {
+        crate::device::shown(self)
     }
 
     /// Whether spray parcels are drawn.
@@ -1154,6 +1178,11 @@ impl Display {
                 .parcels
                 .as_ref()
                 .map(|_| set.unwrap_or(tokens.mesh.field.parcel)),
+            // The devices' surface colour, in every mode.
+            (_, Item::Devices) => self
+                .devices
+                .as_ref()
+                .map(|_| set.unwrap_or(tokens.mesh.field.device)),
             // A streamline set's solid colour, in every mode.
             (_, Item::Stream(k)) => self
                 .streams
@@ -1238,6 +1267,7 @@ impl Display {
             | Item::Iso(_)
             | Item::Arrows
             | Item::Parcels
+            | Item::Devices
             | Item::Blocks
             | Item::Region(_)
             | Item::Stream(_) => false,

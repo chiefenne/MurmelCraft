@@ -97,6 +97,15 @@ change, and [changelog.d](changelog.d) the changes since the release.
 
   <img src="assets/readme/spray-series.gif" width="700" alt="A movie of the FoehnCraft spray in a duct, seen from the top: the stream of droplets grows from the injector at the upper left across the duct towards the lower wall, step by step, over a slice of the gas coloured by speed">
 
+- Injector devices (`devices.open`, `devices.set`): FoehnCraft's
+  `spray/devices.vtu`, the injector a run places (its tip as a shaded
+  surface, a line along each hole, the outline of each injector's cone),
+  drawn under the parcels. `series.open` opens the devices `series.json`
+  lists under `static.devices` and keeps them at every step; the tip, the
+  hole axes and the cones show and hide apart; kept in session files.
+
+  <img src="assets/readme/spray-device.png" width="700" alt="ECN Spray G at 0.4 ms in MurmelCraft: a grey cylindrical injector tip at the left with the ring of eight holes on its domed end and short blue hole axes; from one hole a plume of droplets runs to the right inside the faint outline of the 22.5 degree sector mesh, yellow and fast near the tip, slowing through orange and red to dark purple at its wide head about 30 mm downstream">
+
 - Charts and statistics of a run (`charts.open`, `charts.show`,
   `charts.data`, `charts.export`, `stats.at`): FoehnCraft's `datums.csv`,
   `spray.csv` and size histograms `spray_hist_<datum>.csv`, read without

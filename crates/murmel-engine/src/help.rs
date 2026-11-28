@@ -79,6 +79,7 @@ pages!(
     "arrows",
     "streamlines",
     "parcels",
+    "devices",
     "series",
     "charts",
     "regions",

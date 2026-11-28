@@ -21,6 +21,7 @@ mod convert;
 mod cube;
 mod defaults;
 mod derived;
+mod devices;
 mod edges;
 mod export_dialog;
 mod extracts;

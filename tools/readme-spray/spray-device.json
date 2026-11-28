@@ -1,0 +1,6 @@
+[
+ {"tool": "series.open", "input": {"path": "output/spray_g_device", "step": 400}},
+ {"tool": "parcels.set", "input": {"color": "velocity", "map": "inferno", "scale": 0.3}},
+ {"tool": "view.set_camera", "input": {"target": [0.010, 0.007, 0.0], "distance": 0.045, "yaw_deg": -55, "pitch_deg": 22}},
+ {"tool": "export.image", "input": {"path": "spray-device.png", "width": 1400, "height": 640, "legend": false}}
+]

@@ -148,6 +148,10 @@ pub struct Surface {
     pub parcels_capped: bool,
     /// The smallest and largest colour value of the parcels drawn.
     pub parcel_range: Option<(f64, f64)>,
+    /// The triangles of the devices' surface and the line pieces of
+    /// their hole axes and cones drawn ([`crate::device`]).
+    pub device_triangles: usize,
+    pub device_segments: usize,
     /// Where each plane of each slice is in `indices` and in
     /// `edge_positions`, so a renderer can leave a moving slice out
     /// while it draws its preview ([`crate::slice_preview`]).
@@ -1285,6 +1289,8 @@ impl Surface {
         }
         // (an overview's lines are traced through its blocks)
         crate::stream::append(self, mesh, fields, tokens, display);
+        // The devices before the parcels: the parcels draw over them.
+        crate::device::append(self, tokens, display);
         crate::parcel::append(self, mesh, tokens, display);
         crate::block_boxes::append(self, tokens, display);
     }
@@ -1382,6 +1388,8 @@ impl Surface {
         self.parcels = part.parcels;
         self.parcels_capped = part.parcels_capped;
         self.parcel_range = part.parcel_range;
+        self.device_triangles = part.device_triangles;
+        self.device_segments = part.device_segments;
         self.slice_parts = part
             .slice_parts
             .into_iter()
@@ -1451,6 +1459,8 @@ pub fn extras_only(old: &Display, new: &Display) -> bool {
         stream_traces: new.stream_traces.clone(),
         parcels: new.parcels.clone(),
         parcel_data: new.parcel_data.clone(),
+        devices: new.devices.clone(),
+        device_data: new.device_data.clone(),
         show_blocks: new.show_blocks,
         block_boxes: new.block_boxes.clone(),
         block_cuts: new.block_cuts.clone(),
@@ -2115,6 +2125,7 @@ fn selected(mesh: &Mesh, display: &Display, poly: &Poly) -> bool {
         | Item::Iso(_)
         | Item::Arrows
         | Item::Parcels
+        | Item::Devices
         | Item::Blocks
         | Item::Region(_)
         | Item::Stream(_) => false,

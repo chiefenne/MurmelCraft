@@ -14,6 +14,7 @@ in the command palette (Ctrl + K) and keeps its keys ([keys.md](keys.md)). On ma
   - Clear the list of recent files → `recent.clear`
 - Open time series… → `series.open`
 - Open spray parcels… → `parcels.open`
+- Open injector devices… → `devices.open`
 - Open the charts of a run… → `charts.open`
 - **Import** ▸
   - OpenFOAM polyMesh… → `mesh.open`
@@ -192,6 +193,11 @@ in the command palette (Ctrl + K) and keeps its keys ([keys.md](keys.md)). On ma
   - Spray parcels: show or hide → `parcels.set`
   - Spray parcels: size by diameter, or all the same → `parcels.set`
   - Remove the spray parcels → `parcels.clear`
+- **Injector devices** ▸
+  - Injector devices: show or hide → `devices.set`
+  - Injector devices: tip surface on or off → `devices.set`
+  - Injector devices: hole axes and cones on or off → `devices.set`
+  - Remove the injector devices → `devices.clear`
 - **Time series** ▸
   - Play or pause the time series `Space` → `series.play`
   - Next time step `Period` → `series.go`

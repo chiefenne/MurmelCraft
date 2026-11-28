@@ -246,6 +246,11 @@ Option + 7 works on layouts where it types a character. Every command is also in
 | palette | Spray parcels: show or hide | `parcels.set` (input from the session) |
 | palette | Spray parcels: size by diameter, or all the same | `parcels.set` (input from the session) |
 | palette | Remove the spray parcels | `parcels.clear` (input from the session) |
+| palette | Open injector devices… | window, then `devices.open` |
+| palette | Injector devices: show or hide | `devices.set` (input from the session) |
+| palette | Injector devices: tip surface on or off | `devices.set` (input from the session) |
+| palette | Injector devices: hole axes and cones on or off | `devices.set` (input from the session) |
+| palette | Remove the injector devices | `devices.clear` (input from the session) |
 | palette | Open time series… | window, then `series.open` |
 | palette | First time step | `series.go` (input from the session) |
 | palette | Last time step | `series.go` (input from the session) |

@@ -684,6 +684,28 @@ pub fn rows(open: &OpenMesh, display: &Display, item: Item) -> Vec<Row> {
                 row("enabled", display.show_blocks),
             ]
         }
+        Item::Devices => {
+            let (Some(v), Some(d)) = (&display.devices, display.device_data.as_deref()) else {
+                return Vec::new();
+            };
+            let file = v
+                .path
+                .file_name()
+                .map_or(String::new(), |f| f.to_string_lossy().into_owned());
+            use murmel_mesh::devices::Part;
+            vec![
+                row("file", file),
+                row("devices", d.count()),
+                row("triangles", d.triangles()),
+                row("holes", d.holes()),
+                row("cones", d.cells_of(Part::Cone)),
+                row(
+                    "drawn",
+                    open.surface.device_triangles + open.surface.device_segments,
+                ),
+                row("enabled", v.enabled),
+            ]
+        }
         Item::Parcels => {
             let (Some(v), Some(p)) = (&display.parcels, display.parcel_data.as_deref()) else {
                 return Vec::new();

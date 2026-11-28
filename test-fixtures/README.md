@@ -73,3 +73,16 @@ changed. Layouts: FoehnCraft `docs/interfaces.md`, "Files of a run".
 | `spray-run/spray.csv` | format `foehncraft-spray 1`: the mass book every step and injector `nozzle` with its penetration |
 | `spray-run/spray_hist_{outlet,floor,x06}.csv` | format `foehncraft-spray-histogram 1`: 40 log bins from 1 µm to 1 mm plus the under and over rows, per interval |
 | `spray-run/result.json` | the end-of-run statistics of the datums and the spray |
+
+## Injector devices (`spray-device/`)
+
+`spray-device/devices.vtu` was written by FoehnCraft's tool `spray.place`
+(MIT, github.com/chiefenne/Foehncraft, main `b7955a3`, 2026-11-28) for the
+five-hole nozzle of its gallery 341, copied unchanged:
+
+    echo '{"file": "examples/cases/flow/spray_multihole_device_injectors.toml", "out": "place"}' \
+      | foehn call spray.place --input -
+
+| File | What it checks |
+|---|---|
+| `spray-device/devices.vtu` | FoehnCraft's device layout (D345): one device without a surface, 5 hole axes (lines) and 5 injector cones (closed polylines of 37 points), cell fields `device`, `part`, `hole`, `injector` |

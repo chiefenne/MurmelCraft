@@ -183,6 +183,14 @@ const OWN: &[Code] = &[
         ),
     },
     Code {
+        code: "DEVICE001",
+        severity: Severity::Error,
+        meaning: "No injector devices are open.",
+        fix: Some(
+            "Open FoehnCraft's spray/devices.vtu with devices.open, or a series whose series.json lists it under static.devices (series.open).",
+        ),
+    },
+    Code {
         code: "SERIES001",
         severity: Severity::Error,
         meaning: "The time series cannot be read: the path does not exist, the manifest is not foehncraft.series 1 or names a step twice or a step without files, or the folder holds no numbered files.",

@@ -19,6 +19,7 @@ pub mod charts;
 pub mod commands;
 mod defaults;
 mod derive;
+mod device;
 mod diag;
 pub mod export;
 mod extract;

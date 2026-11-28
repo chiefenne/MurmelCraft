@@ -109,6 +109,7 @@ impl MurmelApp {
                 "window.import_openfoam" => self.import_openfoam_dialog(),
                 "window.import_vtk" => self.import_vtk_dialog(),
                 "window.parcels_open" => self.parcels_open_dialog(),
+                "window.devices_open" => self.devices_open_dialog(),
                 "window.series_open" => self.series_open_dialog(),
                 "window.charts_open" => self.charts_open_dialog(),
                 "window.charts_export" => self.charts_export_dialog(),

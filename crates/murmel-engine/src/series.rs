@@ -18,6 +18,12 @@
 //! Paths are relative to the manifest's folder; entries are sorted by
 //! step, one per step; keys MurmelCraft does not know are ignored, so the
 //! manifest can grow.
+//!
+//! Files written once for the whole run are listed under `static`
+//! (FoehnCraft D345, plan stage ID2m): `"static": {"devices":
+//! "spray/devices.vtu"}`, the injector devices, drawn under the parcels
+//! at every step. A folder without a manifest takes its
+//! `spray/devices.vtu` when it has one.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,6 +35,8 @@ pub const FORMAT: &str = "foehncraft.series";
 pub const FORMAT_VERSION: u64 = 1;
 /// The manifest's name in an output folder.
 pub const MANIFEST: &str = "series.json";
+/// The devices file's name in an output folder's `spray` folder.
+pub const DEVICES: &str = "devices.vtu";
 /// The most entries a series may have (a manifest is read whole).
 pub const MAX_ENTRIES: usize = 100_000;
 /// The largest manifest read, in bytes.
@@ -95,6 +103,8 @@ pub struct Series {
     pub source: Source,
     pub case: Option<String>,
     pub entries: Vec<Entry>,
+    /// The injector devices of the run (`static.devices`), absolute.
+    pub devices: Option<PathBuf>,
     /// The entry shown.
     pub current: usize,
     pub playback: Playback,
@@ -117,6 +127,15 @@ struct Manifest {
     #[serde(default)]
     case: Option<String>,
     entries: Vec<ManifestEntry>,
+    #[serde(default, rename = "static")]
+    fixed: ManifestStatic,
+}
+
+/// The files of the whole run (`static`).
+#[derive(Deserialize, Default)]
+struct ManifestStatic {
+    #[serde(default)]
+    devices: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -225,7 +244,9 @@ impl Series {
                 w[0].step
             )));
         }
-        Self::made(path, Source::Manifest, m.case, entries)
+        let mut s = Self::made(path, Source::Manifest, m.case, entries)?;
+        s.devices = m.fixed.devices.map(|f| dir.join(f));
+        Ok(s)
     }
 
     /// The numbered files of an output folder: `fields_<step>.vtkhdf`
@@ -266,7 +287,10 @@ impl Series {
         add(dir, "parcels_", true)?;
         add(&dir.join("spray"), "parcels_", true)?;
         let entries: Vec<Entry> = steps.into_values().collect();
-        Self::made(dir, Source::Folder, None, entries)
+        let mut s = Self::made(dir, Source::Folder, None, entries)?;
+        let devices = dir.join("spray").join(DEVICES);
+        s.devices = devices.is_file().then_some(devices);
+        Ok(s)
     }
 
     fn made(
@@ -286,6 +310,7 @@ impl Series {
             source,
             case,
             entries,
+            devices: None,
             current: 0,
             playback: Playback::default(),
         })
@@ -400,6 +425,7 @@ mod tests {
         assert_eq!(s.times(), Some((0.1, 0.2)));
         assert_eq!(s.index_near_time(0.19), Some(1));
         assert_eq!(s.index_of_step(20), Some(1));
+        assert_eq!(s.devices, None);
         std::fs::remove_file(d.join(MANIFEST)).unwrap();
         for f in [
             "fields_000010.vtkhdf",
@@ -420,6 +446,35 @@ mod tests {
         assert!(s.entries[0].fields.is_none());
         assert!(s.entries[1].fields.is_some() && s.entries[1].parcels.is_some());
         assert!(s.entries[2].parcels.is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Invariant: the run's devices come from the manifest's
+    /// `static.devices` (joined to its folder; other `static` keys
+    /// ignored) and, without a manifest, from the folder's
+    /// spray/devices.vtu. Breaks if a series stopped finding the devices
+    /// FoehnCraft lists (ID2m), or a manifest with `static` became
+    /// unreadable.
+    #[test]
+    fn static_devices() {
+        let d = dir("static");
+        std::fs::write(
+            d.join(MANIFEST),
+            r#"{"format":"foehncraft.series","format_version":1,
+               "static":{"devices":"spray/devices.vtu","later":"x.vtu"},
+               "entries":[{"step":1,"files":{"parcels":"spray/parcels_000001.vtkhdf"}}]}"#,
+        )
+        .unwrap();
+        let s = Series::read(&d).unwrap();
+        assert_eq!(s.devices, Some(d.join("spray/devices.vtu")));
+        std::fs::remove_file(d.join(MANIFEST)).unwrap();
+        std::fs::write(d.join("spray/parcels_000001.vtkhdf"), b"").unwrap();
+        assert_eq!(Series::read(&d).unwrap().devices, None);
+        std::fs::write(d.join("spray/devices.vtu"), b"").unwrap();
+        assert_eq!(
+            Series::read(&d).unwrap().devices,
+            Some(d.join("spray/devices.vtu"))
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
