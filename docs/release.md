@@ -24,6 +24,15 @@ The minor version follows the milestone of the UI spec that is done
    tag), then without. It refuses a version whose changelog section is
    missing or that differs from `Cargo.toml`.
 
+To publish at a set time, give *publish_at* a UTC time up to 8.5 hours
+ahead, for example `2026-11-28T09:00:00Z` (10:00 in Vienna in winter). The
+workflow then creates the release as a draft at the current `main`, the
+Executables job builds that commit and attaches the programs to the draft,
+and the job *publish* waits until that second, pushes the annotated tag and
+publishes the release. Cancel the run before then to call the release off;
+the draft stays and can be deleted by hand. A second run waits behind a
+running one, so cancel the first before starting it again.
+
 Tags cannot be pushed from the cloud sessions; the workflow creates them.
 Locally, after the release: `git checkout main && git pull --tags`.
 

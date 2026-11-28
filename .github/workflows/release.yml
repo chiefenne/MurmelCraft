@@ -10,6 +10,13 @@
 #   (then only the missing GitHub release is created).
 # With dry_run = true it only prints what it would do. After the release
 # the job `executables` builds the programs and attaches them to it.
+#
+# With publish_at (a UTC time such as 2026-11-28T09:00:00Z, at most
+# 8.5 hours ahead) the release is first created as a draft, the programs
+# are attached to the draft, and the job `publish` waits until that time,
+# then creates the tag and publishes the release within a few seconds of
+# it. Cancel the run before that time to call the release off (the draft
+# stays and can be deleted by hand).
 name: Release
 
 on:
@@ -24,6 +31,11 @@ on:
         required: false
         type: boolean
         default: true
+      publish_at:
+        description: "Publish at this UTC time, for example 2026-11-28T09:00:00Z (empty: at once). Until then the release is a draft with its programs attached."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -39,6 +51,8 @@ jobs:
       contents: write
     outputs:
       tag: ${{ steps.check.outputs.tag }}
+      sha: ${{ steps.check.outputs.sha }}
+      at: ${{ steps.check.outputs.at }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,8 +63,22 @@ jobs:
         id: check
         env:
           VERSION: ${{ inputs.version }}
+          PUBLISH_AT: ${{ inputs.publish_at }}
         run: |
           set -euo pipefail
+          if [ -n "$PUBLISH_AT" ]; then
+            if ! printf '%s' "$PUBLISH_AT" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z$'; then
+              echo "::error::publish_at must be a UTC time such as 2026-11-28T09:00:00Z, got '$PUBLISH_AT'"; exit 1
+            fi
+            at=$(date -u -d "$PUBLISH_AT" +%s)
+            left=$(( at - $(date -u +%s) ))
+            # two waiting jobs of at most 6 hours each, the first one 5h40m
+            if [ "$left" -lt 120 ] || [ "$left" -gt 30600 ]; then
+              echo "::error::publish_at must be between 2 minutes and 8.5 hours ahead ($left s)"; exit 1
+            fi
+            echo "at=$at" >> "$GITHUB_OUTPUT"
+            echo "draft until $(date -u -d @"$at" '+%Y-%m-%d %H:%M:%S UTC'), $left s from now"
+          fi
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
             echo "::error::version must look like 0.1 or 1.0.2, got '$VERSION'"; exit 1
           fi
@@ -75,6 +103,7 @@ jobs:
             mv notes2.md notes.md
           fi
           head_sha=$(git rev-parse HEAD)
+          echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             tag_sha=$(git rev-list -n 1 "$tag")
             echo "tag $tag exists at $tag_sha"
@@ -87,7 +116,7 @@ jobs:
           echo "----- release notes -----"; cat notes.md
 
       - name: Create tag
-        if: ${{ !inputs.dry_run && steps.check.outputs.create_tag == 'true' }}
+        if: ${{ !inputs.dry_run && inputs.publish_at == '' && steps.check.outputs.create_tag == 'true' }}
         env:
           TAG: ${{ steps.check.outputs.tag }}
         run: |
@@ -101,11 +130,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.check.outputs.tag }}
+          SHA: ${{ steps.check.outputs.sha }}
+          PUBLISH_AT: ${{ inputs.publish_at }}
         run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG exists already"
+          set -euo pipefail
+          if [ -z "$PUBLISH_AT" ]; then
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "release $TAG exists already"
+            else
+              gh release create "$TAG" --title "MurmelCraft $TAG" --notes-file notes.md --verify-tag
+            fi
+          elif [ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo none)" = "true" ]; then
+            gh release edit "$TAG" --title "MurmelCraft $TAG" --notes-file notes.md --target "$SHA"
+            echo "draft $TAG updated, published at $PUBLISH_AT"
+          elif gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::release $TAG is published already"; exit 1
           else
-            gh release create "$TAG" --title "MurmelCraft $TAG" --notes-file notes.md --verify-tag
+            gh release create "$TAG" --draft --target "$SHA" --title "MurmelCraft $TAG" --notes-file notes.md
+            echo "draft $TAG created, published at $PUBLISH_AT"
           fi
 
       # The README release badge is an image of img.shields.io that GitHub
@@ -114,7 +156,7 @@ jobs:
       # until shields.io reports the new release, then purge the proxy copies
       # of the README images. Never fails the release.
       - name: Refresh the README badges
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && inputs.publish_at == '' }}
         continue-on-error: true
         env:
           TAG: ${{ steps.check.outputs.tag }}
@@ -147,4 +189,81 @@ jobs:
     uses: ./.github/workflows/executables.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
+      ref: ${{ needs.release.outputs.sha }}
       upload: true
+
+  # A scheduled release (publish_at): the first job waits until 3 hours
+  # before the time (at most 5h40m, a job may run 6 hours), the second one
+  # the rest, then tags the recorded commit and publishes the draft. It does
+  # not wait for the programs: they are attached to the draft long before.
+  wait:
+    name: Wait for the publish time (first part)
+    needs: release
+    if: ${{ !inputs.dry_run && inputs.publish_at != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Wait
+        env:
+          AT: ${{ needs.release.outputs.at }}
+        run: |
+          left=$(( AT - 10800 - $(date -u +%s) ))
+          if [ "$left" -gt 20400 ]; then left=20400; fi
+          if [ "$left" -gt 0 ]; then echo "waiting $left s"; sleep "$left"; fi
+
+  publish:
+    name: Publish at ${{ inputs.publish_at }}
+    needs: [release, wait]
+    if: ${{ !inputs.dry_run && inputs.publish_at != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Wait
+        env:
+          AT: ${{ needs.release.outputs.at }}
+        run: |
+          left=$(( AT - $(date -u +%s) ))
+          if [ "$left" -gt 0 ]; then echo "waiting $left s"; sleep "$left"; fi
+          date -u '+%Y-%m-%d %H:%M:%S UTC'
+
+      - name: Tag and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          SHA: ${{ needs.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "MurmelCraft $TAG" "$SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+          gh release edit "$TAG" --draft=false --latest
+          gh release view "$TAG" --json tagName,isDraft,publishedAt,url
+
+      - name: Refresh the README badges
+        continue-on-error: true
+        env:
+          TAG: ${{ needs.release.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS "https://img.shields.io/github/v/release/$REPO.json" | grep -q "\"$TAG\""; then
+              echo "shields.io reports $TAG"; break
+            fi
+            echo "shields.io does not report $TAG yet, waiting"; sleep 60
+          done
+          curl -fsS "https://github.com/$REPO" \
+            | grep -oE 'https://camo\.githubusercontent\.com/[0-9a-f]+/[0-9a-f]+' | sort -u \
+            | while read -r u; do
+                if curl -fsS -X PURGE "$u" >/dev/null; then echo "purged $u"; else echo "could not purge $u"; fi
+              done

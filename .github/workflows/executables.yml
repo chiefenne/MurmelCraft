@@ -26,6 +26,12 @@ on:
       tag:
         type: string
         required: true
+      # the commit to build when the tag does not exist yet (a draft
+      # release that is published later, release.yml publish_at)
+      ref:
+        type: string
+        required: false
+        default: ""
       upload:
         type: boolean
         default: true
@@ -69,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ inputs.ref || inputs.tag || github.sha }}
       - name: Select stable Rust
         run: |
           # the manylinux container has no Rust
@@ -110,7 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ inputs.ref || inputs.tag || github.sha }}
       - name: Select stable Rust
         run: rustup update stable && rustup default stable
       - name: Build
@@ -138,7 +144,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.sha }}
+          ref: ${{ inputs.ref || inputs.tag || github.sha }}
       # the app icon comes from the branch this workflow runs on, so that
       # older tags get it too
       - uses: actions/checkout@v4
