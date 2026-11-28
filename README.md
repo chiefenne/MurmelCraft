@@ -47,7 +47,7 @@ own assistant: [below](#let-claude-drive-murmelcraft-macos-copy-and-paste).</sub
 
 ## What works today
 
-Release 0.6.0 (tag `v0.6.0`): the V0.1 to V0.6 milestones of the UI spec
+Release 0.7.0 (tag `v0.7.0`): the V0.1 to V0.6 milestones of the UI spec
 are done and V1.0 is in progress; [CHANGELOG.md](CHANGELOG.md) lists every
 change, and [changelog.d](changelog.d) the changes since the release.
 
@@ -147,15 +147,20 @@ change, and [changelog.d](changelog.d) the changes since the release.
   <img src="assets/readme/spray-charts.png" width="700" alt="The MurmelCraft window with a FoehnCraft spray in a duct seen from the top. Below the view, a chart of the liquid mass flow through six datums over time, each line rising as the spray reaches its datum and settling between 2 and 10 g/s, with a pink cursor at step 150; beside it the statistics at step 150: 7.50 g injected, 4.36 g in the flow, 2.25 g left the domain, 890 mg on walls, 1744 parcels, D32 in the flow 79.9 µm, penetration 760 mm">
 
 - Derived fields (`field.derive`, the Derived fields window): vorticity,
-  Q criterion, λ₂, total pressure and pressure coefficient computed from
-  the result's velocity and pressure (the velocity gradient by least
-  squares in each cell), with FoehnCraft's names and units. They join the
+  Q criterion, λ₂, helicity, swirling strength, total pressure, pressure
+  coefficient and turbulence intensity computed from the result's velocity
+  and pressure (the velocity gradient by least squares in each cell), also
+  of the time means, and the turbulence statistics of FoehnCraft's
+  `statistics.vtkhdf` (resolved Reynolds stresses, Lumley anisotropy,
+  turbulent heat flux), with FoehnCraft's names and units. They join the
   file's fields for colouring, slices, iso-surfaces, arrows and
   streamlines, and sessions save how each was made. The reference values
   come from FoehnCraft's case beside the result, else your defaults.
   FoehnCraft's own fields (y⁺, wall shear stress, u_τ, the turbulence
   features, …) are computed by the `foehn` installed on the machine
-  (`field.foehn_derive`, in the background with Cancel) and read in as the
+  (`field.foehn_derive`, in the background with Cancel; with the energy
+  equation also the wall heat flux, heat transfer coefficient and Nusselt
+  number) and read in as the
   next step of the same result.
 - Field calculator (`field.calculate`, the Derived fields window's Your
   formulas tab, palette "Field calculator…"): your own formulas of the
@@ -182,6 +187,9 @@ change, and [changelog.d](changelog.d) the changes since the release.
   iso-surfaces, arrows, streamlines, regions, measurements and probes,
   each with an
   eye, a context menu and double click to fit; H hides, I isolates.
+  Exploded view of the blocks of a KoflCraft block mesh or of the cell
+  zones (`display.explode`), each block in its own colour
+  (`display.color_by` `category`).
 - Picking of cells and faces and a Properties panel (P) for the mesh,
   any item, a cell, a face or a probe, with the field values of results.
 - Orbit about the point under the cursor, pan, zoom to the cursor, zoom

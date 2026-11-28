@@ -8,7 +8,104 @@ Nothing yet.
 
 | Version | Milestone | Highlights |
 |---|---|---|
+| 0.7.0 (2026-11-28) | V0.1 to V0.6 done, V1.0 in progress | FoehnCraft's injector devices drawn under the spray parcels; exploded view of the blocks of a KoflCraft mesh with a colour per block; derived statistics, helicity, swirling strength, turbulence intensity and quantities of the time means; FoehnCraft's wall heat fields through `foehn post derive`; slices read three blocks at once (a 10 M cell slice over a gigabit share 48 s instead of 56 s); four recorded example chats through `murmel mcp`; ready-to-run programs for macOS, Linux (glibc 2.28) and Windows on every release, a shared install under `/opt` and an install guide for the three systems |
 | 0.6.0 (2026-11-26) | V0.1 to V0.6 of the UI spec done, V1.0 in progress | First release. The desktop viewer of KoflCraft meshes and FoehnCraft results: model tree, picking, properties, view cube, clip planes with handles, regions of interest, cell quality, measurements and probes; fields with slices, smooth iso-surfaces, vector arrows, streamlines, derived fields and a field calculator; spray parcels, time series and run charts; OpenFOAM and VTK import, an own HDF5 reader for VTKHDF, blocked files and overviews of meshes larger than memory; sessions, undo, pictures, movies, print and PDF; one tool registry for the window, the command line and an MCP server that can also drive the open window. **A 1 million cell ascii `.vtu` opens in 3.3 s instead of 12.8 s; at 4 million cells a flat clip cut builds in 0.66 s and the cell quality in 2.1 s on 4 threads.** |
+
+## 0.7.0 (2026-11-28) – injector devices, exploded blocks, more derived fields, release downloads
+
+**In one paragraph.** MurmelCraft 0.7.0 is a feature release on the way to
+the V1.0 milestone of the UI spec (V0.1 to V0.6 done): FoehnCraft's injector devices are drawn with the
+mesh and under the spray parcels; the blocks of a KoflCraft block mesh (or
+the cell zones) can be drawn apart, each in its own colour; the derived
+fields gain the turbulence statistics of FoehnCraft's `statistics.vtkhdf`,
+helicity, swirling strength, turbulence intensity and the quantities of the
+time means, and the `foehn post derive` runner offers FoehnCraft 1.3's wall
+heat fields; slices of large files on a network share are faster. Four
+recorded chats show an assistant driving MurmelCraft through `murmel mcp`.
+Every release now carries programs for macOS (an app in a `.dmg`), Linux
+(glibc 2.28 or newer) and Windows, with a script for a shared install under
+`/opt`, and the Release workflow can publish at a set time (`publish_at`).
+Sessions of 0.6.0 read unchanged (format now 1.20).
+
+### All changes
+
+### Results, sprays and derived fields
+
+- **Injector devices.** FoehnCraft's `spray/devices.vtu` (its injector and
+  nozzle devices, D343 to D345) draws with the mesh and under the parcels:
+  the placed tip shaded like the mesh (a 35° crease angle keeps its rims
+  sharp), a line along each hole and the outline of each injector's cone.
+  `series.open` takes the devices that `series.json` lists under
+  `static.devices` (or the folder's `spray/devices.vtu`) and keeps them at
+  every step of the player. Tools `devices.open`, `devices.set` (tip,
+  hole axes, cones), `devices.clear`; a model-tree row, palette and menu
+  entries, help page; sessions keep them (format 1.20).
+- **Derived statistics, vortex and turbulence quantities.** Statistics
+  group for FoehnCraft's `statistics.vtkhdf`: resolved and total kinetic
+  energy, the resolved Reynolds stresses, the Lumley anisotropy invariants
+  η and ξ (Pope 2000) and the turbulent heat flux ⟨u'T'⟩; helicity,
+  normalised helicity and the swirling strength λ_ci; the turbulence
+  intensity against U_ref and against the local speed. A mean switch takes
+  the quantities of velocity, pressure and k from the time means
+  (`mean_<field>`, default `[defaults.derived] mean`, diagnostic FIELD021).
+  The `foehn post derive` runner lists `solid-fraction`. Session format 1.19.
+- **FoehnCraft's wall heat fields.** The `foehn post derive` runner lists
+  `wall-heat-flux` (`wall_heat_flux`, `wall_temperature`),
+  `heat-transfer-coefficient` and `nusselt-number` of FoehnCraft 1.3 under
+  Wall, on the walls.
+- **Exploded view and colour by category.** `display.explode` draws the
+  blocks of a block mesh (the whole-number cell field `BlockId` that
+  KoflCraft writes) or the cell zones apart, each as a closed piece, in
+  2-D and 3-D; `display.color_by` `category` gives every block its own
+  colour with a legend. Toolbar toggle with the factor, palette entries,
+  help page; sessions keep both (format 1.18).
+
+### Speed
+
+- **Three blocks read at once.** Exact slices and iso-surfaces on an overview read three blocks at once while one is being cut, and still cut them in the order of the blocks, so the faces are the same as before. A file on a network share is read with several requests on the way instead of one, which keeps the link busy: over a stand-in for a gigabit NAS a slice through a 10 M cell file takes 48 s instead of 56 s, and the link is full. It holds up to two blocks more than before (about 0.4 GB at 10 M).
+
+### Agents
+
+- **Example chats.** [docs/chats.md](docs/chats.md): four recorded chats
+  of an assistant driving MurmelCraft through `murmel mcp` (check a
+  KoflCraft mesh, see the flow of a FoehnCraft result, read the pressure
+  drop, explode a block mesh), each with the prompt, every call and what
+  came back, the answer and its picture; a short chat section in the
+  README. `tools/agent/mcp_host.py` replays them from
+  `tools/agent/chats/`.
+
+### Downloads, install, release and docs
+
+- **Release downloads**: the new workflow Executables builds MurmelCraft
+  for macOS (one universal build for Apple silicon and Intel:
+  `MurmelCraft.app` in a `.dmg`, and the programs in a `.tar.gz`), Linux
+  x86-64 and Windows x86-64, and attaches them with `SHA256SUMS.txt` to the
+  release; the Release workflow starts it after each release, and it can be
+  run by hand for an existing one (docs/release.md). The README's
+  "Download a release" says which file to take and how to open the
+  unsigned Mac app the first time.
+- The Windows release build of `murmelcraft` is a window program: started
+  from the Explorer it opens no console window beside it.
+- **Shared install on Linux**: `tools/install-shared.sh` installs a release (or, with `--build`, a source build, optionally with a system-wide Rust under `/opt/MurmelCraft/rust` and `--native`) once for all users under `/opt/MurmelCraft/<version>/`, with `env.sh`/`env.csh`, a module file for Environment Modules and Lmod, and the `current` default. Several versions stay side by side: users switch with `murmelcraft-use <version>` or `module load`, the administrator moves the default with `--activate`. The install guide has the new section "Shared install on Linux".
+- **Linux release programs on older systems**: the Linux release build runs in the manylinux_2_28 container and checks the glibc floor, so the programs run on glibc 2.28 or newer (RHEL, Rocky and Alma 8 and 9, Debian 11 to 13, Ubuntu 20.04 and newer).
+- **Release at a set time.** The Release workflow takes an optional
+  `publish_at` (UTC): the release is made as a draft, the programs are
+  attached, and tag and release are published at that time
+  (docs/release.md). Without it the workflow works as before.
+- **Install section in the README.** How to build MurmelCraft from source
+  (prerequisites on macOS and Linux, clone, build, the three programs in
+  `target/release/`, `cargo install`, update), with a placeholder for
+  release downloads. The minimum Rust in the badge is corrected from 1.85
+  to 1.98 (`AtomicU32::from_mut_slice` is stable since 1.98).
+- **Install guide for macOS, Linux and Windows.** `docs/install.md` lists
+  the tools with the install commands per system (Xcode tools; apt and dnf;
+  winget and Chocolatey), the GPU driver each system needs (Metal, Vulkan
+  with `mesa-vulkan-drivers`, DirectX 12), ffmpeg per system and how to
+  check the Vulkan driver. MurmelCraft needs no CMake, HDF5 or Gmsh. The
+  README's install section gives the short version per system, now also
+  for Windows.
+
+---
 
 ## 0.6.0 (2026-11-26) – first release: the viewer of KoflCraft and FoehnCraft
 
