@@ -49,7 +49,11 @@ attaches them to the release in about 15 minutes:
 | `murmelcraft-<version>-macos-universal.dmg` | `MurmelCraft.app` (Apple silicon and Intel) with `murmel` and `murmel-mcp` inside it |
 | `murmelcraft-<version>-macos-universal.tar.gz` | `murmelcraft`, `murmel`, `murmel-mcp` |
 | `murmelcraft-<version>-linux-x86_64.tar.gz` | the same three programs |
+| `murmelcraft-<version>-linux-aarch64.tar.gz` | the same three programs for 64-bit ARM Linux |
 | `murmelcraft-<version>-windows-x86_64.zip` | the same three programs (`.exe`) |
+| `kraxn-<kraxn version>-macos-universal.dmg` | `Kraxn.app`, the installer of all three programs ([kraxn.md](kraxn.md)) |
+| `kraxn-<kraxn version>-linux-x86_64.tar.gz`, `…-linux-aarch64.tar.gz` | `kraxn` |
+| `kraxn-<kraxn version>-windows-x86_64.exe` | Kraxn, one file |
 | `SHA256SUMS.txt` | the SHA-256 of each file |
 
 To attach them to a release that exists already, run Executables by hand

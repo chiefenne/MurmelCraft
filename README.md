@@ -258,7 +258,15 @@ Ready-to-run programs are attached to each
 |---|---|---|
 | macOS 11 or newer, Apple silicon and Intel | `murmelcraft-<version>-macos-universal.dmg` | drag MurmelCraft into Applications |
 | Linux x86-64 (glibc 2.28 or newer: RHEL/Rocky/Alma 8 and 9, Debian 11-13, Ubuntu 20.04 and newer; v0.6.0 needs 2.39) | `murmelcraft-<version>-linux-x86_64.tar.gz` | unpack, run `./murmelcraft` |
+| Linux aarch64, 64-bit ARM (glibc 2.28 or newer; from the next release on) | `murmelcraft-<version>-linux-aarch64.tar.gz` | unpack, run `./murmelcraft` |
 | Windows 10 or 11, x86-64 | `murmelcraft-<version>-windows-x86_64.zip` | unpack, run `murmelcraft.exe` |
+
+From the next release on, each release also carries **Kraxn**, a window
+that installs MurmelCraft, KoflCraft and FoehnCraft for you or for every
+user, with versions side by side, the PATH, the examples and the AI
+assistants' MCP servers: `kraxn-<v>-macos-universal.dmg`,
+`kraxn-<v>-windows-x86_64.exe` or `kraxn-<v>-linux-<x86_64|aarch64>.tar.gz`
+([Kraxn's guide](docs/kraxn.md)).
 
 Each one holds the three programs: `murmelcraft` (the window), `murmel`
 (the command line; `murmel mcp` is the MCP server) and `murmel-mcp`. On the
