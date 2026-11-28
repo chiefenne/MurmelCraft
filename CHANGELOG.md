@@ -8,8 +8,25 @@ Nothing yet.
 
 | Version | Milestone | Highlights |
 |---|---|---|
+| 0.7.1 (2026-11-28) | V0.1 to V0.6 done, V1.0 in progress | A patch on 0.7.0: the README shows how to connect an AI assistant (Claude Code, Claude Desktop, ChatGPT through Codex, Gemini CLI and other MCP hosts) to `murmel mcp`, with two example prompts and troubleshooting. No change to the programs or the file formats. |
 | 0.7.0 (2026-11-28) | V0.1 to V0.6 done, V1.0 in progress | Foehncraft's injector devices drawn with the spray at every step; statistics, helicity, swirling strength, turbulence intensities, mean-flow and wall heat quantities of Foehncraft; exploded view and colour by block of KoflCraft's block meshes; ready-to-run programs for macOS (.app in a .dmg), Linux (glibc 2.28 or newer) and Windows; shared install on Linux; example chats of an assistant driving MurmelCraft; **slices through a 10 M cell file on a NAS in 48 s instead of 56 s.** Released with Foehncraft 1.3.0 and KoflCraft 0.3.0 at 10:00 Vienna. |
 | 0.6.0 (2026-11-26) | V0.1 to V0.6 of the UI spec done, V1.0 in progress | First release. The desktop viewer of KoflCraft meshes and FoehnCraft results: model tree, picking, properties, view cube, clip planes with handles, regions of interest, cell quality, measurements and probes; fields with slices, smooth iso-surfaces, vector arrows, streamlines, derived fields and a field calculator; spray parcels, time series and run charts; OpenFOAM and VTK import, an own HDF5 reader for VTKHDF, blocked files and overviews of meshes larger than memory; sessions, undo, pictures, movies, print and PDF; one tool registry for the window, the command line and an MCP server that can also drive the open window. **A 1 million cell ascii `.vtu` opens in 3.3 s instead of 12.8 s; at 4 million cells a flat clip cut builds in 0.66 s and the cell quality in 2.1 s on 4 threads.** |
+
+## 0.7.1 (2026-11-28) – connect an AI assistant
+
+**In one paragraph.** MurmelCraft 0.7.1 is a patch on 0.7.0 of the same
+day. Its README now shows how to connect an AI assistant to `murmel mcp`.
+The programs, the tools and the file formats are those of 0.7.0, so there
+is nothing to do when upgrading.
+
+### All changes
+
+### Documents
+
+- **Connect an AI assistant in the README.** How to connect Claude Code,
+  Claude Desktop, ChatGPT (through Codex), Gemini CLI and other MCP hosts
+  to `murmel mcp` (live window or headless), where `murmel` is in each
+  release, two example prompts on the test fixtures, and troubleshooting. (#135)
 
 ## 0.7.0 (2026-11-28) – injector devices, exploded block meshes, release downloads
 

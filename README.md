@@ -47,7 +47,7 @@ own assistant: [below](#connect-an-ai-assistant-claude-chatgpt-others).</sub>
 
 ## What works today
 
-Release 0.7.0 (tag `v0.7.0`): the V0.1 to V0.6 milestones of the UI spec
+Release 0.7.1 (tag `v0.7.1`): the V0.1 to V0.6 milestones of the UI spec
 are done and V1.0 is in progress; [CHANGELOG.md](CHANGELOG.md) lists every
 change, and [changelog.d](changelog.d) the changes since the release.
 
