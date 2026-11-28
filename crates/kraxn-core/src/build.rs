@@ -702,6 +702,10 @@ pub fn cargo_build(
         drop(tx);
         let mut all = String::new();
         for l in rx {
+            // cargo's hint about its --root folder does not apply here
+            if l.contains("be sure to add") && l.contains("to your PATH") {
+                continue;
+            }
             all.push_str(&l);
             all.push('\n');
             log(l);
