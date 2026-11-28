@@ -20,6 +20,29 @@ pub struct FileType {
     pub own: bool,
 }
 
+/// Python for a product's scripts: a venv with `pip`, or the
+/// distribution's packages.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PythonSpec {
+    /// What pip installs into the venv.
+    pub pip: Vec<String>,
+    /// The same as Debian/Ubuntu and Fedora packages (`python = "system"`).
+    #[serde(default)]
+    pub apt: Vec<String>,
+    #[serde(default)]
+    pub dnf: Vec<String>,
+    /// System libraries the pip packages load on Linux: their file
+    /// names, and the packages that hold them.
+    #[serde(default)]
+    pub libs: Vec<String>,
+    #[serde(default)]
+    pub apt_libs: Vec<String>,
+    #[serde(default)]
+    pub dnf_libs: Vec<String>,
+    /// Python code that must run after the install.
+    pub check: String,
+}
+
 /// One program of the family.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Product {
@@ -52,6 +75,15 @@ pub struct Product {
     pub needs_cmake: bool,
     pub apt_runtime: Vec<String>,
     pub dnf_runtime: Vec<String>,
+    /// Movies call the system's ffmpeg.
+    #[serde(default)]
+    pub ffmpeg: bool,
+    /// The folder of the source copied next to the programs.
+    #[serde(default)]
+    pub examples: Option<String>,
+    /// Python for its scripts.
+    #[serde(default)]
+    pub python: Option<PythonSpec>,
 }
 
 impl Product {

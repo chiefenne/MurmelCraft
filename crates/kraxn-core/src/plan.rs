@@ -11,6 +11,9 @@
 //! path = true                   # put the programs on the PATH
 //! menu = true                   # a menu entry for MurmelCraft's window
 //! file_types = true             # .murmel, .vtu and .vtkhdf open in it
+//! python = "venv"               # FoehnCraft's Python: venv, system or none
+//! ffmpeg = true                 # ffmpeg for MurmelCraft's MP4 movies
+//! examples = true               # KoflCraft's and FoehnCraft's examples
 //!
 //! [[install]]
 //! product = "foehncraft"
@@ -41,6 +44,19 @@ fn format() -> String {
 
 fn format_version() -> String {
     "1.0".into()
+}
+
+/// Python for the scripts of a product that has some (FoehnCraft).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PyMode {
+    /// `<version>/venv` with pip's packages (Gmsh, NumPy, …).
+    #[default]
+    Venv,
+    /// The distribution's packages (apt, dnf), no pip.
+    System,
+    /// No Python.
+    None,
 }
 
 /// Where a product's programs come from.
@@ -127,6 +143,15 @@ pub struct Plan {
     /// With the menu entry: the file types it opens (default: yes).
     #[serde(default = "yes")]
     pub file_types: bool,
+    /// Python for the scripts (default: a venv).
+    #[serde(default)]
+    pub python: PyMode,
+    /// ffmpeg for MP4 movies, when it is missing (default: yes).
+    #[serde(default = "yes")]
+    pub ffmpeg: bool,
+    /// The examples from the release's source (default: yes).
+    #[serde(default = "yes")]
+    pub examples: bool,
     #[serde(default, rename = "install")]
     pub installs: Vec<Want>,
 }
@@ -143,6 +168,9 @@ impl Default for Plan {
             path: true,
             menu: true,
             file_types: true,
+            python: PyMode::Venv,
+            ffmpeg: true,
+            examples: true,
             installs: Vec::new(),
         }
     }
@@ -239,7 +267,8 @@ mod tests {
     use super::*;
 
     /// Invariant: a short plan takes the defaults (user scope, latest,
-    /// default version, PATH, checksums required), survives a save and
+    /// default version, PATH, checksums required, a Python venv, ffmpeg,
+    /// examples), survives a save and
     /// load unchanged, and an unknown field or product is refused with
     /// KRX010 / KRX001. Breaks if a default flips (an unattended install
     /// would do something else than the window showed) or a typo in a
@@ -249,7 +278,8 @@ mod tests {
         let c = Catalogue::builtin().unwrap();
         let p = Plan::parse("[[install]]\nproduct = \"koflcraft\"\n").unwrap();
         assert_eq!(p.scope, Scope::User);
-        assert!(p.path && p.require_checksums);
+        assert!(p.path && p.require_checksums && p.ffmpeg && p.examples);
+        assert_eq!(p.python, PyMode::Venv);
         assert_eq!(p.installs[0], Want::new("koflcraft"));
         p.check(&c).unwrap();
         assert_eq!(Plan::parse(&p.to_toml()).unwrap(), p);

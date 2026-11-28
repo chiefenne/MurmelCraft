@@ -14,6 +14,7 @@ pub mod catalogue;
 pub mod desktop;
 pub mod diag;
 pub mod envfiles;
+pub mod extras;
 pub mod fetch;
 pub mod install;
 pub mod installed;

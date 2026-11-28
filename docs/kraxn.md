@@ -86,6 +86,43 @@ program that already opens those (ParaView) keeps them.
 Removing MurmelCraft removes them again (on macOS only an app Kraxn
 wrote).
 
+## Python, ffmpeg and examples
+
+**Python for FoehnCraft** (`python = "venv"`, the default): a venv in the
+version folder (`<version>/venv`) with Gmsh, NumPy, Matplotlib and h5py
+from PyPI, the same as `tools/install-shared.sh --python venv`. `env.sh`,
+`env.csh` and the module file put `venv/bin` on the PATH, so after
+`source …/current/env.sh` the example scripts find `python` and `gmsh`.
+When Python 3 or its venv module is missing, Kraxn installs it first
+(apt or dnf, Homebrew, winget); on Linux it also installs the libraries
+the pip Gmsh loads (libGLU and four X11 and OpenMP libraries), asking for
+administrator rights only for that step. At the end it runs
+`import gmsh, numpy, matplotlib, h5py` and starts Gmsh once in the venv.
+`python = "system"` uses the distribution's packages instead
+(`python3-gmsh` and the others, with apt or dnf, no pip); `python =
+"none"` leaves Python out. Without internet, pip takes the packages from
+a `wheels` folder in the folder of downloads (make it with
+`pip download -d wheels gmsh numpy matplotlib h5py` on a computer of the
+same system); without one, Kraxn installs the programs and says that the
+venv was left out.
+
+**ffmpeg for MurmelCraft** (`ffmpeg = true`, the default): MurmelCraft
+writes MP4 movies with the system's ffmpeg. When it is missing, Kraxn
+installs it (apt `ffmpeg`, dnf `ffmpeg-free`, Homebrew, winget
+`Gyan.FFmpeg`). When that is not possible or does not work, the install
+goes on and says so; GIF movies need nothing.
+
+**Examples** (`examples = true`, the default): KoflCraft's and
+FoehnCraft's `examples` folder from the release's source (GitHub's
+archive of the tag, or the source build's), copied to
+`<version>/examples`. Without internet, put the release page's "Source
+code (tar.gz)" (`KoflCraft-0.3.1.tar.gz`, `Foehncraft-1.3.0.tar.gz`) in
+the folder of downloads; without it, Kraxn says that the examples were
+left out.
+
+The venv and the examples are in the version folder, so removing the
+version removes them too.
+
 ## Administrator rights
 
 Kraxn runs as you. Only the steps that write into system folders run with
@@ -157,6 +194,9 @@ scope = "system"            # user (default) or system
 path = true                 # put the programs on the PATH (default)
 menu = true                 # MurmelCraft's menu entry (default)
 file_types = true           # .murmel, .vtu, .vtkhdf open in MurmelCraft (default)
+python = "venv"             # FoehnCraft's Python: venv (default), system or none
+ffmpeg = true               # ffmpeg for MurmelCraft's MP4 movies if missing (default)
+examples = true             # KoflCraft's and FoehnCraft's examples (default)
 require_checksums = true    # default
 
 [[install]]

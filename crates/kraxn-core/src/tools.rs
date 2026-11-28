@@ -358,11 +358,13 @@ fn plan_check(h: &mut Host, v: &Value) -> Out {
     let c = ctx(h);
     let source = source_of(h, &plan);
     let resolved = install::resolve(&c, &plan, &source)?;
-    let tools = install::tools(&c, &plan, &h.work)?;
+    let tools = install::tools(&c, &plan, &source, &h.work)?;
     let steps = install::preview(&c, &plan, &source, &resolved, &tools)?;
+    let notes = install::notes(&c, &plan, &source, &resolved);
     let layout = c.layout(&plan)?;
     Ok(json!({
         "tools": tools,
+        "notes": notes,
         "blocked": tools.iter().any(|t| t.blocks()),
         "versions": resolved.iter().map(|(p, r)| json!({"product": p.id, "version": r.version})).collect::<Vec<_>>(),
         "root": layout.root,

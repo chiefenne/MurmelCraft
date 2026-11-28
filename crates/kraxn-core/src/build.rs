@@ -46,12 +46,16 @@ pub struct ToolState {
     /// What you do yourself when Kraxn cannot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manual: Option<String>,
+    /// An extra the install goes on without (ffmpeg, the system's Python
+    /// packages): missing, it is a note, not a stop.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 impl ToolState {
     /// Missing, and only you can install it.
     pub fn blocks(&self) -> bool {
-        !self.ok && self.fix.is_none()
+        !self.ok && self.fix.is_none() && !self.optional
     }
 }
 
@@ -81,7 +85,7 @@ pub fn find(platform: &Platform, dirs: &[PathBuf], name: &str) -> Option<PathBuf
 }
 
 /// The first line a program prints for `args`, if it ends well.
-fn first_line(program: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn first_line(program: &Path, args: &[&str]) -> Option<String> {
     let o = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -128,12 +132,12 @@ fn rustup_dist() -> String {
 
 /// The package manager of this Linux.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Pkg {
+pub(crate) enum Pkg {
     Apt,
     Dnf,
 }
 
-fn linux_pkg(platform: &Platform, dirs: &[PathBuf]) -> Option<(Pkg, PathBuf)> {
+pub(crate) fn linux_pkg(platform: &Platform, dirs: &[PathBuf]) -> Option<(Pkg, PathBuf)> {
     if let Some(p) = find(platform, dirs, "apt-get") {
         return Some((Pkg::Apt, p));
     }
@@ -142,7 +146,7 @@ fn linux_pkg(platform: &Platform, dirs: &[PathBuf]) -> Option<(Pkg, PathBuf)> {
 
 /// The step that installs system packages on Linux (with administrator
 /// rights).
-fn pkg_step(pkg: Pkg, exe: &Path, title: &str, packages: &[&str]) -> Step {
+pub(crate) fn pkg_step(pkg: Pkg, exe: &Path, title: &str, packages: &[&str]) -> Step {
     let pk: Vec<String> = packages.iter().map(|s| s.to_string()).collect();
     let actions = match pkg {
         Pkg::Apt => {
@@ -186,7 +190,7 @@ fn pkg_step(pkg: Pkg, exe: &Path, title: &str, packages: &[&str]) -> Step {
     }
 }
 
-fn brew_step(brew: &Path, title: &str, formula: &str) -> Step {
+pub(crate) fn brew_step(brew: &Path, title: &str, formula: &str) -> Step {
     Step {
         title: format!("Install {title} with Homebrew"),
         admin: false,
@@ -199,7 +203,7 @@ fn brew_step(brew: &Path, title: &str, formula: &str) -> Step {
     }
 }
 
-fn winget_step(winget: &Path, title: &str, id: &str, extra: &[&str]) -> Step {
+pub(crate) fn winget_step(winget: &Path, title: &str, id: &str, extra: &[&str]) -> Step {
     let mut args: Vec<String> = [
         "install",
         "--id",
@@ -276,6 +280,7 @@ fn c_compiler(platform: &Platform, env: &Env, dirs: &[PathBuf], cpp: bool) -> To
         ok: false,
         fix: None,
         manual: None,
+        optional: false,
     };
     match platform.os {
         Os::Linux => {
@@ -372,6 +377,7 @@ fn rust(platform: &Platform, dirs: &[PathBuf], min: &str, work: &Path) -> ToolSt
         ok: false,
         fix: None,
         manual: None,
+        optional: false,
     };
     let rustc = find(platform, dirs, "rustc");
     let have = rustc
@@ -442,6 +448,7 @@ fn cmake(platform: &Platform, dirs: &[PathBuf]) -> ToolState {
         ok: false,
         fix: None,
         manual: None,
+        optional: false,
     };
     let have = find(platform, dirs, "cmake")
         .and_then(|c| first_line(&c, &["--version"]))
@@ -513,6 +520,7 @@ fn mpi_tool(platform: &Platform, dirs: &[PathBuf]) -> ToolState {
         ok: false,
         fix: None,
         manual: None,
+        optional: false,
     };
     let mpicc = find(platform, dirs, "mpicc");
     let clang_ok = platform.os != Os::Linux || libclang_linux().is_some();

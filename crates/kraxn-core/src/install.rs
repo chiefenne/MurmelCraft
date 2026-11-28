@@ -12,6 +12,7 @@ use crate::build::{self, BuildWant, ToolState};
 use crate::catalogue::{Catalogue, Product};
 use crate::diag::{Res, diag};
 use crate::envfiles::{self, Extras};
+use crate::extras::{self, Beside, PyPlan};
 use crate::fetch::{Checked, Source, fetch, verify};
 use crate::installed::{self, RECEIPT, Receipt};
 use crate::layout::{Env, Layout, Scope};
@@ -95,13 +96,26 @@ pub fn build_wants<'c>(ctx: &'c Ctx, plan: &Plan) -> Res<Vec<BuildWant<'c>>> {
 
 /// The tools the plan's source builds need, as found now (empty without
 /// a source build). `work` is where installers are downloaded to.
-pub fn tools(ctx: &Ctx, plan: &Plan, work: &Path) -> Res<Vec<ToolState>> {
-    build::check_tools(
+pub fn tools(ctx: &Ctx, plan: &Plan, source: &Source, work: &Path) -> Res<Vec<ToolState>> {
+    let mut v = build::check_tools(
         &ctx.platform,
         ctx.env,
         &build_wants(ctx, plan)?,
         &work.join("tools"),
-    )
+    )?;
+    let products = plan
+        .installs
+        .iter()
+        .map(|w| ctx.catalogue.get(&w.product))
+        .collect::<Res<Vec<_>>>()?;
+    v.extend(extras::check(
+        &ctx.platform,
+        ctx.env,
+        plan,
+        source,
+        &products,
+    ));
+    Ok(v)
 }
 
 /// The steps that install the missing tools; KRX015 when one of them is
@@ -115,7 +129,7 @@ pub fn tool_steps(tools: &[ToolState]) -> Res<Vec<Step>> {
     if !blocked.is_empty() {
         return Err(diag(
             "KRX015",
-            format!("the source build needs {}", blocked.join("; ")),
+            format!("the install needs {}", blocked.join("; ")),
         ));
     }
     Ok(tools
@@ -128,24 +142,8 @@ pub fn tool_steps(tools: &[ToolState]) -> Res<Vec<Step>> {
 /// What a source build's preview shows before it runs: the download of
 /// the source and the cargo runs.
 fn build_preview(source: &Source, p: &Product, r: &Release, features: &[String]) -> Vec<Step> {
-    let api = match source {
-        Source::Online { api, .. } => api.clone(),
-        Source::Folder(_) => "https://api.github.com".into(),
-    };
     vec![
-        Step {
-            title: format!(
-                "Download the source of {} {} from GitHub",
-                p.title, r.version
-            ),
-            admin: false,
-            actions: vec![Action::Download {
-                url: format!("{api}/repos/{}/tarball/{}", p.repo, r.tag),
-                sha256_url: None,
-                to: PathBuf::from("<download>")
-                    .join(format!("{}-{}-source.tar.gz", p.archive, r.tag)),
-            }],
-        },
+        source_download_step(source, p, r, "from GitHub"),
         Step {
             title: format!(
                 "Build {} {} with cargo, as you (the first build takes several minutes)",
@@ -166,6 +164,60 @@ fn build_preview(source: &Source, p: &Product, r: &Release, features: &[String])
                 .collect(),
         },
     ]
+}
+
+/// The download of a release's source (GitHub's archive of the tag), as
+/// the preview shows it.
+fn source_download_step(source: &Source, p: &Product, r: &Release, why: &str) -> Step {
+    let api = match source {
+        Source::Online { api, .. } => api.clone(),
+        Source::Folder(_) => "https://api.github.com".into(),
+    };
+    Step {
+        title: format!("Download the source of {} {} {why}", p.title, r.version),
+        admin: false,
+        actions: vec![Action::Download {
+            url: format!("{api}/repos/{}/tarball/{}", p.repo, r.tag),
+            sha256_url: None,
+            to: PathBuf::from("<download>").join(format!("{}-{}-source.tar.gz", p.archive, r.tag)),
+        }],
+    }
+}
+
+/// The product's examples folder in its source, when the plan wants it.
+fn examples_folder<'p>(plan: &Plan, p: &'p Product) -> Option<&'p str> {
+    p.examples.as_deref().filter(|_| plan.examples)
+}
+
+/// What the plan leaves out and why (offline without wheels or source).
+pub fn notes(
+    ctx: &Ctx,
+    plan: &Plan,
+    source: &Source,
+    resolved: &[(&Product, Release)],
+) -> Vec<String> {
+    let _ = ctx;
+    let mut v = Vec::new();
+    for (p, r) in resolved {
+        if let PyPlan::Skip(why) = extras::py_plan(plan, p, source) {
+            v.push(why);
+        }
+        if examples_folder(plan, p).is_some()
+            && let Source::Folder(d) = source
+            && extras::source_archive(d, p, &r.tag, &r.version).is_none()
+            && !plan
+                .installs
+                .iter()
+                .any(|w| w.product == p.id && w.from == Origin::Source)
+        {
+            let repo = p.repo.rsplit('/').next().unwrap_or(&p.title);
+            v.push(format!(
+                "{}'s examples are left out: the folder has no {repo}-{}.tar.gz (the release page's \"Source code (tar.gz)\")",
+                p.title, r.version
+            ));
+        }
+    }
+    v
 }
 
 /// A file of an unpacked release: its name and whether it is a program.
@@ -217,6 +269,7 @@ pub fn expected_files(p: &Product, platform: &Platform) -> Vec<Staged> {
 }
 
 /// The steps that copy one version into place (not yet the default).
+#[allow(clippy::too_many_arguments)]
 pub fn install_steps(
     layout: &Layout,
     p: &Product,
@@ -225,6 +278,7 @@ pub fn install_steps(
     files: &[Staged],
     receipt: &Receipt,
     replace: bool,
+    x: Extras,
 ) -> Vec<Step> {
     let admin = layout.scope == Scope::System;
     let dest = layout.version_dir(p, version);
@@ -254,7 +308,6 @@ pub fn install_steps(
         executable: false,
     });
     if layout.platform.unix() {
-        let x = Extras::default();
         a.push(Action::Write {
             path: dest.join("env.sh"),
             text: envfiles::env_sh(p, version, &prefix, &dest, x),
@@ -463,6 +516,14 @@ pub fn preview(
         .filter(|t| !t.ok)
         .filter_map(|t| t.fix.clone())
         .collect();
+    // the Python found now, or the one the tool steps put in place
+    let python = extras::python(&ctx.platform, &build::tool_dirs(ctx.env)).unwrap_or_else(|| {
+        PathBuf::from(if ctx.platform.os == Os::Windows {
+            "python"
+        } else {
+            "python3"
+        })
+    });
     for (p, r) in resolved {
         let w = plan
             .installs
@@ -476,6 +537,23 @@ pub fn preview(
             PathBuf::from("<download>").join(top_folder(p, &r.version, &ctx.platform))
         };
         let files = expected_files(p, &ctx.platform);
+        let mut beside = Beside::default();
+        if let PyPlan::Venv { wheels } = extras::py_plan(plan, p, source) {
+            beside.venv = Some((python.clone(), wheels));
+        }
+        if let Some(ex) = examples_folder(plan, p) {
+            let from = match (w.from, source) {
+                (Origin::Source, _) => Some(PathBuf::from("<build>")),
+                (_, Source::Online { .. }) => {
+                    steps.push(source_download_step(source, p, r, "for its examples"));
+                    Some(PathBuf::from("<download>"))
+                }
+                (_, Source::Folder(d)) => {
+                    extras::source_archive(d, p, &r.tag, &r.version).map(|_| "<download>".into())
+                }
+            };
+            beside.examples = from.map(|f| f.join(format!("{}-source", p.archive)).join(ex));
+        }
         steps.extend(product_steps(
             ctx,
             plan,
@@ -487,6 +565,7 @@ pub fn preview(
             &Receipt::new(&p.id, &r.version, "release"),
             w.make_default,
             w.replace,
+            &beside,
         ));
     }
     if plan.path {
@@ -507,6 +586,7 @@ fn product_steps(
     receipt: &Receipt,
     make_default: bool,
     replace: bool,
+    beside: &Beside,
 ) -> Vec<Step> {
     let have = installed::product(layout, p);
     let already = have.get(version).is_some();
@@ -521,7 +601,12 @@ fn product_steps(
             files,
             receipt,
             replace && already,
+            Extras {
+                venv: beside.venv.is_some(),
+                src: false,
+            },
         ));
+        steps.extend(beside.steps(layout, p, version));
     }
     let no_default = have.default_version().is_none();
     if make_default || no_default {
@@ -647,51 +732,90 @@ pub fn apply(
     let mut steps = Vec::new();
     let mut products = Vec::new();
     let mut outcomes = Vec::new();
-    // the tools of the source builds first: the builds need them
+    let mut notes = notes(ctx, plan, source, &resolved);
+    // the tools first (the builds', Python, ffmpeg): the rest needs them
     let wants = build_wants(ctx, plan)?;
-    let toolbox = if wants.is_empty() {
-        None
-    } else {
-        let tools = tools(ctx, plan, work)?;
-        let fixes = tool_steps(&tools)?;
-        if !fixes.is_empty() {
-            progress(Event::Info {
-                text: "Install the tools the build needs".into(),
+    let tools = tools(ctx, plan, source, work)?;
+    let fixes = tool_steps(&tools)?;
+    if !fixes.is_empty() {
+        progress(Event::Info {
+            text: "Install the tools the install needs".into(),
+        });
+        let optional: Vec<&str> = tools
+            .iter()
+            .filter(|t| t.optional)
+            .filter_map(|t| t.fix.as_ref().map(|f| f.title.as_str()))
+            .collect();
+        let (opt, req): (Vec<Step>, Vec<Step>) = fixes
+            .into_iter()
+            .partition(|f| optional.contains(&f.title.as_str()));
+        let o = run_all(&req, elevator);
+        for x in &o {
+            progress(Event::Step {
+                title: x.title.clone(),
+                ok: x.ok,
             });
-            let o = run_all(&fixes, elevator);
-            for x in &o {
-                progress(Event::Step {
-                    title: x.title.clone(),
-                    ok: x.ok,
-                });
-            }
-            let failed = o.len() < fixes.len() || o.iter().any(|x| !x.ok);
-            outcomes.extend(o);
-            if failed {
-                return Ok(Report {
-                    ok: false,
-                    outcomes,
-                    products,
-                    notes: Vec::new(),
-                });
-            }
-            let again = self::tools(ctx, plan, work)?;
-            if let Some(t) = again.iter().find(|t| !t.ok) {
-                return Err(diag(
-                    "KRX015",
-                    format!(
-                        "{} is still missing after its install{}; open a new terminal or sign in again, then retry",
-                        t.need,
-                        t.found
-                            .as_ref()
-                            .map(|f| format!(" (found {f})"))
-                            .unwrap_or_default()
-                    ),
+        }
+        let failed = o.len() < req.len() || o.iter().any(|x| !x.ok);
+        outcomes.extend(o);
+        if failed {
+            return Ok(Report {
+                ok: false,
+                outcomes,
+                products,
+                notes,
+            });
+        }
+        // an optional tool that does not install is a note, not a stop
+        for f in opt {
+            let o = run_all(std::slice::from_ref(&f), elevator);
+            let ok = o.first().is_some_and(|x| x.ok);
+            progress(Event::Step {
+                title: f.title.clone(),
+                ok,
+            });
+            if !ok {
+                notes.push(format!(
+                    "{} did not work{}; the install went on without it",
+                    f.title,
+                    o.first()
+                        .and_then(|x| x.error.as_ref())
+                        .map(|e| format!(" ({})", e.message))
+                        .unwrap_or_default()
                 ));
             }
         }
+        let again = self::tools(ctx, plan, source, work)?;
+        if let Some(t) = again.iter().find(|t| !t.ok && !t.optional) {
+            return Err(diag(
+                "KRX015",
+                format!(
+                    "{} is still missing after its install{}; open a new terminal or sign in again, then retry",
+                    t.need,
+                    t.found
+                        .as_ref()
+                        .map(|f| format!(" (found {f})"))
+                        .unwrap_or_default()
+                ),
+            ));
+        }
+    }
+    for t in tools
+        .iter()
+        .filter(|t| !t.ok && t.optional && t.fix.is_none())
+    {
+        notes.push(format!(
+            "{} is missing: {}",
+            t.need,
+            t.manual.clone().unwrap_or_default()
+        ));
+    }
+    let toolbox = if wants.is_empty() {
+        None
+    } else {
         Some(build::toolbox(&ctx.platform, ctx.env)?)
     };
+    let python = extras::python(&ctx.platform, &build::tool_dirs(ctx.env));
     for (p, r) in &resolved {
         let w = plan
             .installs
@@ -722,6 +846,7 @@ pub fn apply(
                 &Receipt::new(&p.id, &r.version, "release"),
                 w.make_default,
                 false,
+                &Beside::default(),
             ));
             products.push(ProductReport {
                 product: p.id.clone(),
@@ -778,6 +903,17 @@ pub fn apply(
             receipt.features = w.features.clone();
             receipt.native = w.native;
             receipt.rustc = tb.rustc.clone();
+            let beside = beside_for(
+                plan,
+                p,
+                r,
+                source,
+                python.as_deref(),
+                Some(&src),
+                &pwork,
+                &mut notes,
+                progress,
+            );
             steps.extend(product_steps(
                 ctx,
                 plan,
@@ -789,6 +925,7 @@ pub fn apply(
                 &receipt,
                 w.make_default,
                 w.replace,
+                &beside,
             ));
             products.push(ProductReport {
                 product: p.id.clone(),
@@ -844,6 +981,17 @@ pub fn apply(
         receipt.file = name.clone();
         receipt.sha256 = sha256.clone();
         receipt.verified = verified;
+        let beside = beside_for(
+            plan,
+            p,
+            r,
+            source,
+            python.as_deref(),
+            None,
+            &pwork,
+            &mut notes,
+            progress,
+        );
         steps.extend(product_steps(
             ctx,
             plan,
@@ -855,6 +1003,7 @@ pub fn apply(
             &receipt,
             w.make_default,
             w.replace,
+            &beside,
         ));
         products.push(ProductReport {
             product: p.id.clone(),
@@ -880,7 +1029,6 @@ pub fn apply(
     }
     let mut ok = ran.len() == steps.len() && ran.iter().all(|o| o.ok);
     outcomes.extend(ran);
-    let mut notes = Vec::new();
     if ok {
         for pr in products.iter_mut().filter(|pr| !pr.already) {
             let p = ctx.catalogue.get(&pr.product)?;
@@ -901,6 +1049,75 @@ pub fn apply(
         products,
         notes,
     })
+}
+
+/// The venv and the examples of a new version: the source of a build
+/// (`src`), else the release's source from GitHub or the folder of
+/// downloads. What cannot be had becomes a note.
+#[allow(clippy::too_many_arguments)]
+fn beside_for(
+    plan: &Plan,
+    p: &Product,
+    r: &Release,
+    source: &Source,
+    python: Option<&Path>,
+    src: Option<&Path>,
+    pwork: &Path,
+    notes: &mut Vec<String>,
+    progress: &mut dyn FnMut(Event),
+) -> Beside {
+    let mut b = Beside::default();
+    if let PyPlan::Venv { wheels } = extras::py_plan(plan, p, source) {
+        match python {
+            Some(py) => b.venv = Some((py.to_path_buf(), wheels)),
+            None => notes.push(format!(
+                "{}'s Python is left out: no Python 3 found",
+                p.title
+            )),
+        }
+    }
+    let Some(ex) = examples_folder(plan, p) else {
+        return b;
+    };
+    let top = match (src, source) {
+        (Some(s), _) => Ok(s.to_path_buf()),
+        (None, Source::Online { .. }) => {
+            let name = format!("{}@{}", p.repo, r.tag);
+            progress(Event::Info {
+                text: format!(
+                    "Download the source of {} {} for its examples",
+                    p.title, r.version
+                ),
+            });
+            let _ = std::fs::create_dir_all(pwork.join("src"));
+            build::fetch_source(source, p, &r.tag, &pwork.join("src"), &mut |done, total| {
+                progress(Event::Download {
+                    file: name.clone(),
+                    done,
+                    total,
+                })
+            })
+            .map(|(top, _)| top)
+        }
+        (None, Source::Folder(d)) => match extras::source_archive(d, p, &r.tag, &r.version) {
+            // `notes` already says why
+            None => return b,
+            Some(a) => crate::archive::unpack(&a, &pwork.join("src").join("source")),
+        },
+    };
+    match top {
+        Ok(t) if t.join(ex).is_dir() => b.examples = Some(t.join(ex)),
+        Ok(t) => notes.push(format!(
+            "{}'s examples are left out: the source has no {ex} folder ({})",
+            p.title,
+            t.display()
+        )),
+        Err(e) => notes.push(format!(
+            "{}'s examples are left out: {}",
+            p.title, e.message
+        )),
+    }
+    b
 }
 
 /// The steps that make an installed version the default.

@@ -72,7 +72,9 @@ fn problems(h: &Harness<'_, KraxnApp>) -> Vec<String> {
 /// text mode does: Install → for you → a folder → KoflCraft only (the
 /// others have no file there) → PATH → the steps → Install, ending with
 /// the SHA-256 and start checks shown and the program in place; every
-/// page's controls keep their names. Breaks if a page stops filling the
+/// page's controls keep their names; the options offer only the extras
+/// of the chosen programs, and the steps page says what an offline
+/// install leaves out. Breaks if a page stops filling the
 /// plan, Next stays disabled, the run is not started on its thread, or a
 /// control loses its name.
 #[cfg(unix)]
@@ -101,9 +103,13 @@ fn wizard_installs_from_a_folder() {
     assert_eq!(problems(&h), Vec::<String>::new(), "products");
     click(&mut h, "Next");
     assert_eq!(h.state().page, Page::Options);
+    assert!(shows(&h, "Copy the examples of KoflCraft"), "options");
+    assert!(!shows(&h, "ffmpeg"), "options: no MurmelCraft, no ffmpeg");
     click(&mut h, "Next");
     wait(&mut h, |a| a.page == Page::Review && !a.review_busy());
     assert!(shows(&h, "Install KoflCraft 0.3.1 into"), "review");
+    // offline without the release's source: said before Install
+    assert!(shows(&h, "KoflCraft's examples are left out"), "review");
     assert_eq!(problems(&h), Vec::<String>::new(), "review");
     click(&mut h, "Install");
     wait(&mut h, |a| a.page == Page::Running && a.run_finished());
@@ -144,7 +150,7 @@ fn wizard_builds_from_source() {
     assert!(shows(&h, "Tune source builds"));
     click(&mut h, "Next");
     wait(&mut h, |a| a.page == Page::Review && !a.review_busy());
-    assert!(shows(&h, "Tools for the build:"), "review");
+    assert!(shows(&h, "Tools this install needs:"), "review");
     assert!(shows(&h, "Build KoflCraft 0.3.1 with cargo"), "review");
     assert_eq!(problems(&h), Vec::<String>::new(), "review");
     click(&mut h, "Install");

@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout, RichText};
 use kraxn_core::install::Event;
+use kraxn_core::plan::PyMode;
 use kraxn_core::tools::Envelope;
 use kraxn_core::{Origin, Plan, Scope, Want};
 use serde_json::{Value, json};
@@ -118,6 +119,12 @@ pub struct KraxnApp {
     pub native: bool,
     pub menu: bool,
     pub file_types: bool,
+    /// FoehnCraft's Python: a venv, the system's packages or none.
+    pub python: PyMode,
+    /// ffmpeg for MurmelCraft's MP4 movies, when it is missing.
+    pub ffmpeg: bool,
+    /// KoflCraft's and FoehnCraft's examples.
+    pub examples: bool,
     preview: Option<Job>,
     run: Option<Job>,
     installed: Option<Value>,
@@ -168,6 +175,9 @@ impl KraxnApp {
             native: false,
             menu: true,
             file_types: true,
+            python: PyMode::Venv,
+            ffmpeg: true,
+            examples: true,
             preview: None,
             run: None,
             installed: None,
@@ -206,6 +216,9 @@ impl KraxnApp {
             path: self.path,
             menu: self.menu,
             file_types: self.file_types,
+            python: self.python,
+            ffmpeg: self.ffmpeg,
+            examples: self.examples,
             installs: self
                 .rows
                 .iter()
@@ -774,17 +787,16 @@ impl KraxnApp {
         if self.any_source() {
             ui.checkbox(&mut self.native, self.t.tr("win-native"));
         }
-        let windows: Vec<kraxn_core::Product> = {
+        let chosen: Vec<kraxn_core::Product> = {
             let r = self.lock();
             self.rows
                 .iter()
                 .filter(|row| row.chosen)
                 .filter_map(|row| r.catalogue.get(&row.id).ok())
-                .filter(|p| p.window.is_some())
                 .cloned()
                 .collect()
         };
-        for p in windows {
+        for p in chosen.iter().filter(|p| p.window.is_some()) {
             ui.checkbox(
                 &mut self.menu,
                 self.t.tr_args("win-menu", &[("title", p.title.clone())]),
@@ -796,16 +808,63 @@ impl KraxnApp {
                         &mut self.file_types,
                         self.t.tr_args(
                             "win-file-types",
-                            &[("title", p.title.clone()), ("types", file_types_list(&p))],
+                            &[("title", p.title.clone()), ("types", file_types_list(p))],
                         ),
                     ),
                 );
             }
         }
-        ui.label(
-            RichText::new(self.t.tr("win-more-later"))
-                .color(ui.visuals().widgets.noninteractive.fg_stroke.color),
-        );
+        let titles = |f: &dyn Fn(&kraxn_core::Product) -> bool| {
+            chosen
+                .iter()
+                .filter(|p| f(p))
+                .map(|p| p.title.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let with_examples = titles(&|p| p.examples.is_some());
+        if !with_examples.is_empty() {
+            ui.checkbox(
+                &mut self.examples,
+                self.t.tr_args("win-examples", &[("titles", with_examples)]),
+            );
+        }
+        let with_movies = titles(&|p| p.ffmpeg);
+        if !with_movies.is_empty() {
+            ui.checkbox(
+                &mut self.ffmpeg,
+                self.t.tr_args("win-ffmpeg", &[("titles", with_movies)]),
+            );
+        }
+        for p in chosen.iter().filter(|p| p.python.is_some()) {
+            ui.add_space(8.0);
+            ui.label(kit::bold(
+                self.t.tr_args("win-python", &[("title", p.title.clone())]),
+            ));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for (m, key) in [
+                    (PyMode::Venv, "win-python-venv"),
+                    (PyMode::System, "win-python-system"),
+                    (PyMode::None, "win-python-none"),
+                ] {
+                    kit::segment(ui, &mut self.python, m, &self.t.tr(key));
+                }
+            });
+            let pip = p
+                .python
+                .as_ref()
+                .map(|x| x.pip.join(", "))
+                .unwrap_or_default();
+            let text = match self.python {
+                PyMode::Venv => self.t.tr_args("win-python-venv-text", &[("pip", pip)]),
+                PyMode::System => self.t.tr("win-python-system-text"),
+                PyMode::None => self.t.tr("win-python-none-text"),
+            };
+            ui.label(RichText::new(text).color(kit::secondary_text(ui)));
+        }
+        ui.add_space(8.0);
+        ui.label(RichText::new(self.t.tr("win-more-later")).color(kit::secondary_text(ui)));
     }
 
     fn steps_ui(&self, ui: &mut egui::Ui, steps: &Value) {
@@ -864,7 +923,11 @@ impl KraxnApp {
             for t in tools {
                 let mut rt = RichText::new(tool_line(&self.t, t));
                 if !t["ok"].as_bool().unwrap_or(false) && !t["fix"].is_object() {
-                    rt = rt.color(ui.visuals().error_fg_color);
+                    rt = rt.color(if t["optional"].as_bool().unwrap_or(false) {
+                        ui.visuals().warn_fg_color
+                    } else {
+                        ui.visuals().error_fg_color
+                    });
                 }
                 ui.label(rt);
             }
@@ -878,6 +941,9 @@ impl KraxnApp {
                 }
             }
             ui.add_space(8.0);
+        }
+        for n in e.result["notes"].as_array().into_iter().flatten() {
+            ui.label(RichText::new(n.as_str().unwrap_or("")).color(ui.visuals().warn_fg_color));
         }
         self.steps_ui(ui, &e.result["steps"]);
         ui.add_space(8.0);

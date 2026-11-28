@@ -87,7 +87,7 @@ fn text_mode_installs_lists_and_removes() {
     let mut r = runner(&home);
     let plan_file = d.join("plan.toml");
     let answers = format!(
-        "1\n1\n\n2\n{}\n2\n\n\n{}\n\n4\n5\n",
+        "1\n1\n\n2\n{}\n2\n\n\n\n{}\n\n4\n5\n",
         d.join("dl").display(),
         plan_file.display()
     );
@@ -246,13 +246,14 @@ fn text_mode_builds_from_source() {
     std::fs::create_dir_all(&home).unwrap();
     let mut r = source_runner(&d, &home);
     // install, for you, default folder, GitHub, KoflCraft, build: yes,
-    // version: latest, native: no, PATH: yes, no plan file, start; quit
-    let out = session(&mut r, "1\n1\n\n1\n2\n\n\n\n\n\n\n5\n");
+    // version: latest, native: no, PATH: yes, examples: yes, no plan
+    // file, start; quit
+    let out = session(&mut r, "1\n1\n\n1\n2\n\n\n\n\n\n\n\n5\n");
     assert!(
         out.contains("Kraxn can build 0.3.1 from the source"),
         "{out}"
     );
-    assert!(out.contains("Tools for the build:"), "{out}");
+    assert!(out.contains("Tools this install needs:"), "{out}");
     assert!(
         out.contains("Rust 1.88 or newer: there (rustc 1.99.0)"),
         "{out}"

@@ -6,6 +6,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use kraxn_core::install::Event;
+use kraxn_core::plan::PyMode;
 use kraxn_core::tools::Envelope;
 use kraxn_core::{Layout, Origin, Plan, Scope, Want};
 use serde_json::{Value, json};
@@ -372,23 +373,58 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
         }
         let q = self.t.tr("path-ask");
         plan.path = self.yes(&q, true)?;
-        let windows: Vec<kraxn_core::Product> = plan
+        let chosen: Vec<kraxn_core::Product> = plan
             .installs
             .iter()
             .filter_map(|w| self.runner.catalogue.get(&w.product).ok())
-            .filter(|p| p.window.is_some())
             .cloned()
             .collect();
-        for p in windows {
+        for p in chosen.iter().filter(|p| p.window.is_some()) {
             let q = self.t.tr_args("menu-ask", &[("title", p.title.clone())]);
             plan.menu = self.yes(&q, true)?;
             if plan.menu && !p.file_types.is_empty() {
                 let q = self.t.tr_args(
                     "file-types-ask",
-                    &[("title", p.title.clone()), ("types", file_types_list(&p))],
+                    &[("title", p.title.clone()), ("types", file_types_list(p))],
                 );
                 plan.file_types = self.yes(&q, true)?;
             }
+        }
+        let titles = |f: &dyn Fn(&kraxn_core::Product) -> bool| {
+            chosen
+                .iter()
+                .filter(|p| f(p))
+                .map(|p| p.title.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let with_examples = titles(&|p| p.examples.is_some());
+        if !with_examples.is_empty() {
+            let q = self.t.tr_args("examples-ask", &[("titles", with_examples)]);
+            plan.examples = self.yes(&q, true)?;
+        }
+        let with_movies = titles(&|p| p.ffmpeg);
+        if !with_movies.is_empty() {
+            let q = self.t.tr_args("ffmpeg-ask", &[("titles", with_movies)]);
+            plan.ffmpeg = self.yes(&q, true)?;
+        }
+        if let Some(p) = chosen.iter().find(|p| p.python.is_some()) {
+            let pip = p
+                .python
+                .as_ref()
+                .map(|x| x.pip.join(", "))
+                .unwrap_or_default();
+            let options = [
+                self.t.tr_args("python-venv", &[("pip", pip)]),
+                self.t.tr("python-system"),
+                self.t.tr("python-none"),
+            ];
+            let title = self.t.tr_args("python-ask", &[("title", p.title.clone())]);
+            plan.python = match self.choose(&title, &options, 0)? {
+                0 => PyMode::Venv,
+                1 => PyMode::System,
+                _ => PyMode::None,
+            };
         }
         self.confirm_and_apply(plan)
     }
@@ -429,6 +465,9 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                 let m = self.t.tr("tools-blocked");
                 return self.say(&m);
             }
+        }
+        for n in e.result["notes"].as_array().into_iter().flatten() {
+            self.say(&format!("\n{}", n.as_str().unwrap_or("")))?;
         }
         let steps = e.result["steps"].clone();
         self.show_steps(&steps)?;
