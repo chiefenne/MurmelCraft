@@ -158,11 +158,13 @@ fn pkg_step(pkg: Pkg, exe: &Path, title: &str, packages: &[&str]) -> Step {
                     program: exe.to_path_buf(),
                     args: vec!["update".into(), "-q".into()],
                     env: env.clone(),
+                    optional: false,
                 },
                 Action::Run {
                     program: exe.to_path_buf(),
                     args,
                     env,
+                    optional: false,
                 },
             ]
         }
@@ -173,6 +175,7 @@ fn pkg_step(pkg: Pkg, exe: &Path, title: &str, packages: &[&str]) -> Step {
                 program: exe.to_path_buf(),
                 args,
                 env: Vec::new(),
+                optional: false,
             }]
         }
     };
@@ -191,6 +194,7 @@ fn brew_step(brew: &Path, title: &str, formula: &str) -> Step {
             program: brew.to_path_buf(),
             args: vec!["install".into(), formula.into()],
             env: Vec::new(),
+            optional: false,
         }],
     }
 }
@@ -217,6 +221,7 @@ fn winget_step(winget: &Path, title: &str, id: &str, extra: &[&str]) -> Step {
             program: winget.to_path_buf(),
             args,
             env: Vec::new(),
+            optional: false,
         }],
     }
 }
@@ -390,6 +395,7 @@ fn rust(platform: &Platform, dirs: &[PathBuf], min: &str, work: &Path) -> ToolSt
                     .map(|s| s.to_string())
                     .collect(),
                 env: Vec::new(),
+                optional: false,
             }],
         });
         return t;
@@ -420,6 +426,7 @@ fn rust(platform: &Platform, dirs: &[PathBuf], min: &str, work: &Path) -> ToolSt
                 .map(|s| s.to_string())
                 .collect(),
                 env: Vec::new(),
+                optional: false,
             },
         ],
     });

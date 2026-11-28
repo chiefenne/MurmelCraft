@@ -510,3 +510,80 @@ fn source_build_installs_the_built_programs() {
         "rustup-init is offered: {rust:?}"
     );
 }
+
+/// Invariant: installing MurmelCraft for you on Linux writes its menu
+/// entry (desktop file, icon, file types) into `~/.local/share`, and
+/// removing it takes them away; `menu = false` writes none. Breaks if
+/// the window got no entry, or a removed program left one behind.
+#[cfg(unix)]
+#[test]
+fn menu_entry_comes_and_goes_with_the_window() {
+    let t = Tmp::new("menu");
+    let (root, offline, home) = (t.0.join("root"), t.0.join("dl"), t.0.join("home"));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    let name = "murmelcraft-0.7.1-linux-x86_64.tar.gz";
+    let ok: &[u8] = b"#!/bin/sh\nexit 0\n";
+    make_tar(
+        &offline.join(name),
+        "murmelcraft-0.7.1-linux-x86_64",
+        &[
+            ("murmelcraft", ok, 0o755),
+            ("murmel", ok, 0o755),
+            ("murmel-mcp", ok, 0o755),
+            ("LICENSE", b"l", 0o644),
+        ],
+    );
+    let sum = sha256_file(&offline.join(name)).unwrap();
+    std::fs::write(offline.join("SHA256SUMS.txt"), format!("{sum}  {name}\n")).unwrap();
+    let c = Catalogue::builtin().unwrap();
+    let e = env(&home);
+    let ctx = Ctx {
+        catalogue: &c,
+        platform: linux(),
+        env: &e,
+    };
+    let mut plan = Plan {
+        prefix: Some(root.clone()),
+        offline_dir: Some(offline.clone()),
+        path: false,
+        installs: vec![Want::new("murmelcraft")],
+        ..Plan::default()
+    };
+    let share = home.join(".local/share");
+    let desktop = share.join("applications/io.github.chiefenne.murmelcraft.desktop");
+    plan.menu = false;
+    let r = run(&ctx, &plan, &t.0.join("w0")).unwrap();
+    assert!(r.ok, "{r:?}");
+    assert!(!desktop.exists());
+    let l = ctx.layout(&plan).unwrap();
+    run_all(
+        &remove(&ctx, &l, "murmelcraft", None).unwrap(),
+        &mut NoElevation,
+    );
+
+    plan.menu = true;
+    let r = run(&ctx, &plan, &t.0.join("w1")).unwrap();
+    assert!(r.ok, "{r:?}");
+    let text = std::fs::read_to_string(&desktop).unwrap();
+    assert!(
+        text.contains("MurmelCraft/current/bin/murmelcraft"),
+        "{text}"
+    );
+    assert!(
+        share
+            .join("icons/hicolor/256x256/apps/io.github.chiefenne.murmelcraft.png")
+            .is_file()
+    );
+    assert!(
+        share
+            .join("mime/packages/io.github.chiefenne.murmelcraft.xml")
+            .is_file()
+    );
+    let o = run_all(
+        &remove(&ctx, &l, "murmelcraft", None).unwrap(),
+        &mut NoElevation,
+    );
+    assert!(o.iter().all(|o| o.ok), "{o:?}");
+    assert!(!desktop.exists() && !root.join("MurmelCraft").exists());
+}

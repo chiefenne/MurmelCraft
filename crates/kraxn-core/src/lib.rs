@@ -11,6 +11,7 @@ pub mod actions;
 pub mod archive;
 pub mod build;
 pub mod catalogue;
+pub mod desktop;
 pub mod diag;
 pub mod envfiles;
 pub mod fetch;

@@ -40,6 +40,10 @@ pub struct Env {
     pub local_app_data: Option<PathBuf>,
     /// `%ProgramFiles%` on Windows.
     pub program_files: Option<PathBuf>,
+    /// `%APPDATA%` on Windows (the user's Start menu is below it).
+    pub app_data: Option<PathBuf>,
+    /// `%ProgramData%` on Windows (everybody's Start menu).
+    pub program_data: Option<PathBuf>,
     /// `PATH`, split.
     pub path: Vec<PathBuf>,
     /// Where tools often are besides the PATH (Homebrew, CMake on
@@ -58,6 +62,8 @@ impl Env {
             home: var("HOME").or_else(|| var("USERPROFILE")),
             local_app_data: var("LOCALAPPDATA"),
             program_files: var("ProgramFiles"),
+            app_data: var("APPDATA"),
+            program_data: var("ProgramData"),
             path: std::env::var_os("PATH")
                 .map(|p| std::env::split_paths(&p).collect())
                 .unwrap_or_default(),
@@ -208,6 +214,8 @@ mod tests {
             home: Some("/home/ann".into()),
             local_app_data: Some(r"C:\Users\ann\AppData\Local".into()),
             program_files: Some(r"C:\Program Files".into()),
+            app_data: None,
+            program_data: None,
             path: vec![],
             tool_dirs: vec![],
         }

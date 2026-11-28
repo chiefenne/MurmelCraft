@@ -372,6 +372,24 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
         }
         let q = self.t.tr("path-ask");
         plan.path = self.yes(&q, true)?;
+        let windows: Vec<kraxn_core::Product> = plan
+            .installs
+            .iter()
+            .filter_map(|w| self.runner.catalogue.get(&w.product).ok())
+            .filter(|p| p.window.is_some())
+            .cloned()
+            .collect();
+        for p in windows {
+            let q = self.t.tr_args("menu-ask", &[("title", p.title.clone())]);
+            plan.menu = self.yes(&q, true)?;
+            if plan.menu && !p.file_types.is_empty() {
+                let q = self.t.tr_args(
+                    "file-types-ask",
+                    &[("title", p.title.clone()), ("types", file_types_list(&p))],
+                );
+                plan.file_types = self.yes(&q, true)?;
+            }
+        }
         self.confirm_and_apply(plan)
     }
 
@@ -697,4 +715,14 @@ pub fn done_source(t: &I18n, p: &Value) -> String {
     } else {
         "done-unchecked"
     })
+}
+
+/// `.murmel, .vtu and .vtkhdf`.
+pub fn file_types_list(p: &kraxn_core::Product) -> String {
+    let v: Vec<String> = p.file_types.iter().map(|f| format!(".{}", f.ext)).collect();
+    match v.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        Some((last, _)) => last.clone(),
+        None => String::new(),
+    }
 }

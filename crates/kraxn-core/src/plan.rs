@@ -9,6 +9,8 @@
 //! # prefix = "/opt"             # another install root
 //! # offline_dir = "/srv/kraxn"  # install from downloaded files
 //! path = true                   # put the programs on the PATH
+//! menu = true                   # a menu entry for MurmelCraft's window
+//! file_types = true             # .murmel, .vtu and .vtkhdf open in it
 //!
 //! [[install]]
 //! product = "foehncraft"
@@ -119,6 +121,12 @@ pub struct Plan {
     /// Put the programs on the PATH (default: yes).
     #[serde(default = "yes")]
     pub path: bool,
+    /// A menu entry for a program with a window (default: yes).
+    #[serde(default = "yes")]
+    pub menu: bool,
+    /// With the menu entry: the file types it opens (default: yes).
+    #[serde(default = "yes")]
+    pub file_types: bool,
     #[serde(default, rename = "install")]
     pub installs: Vec<Want>,
 }
@@ -133,6 +141,8 @@ impl Default for Plan {
             offline_dir: None,
             require_checksums: true,
             path: true,
+            menu: true,
+            file_types: true,
             installs: Vec::new(),
         }
     }

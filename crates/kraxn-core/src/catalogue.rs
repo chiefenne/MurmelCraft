@@ -7,6 +7,19 @@ use crate::diag::{Res, diag};
 /// The catalogue built into Kraxn.
 pub const CATALOGUE: &str = include_str!("../../../assets/kraxn/catalogue.toml");
 
+/// A kind of file the window opens.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileType {
+    /// Without the dot, e.g. `vtu`.
+    pub ext: String,
+    pub mime: String,
+    pub name: String,
+    /// The family's own format: the window becomes its default program.
+    /// Other formats only offer the window under "Open with".
+    #[serde(default)]
+    pub own: bool,
+}
+
 /// One program of the family.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Product {
@@ -22,6 +35,15 @@ pub struct Product {
     /// The program with a window, if any.
     #[serde(default)]
     pub window: Option<String>,
+    /// The menu entry's id (desktop file, macOS bundle identifier).
+    #[serde(default)]
+    pub app_id: String,
+    /// The menu entry's line.
+    #[serde(default)]
+    pub summary: String,
+    /// The files the window opens.
+    #[serde(default)]
+    pub file_types: Vec<FileType>,
     /// The smoke test after an install: program and arguments.
     pub check: Vec<String>,
     pub build_paths: Vec<String>,
