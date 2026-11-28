@@ -82,6 +82,8 @@ Options:
                       the programs may then not run on other CPUs
   --install-rust      with --build: if cargo is missing, install Rust system-wide into
                       DIR/rust (RUSTUP_HOME and CARGO_HOME there, not in root's home)
+                      (with --build, set CARGO_TARGET_DIR to keep the build files for the
+                      next build; by default they go to a temporary folder)
   --tarball FILE      install from a downloaded release archive (offline)
   --no-current        install next to the others, keep the default (DIR/current) as it is
   --activate V        only make the installed version V the default (DIR/current)
@@ -226,7 +228,7 @@ if [ "$BUILD" = 1 ]; then
   [ "$NATIVE" = 1 ] && export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native"
   feat=(); [ -n "$FEATURES" ] && feat=(--features "$FEATURES")
   for p in $BUILD_PATHS; do
-    run env -C "$DEST/src" CARGO_TARGET_DIR="$WORK/target" cargo install --locked --root "$DEST" \
+    run env -C "$DEST/src" CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK/target}" cargo install --locked --root "$DEST" \
       --path "$DEST/src/$p" "${feat[@]}"
   done
   run rm -f "$DEST/.crates.toml" "$DEST/.crates2.json"
@@ -320,7 +322,7 @@ esac
 if [ "$BUILD" = 1 ] && [ "$PYTHON_MODE" = venv ] && [ -n "$PY_PROJECT" ] \
    && { [ "$DRY" = 1 ] || [ -f "$DEST/src/$PY_PROJECT/pyproject.toml" ]; }; then
   say "Python package from $DEST/src/$PY_PROJECT (builds its Rust module)"
-  run env CARGO_TARGET_DIR="$WORK/target-py" "$DEST/venv/bin/python" -m pip install --quiet "$DEST/src/$PY_PROJECT"
+  run env CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK}/target-py" "$DEST/venv/bin/python" -m pip install --quiet "$DEST/src/$PY_PROJECT"
 fi
 
 # ---- environment files ------------------------------------------------------
