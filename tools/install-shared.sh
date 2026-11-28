@@ -187,10 +187,14 @@ if [ -e "$DEST/bin" ] && [ "$FORCE" = 0 ]; then
   echo "install-shared: $DEST exists already (use --force to replace it)" >&2; exit 1
 fi
 
-arch="$(uname -m)"
-if [ "$BUILD" = 0 ] && [ -z "$TARBALL" ] && [ "$arch" != x86_64 ]; then
-  echo "install-shared: release archives are built for x86_64 only; use --build on $arch" >&2; exit 1
-fi
+case "$(uname -m)" in
+  x86_64|amd64) arch=x86_64 ;;
+  aarch64|arm64) arch=aarch64 ;;
+  *) arch="$(uname -m)"
+     if [ "$BUILD" = 0 ] && [ -z "$TARBALL" ]; then
+       echo "install-shared: release archives are built for x86_64 and aarch64; use --build on $arch" >&2; exit 1
+     fi ;;
+esac
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 run mkdir -p "$DEST/bin"
@@ -234,7 +238,7 @@ if [ "$BUILD" = 1 ]; then
   run rm -f "$DEST/.crates.toml" "$DEST/.crates2.json"
   [ "$DRY" = 1 ] || cp "$DEST/src/README.md" "$DEST/src/LICENSE" "$DEST/" 2>/dev/null || true
 else
-  file="$NAME-$VERSION-linux-x86_64.tar.gz"
+  file="$NAME-$VERSION-linux-$arch.tar.gz"
   if [ -n "$TARBALL" ]; then
     archive="$TARBALL"
     sums="$(dirname "$TARBALL")/SHA256SUMS.txt"
@@ -258,7 +262,7 @@ else
   fi
   run tar -xzf "$archive" -C "$WORK"
   if [ "$DRY" = 0 ]; then
-    top="$WORK/$NAME-$VERSION-linux-x86_64"
+    top="$WORK/$NAME-$VERSION-linux-$arch"
     for f in "$top"/*; do
       case "$(basename "$f")" in
         README.md|LICENSE) cp "$f" "$DEST/" ;;
@@ -346,9 +350,14 @@ write "$DEST/env.sh" <<EOF
 # (or $PREFIX/current/env.sh for the version the 'current' link points to)
 # Takes every other $TITLE version under $PREFIX off PATH first, so that
 # sourcing another version's env.sh switches cleanly.
-_fc_p=":\$PATH:"
-for _fc_d in "$PREFIX"/*/bin "$PREFIX"/*/venv/bin; do _fc_p="\${_fc_p//:\$_fc_d:/:}"; done
-_fc_p="\${_fc_p#:}"; PATH="\${_fc_p%:}"; unset _fc_p _fc_d
+# (A loop over PATH's parts, not a glob: it works the same in sh, bash
+# and zsh, and a folder name is never read as a pattern.)
+_fc_rest="\$PATH:"; _fc_new=""
+while [ -n "\$_fc_rest" ]; do
+  _fc_d="\${_fc_rest%%:*}"; _fc_rest="\${_fc_rest#*:}"
+  case "\$_fc_d" in "$PREFIX"/*) ;; *) _fc_new="\${_fc_new:+\$_fc_new:}\$_fc_d" ;; esac
+done
+PATH="\$_fc_new"; unset _fc_rest _fc_new _fc_d
 export $home_var="$DEST"
 export PATH="\$$home_var/bin:$venv_sh\$PATH"
 $src_sh

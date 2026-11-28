@@ -167,7 +167,7 @@ bash install-shared.sh                        # the latest release
 bash install-shared.sh --version 0.6.0          # a given release
 ```
 
-It downloads `murmelcraft-<version>-linux-x86_64.tar.gz` and `SHA256SUMS.txt`
+It downloads `murmelcraft-<version>-linux-<x86_64|aarch64>.tar.gz` (for this machine) and `SHA256SUMS.txt`
 from the release, checks the checksum, puts the programs into
 `<version>/bin/` (`--tarball FILE` for a file you downloaded), writes
 `env.sh`, `env.csh`, the module file and `use.sh`, makes the version the
@@ -180,10 +180,10 @@ installs the Vulkan driver the window needs (`mesa-vulkan-drivers
 libvulkan1`, or `mesa-vulkan-drivers vulkan-loader` with dnf); NVIDIA
 cards use the NVIDIA driver instead.
 
-The release programs are built for x86-64 and need glibc 2.28 or newer
+The release programs are built for x86-64 and, from the next release on, aarch64 (64-bit ARM), and need glibc 2.28 or newer
 (RHEL, Rocky and Alma 8 and 9, Debian 11 to 13, Ubuntu 20.04 and newer);
 v0.6.0 itself still needs a newer glibc (Debian 13, Ubuntu 24.04). On older
-systems, or on ARM, build from source.
+systems, or on ARM with an older release, build from source.
 
 ### Build from source into /opt
 
