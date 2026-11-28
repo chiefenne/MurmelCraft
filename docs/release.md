@@ -6,7 +6,9 @@ release whose notes are that version's section of
 1.0 a minor step (0.1 to 0.2) may change file formats and tool inputs.
 
 The minor version follows the milestone of the UI spec that is done
-(0.6.0 after V0.6), and 1.0.0 is the V1.0 milestone.
+(0.6.0 after V0.6), and 1.0.0 is the V1.0 milestone. 0.7.0 is the
+maintainer's exception: a minor step released together with Foehncraft
+1.3.0 and KoflCraft 0.3.0 while V1.0 is in progress.
 
 1. In a pull request (branch `release-v<version>-changelog`):
    - set `version` in `[workspace.package]` of `Cargo.toml` and run
