@@ -160,6 +160,7 @@ fn build_preview(source: &Source, p: &Product, r: &Release, features: &[String])
                         program: PathBuf::from(words.next().unwrap_or_default()),
                         args: words.collect(),
                         env: Vec::new(),
+                        optional: false,
                     }
                 })
                 .collect(),
@@ -525,11 +526,34 @@ fn product_steps(
     let no_default = have.default_version().is_none();
     if make_default || no_default {
         steps.extend(default_steps(layout, p, version, &programs, plan.path));
+        if plan.menu {
+            steps.extend(crate::desktop::menu_steps(
+                layout,
+                ctx.env,
+                p,
+                &window_exe(layout, p, version),
+                plan.file_types,
+            ));
+        }
     }
     if plan.path {
         steps.extend(path_steps(layout, p, version, &programs));
     }
     steps
+}
+
+/// The program a menu entry starts: under `current` on macOS and Linux
+/// (it follows the default), the version's own on Windows.
+pub fn window_exe(layout: &Layout, p: &Product, version: &str) -> PathBuf {
+    let w = p.window.clone().unwrap_or_default();
+    if layout.platform.unix() {
+        layout.current_link(p).join("bin").join(w)
+    } else {
+        layout
+            .version_dir(p, version)
+            .join("bin")
+            .join(layout.platform.exe(&w))
+    }
 }
 
 /// The check after an install: the product's check command in the new
@@ -892,13 +916,24 @@ pub fn activate(ctx: &Ctx, layout: &Layout, product: &str, version: &str) -> Res
         )
         .exists();
     let files = staged_files(&v.dir.join("bin")).unwrap_or_default();
-    Ok(default_steps(
+    let mut steps = default_steps(
         layout,
         p,
         &v.version,
         &program_names(&files, &ctx.platform),
         linked,
-    ))
+    );
+    // Windows' menu entry names one version's program
+    if !layout.platform.unix() && crate::desktop::has_entry(layout, ctx.env, p) {
+        steps.extend(crate::desktop::menu_steps(
+            layout,
+            ctx.env,
+            p,
+            &window_exe(layout, p, &v.version),
+            true,
+        ));
+    }
+    Ok(steps)
 }
 
 /// The steps that remove one version, or the whole product (`version`
@@ -966,11 +1001,12 @@ pub fn remove(ctx: &Ctx, layout: &Layout, product: &str, version: Option<&str>) 
     a.push(Action::RemoveDir {
         path: layout.product_dir(p),
     });
-    let mut steps = vec![Step {
+    let mut steps = crate::desktop::remove_steps(layout, ctx.env, p);
+    steps.push(Step {
         title: format!("Remove {} ({})", p.title, layout.product_dir(p).display()),
         admin,
         actions: a,
-    }];
+    });
     let others = ctx
         .catalogue
         .products

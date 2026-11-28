@@ -21,6 +21,9 @@ repo = "chiefenne/MurmelCraft"
 programs = ["murmelcraft", "murmel", "murmel-mcp"]
 # the program with a window, if any (menu entries and file types)
 window = "murmelcraft"
+# the menu entry: its id (desktop file, macOS bundle) and its line
+app_id = "io.github.chiefenne.murmelcraft"
+summary = "Meshes and results in a window"
 # the smoke test after an install (install-shared.sh: CHECK)
 check = ["murmel", "help"]
 # source build (install-shared.sh: BUILD_PATHS, BUILD_FEATURES)
@@ -32,6 +35,22 @@ needs_cmake = false
 # APT_RUNTIME, DNF_RUNTIME): the GPU (wgpu) through Vulkan
 apt_runtime = ["mesa-vulkan-drivers", "libvulkan1"]
 dnf_runtime = ["mesa-vulkan-drivers", "vulkan-loader"]
+
+# the files the window opens; `own` types become MurmelCraft's by
+# default, the others only offer it ("Open with")
+[[product.file_types]]
+ext = "murmel"
+mime = "application/x-murmelcraft-session"
+name = "MurmelCraft session"
+own = true
+[[product.file_types]]
+ext = "vtu"
+mime = "application/x-vtk-unstructured-grid"
+name = "VTK unstructured grid"
+[[product.file_types]]
+ext = "vtkhdf"
+mime = "application/x-vtkhdf"
+name = "VTKHDF mesh and results"
 
 [[product]]
 id = "koflcraft"

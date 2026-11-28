@@ -50,6 +50,8 @@ product-foehncraft = FoehnCraft, the solver: flows, heat and more
 version-ask = Version of { $title } (Enter for { $latest })
 default-ask = Make { $title } { $version } the default version?
 path-ask = Put the programs on the PATH of new terminals?
+menu-ask = Add a menu entry for { $title }?
+file-types-ask = Let { $title } open { $types } files? (.murmel by default; the others under "Open with")
 
 # Source builds
 from-ask = Install { $title } from the release (r) or build it from the source here (s)?
@@ -119,7 +121,9 @@ win-from-source = Build from the source
 win-native = Tune source builds for this computer's processor (the programs may then not run on other computers)
 win-check-again = Check again
 win-build-log = Build output
-win-more-later = Menu entries, file types, Python and Gmsh, ffmpeg, examples and the AI assistant set-up come in the next version of Kraxn.
+win-menu = A menu entry for { $title }
+win-file-types = { $title } opens { $types } files (.murmel by default; the others under "Open with")
+win-more-later = Python and Gmsh, ffmpeg, examples and the AI assistant set-up come in the next version of Kraxn.
 win-plan-file = Plan file
 win-save-plan = Save the plan
 win-running = Installing…

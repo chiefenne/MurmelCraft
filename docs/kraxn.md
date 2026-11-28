@@ -6,9 +6,9 @@ releases or from a folder of downloaded files, with several versions side
 by side. *Kraxn* is Tyrolean for the carrying frame on your back: it
 carries the three up the hill.
 
-This page describes the core, the window, the text mode and source
-builds. Extras (menu entries, file types, Python and Gmsh, ffmpeg,
-examples) and the AI assistant set-up follow in the next pull requests.
+This page describes the core, the window, the text mode, source builds,
+menu entries and file types. Python and Gmsh, ffmpeg, examples and the
+AI assistant set-up follow in the next pull requests.
 
 ## Start it
 
@@ -65,6 +65,22 @@ is not there yet: a marked block in `~/.profile` (and `~/.bashrc`,
 `~/.zshrc` if you have them) on Linux, in `~/.zprofile` (and
 `~/.bash_profile`) on macOS, the user's or the machine's `Path` on
 Windows. Removing the last product takes the block away again.
+
+## Menu entry and file types
+
+MurmelCraft, the program with a window, gets a menu entry (`menu = true`,
+the default) and opens its files (`file_types = true`): `.murmel`
+sessions by default, `.vtu` and `.vtkhdf` under "Open with", so a
+program that already opens those (ParaView) keeps them.
+
+| System | Menu entry | File types |
+|---|---|---|
+| Linux | `io.github.chiefenne.murmelcraft.desktop` and its icon in `~/.local/share` (every user: `/usr/local/share`), starting `current/bin/murmelcraft` | a shared-mime-info file, `update-mime-database`, `xdg-mime default` for `.murmel` |
+| macOS | `MurmelCraft.app` in `~/Applications` (every user: `/Applications`), whose program is `current/bin/murmelcraft` | not yet: macOS hands a double-clicked file to the app by an Apple Event, which MurmelCraft does not read yet |
+| Windows | `MurmelCraft.lnk` in the Start menu (the user's or everybody's), naming the default version's program; a new default writes it again | `HKCU\Software\Classes` (every user: `HKLM`): `MurmelCraft.murmel` as `.murmel`'s default, `OpenWithProgids` for `.vtu` and `.vtkhdf` |
+
+Removing MurmelCraft removes them again (on macOS only an app Kraxn
+wrote).
 
 ## Administrator rights
 
@@ -135,6 +151,8 @@ scope = "system"            # user (default) or system
 # prefix = "/apps"          # another install root
 # offline_dir = "/srv/kraxn"
 path = true                 # put the programs on the PATH (default)
+menu = true                 # MurmelCraft's menu entry (default)
+file_types = true           # .murmel, .vtu, .vtkhdf open in MurmelCraft (default)
 require_checksums = true    # default
 
 [[install]]

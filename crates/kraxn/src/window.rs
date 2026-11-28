@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use crate::i18n::I18n;
 use crate::runner::Runner;
 use crate::style::{self, Tokens, icon};
-use crate::text::{done_source, tool_line};
+use crate::text::{done_source, file_types_list, tool_line};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -114,6 +114,8 @@ pub struct KraxnApp {
     pub path: bool,
     /// Source builds for this computer's processor.
     pub native: bool,
+    pub menu: bool,
+    pub file_types: bool,
     preview: Option<Job>,
     run: Option<Job>,
     installed: Option<Value>,
@@ -161,6 +163,8 @@ impl KraxnApp {
             rows,
             path: true,
             native: false,
+            menu: true,
+            file_types: true,
             preview: None,
             run: None,
             installed: None,
@@ -196,6 +200,8 @@ impl KraxnApp {
             prefix: self.prefix(),
             offline_dir: self.offline.then(|| PathBuf::from(self.offline_dir.trim())),
             path: self.path,
+            menu: self.menu,
+            file_types: self.file_types,
             installs: self
                 .rows
                 .iter()
@@ -637,6 +643,34 @@ impl KraxnApp {
         ui.checkbox(&mut self.path, self.t.tr("path-ask"));
         if self.any_source() {
             ui.checkbox(&mut self.native, self.t.tr("win-native"));
+        }
+        let windows: Vec<kraxn_core::Product> = {
+            let r = self.lock();
+            self.rows
+                .iter()
+                .filter(|row| row.chosen)
+                .filter_map(|row| r.catalogue.get(&row.id).ok())
+                .filter(|p| p.window.is_some())
+                .cloned()
+                .collect()
+        };
+        for p in windows {
+            ui.checkbox(
+                &mut self.menu,
+                self.t.tr_args("win-menu", &[("title", p.title.clone())]),
+            );
+            if !p.file_types.is_empty() {
+                ui.add_enabled(
+                    self.menu,
+                    egui::Checkbox::new(
+                        &mut self.file_types,
+                        self.t.tr_args(
+                            "win-file-types",
+                            &[("title", p.title.clone()), ("types", file_types_list(&p))],
+                        ),
+                    ),
+                );
+            }
         }
         ui.label(
             RichText::new(self.t.tr("win-more-later"))

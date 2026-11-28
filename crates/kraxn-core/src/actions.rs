@@ -43,6 +43,12 @@ pub enum Action {
         text: String,
         executable: bool,
     },
+    /// Writes a binary file (an icon), mode 0644.
+    WriteBytes {
+        path: PathBuf,
+        #[serde(with = "hex_bytes")]
+        bytes: Vec<u8>,
+    },
     RemoveFile {
         path: PathBuf,
     },
@@ -80,6 +86,10 @@ pub enum Action {
         args: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env: Vec<(String, String)>,
+        /// A helper that may be missing (`update-desktop-database`): not
+        /// there is fine, a failure is not.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        optional: bool,
     },
 }
 
@@ -350,6 +360,13 @@ pub fn run(a: &Action) -> Res<()> {
             std::fs::write(path, text).map_err(|e| io(path, e))?;
             set_mode(path, if *executable { 0o755 } else { 0o644 })
         }
+        Action::WriteBytes { path, bytes } => {
+            if let Some(p) = path.parent() {
+                std::fs::create_dir_all(p).map_err(|e| io(p, e))?;
+            }
+            std::fs::write(path, bytes).map_err(|e| io(path, e))?;
+            set_mode(path, 0o644)
+        }
         Action::RemoveFile { path } => remove_existing(path),
         Action::RemoveDir { path } => {
             if std::fs::symlink_metadata(path).is_err() {
@@ -375,7 +392,12 @@ pub fn run(a: &Action) -> Res<()> {
             sha256_url,
             to,
         } => download(url, sha256_url.as_deref(), to),
-        Action::Run { program, args, env } => run_program(program, args, env),
+        Action::Run {
+            program,
+            args,
+            env,
+            optional,
+        } => run_program(program, args, env, *optional),
     }
 }
 
@@ -413,18 +435,27 @@ pub fn tail(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-fn run_program(program: &Path, args: &[String], env: &[(String, String)]) -> Res<()> {
-    let o = std::process::Command::new(program)
+fn run_program(
+    program: &Path,
+    args: &[String],
+    env: &[(String, String)],
+    optional: bool,
+) -> Res<()> {
+    let o = match std::process::Command::new(program)
         .args(args)
         .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(std::process::Stdio::null())
         .output()
-        .map_err(|e| {
-            diag(
+    {
+        Ok(o) => o,
+        Err(e) if optional && e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(diag(
                 "KRX016",
                 format!("{} did not start: {e}", program.display()),
-            )
-        })?;
+            ));
+        }
+    };
     if o.status.success() {
         return Ok(());
     }
@@ -486,6 +517,9 @@ pub fn describe(a: &Action) -> String {
         Action::CopyDir { from, to } => format!("cp -R {} {}", q(from), q(to)),
         Action::Link { target, link } => format!("ln -sfn {} {}", q(target), q(link)),
         Action::Write { path, .. } => format!("write {}", q(path)),
+        Action::WriteBytes { path, bytes } => {
+            format!("write {} ({} bytes)", q(path), bytes.len())
+        }
         Action::RemoveFile { path } => format!("rm -f {}", q(path)),
         Action::RemoveDir { path } => format!("rm -rf {}", q(path)),
         Action::ShellBlock {
@@ -498,7 +532,9 @@ pub fn describe(a: &Action) -> String {
             format!("remove the Kraxn block from {}", q(file))
         }
         Action::Download { url, to, .. } => format!("download {url} to {}", q(to)),
-        Action::Run { program, args, env } => {
+        Action::Run {
+            program, args, env, ..
+        } => {
             let mut s = String::new();
             for (k, v) in env {
                 s.push_str(&format!("{k}={v} "));
@@ -575,5 +611,30 @@ mod tests {
         let out = run_all(&steps, &mut NoElevation);
         assert!(out.iter().all(|o| o.ok) && out.len() == 3 && d.join("c").exists());
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// Bytes as hex in the admin file (JSON has no bytes).
+mod hex_bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(b: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        let mut out = String::with_capacity(b.len() * 2);
+        for x in b {
+            out.push_str(&format!("{x:02x}"));
+        }
+        s.serialize_str(&out)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let t = String::deserialize(d)?;
+        (0..t.len())
+            .step_by(2)
+            .map(|i| {
+                t.get(i..i + 2)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                    .ok_or_else(|| serde::de::Error::custom("bad hex"))
+            })
+            .collect()
     }
 }
