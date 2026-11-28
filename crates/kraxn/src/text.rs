@@ -426,6 +426,30 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                 _ => PyMode::None,
             };
         }
+        let servers: Vec<String> = chosen
+            .iter()
+            .filter_map(|p| p.mcp.as_ref().map(|m| m.name.clone()))
+            .collect();
+        if !servers.is_empty() {
+            let e = self.runner.quiet("assistants.detect", &json!({}));
+            for h in e.result.as_array().into_iter().flatten() {
+                if !h["found"].as_bool().unwrap_or(false) {
+                    continue;
+                }
+                let q = self.t.tr_args(
+                    "assistant-ask",
+                    &[
+                        ("servers", servers.join(", ")),
+                        ("host", h["title"].as_str().unwrap_or("").into()),
+                    ],
+                );
+                if self.yes(&q, true)?
+                    && let Ok(id) = serde_json::from_value(h["id"].clone())
+                {
+                    plan.assistants.push(id);
+                }
+            }
+        }
         self.confirm_and_apply(plan)
     }
 
@@ -569,6 +593,16 @@ impl<R: BufRead, W: Write> Text<'_, R, W> {
                 );
                 self.say(&format!("  {s}"))?;
             }
+        }
+        for a in report["assistants"].as_array().into_iter().flatten() {
+            let s = self.t.tr_args(
+                "done-mcp",
+                &[
+                    ("name", a["name"].as_str().unwrap_or("").into()),
+                    ("message", a["message"].as_str().unwrap_or("").into()),
+                ],
+            );
+            self.say(&s)?;
         }
         for n in report["notes"].as_array().into_iter().flatten() {
             self.say(n.as_str().unwrap_or(""))?;

@@ -73,8 +73,9 @@ fn problems(h: &Harness<'_, KraxnApp>) -> Vec<String> {
 /// others have no file there) → PATH → the steps → Install, ending with
 /// the SHA-256 and start checks shown and the program in place; every
 /// page's controls keep their names; the options offer only the extras
-/// of the chosen programs, and the steps page says what an offline
-/// install leaves out. Breaks if a page stops filling the
+/// of the chosen programs and tick the AI assistant found, the steps
+/// page says what an offline install leaves out, and the result shows
+/// the MCP server's start check. Breaks if a page stops filling the
 /// plan, Next stays disabled, the run is not started on its thread, or a
 /// control loses its name.
 #[cfg(unix)]
@@ -82,7 +83,8 @@ fn problems(h: &Harness<'_, KraxnApp>) -> Vec<String> {
 fn wizard_installs_from_a_folder() {
     let d = tmp("window");
     let home = d.join("home");
-    std::fs::create_dir_all(&home).unwrap();
+    // ChatGPT's Codex is "installed"
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
     kofl_release(&d.join("dl"), "0.3.1");
     let mut h = harness(&home);
     assert_eq!(problems(&h), Vec::<String>::new(), "welcome");
@@ -105,6 +107,12 @@ fn wizard_installs_from_a_folder() {
     assert_eq!(h.state().page, Page::Options);
     assert!(shows(&h, "Copy the examples of KoflCraft"), "options");
     assert!(!shows(&h, "ffmpeg"), "options: no MurmelCraft, no ffmpeg");
+    assert_eq!(
+        h.state().assistants,
+        vec![kraxn_core::assist::HostId::Codex],
+        "the assistant found is ticked"
+    );
+    assert!(shows(&h, "Not found: Claude Code, Gemini CLI"), "options");
     click(&mut h, "Next");
     wait(&mut h, |a| a.page == Page::Review && !a.review_busy());
     assert!(shows(&h, "Install KoflCraft 0.3.1 into"), "review");
@@ -115,7 +123,10 @@ fn wizard_installs_from_a_folder() {
     wait(&mut h, |a| a.page == Page::Running && a.run_finished());
     assert!(shows(&h, "SHA-256 checked against SHA256SUMS.txt"));
     assert!(shows(&h, "started and ended without an error"));
+    assert!(shows(&h, "MCP server koflcraft: koflcraft answered"));
     assert!(home.join(".local/opt/KoflCraft/0.3.1/bin/kofl").is_file());
+    let codex = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+    assert!(codex.contains("[mcp_servers.koflcraft]"), "{codex}");
     assert_eq!(problems(&h), Vec::<String>::new(), "result");
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -205,7 +216,7 @@ fn shots() {
     std::fs::create_dir_all(&out).unwrap();
     let d = tmp("shots");
     let home = d.join("home");
-    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
     kofl_release(&d.join("dl"), "0.3.1");
     kofl_release(&d.join("dl/older"), "0.3.0");
     let mut h = harness(&home);

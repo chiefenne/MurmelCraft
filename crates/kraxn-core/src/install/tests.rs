@@ -614,3 +614,72 @@ fn menu_entry_comes_and_goes_with_the_window() {
     assert!(o.iter().all(|o| o.ok), "{o:?}");
     assert!(!desktop.exists() && !root.join("MurmelCraft").exists());
 }
+
+/// Invariant: a plan with an assistant registers the installed program's
+/// MCP server with it (pointing through `current`, the folder made, the
+/// settings file copied first), starts the server once with MCP's
+/// `initialize` and reports the answer; removing the product takes the
+/// entry out again. An assistant that is not there stops the plan with
+/// KRX017 before anything runs. Breaks if the registration named a
+/// version folder (a new default would leave it behind), the start
+/// check were skipped, or a removal left a server that no longer exists.
+#[cfg(unix)]
+#[test]
+fn assistants_get_the_servers() {
+    let t = Tmp::new("assist");
+    let (root, offline, home) = (t.0.join("root"), t.0.join("dl"), t.0.join("home"));
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    std::fs::write(home.join(".codex/config.toml"), "model = \"o5\"\n").unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    // a foehn that answers MCP's initialize
+    let name = "foehncraft-1.3.0-linux-x86_64.tar.gz";
+    let script = "#!/bin/sh\n[ \"$1\" = mcp ] || exit 0\nread l\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"foehn\"}}}'\n";
+    make_tar(
+        &offline.join(name),
+        "foehncraft-1.3.0-linux-x86_64",
+        &[
+            ("foehn", script.as_bytes(), 0o755),
+            ("README.md", b"r", 0o644),
+            ("LICENSE", b"l", 0o644),
+        ],
+    );
+    let sum = sha256_file(&offline.join(name)).unwrap();
+    std::fs::write(offline.join("SHA256SUMS.txt"), format!("{sum}  {name}\n")).unwrap();
+    let c = Catalogue::builtin().unwrap();
+    let e = env(&home);
+    let ctx = Ctx {
+        catalogue: &c,
+        platform: linux(),
+        env: &e,
+    };
+    let mut p = plan(&root, &offline, "1.3.0");
+    p.assistants = vec![crate::assist::HostId::Gemini];
+    assert_eq!(run(&ctx, &p, &t.0.join("work")).unwrap_err().code, "KRX017");
+    assert!(!root.join("Foehncraft").exists());
+
+    p.assistants = vec![crate::assist::HostId::Codex];
+    let r = run(&ctx, &p, &t.0.join("work")).unwrap();
+    assert!(r.ok, "{r:?}");
+    assert_eq!(r.assistants.len(), 1);
+    assert!(
+        r.assistants[0].ok && r.assistants[0].name == "foehn",
+        "{r:?}"
+    );
+    let cfg = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+    assert!(cfg.starts_with("model = \"o5\"\n"), "{cfg}");
+    assert!(
+        cfg.contains(&format!(
+            "command = \"{}\"",
+            root.join("Foehncraft/current/bin/foehn").display()
+        )),
+        "{cfg}"
+    );
+    assert!(home.join(".codex/config.toml.kraxn-backup").is_file());
+    assert!(home.join("foehn-work").is_dir());
+
+    let layout = ctx.layout(&p).unwrap();
+    let steps = remove(&ctx, &layout, "foehncraft", None).unwrap();
+    crate::actions::run_steps(&steps);
+    let cfg = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
+    assert!(!cfg.contains("mcp_servers.foehn"), "{cfg}");
+}

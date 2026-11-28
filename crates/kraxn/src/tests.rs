@@ -19,6 +19,8 @@ pub(crate) fn tmp(name: &str) -> PathBuf {
 }
 
 /// A KoflCraft release in `dir` whose `kofl` exits 0.
+const KOFL: &str = "#!/bin/sh\n[ \"$1\" = mcp ] || exit 0\nread l\necho '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"koflcraft\"}}}'\n";
+
 pub(crate) fn kofl_release(dir: &Path, v: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let top = format!("koflcraft-{v}-linux-x86_64");
@@ -27,7 +29,8 @@ pub(crate) fn kofl_release(dir: &Path, v: &str) {
     let gz = flate2::write::GzEncoder::new(f, flate2::Compression::fast());
     let mut b = tar::Builder::new(gz);
     for (n, data, mode) in [
-        ("kofl", &b"#!/bin/sh\nexit 0\n"[..], 0o755),
+        // answers MCP's initialize as `kofl mcp`
+        ("kofl", KOFL.as_bytes(), 0o755),
         ("mesh-mcp", &b"#!/bin/sh\n"[..], 0o755),
         ("LICENSE", &b"l"[..], 0o644),
     ] {

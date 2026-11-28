@@ -58,6 +58,8 @@ python-ask = Python for { $title }'s scripts and Gmsh:
 python-venv = Its own venv with { $pip } (recommended)
 python-system = The system's packages (apt or dnf, no pip)
 python-none = No Python
+assistant-ask = Register { $servers } with { $host }?
+done-mcp = MCP server { $name }: { $message }
 
 # Source builds
 from-ask = Install { $title } from the release (r) or build it from the source here (s)?
@@ -158,7 +160,10 @@ win-check-again = Check again
 win-build-log = Build output
 win-menu = A menu entry for { $title }
 win-file-types = { $title } opens { $types } files (.murmel by default; the others under "Open with")
-win-more-later = The AI assistant set-up comes in the next version of Kraxn.
+win-assistants = AI assistants
+win-assistants-text = Kraxn registers the MCP servers ({ $servers }) with the assistants you tick, keeps a copy of each settings file, and starts every server once at the end.
+win-assistants-none = No AI assistant found ({ $hosts }).
+win-assistants-missing = Not found: { $hosts }.
 win-examples = Copy the examples of { $titles } from the release's source
 win-ffmpeg = Install ffmpeg for { $titles }'s MP4 movies, if it is missing (GIF needs nothing)
 win-python = Python for { $title }'s scripts and Gmsh

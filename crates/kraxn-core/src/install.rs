@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::actions::{Action, Elevator, Outcome, Step, run_all};
+use crate::assist::{self, Server, ServerCheck};
 use crate::build::{self, BuildWant, ToolState};
 use crate::catalogue::{Catalogue, Product};
 use crate::diag::{Res, diag};
@@ -571,7 +572,52 @@ pub fn preview(
     if plan.path {
         steps.extend(path_env_steps(&layout, ctx.env));
     }
+    steps.extend(assistant_steps(ctx, plan, &layout, resolved)?.0);
     Ok(steps)
+}
+
+/// The steps that register the plan's MCP servers with its assistants,
+/// and the servers.
+pub fn assistant_steps(
+    ctx: &Ctx,
+    plan: &Plan,
+    layout: &Layout,
+    resolved: &[(&Product, Release)],
+) -> Res<(Vec<Step>, Vec<Server>)> {
+    if plan.assistants.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let hosts = assist::detect(&ctx.platform, ctx.env);
+    let servers: Vec<Server> = resolved
+        .iter()
+        .filter_map(|(p, r)| {
+            assist::server(
+                layout,
+                ctx.env,
+                p,
+                &r.version,
+                plan.path,
+                plan.assistant_dir.as_deref(),
+            )
+        })
+        .collect();
+    let mut steps = Vec::new();
+    for id in &plan.assistants {
+        let h = hosts
+            .iter()
+            .find(|h| h.id == *id && h.found)
+            .ok_or_else(|| {
+                diag(
+                    "KRX017",
+                    format!(
+                        "{} is not on this computer; leave it out of assistants",
+                        id.title()
+                    ),
+                )
+            })?;
+        steps.extend(assist::register_steps(h, &servers)?);
+    }
+    Ok((steps, servers))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -712,6 +758,9 @@ pub struct Report {
     pub outcomes: Vec<Outcome>,
     pub products: Vec<ProductReport>,
     pub notes: Vec<String>,
+    /// The start check of each MCP server registered with an assistant.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assistants: Vec<ServerCheck>,
 }
 
 /// Runs a plan: resolves the releases, downloads and checks each file
@@ -764,6 +813,7 @@ pub fn apply(
                 outcomes,
                 products,
                 notes,
+                assistants: Vec::new(),
             });
         }
         // an optional tool that does not install is a note, not a stop
@@ -1020,6 +1070,10 @@ pub fn apply(
     if plan.path {
         steps.extend(path_env_steps(&layout, ctx.env));
     }
+    let resolved_refs: Vec<(&Product, Release)> =
+        resolved.iter().map(|(p, r)| (*p, r.clone())).collect();
+    let (assistant, servers) = assistant_steps(ctx, plan, &layout, &resolved_refs)?;
+    steps.extend(assistant);
     let ran = run_all(&steps, elevator);
     for o in &ran {
         progress(Event::Step {
@@ -1043,11 +1097,23 @@ pub fn apply(
             ));
         }
     }
+    let mut assistants = Vec::new();
+    if ok {
+        for s in &servers {
+            progress(Event::Info {
+                text: format!("Start the MCP server {} once", s.name),
+            });
+            let c = assist::start_check(s, std::time::Duration::from_secs(20));
+            ok &= c.ok;
+            assistants.push(c);
+        }
+    }
     Ok(Report {
         ok,
         outcomes,
         products,
         notes,
+        assistants,
     })
 }
 
@@ -1219,6 +1285,19 @@ pub fn remove(ctx: &Ctx, layout: &Layout, product: &str, version: Option<&str>) 
         path: layout.product_dir(p),
     });
     let mut steps = crate::desktop::remove_steps(layout, ctx.env, p);
+    if let Some(m) = &p.mcp {
+        let names: Vec<String> = std::iter::once(m.name.clone())
+            .chain(m.windows_name.clone())
+            .collect();
+        let dir = layout.product_dir(p);
+        let links: Vec<PathBuf> = p.programs.iter().map(|n| layout.bin_link(n)).collect();
+        let ours = |c: &Path| c.starts_with(&dir) || links.iter().any(|l| l == c);
+        steps.extend(assist::unregister_steps(
+            &assist::detect(&ctx.platform, ctx.env),
+            &names,
+            &ours,
+        ));
+    }
     steps.push(Step {
         title: format!("Remove {} ({})", p.title, layout.product_dir(p).display()),
         admin,

@@ -123,6 +123,36 @@ left out.
 The venv and the examples are in the version folder, so removing the
 version removes them too.
 
+## AI assistants
+
+Kraxn finds the AI assistants on this computer that can start a local
+MCP server: Claude Code (its `claude` program), Claude Desktop (macOS and
+Windows), ChatGPT's Codex (`~/.codex`, shared by the `codex` command, the
+ChatGPT desktop app and the IDE extension) and Gemini CLI (`~/.gemini`).
+The window ticks the ones it finds; the text mode asks for each; a plan
+names them (`assistants = ["claude-code", "codex"]`). Each installed
+program's server is registered under the name its README uses:
+
+| Program | Name | Command |
+|---|---|---|
+| MurmelCraft | `murmelcraft-live` (Windows: `murmelcraft`) | `murmel mcp --live --root ~/murmel-work` (Windows: without `--live`) |
+| KoflCraft | `koflcraft` | `kofl mcp --read-root ~/kofl-work --write-root ~/kofl-work` |
+| FoehnCraft | `foehn` | `foehn mcp --read-root ~/foehn-work --write-root ~/foehn-work` |
+
+The command is the default version's program (through `current`, or the
+PATH folder's link on Windows), so a new default needs no new
+registration; `assistant_dir` names one folder for all three instead of
+the `~/…-work` folders, which Kraxn makes. Claude Code is changed with
+its own `claude mcp remove` and `claude mcp add --scope user`; Claude
+Desktop's `claude_desktop_config.json`, Gemini's `settings.json` (their
+`mcpServers`) and Codex's `config.toml` (`[mcp_servers.NAME]`) are edited
+directly, the rest of each file kept (JSON keys come back sorted). Before
+any change Kraxn copies the file to `<file>.kraxn-backup`. At the end it
+starts each server once and asks it MCP's `initialize`; the answer is
+part of the result. Claude Desktop reads its settings when it starts, so
+restart it. Removing a program takes its server out of the assistants
+again, but only an entry that points into that install.
+
 ## Administrator rights
 
 Kraxn runs as you. Only the steps that write into system folders run with
@@ -197,6 +227,9 @@ file_types = true           # .murmel, .vtu, .vtkhdf open in MurmelCraft (defaul
 python = "venv"             # FoehnCraft's Python: venv (default), system or none
 ffmpeg = true               # ffmpeg for MurmelCraft's MP4 movies if missing (default)
 examples = true             # KoflCraft's and FoehnCraft's examples (default)
+assistants = ["claude-code"]  # register the MCP servers: claude-code,
+                            # claude-desktop, codex, gemini (default: none)
+# assistant_dir = "/home/me/cfd"  # their folder (default: ~/<program>-work)
 require_checksums = true    # default
 
 [[install]]

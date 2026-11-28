@@ -9,6 +9,7 @@
 
 pub mod actions;
 pub mod archive;
+pub mod assist;
 pub mod build;
 pub mod catalogue;
 pub mod desktop;
