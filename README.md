@@ -225,7 +225,7 @@ Ready-to-run programs are attached to each
 | System | File | Then |
 |---|---|---|
 | macOS 11 or newer, Apple silicon and Intel | `murmelcraft-<version>-macos-universal.dmg` | drag MurmelCraft into Applications |
-| Linux x86-64 (glibc 2.39 or newer: Ubuntu 24.04, Debian 13, Fedora 40) | `murmelcraft-<version>-linux-x86_64.tar.gz` | unpack, run `./murmelcraft` |
+| Linux x86-64 (glibc 2.28 or newer: RHEL/Rocky/Alma 8 and 9, Debian 11-13, Ubuntu 20.04 and newer; v0.6.0 needs 2.39) | `murmelcraft-<version>-linux-x86_64.tar.gz` | unpack, run `./murmelcraft` |
 | Windows 10 or 11, x86-64 | `murmelcraft-<version>-windows-x86_64.zip` | unpack, run `murmelcraft.exe` |
 
 Each one holds the three programs: `murmelcraft` (the window), `murmel`

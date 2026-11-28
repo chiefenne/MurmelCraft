@@ -1,13 +1,13 @@
 # Install and update
 
-MurmelCraft is built from source; release downloads are planned. This page
+MurmelCraft releases have ready-to-run programs for Linux, macOS and Windows (README, "Download a release"); building from source gives the newest `main`. For an install under `/opt` that all users of a Linux machine share, with several versions side by side, see [Shared install on Linux](#shared-install-on-linux). This page
 lists every tool to install on macOS, Linux and Windows, with the commands,
 so that a fresh machine gets to a working `murmelcraft` window in one pass.
 
 Contents: [What you need](#what-you-need) · [macOS](#macos) ·
 [Linux](#linux) · [Windows](#windows) · [Build](#build) ·
 [Optional: ffmpeg and Foehncraft](#optional-ffmpeg-and-foehncraft) ·
-[Update](#update)
+[Shared install on Linux](#shared-install-on-linux) · [Update](#update)
 
 ## What you need
 
@@ -63,6 +63,8 @@ rustc --version                        # 1.98 or newer; else: rustup update stab
 
 To check the Vulkan driver: `sudo apt install vulkan-tools` (Fedora:
 `vulkan-tools`), then `vulkaninfo --summary` lists the devices.
+
+These commands install Rust for your own user. To install MurmelCraft once for all users of a machine, as root, see [Shared install on Linux](#shared-install-on-linux).
 
 Continue with [Build](#build).
 
@@ -129,6 +131,109 @@ Check with `ffmpeg -version`.
 (it needs CMake in addition) and put `foehn` on `PATH`
 (`cargo install --locked --path crates/foehncraft-cli` in the Foehncraft
 folder).
+
+## Shared install on Linux
+
+For a machine (or several that mount the same folder) where an
+administrator installs MurmelCraft once, as root, under `/opt/MurmelCraft/<version>/`, and
+every user runs it. Several versions stay installed side by side; each user
+picks one. The layout is the same as for Foehncraft:
+
+```
+/opt/MurmelCraft/
+  0.6.0/bin/                 murmelcraft, murmel, murmel-mcp
+  0.6.0/src/                 the source tree of v0.6.0, optional
+  0.6.0/env.sh, env.csh      switch this version on (bash/zsh, csh/tcsh)
+  current -> 0.6.0           the default version
+  use.sh                   defines the command murmelcraft-use (bash, zsh)
+  modulefiles/murmelcraft/        module files (Environment Modules, Lmod)
+  rust/                    only for a build from source with --install-rust
+```
+
+rustup installs Rust for one user only (into `~/.cargo` of whoever runs
+it), so Rust installed as root is not found by other users. The release
+programs need no Rust.
+
+### With the install script
+
+[`tools/install-shared.sh`](../tools/install-shared.sh), as root
+(`--dry-run` prints the steps without changing anything, `--help` lists
+the options):
+
+```
+curl -fsSLO https://raw.githubusercontent.com/chiefenne/MurmelCraft/main/tools/install-shared.sh
+bash install-shared.sh --dry-run
+bash install-shared.sh                        # the latest release
+bash install-shared.sh --version 0.6.0          # a given release
+```
+
+It downloads `murmelcraft-<version>-linux-x86_64.tar.gz` and `SHA256SUMS.txt`
+from the release, checks the checksum, puts the programs into
+`<version>/bin/` (`--tarball FILE` for a file you downloaded), writes
+`env.sh`, `env.csh`, the module file and `use.sh`, makes the version the
+default (`--no-current` keeps the old one), makes everything readable for
+all users and runs `murmel help`. `--with-source` clones the tag into
+`<version>/src/`; `--no-system-deps` leaves apt and dnf alone.
+
+MurmelCraft needs no Python (`--python none` is the default). The script
+installs the Vulkan driver the window needs (`mesa-vulkan-drivers
+libvulkan1`, or `mesa-vulkan-drivers vulkan-loader` with dnf); NVIDIA
+cards use the NVIDIA driver instead.
+
+The release programs are built for x86-64 and need glibc 2.28 or newer
+(RHEL, Rocky and Alma 8 and 9, Debian 11 to 13, Ubuntu 20.04 and newer);
+v0.6.0 itself still needs a newer glibc (Debian 13, Ubuntu 24.04). On older
+systems, or on ARM, build from source.
+
+### Build from source into /opt
+
+For an older Linux, ARM, or programs tuned for one machine's CPU; the
+result has the same layout. Complete for Debian 13 (Ubuntu the same), as
+root:
+
+```
+apt install build-essential git curl mesa-vulkan-drivers libvulkan1
+curl -fsSLO https://raw.githubusercontent.com/chiefenne/MurmelCraft/main/tools/install-shared.sh
+bash install-shared.sh --version 0.6.0 --build --install-rust --native
+```
+
+Fedora, RHEL, Rocky and Alma: `dnf install gcc make git curl mesa-vulkan-drivers vulkan-loader`, then the same.
+
+- `--build` clones the tag into `<version>/src/` and runs
+  `cargo install --locked --root /opt/MurmelCraft/<version>` for each program; the
+  build files go to a temporary folder that is removed at the end.
+- `--install-rust` installs Rust system-wide into `/opt/MurmelCraft/rust`
+  (`RUSTUP_HOME` and `CARGO_HOME` there) when no `cargo` is on `PATH`;
+  users never need it.
+- `--native` optimises for the build machine's CPU (`-C target-cpu=native`);
+  leave it out when different machines share the folder.
+
+### Several versions side by side
+
+Users switch in their shell:
+
+```
+source /opt/MurmelCraft/use.sh        # once per shell, or at login
+murmelcraft-use                       # list: 0.5.0, 0.6.0 (default) (active)
+murmelcraft-use 0.5.0                 # this shell now runs 0.5.0
+murmelcraft-use default               # back to the default
+```
+
+or with Environment Modules or Lmod: `module use /opt/MurmelCraft/modulefiles`,
+`module load murmelcraft/0.5.0`, `module switch murmelcraft/0.6.0`. csh and tcsh:
+`source /opt/MurmelCraft/0.5.0/env.csh`.
+
+The administrator, as root:
+
+```
+bash install-shared.sh --version 0.6.0 --no-current      # next to the others, default unchanged
+bash install-shared.sh --list                           # installed versions
+bash install-shared.sh --activate 0.6.0                   # make 0.6.0 the default
+ln -s /opt/MurmelCraft/use.sh /etc/profile.d/murmelcraft.sh             # default version on at every login
+```
+
+A version is removed by deleting `/opt/MurmelCraft/<version>` and
+`/opt/MurmelCraft/modulefiles/murmelcraft/<version>`.
 
 ## Update
 
