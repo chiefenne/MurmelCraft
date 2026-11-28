@@ -222,9 +222,10 @@ fn bad_sums_and_broken_programs_fail() {
 
 /// Invariant: online, Kraxn reads the release list from the GitHub API,
 /// downloads the archive and SHA256SUMS.txt from the URLs it names and
-/// installs the newest release; a release list Kraxn cannot reach says
-/// KRX003. Breaks if the API path, the JSON fields or the download stop
-/// working; the offline tests do not touch the network code.
+/// installs the newest release, with the examples from GitHub's archive
+/// of the tag; a release list Kraxn cannot reach says KRX003. Breaks if
+/// the API path, the JSON fields or the download stop working; the
+/// offline tests do not touch the network code.
 #[cfg(unix)]
 #[test]
 fn online_install_from_a_github_stand_in() {
@@ -234,9 +235,19 @@ fn online_install_from_a_github_stand_in() {
     let a = release(&files, "1.3.0", false);
     let archive = std::fs::read(&a).unwrap();
     let sums = std::fs::read(files.join("SHA256SUMS.txt")).unwrap();
+    make_tar(
+        &files.join("src.tar.gz"),
+        "chiefenne-Foehncraft-abc1234",
+        &[("examples/cases/case.toml", b"[case]\n", 0o644)],
+    );
+    let src = std::fs::read(files.join("src.tar.gz")).unwrap();
     let addr = serve_with_list(vec![
         ("/dl/a".to_string(), archive),
         ("/dl/s".to_string(), sums),
+        (
+            "/repos/chiefenne/Foehncraft/tarball/v1.3.0".to_string(),
+            src,
+        ),
         (
             "/repos/chiefenne/Foehncraft/releases?per_page=50".to_string(),
             Vec::new(),
@@ -251,6 +262,8 @@ fn online_install_from_a_github_stand_in() {
     };
     let mut p = plan(&root, &files, "latest");
     p.offline_dir = None;
+    // pip would need PyPI; the venv steps have their own test
+    p.python = crate::plan::PyMode::None;
     let source = Source::Online {
         api: addr.clone(),
         token: None,
@@ -266,6 +279,11 @@ fn online_install_from_a_github_stand_in() {
     .unwrap();
     assert!(r.ok && r.products[0].verified, "{r:?}");
     assert!(root.join("Foehncraft/1.3.0/bin/foehn").is_file());
+    assert!(
+        root.join("Foehncraft/1.3.0/examples/cases/case.toml")
+            .is_file(),
+        "{r:?}"
+    );
     let none = Source::Online {
         api: "http://127.0.0.1:9".into(),
         token: None,
@@ -360,6 +378,15 @@ fn preview_marks_admin_steps() {
         files: vec![],
     };
     let kofl = c.get("koflcraft").unwrap();
+    let steps = preview(&ctx, &p, &ctx.source(&p), &[(kofl, r.clone())], &[]).unwrap();
+    // the examples come from the release's source, downloaded as you
+    assert!(!steps[0].admin && steps[0].title.contains("for its examples"));
+    assert!(
+        steps
+            .iter()
+            .any(|s| s.admin && s.title.contains("examples"))
+    );
+    p.examples = false;
     let steps = preview(&ctx, &p, &ctx.source(&p), &[(kofl, r)], &[]).unwrap();
     assert!(steps[0].admin && steps[0].title.starts_with("Install KoflCraft 0.3.1"));
     let shown: Vec<String> = steps[0]
@@ -473,7 +500,7 @@ fn source_build_installs_the_built_programs() {
         token: None,
     };
     let work = t.0.join("work");
-    let tools_now = super::tools(&ctx, &plan, &work).unwrap();
+    let tools_now = super::tools(&ctx, &plan, &source, &work).unwrap();
     assert!(tools_now.iter().all(|t| t.ok), "{tools_now:?}");
     let resolved = resolve(&ctx, &plan, &source).unwrap();
     let shown = preview(&ctx, &plan, &source, &resolved, &tools_now).unwrap();
@@ -503,7 +530,7 @@ fn source_build_installs_the_built_programs() {
 
     // an old Rust without rustup: rustup-init is offered
     fake_build_tools(&tools, "1.80.0");
-    let tools_old = super::tools(&ctx, &plan, &work).unwrap();
+    let tools_old = super::tools(&ctx, &plan, &source, &work).unwrap();
     let rust = tools_old.iter().find(|t| t.id == "rust").unwrap();
     assert!(
         !rust.ok && rust.fix.is_some(),

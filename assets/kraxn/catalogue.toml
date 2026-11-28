@@ -35,6 +35,8 @@ needs_cmake = false
 # APT_RUNTIME, DNF_RUNTIME): the GPU (wgpu) through Vulkan
 apt_runtime = ["mesa-vulkan-drivers", "libvulkan1"]
 dnf_runtime = ["mesa-vulkan-drivers", "vulkan-loader"]
+# MP4 movies call the system's ffmpeg (Kraxn offers to install it)
+ffmpeg = true
 
 # the files the window opens; `own` types become MurmelCraft's by
 # default, the others only offer it ("Open with")
@@ -65,6 +67,8 @@ min_rust = "1.88"
 needs_cmake = false
 apt_runtime = []
 dnf_runtime = []
+# the folder of the source copied next to the programs
+examples = "examples"
 
 [[product]]
 id = "foehncraft"
@@ -80,3 +84,17 @@ min_rust = "1.89"
 needs_cmake = true
 apt_runtime = []
 dnf_runtime = []
+examples = "examples"
+
+# Python for the example scripts and Gmsh (install-shared.sh: PIP_PACKAGES,
+# APT_PACKAGES, DNF_PACKAGES, APT_GMSH_LIBS, DNF_GMSH_LIBS)
+[product.python]
+pip = ["gmsh", "numpy", "matplotlib", "h5py"]
+apt = ["python3-numpy", "python3-matplotlib", "python3-h5py", "python3-gmsh"]
+dnf = ["python3-numpy", "python3-matplotlib", "python3-h5py", "python3-gmsh"]
+# the libraries the pip gmsh module loads on Linux (else: OSError libGLU.so.1)
+libs = ["libGLU.so.1", "libXcursor.so.1", "libXft.so.2", "libXinerama.so.1", "libgomp.so.1"]
+apt_libs = ["libglu1-mesa", "libxcursor1", "libxft2", "libxinerama1", "libgomp1"]
+dnf_libs = ["mesa-libGLU", "libXcursor", "libXft", "libXinerama", "libgomp"]
+# the check after the install
+check = "import gmsh, numpy, matplotlib, h5py; gmsh.initialize(); print('gmsh', gmsh.__version__); gmsh.finalize()"
