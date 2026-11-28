@@ -1908,11 +1908,17 @@ dependencies = [
 name = "kraxn"
 version = "0.1.0"
 dependencies = [
+ "eframe",
+ "egui",
+ "egui_kittest",
  "flate2",
  "fluent-bundle",
  "kraxn-core",
+ "rfd",
+ "serde",
  "serde_json",
  "tar",
+ "toml",
  "unic-langid",
 ]
 
