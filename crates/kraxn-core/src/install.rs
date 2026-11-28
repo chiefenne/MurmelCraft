@@ -8,15 +8,16 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::actions::{Action, Elevator, Outcome, Step, run_all};
+use crate::build::{self, BuildWant, ToolState};
 use crate::catalogue::{Catalogue, Product};
 use crate::diag::{Res, diag};
 use crate::envfiles::{self, Extras};
 use crate::fetch::{Checked, Source, fetch, verify};
 use crate::installed::{self, RECEIPT, Receipt};
 use crate::layout::{Env, Layout, Scope};
-use crate::plan::Plan;
+use crate::plan::{Origin, Plan};
 use crate::platform::{Os, Platform};
-use crate::release::{Release, file_name, pick, top_folder};
+use crate::release::{Release, file_name, pick, pick_source, top_folder};
 
 /// What the front ends show while a plan runs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -34,6 +35,10 @@ pub enum Event {
     Step {
         title: String,
         ok: bool,
+    },
+    /// A line of a source build's output (cargo).
+    Log {
+        line: String,
     },
 }
 
@@ -65,10 +70,101 @@ pub fn resolve<'c>(ctx: &'c Ctx, plan: &Plan, source: &Source) -> Res<Vec<(&'c P
         .map(|w| {
             let p = ctx.catalogue.get(&w.product)?;
             let rels = source.releases(p)?;
-            let r = pick(&rels, p, &ctx.platform, &w.version)?.clone();
-            Ok((p, r))
+            let r = match w.from {
+                Origin::Release => pick(&rels, p, &ctx.platform, &w.version)?,
+                Origin::Source => pick_source(&rels, p, &w.version)?,
+            };
+            Ok((p, r.clone()))
         })
         .collect()
+}
+
+/// The products of a plan that are built from their source.
+pub fn build_wants<'c>(ctx: &'c Ctx, plan: &Plan) -> Res<Vec<BuildWant<'c>>> {
+    plan.installs
+        .iter()
+        .filter(|w| w.from == Origin::Source)
+        .map(|w| {
+            Ok(BuildWant {
+                product: ctx.catalogue.get(&w.product)?,
+                features: w.features.clone(),
+            })
+        })
+        .collect()
+}
+
+/// The tools the plan's source builds need, as found now (empty without
+/// a source build). `work` is where installers are downloaded to.
+pub fn tools(ctx: &Ctx, plan: &Plan, work: &Path) -> Res<Vec<ToolState>> {
+    build::check_tools(
+        &ctx.platform,
+        ctx.env,
+        &build_wants(ctx, plan)?,
+        &work.join("tools"),
+    )
+}
+
+/// The steps that install the missing tools; KRX015 when one of them is
+/// one only you can install.
+pub fn tool_steps(tools: &[ToolState]) -> Res<Vec<Step>> {
+    let blocked: Vec<String> = tools
+        .iter()
+        .filter(|t| t.blocks())
+        .map(|t| format!("{}: {}", t.need, t.manual.clone().unwrap_or_default()))
+        .collect();
+    if !blocked.is_empty() {
+        return Err(diag(
+            "KRX015",
+            format!("the source build needs {}", blocked.join("; ")),
+        ));
+    }
+    Ok(tools
+        .iter()
+        .filter(|t| !t.ok)
+        .filter_map(|t| t.fix.clone())
+        .collect())
+}
+
+/// What a source build's preview shows before it runs: the download of
+/// the source and the cargo runs.
+fn build_preview(source: &Source, p: &Product, r: &Release, features: &[String]) -> Vec<Step> {
+    let api = match source {
+        Source::Online { api, .. } => api.clone(),
+        Source::Folder(_) => "https://api.github.com".into(),
+    };
+    vec![
+        Step {
+            title: format!(
+                "Download the source of {} {} from GitHub",
+                p.title, r.version
+            ),
+            admin: false,
+            actions: vec![Action::Download {
+                url: format!("{api}/repos/{}/tarball/{}", p.repo, r.tag),
+                sha256_url: None,
+                to: PathBuf::from("<download>")
+                    .join(format!("{}-{}-source.tar.gz", p.archive, r.tag)),
+            }],
+        },
+        Step {
+            title: format!(
+                "Build {} {} with cargo, as you (the first build takes several minutes)",
+                p.title, r.version
+            ),
+            admin: false,
+            actions: build::cargo_lines(p, features)
+                .into_iter()
+                .map(|l| {
+                    let mut words = l.split(' ').map(str::to_string);
+                    Action::Run {
+                        program: PathBuf::from(words.next().unwrap_or_default()),
+                        args: words.collect(),
+                        env: Vec::new(),
+                    }
+                })
+                .collect(),
+        },
+    ]
 }
 
 /// A file of an unpacked release: its name and whether it is a program.
@@ -351,17 +447,33 @@ fn program_names(files: &[Staged], platform: &Platform) -> Vec<String> {
 }
 
 /// All steps of a plan, for the preview (before the download): the
-/// release folder is shown as `<download>/<folder>`.
-pub fn preview(ctx: &Ctx, plan: &Plan, resolved: &[(&Product, Release)]) -> Res<Vec<Step>> {
+/// release folder is shown as `<download>/<folder>`, a build's as
+/// `<build>`; first the steps that install the missing `tools`.
+pub fn preview(
+    ctx: &Ctx,
+    plan: &Plan,
+    source: &Source,
+    resolved: &[(&Product, Release)],
+    tools: &[ToolState],
+) -> Res<Vec<Step>> {
     let layout = ctx.layout(plan)?;
-    let mut steps = Vec::new();
+    let mut steps: Vec<Step> = tools
+        .iter()
+        .filter(|t| !t.ok)
+        .filter_map(|t| t.fix.clone())
+        .collect();
     for (p, r) in resolved {
         let w = plan
             .installs
             .iter()
             .find(|w| w.product == p.id)
             .ok_or_else(|| diag("KRX010", "resolved product not in the plan"))?;
-        let staged = PathBuf::from("<download>").join(top_folder(p, &r.version, &ctx.platform));
+        let staged = if w.from == Origin::Source {
+            steps.extend(build_preview(source, p, r, &w.features));
+            PathBuf::from("<build>")
+        } else {
+            PathBuf::from("<download>").join(top_folder(p, &r.version, &ctx.platform))
+        };
         let files = expected_files(p, &ctx.platform);
         steps.extend(product_steps(
             ctx,
@@ -477,6 +589,9 @@ pub struct ProductReport {
     pub file: String,
     pub sha256: String,
     pub verified: bool,
+    /// Built here from the source (`file` names the repository and tag).
+    #[serde(default)]
+    pub built: bool,
     /// Installed before this run (nothing copied).
     pub already: bool,
     pub check: Option<CheckResult>,
@@ -507,6 +622,52 @@ pub fn apply(
         .map_err(|e| diag("KRX007", format!("{}: {e}", work.display())))?;
     let mut steps = Vec::new();
     let mut products = Vec::new();
+    let mut outcomes = Vec::new();
+    // the tools of the source builds first: the builds need them
+    let wants = build_wants(ctx, plan)?;
+    let toolbox = if wants.is_empty() {
+        None
+    } else {
+        let tools = tools(ctx, plan, work)?;
+        let fixes = tool_steps(&tools)?;
+        if !fixes.is_empty() {
+            progress(Event::Info {
+                text: "Install the tools the build needs".into(),
+            });
+            let o = run_all(&fixes, elevator);
+            for x in &o {
+                progress(Event::Step {
+                    title: x.title.clone(),
+                    ok: x.ok,
+                });
+            }
+            let failed = o.len() < fixes.len() || o.iter().any(|x| !x.ok);
+            outcomes.extend(o);
+            if failed {
+                return Ok(Report {
+                    ok: false,
+                    outcomes,
+                    products,
+                    notes: Vec::new(),
+                });
+            }
+            let again = self::tools(ctx, plan, work)?;
+            if let Some(t) = again.iter().find(|t| !t.ok) {
+                return Err(diag(
+                    "KRX015",
+                    format!(
+                        "{} is still missing after its install{}; open a new terminal or sign in again, then retry",
+                        t.need,
+                        t.found
+                            .as_ref()
+                            .map(|f| format!(" (found {f})"))
+                            .unwrap_or_default()
+                    ),
+                ));
+            }
+        }
+        Some(build::toolbox(&ctx.platform, ctx.env)?)
+    };
     for (p, r) in &resolved {
         let w = plan
             .installs
@@ -545,7 +706,75 @@ pub fn apply(
                 file: name,
                 sha256: String::new(),
                 verified: false,
+                built: false,
                 already: true,
+                check: None,
+            });
+            continue;
+        }
+        if w.from == Origin::Source {
+            let tb = toolbox
+                .as_ref()
+                .ok_or_else(|| diag("KRX015", "no Rust for the source build"))?;
+            let pwork = work.join(&p.id);
+            let _ = std::fs::remove_dir_all(&pwork);
+            std::fs::create_dir_all(&pwork)
+                .map_err(|e| diag("KRX007", format!("{}: {e}", pwork.display())))?;
+            let src_name = format!("{}@{}", p.repo, r.tag);
+            progress(Event::Info {
+                text: format!(
+                    "Download the source of {} {} ({src_name})",
+                    p.title, r.version
+                ),
+            });
+            let (src, sha256) =
+                build::fetch_source(source, p, &r.tag, &pwork, &mut |done, total| {
+                    progress(Event::Download {
+                        file: src_name.clone(),
+                        done,
+                        total,
+                    })
+                })?;
+            progress(Event::Info {
+                text: format!(
+                    "Build {} {} with cargo ({}); the first build takes several minutes",
+                    p.title, r.version, tb.rustc
+                ),
+            });
+            // cargo's target folder, apart from the source download
+            let bwork = work.join("build").join(&p.id);
+            let bin =
+                build::cargo_build(tb, p, &w.features, w.native, &src, &bwork, &mut |line| {
+                    progress(Event::Log { line })
+                })?;
+            let files = staged_files(&bin)?;
+            let mut receipt = Receipt::new(&p.id, &r.version, "build");
+            receipt.file = src_name.clone();
+            receipt.sha256 = sha256.clone();
+            receipt.features = w.features.clone();
+            receipt.native = w.native;
+            receipt.rustc = tb.rustc.clone();
+            steps.extend(product_steps(
+                ctx,
+                plan,
+                &layout,
+                p,
+                &r.version,
+                &bin,
+                &files,
+                &receipt,
+                w.make_default,
+                w.replace,
+            ));
+            products.push(ProductReport {
+                product: p.id.clone(),
+                version: r.version.clone(),
+                dir,
+                file: src_name,
+                sha256,
+                verified: false,
+                built: true,
+                already: false,
                 check: None,
             });
             continue;
@@ -610,6 +839,7 @@ pub fn apply(
             file: name,
             sha256,
             verified,
+            built: false,
             already: false,
             check: None,
         });
@@ -617,14 +847,15 @@ pub fn apply(
     if plan.path {
         steps.extend(path_env_steps(&layout, ctx.env));
     }
-    let outcomes = run_all(&steps, elevator);
-    for o in &outcomes {
+    let ran = run_all(&steps, elevator);
+    for o in &ran {
         progress(Event::Step {
             title: o.title.clone(),
             ok: o.ok,
         });
     }
-    let mut ok = outcomes.len() == steps.len() && outcomes.iter().all(|o| o.ok);
+    let mut ok = ran.len() == steps.len() && ran.iter().all(|o| o.ok);
+    outcomes.extend(ran);
     let mut notes = Vec::new();
     if ok {
         for pr in products.iter_mut().filter(|pr| !pr.already) {

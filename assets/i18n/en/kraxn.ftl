@@ -39,6 +39,7 @@ products-ask = Numbers separated by commas, or Enter for all
 products-row = { $title } { $latest }{ $installed }
 products-latest = (latest { $version })
 products-no-file = (no release for this computer)
+products-buildable = (no release file for this computer: Kraxn can build { $version } from the source)
 products-installed = , installed: { $versions }
 products-none = Nothing chosen.
 
@@ -49,6 +50,20 @@ product-foehncraft = FoehnCraft, the solver: flows, heat and more
 version-ask = Version of { $title } (Enter for { $latest })
 default-ask = Make { $title } { $version } the default version?
 path-ask = Put the programs on the PATH of new terminals?
+
+# Source builds
+from-ask = Install { $title } from the release (r) or build it from the source here (s)?
+build-ask = { $title } has no release file for this computer. Build { $version } from the source (several minutes)?
+feature-ask = Build { $title } with { $feature }: { $about }?
+feature-mpi = runs on several processes (Open MPI)
+feature-cuda = the GPU backend (an NVIDIA driver at run time)
+native-ask = Tune the build for this computer's processor? (the programs may then not run on other computers)
+tools-title = Tools for the build:
+tools-ok = { $need }: there ({ $found })
+tools-fix = { $need }: { $found }, Kraxn installs it (see the steps)
+tools-manual = { $need }: missing; { $manual }
+tools-missing = missing
+tools-blocked = Kraxn cannot install every tool the build needs: install the missing ones as described, then check again.
 
 # The steps before they run
 steps-title = Kraxn will do this:
@@ -67,6 +82,7 @@ done-version = { $title } { $version } in { $dir }
 done-already = { $title } { $version } was installed already
 done-checked = SHA-256 checked against SHA256SUMS.txt
 done-unchecked = not checked: no SHA256SUMS.txt listed it
+done-built = built here from the source ({ $file })
 done-started = { $command }: { $message }
 done-failed = It did not work: { $message }
 done-new-terminal = Open a new terminal to use the programs by name.
@@ -99,6 +115,10 @@ win-version = Version
 win-make-default = Make it the default
 win-installed = Installed: { $versions }
 win-options = Options
+win-from-source = Build from the source
+win-native = Tune source builds for this computer's processor (the programs may then not run on other computers)
+win-check-again = Check again
+win-build-log = Build output
 win-more-later = Menu entries, file types, Python and Gmsh, ffmpeg, examples and the AI assistant set-up come in the next version of Kraxn.
 win-plan-file = Plan file
 win-save-plan = Save the plan

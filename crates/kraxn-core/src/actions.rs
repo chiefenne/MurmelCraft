@@ -65,6 +65,22 @@ pub enum Action {
     Readable {
         path: PathBuf,
     },
+    /// Downloads `url` to `to` (mode 0755); with `sha256_url`, the file
+    /// must match the sum that URL gives (rustup's `.sha256` files).
+    Download {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256_url: Option<String>,
+        to: PathBuf,
+    },
+    /// Runs a program (a package manager, rustup) and waits for it; a
+    /// non-zero exit fails the step with the end of its output.
+    Run {
+        program: PathBuf,
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env: Vec<(String, String)>,
+    },
 }
 
 /// One step people see: a title, whether it needs administrator rights,
@@ -354,7 +370,76 @@ pub fn run(a: &Action) -> Res<()> {
         }
         Action::WindowsPath { dir, machine, add } => windows_path(dir, *machine, *add),
         Action::Readable { path } => readable(path),
+        Action::Download {
+            url,
+            sha256_url,
+            to,
+        } => download(url, sha256_url.as_deref(), to),
+        Action::Run { program, args, env } => run_program(program, args, env),
     }
+}
+
+fn download(url: &str, sha256_url: Option<&str>, to: &Path) -> Res<()> {
+    if let Some(p) = to.parent() {
+        std::fs::create_dir_all(p).map_err(|e| io(p, e))?;
+    }
+    let file = |u: &str| crate::release::ReleaseFile {
+        name: u.rsplit('/').next().unwrap_or(u).to_string(),
+        url: Some(u.to_string()),
+        path: None,
+        size: 0,
+    };
+    crate::fetch::fetch(&file(url), to, &mut |_, _| {})?;
+    if let Some(su) = sha256_url {
+        let sums = to.with_extension("sha256");
+        crate::fetch::fetch(&file(su), &sums, &mut |_, _| {})?;
+        let text = std::fs::read_to_string(&sums).map_err(|e| io(&sums, e))?;
+        let want = text.split_whitespace().next().unwrap_or("").to_lowercase();
+        let have = crate::fetch::sha256_file(to)?;
+        if want != have {
+            let _ = std::fs::remove_file(to);
+            return Err(diag(
+                "KRX004",
+                format!("{url}: SHA-256 {have} does not match {want} from {su}"),
+            ));
+        }
+    }
+    set_mode(to, 0o755)
+}
+
+/// The last `n` lines of `text`.
+pub fn tail(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
+}
+
+fn run_program(program: &Path, args: &[String], env: &[(String, String)]) -> Res<()> {
+    let o = std::process::Command::new(program)
+        .args(args)
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| {
+            diag(
+                "KRX016",
+                format!("{} did not start: {e}", program.display()),
+            )
+        })?;
+    if o.status.success() {
+        return Ok(());
+    }
+    let mut out = String::from_utf8_lossy(&o.stdout).to_string();
+    out.push_str(&String::from_utf8_lossy(&o.stderr));
+    Err(diag(
+        "KRX016",
+        format!(
+            "{} {} ended with {}:\n{}",
+            program.display(),
+            args.join(" "),
+            o.status,
+            tail(&out, 12)
+        ),
+    ))
 }
 
 #[cfg(unix)]
@@ -411,6 +496,23 @@ pub fn describe(a: &Action) -> String {
         }
         Action::ShellBlock { file, text: None } => {
             format!("remove the Kraxn block from {}", q(file))
+        }
+        Action::Download { url, to, .. } => format!("download {url} to {}", q(to)),
+        Action::Run { program, args, env } => {
+            let mut s = String::new();
+            for (k, v) in env {
+                s.push_str(&format!("{k}={v} "));
+            }
+            s.push_str(&q(program));
+            for a in args {
+                s.push(' ');
+                if a.contains(' ') {
+                    s.push_str(&format!("\"{a}\""));
+                } else {
+                    s.push_str(a);
+                }
+            }
+            s
         }
         Action::WindowsPath { dir, machine, add } => format!(
             "{} {} {} the {} PATH",

@@ -9,8 +9,8 @@ Every tool takes JSON and answers with a `kraxn.result` envelope:
 | `system.detect` | The system, its folders for both scopes, whether Kraxn runs as administrator and whether a desktop is there. | none | nothing |
 | `catalogue.list` | The products Kraxn installs, with their programs and source-build needs. | none | nothing |
 | `release.list` | The releases of a product, newest first, and whether each has a file for this system. | product: murmelcraft, koflcraft or foehncraft; offline_dir: a folder of downloaded files (optional) | nothing |
-| `plan.check` | Checks a plan and returns its steps, with the ones that need administrator rights marked, without running anything. | plan: the plan (as in a plan file) | nothing |
-| `plan.apply` | Runs a plan: download, SHA-256 check, install, default version, PATH, and a start check of each program. | plan: the plan (as in a plan file) | files |
+| `plan.check` | Checks a plan and returns its steps, with the ones that need administrator rights marked, and for source builds the tools found and how each missing one gets installed (`blocked` when only you can), without running anything. | plan: the plan (as in a plan file) | nothing |
+| `plan.apply` | Runs a plan: download, SHA-256 check (or, for a source build, the missing tools, the source and cargo, with cargo's output as events), install, default version, PATH, and a start check of each program. | plan: the plan (as in a plan file) | files |
 | `installed.list` | The installed products and versions of a scope, with the default version. | scope: user or system (default user); prefix: another install root (optional) | nothing |
 | `version.activate` | Makes an installed version the default (current, module files, links). | product; version; scope; prefix (optional) | files |
 | `version.remove` | Removes an installed version, or the whole product without a version; another version becomes the default. | product; version (optional: all); scope; prefix (optional); dry_run: only list the steps | files |
@@ -36,3 +36,5 @@ Every tool takes JSON and answers with a `kraxn.result` envelope:
 | `KRX012` | the offline folder holds no archive for the product |
 | `KRX013` | the version is installed already |
 | `KRX014` | this system is not supported |
+| `KRX015` | a tool the source build needs is missing and Kraxn cannot install it |
+| `KRX016` | a command failed (a tool install, the download of the source or cargo) |

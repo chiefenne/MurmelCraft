@@ -29,6 +29,11 @@ pub fn unpack(archive: &Path, dest: &Path) -> Res<PathBuf> {
             let mut entry = entry.map_err(|e| bad(archive, e))?;
             let path = entry.path().map_err(|e| bad(archive, e))?.into_owned();
             let kind = entry.header().entry_type();
+            // GitHub's source archives start with the commit in a pax
+            // global header: not a file
+            if kind == tar::EntryType::XGlobalHeader {
+                continue;
+            }
             if !safe(&path) || !(kind.is_file() || kind.is_dir()) {
                 return Err(bad(
                     archive,

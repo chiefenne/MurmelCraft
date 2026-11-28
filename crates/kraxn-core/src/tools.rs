@@ -128,14 +128,14 @@ pub fn tools() -> Vec<Tool> {
         },
         Tool {
             id: "plan.check",
-            summary: "Checks a plan and returns its steps, with the ones that need administrator rights marked, without running anything.",
+            summary: "Checks a plan and returns its steps, with the ones that need administrator rights marked, and for source builds the tools found and how each missing one gets installed (`blocked` when only you can), without running anything.",
             input: &["plan: the plan (as in a plan file)"],
             reads_only: true,
             run: plan_check,
         },
         Tool {
             id: "plan.apply",
-            summary: "Runs a plan: download, SHA-256 check, install, default version, PATH, and a start check of each program.",
+            summary: "Runs a plan: download, SHA-256 check (or, for a source build, the missing tools, the source and cargo, with cargo's output as events), install, default version, PATH, and a start check of each program.",
             input: &["plan: the plan (as in a plan file)"],
             reads_only: false,
             run: plan_apply,
@@ -358,9 +358,12 @@ fn plan_check(h: &mut Host, v: &Value) -> Out {
     let c = ctx(h);
     let source = source_of(h, &plan);
     let resolved = install::resolve(&c, &plan, &source)?;
-    let steps = install::preview(&c, &plan, &resolved)?;
+    let tools = install::tools(&c, &plan, &h.work)?;
+    let steps = install::preview(&c, &plan, &source, &resolved, &tools)?;
     let layout = c.layout(&plan)?;
     Ok(json!({
+        "tools": tools,
+        "blocked": tools.iter().any(|t| t.blocks()),
         "versions": resolved.iter().map(|(p, r)| json!({"product": p.id, "version": r.version})).collect::<Vec<_>>(),
         "root": layout.root,
         "bin": layout.bin,
