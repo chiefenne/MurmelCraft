@@ -12,6 +12,14 @@ AI assistant set-up follow in the next pull requests.
 
 ## Start it
 
+Every release of MurmelCraft, KoflCraft and FoehnCraft carries Kraxn, one
+file per system: `Kraxn.app` in `kraxn-<v>-macos-universal.dmg`,
+`kraxn-<v>-windows-x86_64.exe`, and `kraxn` in
+`kraxn-<v>-linux-x86_64.tar.gz` or `…-linux-aarch64.tar.gz`. Like the
+programs it is not signed: macOS asks once before the first start
+(right-click ▸ Open), Windows SmartScreen under "More info". From the
+source:
+
 ```sh
 cargo run --release -p kraxn            # the window (the text mode without a desktop)
 cargo run --release -p kraxn -- text    # the questions in this terminal
