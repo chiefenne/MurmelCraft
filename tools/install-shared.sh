@@ -200,7 +200,7 @@ if [ "$WITH_SOURCE" = 1 ]; then
   need git
   say "source tree $TAG"
   [ "$FORCE" = 1 ] && [ -d "$DEST/src" ] && run rm -rf "$DEST/src"
-  run git clone --quiet --depth 1 --branch "$TAG" "https://github.com/$REPO.git" "$DEST/src"
+  run git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TAG" "https://github.com/$REPO.git" "$DEST/src"
 fi
 
 if [ "$BUILD" = 1 ]; then
@@ -228,7 +228,7 @@ if [ "$BUILD" = 1 ]; then
   [ "$NATIVE" = 1 ] && export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native"
   feat=(); [ -n "$FEATURES" ] && feat=(--features "$FEATURES")
   for p in $BUILD_PATHS; do
-    run env -C "$DEST/src" CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK/target}" cargo install --locked --root "$DEST" \
+    run env -C "$DEST/src" CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORK/target}" cargo install --locked --force --root "$DEST" \
       --path "$DEST/src/$p" "${feat[@]}"
   done
   run rm -f "$DEST/.crates.toml" "$DEST/.crates2.json"
