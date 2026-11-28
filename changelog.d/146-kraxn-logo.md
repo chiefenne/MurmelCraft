@@ -1,0 +1,1 @@
+- **Kraxn's logo.** The logo is an engraved K on the family's green square, in the same engraved ink-and-cream style as the marmot, the deer and the falcon. Three tiles in the programs' colours step down its leg. It appears in the window, on the window's icon and on the Mac app.
